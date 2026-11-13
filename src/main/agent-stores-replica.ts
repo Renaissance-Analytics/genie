@@ -214,8 +214,6 @@ export class AttentionReplica {
         return (await this.#call('attention', 'withdraw', [owner, questionId])) as { ok: true; questionId: string; withdrawn: true };
     }
     async dismissOlderThan(ms: number): Promise<number> { return (await this.#call('attention', 'dismissOlderThan', [ms])) as number; }
-    /** Fire and forget, as the store's own is: the change comes back as the store's next data. */
-    markSeen(id: string): void { void this.#call('attention', 'markSeen', [id]).catch(() => {}); }
 
     onChange(listener: () => void): () => void {
         this.#changeListeners.add(listener);

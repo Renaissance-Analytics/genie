@@ -1,7 +1,7 @@
 import type { PairRequest } from '../core/pair-confirm.js';
 import type { RemoteAccessEvent, RemoteAccessStatus } from './remote-access-host.js';
 import type { Device } from './remote-devices.js';
-import type { RemoteHost } from './remote-host.js';
+import { isLocalEvent, type RemoteHost } from './remote-host.js';
 
 /**
  * REMOTE ACCESS, READ AND DRIVEN FROM A WINDOW (Tynn #409, host split P5d.1): the client side of `genie.remote-access`.
@@ -84,9 +84,26 @@ export class RemoteAccessReplica implements RemoteAccessView {
         this.#rebase(event.status);
     }
 
-    /** The window's own events (the snapshot, features…) reach remote connections through genie-host. */
-    forwardEvents(onEvent: (listener: (channel: string, payload: unknown) => void) => () => void): () => void {
-        return onEvent((channel, payload) => { void this.#call('event', [channel, payload]).catch(() => {}); });
+    /**
+     * The window's own events (the snapshot, features…) reach remote connections through genie-host — ONLY WHAT THEY WANT
+     * (Tynn #662). Every agent change used to build the agent's whole detail (its ledger of thousands of rows) and send it
+     * to genie-host every 50 ms, with nothing connected to receive it: on the memory soak, ~50 GB allocated in window main
+     * every 5 minutes and lines of 10 M characters into the host 12 times a second. genie-host's status says what its
+     * connections want (`RemoteHost.wanted`); an agent nobody wants is not even built (`wantsAgent`), and nothing is sent
+     * while nobody listens. A status without it (an older host) is sent everything, as before.
+     */
+    forwardEvents(onEvent: (listener: (channel: string, payload: unknown) => void, options?: { wantsAgent?: (agentId: string) => boolean }) => () => void): () => void {
+        const wantsAgent = (agentId: string): boolean => {
+            const w = this.#status.wants;
+            return w === undefined || (w.remote && (w.all || w.agents.includes(agentId)));
+        };
+        const wanted = (channel: string): boolean => {
+            const w = this.#status.wants;
+            if (w === undefined) return true;
+            if (channel.startsWith('agent:')) return wantsAgent(channel.slice('agent:'.length));
+            return isLocalEvent(channel) ? w.local : w.remote;
+        };
+        return onEvent((channel, payload) => { if (wanted(channel)) void this.#call('event', [channel, payload]).catch(() => {}); }, { wantsAgent });
     }
 
     #rebase(status: RemoteAccessStatus): void {

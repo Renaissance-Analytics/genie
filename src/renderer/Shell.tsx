@@ -1,3 +1,4 @@
+import type { AttachmentReply } from '../core/thread-store.js';
 import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnTabHost } from '../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../core/tynn-issues.js';
@@ -67,6 +68,7 @@ import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 import type { GAppListing, GAppsApi } from '../core/gapps.js';
+import { dndHeader, dndToggleAction } from '../core/dnd-header.js';
 
 
 /**
@@ -182,6 +184,8 @@ export interface ShellProps {
     onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     /** The last refused form answer, said beside that item's Answer button. */
     deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
+    /** The action running on one of Genie's own Deck items (Tynn #693). */
+    deckBusy?: { itemId: string; optionId: string } | null | undefined;
     /** NOT USED since 2026-10-19: the chat cannot be closed. Removed with the pin model's cleanup row. */
     onCloseChat?: (() => void) | undefined;
     /** The chat's `Restart` (or `Send now`) on an undelivered draft (§4.4, genie#1238). */
@@ -209,6 +213,8 @@ export interface ShellProps {
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
     loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642): the chat's pills (messages are drawn only in the chat). */
+    loadAttachment?: ((agentId: string, attachmentId: string) => Promise<AttachmentReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
     tynnBoard?: TynnTabHost | undefined;
     /** The Tynn tab's Issues (genie#1295 I1); absent = the tab has no Issues page in this window. */
@@ -265,6 +271,8 @@ export interface ShellProps {
     remoteConnect?: RemoteConnectProps | undefined;
     /** Share this workstation through Tynn (Tynn #587); absent for a guest. */
     onShareWorkstation?: (() => void) | undefined;
+    /** The host picker's other ways to another machine, in a dialog (Tynn #640). */
+    onOpenConnectOther?: (() => void) | undefined;
     /** Agent operations (§6.2) for the Agent view; absent when this window cannot operate agents. */
     agentOps?: AgentOpsProps | undefined;
     /** Workspace operations (§6.1) for the Workspace surface; absent when this window cannot operate workspaces. */
@@ -286,6 +294,10 @@ export interface ShellProps {
     tynnPick?: TynnProjectsView | undefined;
     onAddWorkspaceFromTynn?: (() => void) | undefined;
     onPickTynnProject?: ((projectId: string) => void) | undefined;
+    /** The project whose plan is being read after its folder was picked (Tynn #688); `null` = none. */
+    tynnPlanning?: string | null | undefined;
+    /** Try a failed import from Tynn again, same project and folder (Tynn #688); `undefined` = nothing to try again. */
+    onRetryAdd?: (() => void) | undefined;
     onCancelTynnPick?: (() => void) | undefined;
     onConfirmAddTynn?: ((parent: string, projectId: string) => void) | undefined;
     onCancelAddGit?: (() => void) | undefined;
@@ -317,6 +329,8 @@ export type ShellRemote = {
     host: string; driver: string | null; driving: boolean; locked: boolean;
     lostTo?: string | null; onTakeControl?: () => void;
     refusal?: string | null; needsBaton?: boolean; onDismissRefusal?: () => void;
+    /** The host badge's Disconnect (Tynn #640). */
+    onDisconnect?: () => void;
 } | null;
 
 /** The dock's panels, as the notice names them (§4.4). */
@@ -366,6 +380,7 @@ export function Shell({
     filesPopped = [],
     readCommits,
     loadToolOutput,
+    loadAttachment,
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
@@ -401,9 +416,11 @@ export function Shell({
     onAnswerDeckItem,
     onAnswerDeckForm,
     deckFormRefusal,
+    deckBusy,
     remote,
     remoteConnect,
     onShareWorkstation,
+    onOpenConnectOther,
     agentOps,
     workspaceOps,
     addPreview,
@@ -419,6 +436,8 @@ export function Shell({
     onConfirmAddTynn,
     tynnPick,
     onPickTynnProject,
+    tynnPlanning,
+    onRetryAdd,
     onCancelTynnPick,
     onCancelAddGit,
     onConfirmAdd,
@@ -434,6 +453,12 @@ export function Shell({
     const updateState = useUpdateState(updates);
     // RESTART TO INSTALL (genie#1201): the click shows the restart screen at once, before main has answered; main's
     // `installing` progress fills it in. A refused or failed install brings the window back.
+    // A DECK ACTION IS NEVER A SILENT NO-OP (Tynn #600): a refused dismiss is said on its item, "Dismiss all" under the header.
+    const [deckRefusal, setDeckRefusal] = useState<{ itemId: string; reason: string } | null>(null);
+    const deckAct = (itemId: string, action: FeatureAction): void => {
+        setDeckRefusal(null);
+        void Promise.resolve(onFeature(action)).then((outcome) => { if (outcome && !outcome.ok) setDeckRefusal({ itemId, reason: outcome.reason }); });
+    };
     const [installAsked, setInstallAsked] = useState(false);
     const askInstall = (): void => {
         setInstallAsked(true);
@@ -442,6 +467,12 @@ export function Shell({
     const restartScreen = installScreen(updateState, installAsked);
     // The update window (what is in the update): open from the header's update button until closed.
     const [updateOpen, setUpdateOpen] = useState(false);
+    // An open window is itself a user action. A completed no-update answer ends that interaction, so a later
+    // scheduled check cannot reopen an old window or leave an offline error in the header (#670).
+    useEffect(() => {
+        if (updateState?.phase === 'idle' || updateState?.phase === 'none') setUpdateOpen(false);
+    }, [updateState?.phase]);
+    const updateNotice = updateChip(updateState && { ...updateState, userInitiated: updateOpen || updateState.userInitiated === true });
     // A workspace row's process / site indicator opened that workspace's config (Genie 1's modals).
     const [runtimeModal, setRuntimeModal] = useState<{ kind: 'processes' | 'sites'; workspaceId: string } | null>(null);
     const runtimeWorkspace = runtimeModal ? (snapshot.workspaces ?? []).find((w) => w.id === runtimeModal.workspaceId) ?? null : null;
@@ -526,18 +557,27 @@ export function Shell({
     const colorMap = useShared(useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]));
     // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
     const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
+    /** Trust a workspace from an approval card that asks only because it isn't trusted (Tynn #618): the trust step's own action. */
+    const trustFromCard = (workspaceId: string | null): (() => Promise<unknown>) | undefined => {
+        const workspace = workspaceId ? workspaceFor(workspaceId) : null;
+        return workspace ? () => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: workspace.id, workspacePath: workspace.path })) : undefined;
+    };
     const [gappList, setGappList] = useState<readonly GAppListing[] | null>(null);
     const refreshGapps = useCallback(async (): Promise<void> => {
         if (!gapps) return;
         // A list the host could not give leaves what was shown, or shows none rather than loading for ever.
         try { setGappList(await gapps.list()); } catch { setGappList((shown) => shown ?? []); }
     }, [gapps]);
+    // Live across windows (Tynn #596): the book changed, here or in another window, so read it again.
+    useEffect(() => (gapps ? gapps.onChanged(() => { void refreshGapps(); }) : undefined), [gapps, refreshGapps]);
     const onScreenId = onScreen?.id ?? null;
     const onScreenName = onScreen ? (onScreen.name ?? folderName(onScreen.path)) : null;
     const gappStore = useMemo(() => (gapps && pickGappFolder ? {
         apps: gappList,
         actions: { api: gapps, pickFolder: pickGappFolder, refresh: refreshGapps, workspace: onScreenId !== null && onScreenName !== null ? { id: onScreenId, name: onScreenName } : null },
     } : { apps: [] as readonly GAppListing[] }), [gapps, pickGappFolder, gappList, refreshGapps, onScreenId, onScreenName]);
+
+    const dndView = dndHeader(features.settings.values);
 
     return (
         <WorkspaceColorsContext.Provider value={colorMap}>
@@ -551,7 +591,7 @@ export function Shell({
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
-                update={updateChip(updateState)}
+                update={updateNotice}
                 version={features.version ?? null}
                 onOpenUpdate={() => { setUpdateOpen(true); void updates.notes?.(); }}
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
@@ -559,25 +599,29 @@ export function Shell({
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
-                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
+                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
                 // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it, over the host's book (V7) in a local window.
                 gapps={gappStore}
+                // DO NOT DISTURB (Tynn #655): Settings → General's own setting, read from this window's host snapshot and
+                // written through its feature channel — so a window on another machine shows and sets that machine's.
+                dnd={dndView ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
             />
             {remote?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />
             ) : null}
             {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
-            {updateOpen && updateChip(updateState) ? (
+            {updateOpen && updateNotice ? (
                 <UpdateWindow
-                    update={updateChip(updateState)!}
+                    update={updateNotice}
                     onClose={() => setUpdateOpen(false)}
                     onAction={(action) => {
                         if (action === 'update-download') void updates.download();
                         else if (action === 'update-install') askInstall();
+                        else if (action === 'update-check') void updates.check();
                     }}
                 />
             ) : null}
-            {restartScreen ? <InstallScreen screen={restartScreen} /> : null}
+            {restartScreen ? <InstallScreen screen={restartScreen} onForce={() => { void updates.forceDrain?.(); }} /> : null}
             {/* A workspace's background processes or sites, from its row's indicator (Genie 1's modals). */}
             {runtimeModal && runtimeWorkspace ? (
                 <WorkspaceRuntimeModal kind={runtimeModal.kind} workspace={runtimeWorkspace} data={features} onAction={onFeature} onClose={() => setRuntimeModal(null)} />
@@ -628,6 +672,13 @@ export function Shell({
             />
 
             <div className="relative flex min-h-0 flex-1">
+                {/*
+                 * THE CHROME HAS BOUNDARIES OF ITS OWN (Tynn #662 soak, issue #712): the rail, the pair prompt, the strip above
+                 * an agent's page and the approval toasts sat outside every surface's boundary, so one of them failing to draw
+                 * (react-fancy's TabsList looping, React #185) took the WHOLE window to "Genie failed to draw". Each is its own
+                 * card now, with Retry and the error in Genie's log; the page and the chat beside it keep working.
+                 */}
+                <ErrorBoundary surface="Sidebar">
                 <Sidebar
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
@@ -652,11 +703,14 @@ export function Shell({
                     // A paired device close to expiring: a yellow ! on Settings, naming it and the date (q_8c07b142).
                     settingsAlert={deviceExpiryAlert(features.remote?.devices ?? [], Date.now())}
                 />
+                </ErrorBoundary>
                 {/* "Pair this device?" — on every page, never focused (q_8c07b142). A remote window's snapshot carries none. */}
+                <ErrorBoundary surface="Pair prompt">
                 <PairPrompt
                     requests={features.remote?.pairRequests ?? []}
                     onAnswer={(id, allow) => (featureAsk ? featureAsk({ kind: 'remote.answerPair', id, allow }) : Promise.resolve(onFeature({ kind: 'remote.answerPair', id, allow })))}
                 />
+                </ErrorBoundary>
 
                 <main className="min-w-0 flex-1 overflow-auto">
                     {/*
@@ -684,9 +738,9 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true || Boolean(tynnPlanning)} onRetry={onRetryAdd} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} repos={gitRepos} onReloadRepos={onReloadGitRepos} onGithub={onGitGithub} /> : null}
-                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
+                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} planning={tynnPlanning} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*
                      * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
@@ -733,7 +787,7 @@ export function Shell({
 
                     {canServe && parsed.surface === 'knowledge' ? <ErrorBoundary surface="Knowledge"><KnowledgeSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'flows' ? <ErrorBoundary surface="Flows"><FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
-                    {canServe && parsed.surface === 'hosting' ? <ErrorBoundary surface="Hosting" resetKeys={[parsed.tab]}><HostingSurface tab={parsed.tab} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'hosting' ? <ErrorBoundary surface="Hosting" resetKeys={[parsed.tab]}><HostingSurface tab={parsed.tab} commandRun={parsed.commandRun} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} marketplace={marketplace} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'browser' ? <ErrorBoundary surface="Browser"><BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /></ErrorBoundary> : null}
 
@@ -745,13 +799,15 @@ export function Shell({
                             signals={{ ...snapshot.signals, update: updateState }}
                             answering={answeringApproval}
                             onAnswer={(item, optionId, note) => onAnswerDeckItem(item, optionId, note)}
+                            onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
                             onAnswerForm={onAnswerDeckForm}
-                            formRefusal={deckFormRefusal ?? null}
+                            formRefusal={deckRefusal ?? deckFormRefusal ?? null}
+                            busy={deckBusy}
                             // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
                             // every question older than a day; the agents are told (main).
-                            onDismiss={(item, notes) => onFeature({ kind: 'deck.dismiss', item, notes })}
-                            onDismissStale={(ids) => onFeature({ kind: 'deck.dismissStale', ids })}
-                            onDismissOlder={(olderThanMs) => onFeature({ kind: 'deck.dismissOlder', olderThanMs })}
+                            onDismiss={(item, notes) => deckAct(item.id, { kind: 'deck.dismiss', item, notes })}
+                            onDismissStale={(ids) => deckAct('deck:stale', { kind: 'deck.dismissStale', ids })}
+                            onDismissOlder={(olderThanMs) => deckAct('deck:older', { kind: 'deck.dismissOlder', olderThanMs })}
                             onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
                             onNavigate={onNavigate}
                             onSignalAction={(action) => {
@@ -767,6 +823,7 @@ export function Shell({
                         // its workspace's strip — Dashboard, every agent of the workspace, your tabs, +, Settings — one click from each.
                         <div data-agent-in-workspace={agentWorkspace?.id ?? ''} className="flex h-full min-h-0 flex-col">
                             {agentWorkspace ? (
+                                <ErrorBoundary surface="Tab strip" resetKeys={[parsed.agentId]}>
                                 <WorkspaceTabs
                                     designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
                                     agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
@@ -789,6 +846,7 @@ export function Shell({
                                     // The Active Plan column's toggle, at the strip's right end — only where the column exists.
                                     {...(agentDetail.agent.fidelity !== 'observed' ? { planToggle: { open: planOpen, onToggle: () => setPlanColumn(!planOpen) } } : {})}
                                 />
+                                </ErrorBoundary>
                             ) : null}
                             <div className="min-h-0 flex-1">
                             <ErrorBoundary surface="Agent view" resetKeys={[parsed.agentId]}>
@@ -800,6 +858,7 @@ export function Shell({
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
                                 startRefusal={agentDetail.refusal}
+                                providerSignedOut={agentDetail.providerSignedOut === true}
                                 rows={agentDetail.rows}
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}
@@ -824,6 +883,7 @@ export function Shell({
                                 answeringApproval={answeringFor(answeringApproval, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 approvalRefusal={refusalFor(approvalRefusal, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 onAnswerApproval={(optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note, agentDetail.session?.pendingApproval ?? null)}
+                                onTrustWorkspace={trustFromCard(agentDetail.agent.workspaceId ?? null)}
                                 ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
                                 files={files}
                                 workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
@@ -854,6 +914,8 @@ export function Shell({
                             key={parsed.workspaceId}
                             trustStep={features.trust?.find((row) => row.workspaceId === parsed.workspaceId) ?? null}
                             onTrust={() => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
+                            // Offered once the trust steps are known (so a workspace not read yet is not offered an Untrust).
+                            onUntrust={features.trust ? () => Promise.resolve(onFeature({ kind: 'workspace.untrust', workspaceId: parsed.workspaceId })) : undefined}
                             // Settings → Hosting opens the same modals as the row's indicators.
                             onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}
@@ -971,6 +1033,7 @@ export function Shell({
                  * so answering in either place clears both. Clear of the chat strip, a docked panel or an open flyout. Not
                  * drawn over the Deck itself, which shows the same requests with the same buttons.
                  */}
+                <ErrorBoundary surface="Approvals">
                 <ApprovalToasts
                     items={snapshot.deckItems ?? NO_DECK_ITEMS}
                     dnd={features.settings.values?.do_not_disturb === true}
@@ -979,6 +1042,7 @@ export function Shell({
                     onOpenDeck={(item) => onNavigate(`genie://deck?item=${encodeURIComponent(item.id)}`)}
                     right={chatDockWidth + 16}
                 />
+                </ErrorBoundary>
                 {/* THE CHAT, always: a column of this row, after the page — never over it, never closed. */}
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ErrorBoundary surface="Chat" resetKeys={[chatThread?.agentId ?? null]}>
@@ -997,6 +1061,7 @@ export function Shell({
                         answeringApproval={chatThread ? answeringFor(answeringApproval, chatThread.agentId, chatApproval) : null}
                         approvalRefusal={chatThread ? refusalFor(approvalRefusal, chatThread.agentId, chatApproval) : null}
                         onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note, chatApproval); }}
+                        onTrustWorkspace={trustFromCard(chatWorkspaceId)}
                         scope={scope}
                         // The chat the message was TYPED in (genie#1261): each chat keeps its own composer.
                         onSend={(text, attachments, agentId) => (scope.kind !== 'blocked' ? onSend(agentId || chatThread?.agentId || '', text, attachments) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: scope.reason }))}
@@ -1014,6 +1079,7 @@ export function Shell({
                         // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
                         // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).
                         onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'interrupt') : undefined}
+                        loadAttachment={loadAttachment}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                         onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}

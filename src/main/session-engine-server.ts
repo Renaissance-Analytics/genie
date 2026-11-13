@@ -1,3 +1,4 @@
+import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { KeyringService } from './keyring-service.js';
@@ -122,6 +123,8 @@ export interface EngineServerOptions {
     /** This host's build: a window of another build replaces it (core/engine-protocol.ts `hostDecision`). */
     readonly build: string;
     readonly pid?: number;
+    /** A provider's model list, from the host's one cache (core/provider-models.ts); `refresh` asks the CLI again. */
+    readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
     readonly onShutdown?: () => void;
     /** The number of authenticated windows changed (the host's idle exit watches it). */
@@ -183,6 +186,8 @@ export interface EngineServerOptions {
     readonly gapps?: GAppBookApi | undefined;
     /** One window of one app (Tynn #595), for the window process to open; never asked for by a page. */
     readonly gappSessions?: GAppSessionsApi | undefined;
+    /** The GApp book changed: every local window reads its list again (Tynn #596). */
+    readonly gappsChanged?: ((listener: () => void) => () => void) | undefined;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -312,6 +317,9 @@ export class SessionEngineServer {
         options.catalog?.onEvent((change) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'catalog.changed', change);
         });
+        options.gappsChanged?.(() => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'gapps.changed', null);
+        });
         options.plugins?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'plugins.event', dump);
         });
@@ -394,7 +402,8 @@ export class SessionEngineServer {
 
     /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
     remoteInvoke(method: string, args: unknown[], context?: CallContext): Promise<unknown> {
-        return this.#reverse('client.remoteInvoke', [method, args, context ?? null], { localOnly: true });
+        // Staged bytes cross as base64: the reverse call is JSON (Tynn #657, remote-invoke-wire.ts).
+        return this.#reverse('client.remoteInvoke', [method, encodeRemoteInvokeArgs(method, args), context ?? null], { localOnly: true });
     }
 
     /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */
@@ -676,6 +685,9 @@ export class SessionEngineServer {
                 return true;
             case 'engine.deliverOwed':
                 return host.deliverOwed(id(), (args[1] as { text: string; by: string } | undefined) ?? undefined);
+            case 'engine.forgetShown':
+                host.forgetShown(id());
+                return true;
             case 'engine.ended':
                 return host.ended(id());
             case 'engine.historyRows': {
@@ -684,6 +696,8 @@ export class SessionEngineServer {
             }
             case 'engine.toolOutput':
                 return host.toolOutput(id(), typeof args[1] === 'string' ? args[1] : '');
+            case 'engine.attachment':
+                return host.attachment(id(), typeof args[1] === 'string' ? args[1] : '');
             case 'engine.settled':
                 await host.settled();
                 return true;
@@ -693,6 +707,10 @@ export class SessionEngineServer {
             case 'engine.modelState': {
                 const state = host.modelState(id());
                 return state === null ? null : { state: await state };
+            }
+            case 'engine.providerModels': {
+                if (!this.#options.providerModels) throw new Error('This host cannot ask a provider for its models.');
+                return this.#options.providerModels(str(0), args[1] === true);
             }
             case 'engine.switchModel': {
                 const switched = host.switchModel(id(), str(1));
@@ -989,7 +1007,7 @@ export class SessionEngineServer {
         for (let k = 0; k < pieces; k += 1) {
             const prev = k === 0 ? null : held.seq;
             const seq = ++held.seq;
-            updates.push({ id: agentId, seq, view, rows: cut(rowsP, k, prev), ...(ledgerP ? { ledger: cut(ledgerP, k, prev) } : {}) });
+            updates.push({ id: agentId, seq, view, rows: cut(rowsP, k, prev), ...(ledgerP ? { ledger: cut(ledgerP, k, prev) } : {}), ...(k < pieces - 1 ? { more: true as const } : {}) });
         }
         held.rows = heldRows(held.seq, rows);
         if (ledgerRows !== null) held.ledger = heldRows(held.seq, ledgerRows);
@@ -1013,6 +1031,7 @@ export class SessionEngineServer {
             inTurn: host.inTurn(id),
             queued: [...host.queuedPromptIds(id)],
             needsNewDriver: host.needsNewDriver(id),
+            historyPending: host.historyPending(id),
         };
     }
 

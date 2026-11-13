@@ -133,6 +133,7 @@ afterEach(() => {
     if (!/refuses/.test(expect.getState().currentTestName ?? '')) expect(failures, 'a failed ACL this test did not provoke').toEqual([]);
 });
 
+// CI: WINDOWS ONLY (Windows credential ACLs, through the native commands)
 describe.skipIf(process.platform !== 'win32')('credential write native launch budget', () => {
     it.each(['new', 'existing'] as const)('secures and atomically writes a %s credential with one native process', async (kind) => {
         const root = await mkdtemp(join(tmpdir(), 'genie-acl-launch-')); roots.push(root);

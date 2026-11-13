@@ -14,6 +14,7 @@ function alive(pid: number): boolean {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
 }
 
+// CI: WINDOWS ONLY (Windows credential ACLs, through the native commands)
 describe.skipIf(process.platform !== 'win32')('credential verifier parent lifetime', () => {
     it('exits when its parent dies during staging and refuses the unfinished write on the next start', async () => {
         const root = await mkdtemp(join(tmpdir(), 'genie-credential-death-'));

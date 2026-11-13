@@ -30,22 +30,22 @@ const agents: AgentRow[] = [row({ id: 'a_atlas', name: 'atlas' }), row({ id: 'a_
 // wren is the workspace's DEFAULT agent — deliberately not the first, so "the first agent" cannot pass for it.
 const workspaces = [{ id: 'ws', defaultAgentId: 'a_wren' }];
 
-describe('there is always a chat, and the VIEW decides whose (the owner, 2026-10-19: "the chat is always the workspace agent unless I click on another agents tab then the chat shows that agent’s chat")', () => {
-    it("a workspace's view: its DEFAULT agent; an agent's tab: that agent; off a workspace: genie", () => {
-        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, workspaces)).toBe('a_wren');
-        expect(chatSubjectFor(parseRoute('genie://agent/a_atlas?tab=stream'), agents, workspaces)).toBe('a_atlas');
-        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, workspaces)).toBe('a_genie');
+// Tynn #639 (the owner, 2026-11-12): the chat is the agent the person SELECTED; a page no longer chooses it. The
+// workspace's default agent no longer takes the chat on entering the workspace (test/chat-stays-639.test.ts).
+describe('there is always a chat, and the PERSON decides whose (Tynn #639)', () => {
+    it("an agent's tab: that agent; anywhere else: the agent picked, else genie", () => {
+        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, null)).toBe('a_genie');
+        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, 'a_atlas')).toBe('a_atlas');
+        expect(chatSubjectFor(parseRoute('genie://agent/a_atlas?tab=stream'), agents, null)).toBe('a_atlas');
+        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, null)).toBe('a_genie');
     });
 
-    it('a workspace with no default agent chosen: its first agent', () => {
-        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, [{ id: 'ws' }])).toBe('a_atlas');
-    });
-
-    it('a chat named in the route does NOT override the view — the chat follows the view, nothing else', () => {
-        expect(chatSubjectFor(parseRoute('genie://dashboard?chat=a_atlas'), agents, workspaces)).toBe('a_genie');
-        expect(chatSubjectFor(parseRoute('genie://workspace/ws?chat=a_atlas'), agents, workspaces)).toBe('a_wren');
+    it('a chat named in the route does NOT override the pick — the chat follows the person, nothing else', () => {
+        expect(chatSubjectFor(parseRoute('genie://dashboard?chat=a_atlas'), agents, null)).toBe('a_genie');
+        expect(chatSubjectFor(parseRoute('genie://workspace/ws?chat=a_atlas'), agents, 'a_wren')).toBe('a_wren');
     });
 });
+void workspaces;
 
 describe('the chat is a column beside the page, never over it', () => {
     const snapshot: GenieSnapshot = { ...EMPTY_SNAPSHOT, agents, workspaces: [{ id: 'ws', path: '/w/ws', agentsKnown: true }] };

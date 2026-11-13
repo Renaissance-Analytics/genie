@@ -13,9 +13,7 @@ import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
 import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
-import type { Finished } from './attention-store.js';
 import type { HostApi } from './remote-host.js';
-import { restartWithHandoff, type RestartPorts } from './restart-with-handoff.js';
 import type { PtyOpened, TerminalOptions } from './terminal-host.js';
 import type { StartForWork as StartForWorkAnswer } from './start-on-demand.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -32,6 +30,7 @@ import { isLocalDraftMethod } from '../core/local-drafts.js';
 import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
@@ -78,6 +77,8 @@ export interface HostApiDeps {
     rosterChanged?(): void;
     marketplace?: () => MarketplaceApi | null;
     gapps?: () => GAppsApi | null;
+    /** The GApp book changed: a signal; the window reads the list (Tynn #596). */
+    gappsChanged?: { subscribe(listener: () => void): () => void };
     localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
@@ -107,7 +108,8 @@ export interface HostApiDeps {
      * conversation when the run's own stopped itself (prism-acp 0.37.0). Absent = `startForWork`.
      */
     startForYourMessage?(record: AgentRecord): Promise<StartForWorkAnswer>;
-    host: Pick<RestartPorts, 'prompt'> & {
+    host: {
+        prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean | Promise<boolean>;
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -122,7 +124,6 @@ export interface HostApiDeps {
     };
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
     registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
-    attention: { finished(): readonly Finished[]; markSeen(id: string): void };
     /**
      * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): the TUI started here with NO window here (main/take-over-host.ts
      * `window: false`); the person's machine opens its own window on it. `ended`: that window closed. Absent = Take over
@@ -218,6 +219,8 @@ export interface HostApiDeps {
         onSettingsChanged?(listener: (workspaceId: string) => void): () => void;
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<unknown>;
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
+        /** One MCP server on or off as this workspace's default (Tynn #628); checked by the registry, which refuses in words. */
+        setMcpServer(workspaceId: string, name: unknown, on: unknown): Promise<unknown>;
         /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
         setColor?(workspaceId: string, color: string): Promise<unknown>;
     };
@@ -236,6 +239,8 @@ export interface HostApiDeps {
         setAutoApprove(agentId: string, on: boolean): Promise<unknown>;
         setManageTabs(agentId: string, on: boolean): Promise<unknown>;
         setDrivePages(agentId: string, on: boolean): Promise<unknown>;
+        /** One MCP server on or off for this agent (Tynn #628); checked by the operation itself, which refuses in words. */
+        setMcpServer(agentId: string, name: unknown, on: unknown): Promise<unknown>;
         setIssueWatch(agentId: string, setting: unknown): Promise<unknown>;
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
@@ -244,6 +249,8 @@ export interface HostApiDeps {
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
         /** A tool row's whole output, from the host's store, bounded (Tynn story #386). Absent = previews only. */
         toolOutput?(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
+        /** One image a thread kept (Tynn #642), for a sent message's pill. */
+        attachment?(agentId: string, attachmentId: string): Promise<AttachmentReply>;
     };
     /** Every agent's activity feed (the Dashboard's lanes, beta.33 item 10): one workspace's, and each as it changes. */
     activity?: {
@@ -270,6 +277,7 @@ export interface HostApiDeps {
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
         install(): Promise<{ report: string }> | null;
+        forceDrain?(): boolean | Promise<boolean>;
         notes?(): Promise<UpdateState | null>;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
         onChange(listener: (state: UpdateState) => void): () => void;
@@ -428,14 +436,6 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const created = await deps.registerAgent(str(args[0]), { name: str(raw['name']), purpose: str(raw['purpose']), provider: str(raw['provider']) });
                 return created.ok ? { ok: true, id: created.id } : created;
             }
-            case 'restartWithHandoff': {
-                const r = agent(args[0]);
-                if (!r) return { ok: false, reason: 'unknown agent' };
-                // The one restart (genie#1238), then the note.
-                const restarted = await restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
-                deps.rosterChanged?.();
-                return restarted;
-            }
             case 'agents.restart':
                 if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
                 return deps.agentOps.restart(args[0], args[1]);
@@ -463,6 +463,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setDrivePages':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'driving pages is on or off' };
                 return deps.agentOps.setDrivePages(args[0], args[1]);
+            case 'agents.setMcpServer':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'Name the MCP server, and say on or off.' };
+                return deps.agentOps.setMcpServer(args[0], args[1], args[2]);
             case 'agents.setIssueWatch':
                 if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
                 return deps.agentOps.setIssueWatch(args[0], args[1]);
@@ -489,6 +492,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.toolOutput':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'toolOutput names an agent and a tool call' };
                 return deps.agentOps.toolOutput ? deps.agentOps.toolOutput(args[0], args[1]) : { ok: false, reason: 'this host keeps no tool outputs' };
+            case 'agents.attachment':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'attachment names an agent and an image' };
+                return deps.agentOps.attachment ? deps.agentOps.attachment(args[0], args[1]) : { ok: false, reason: 'this host keeps no images' };
             case 'workspaces.previewAdd':
                 // Preserve the retired native wizard's early refusals before any coercion or disk operation.
                 if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
@@ -613,6 +619,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.setGoverns(str(args[0]), Array.isArray(args[1]) ? args[1].map(str) : []);
             case 'workspaces.setDefaultAgent':
                 return deps.workspaceOps.setDefaultAgent(str(args[0]), typeof args[1] === 'string' && args[1] !== '' ? args[1] : null);
+            case 'workspaces.setMcpServer':
+                return deps.workspaceOps.setMcpServer(str(args[0]), args[1], args[2]);
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
             case 'addWorkspace':
@@ -675,6 +683,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates ? deps.updates.download() : false;
             case 'updates.install':
                 return deps.updates?.install() ?? null;
+            case 'updates.forceDrain':
+                return deps.updates?.forceDrain?.() ?? false;
             case 'updates.notes':
                 return deps.updates?.notes?.() ?? null;
             case 'headroom':
@@ -754,6 +764,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
                 deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
                 deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
+                deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };

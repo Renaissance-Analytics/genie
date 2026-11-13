@@ -9,6 +9,7 @@
  * nothing. It launches Electron, so it refuses to run anywhere but CI or a test machine. Exit 0 all passed; 1 a check
  * failed; 2 cannot run here. Every wait has a deadline, and the whole run has one.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -17,7 +18,7 @@ import { join } from 'node:path';
 // The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
 
-if (process.env.CI !== 'true' && process.env.BROWSER_PROCESS_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
+if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1' && process.env.BROWSER_PROCESS_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 if (process.platform !== 'linux') { console.error('Linux only'); process.exit(2); }
 
 const PORT = 9334;
@@ -75,15 +76,19 @@ writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WO
 
 const logFile = join(tmpdir(), 'browser-process-electron.log');
 const log = openSync(logFile, 'a');
-const xvfb = spawn('Xvfb', [DISPLAY, '-screen', '0', '1440x900x24'], { stdio: 'ignore', detached: true });
-xvfb.unref();
-await sleep(1000);
-const env = { ...process.env, DISPLAY, HOME: user, GENIE_HOME: home };
+// THE DISPLAY: the session's own when there is one (a Wayland session, as on an Omarchy machine: scripts/ci/linux.sh), and
+// a virtual X screen where there is none (a bare runner) or when CI_DISPLAY=xvfb asks for one. Nothing here needs X.
+const inSession = process.platform === 'linux' && process.env.CI_DISPLAY !== 'xvfb' && process.env.XDG_SESSION_TYPE === 'wayland' && !!process.env.WAYLAND_DISPLAY;
+// Its own Xvfb, not xvfb-run, where it needs one: under xvfb-run the display ends with the window. A session outlives it already.
+const xvfb = inSession ? null : spawn('Xvfb', [DISPLAY, '-screen', '0', '1440x900x24'], { stdio: 'ignore', detached: true });
+xvfb?.unref();
+if (xvfb) await sleep(1000);
+const env = { ...process.env, ...(inSession ? {} : { DISPLAY }), HOME: user, GENIE_HOME: home };
 const app = spawn('npx', ['electron', '.', '--no-sandbox', '--password-store=gnome-libsecret', `--remote-debugging-port=${PORT}`, `--genie-browser-debug-port=${BROWSER_PORT}`, `--user-data-dir=${data}`], { env, stdio: ['ignore', log, log], detached: true });
 const end = (code) => {
     for (const p of processes()) if (p.args.includes(data) || p.args.includes('--genie-browser') || p.args.includes(home)) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
     try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ }
-    try { process.kill(xvfb.pid, 'SIGKILL'); } catch { /* gone */ }
+    if (xvfb) { try { process.kill(xvfb.pid, 'SIGKILL'); } catch { /* gone */ } }
     if (code !== 0) {
         try { console.log(readFileSync(logFile, 'utf8').slice(-2500)); } catch { /* none */ }
         try { console.log(readFileSync(join(home, 'logs', 'genie-browser.log'), 'utf8').slice(-2500)); } catch { console.log('(no genie-browser.log)'); }
@@ -93,7 +98,7 @@ const end = (code) => {
 setTimeout(() => { console.log('FAIL the run\'s own deadline, 240 s'); end(1); }, 240_000).unref?.();
 
 try {
-    const page = await until('the window', 60_000, async () => (await targets(PORT)).find((t) => t.type === 'page' && /index\.html/.test(t.url)));
+    const page = await until('the window', 60_000, async () => mainWindow(await targets(PORT)));
     if (!page) { check(false, 'the main window came up'); end(1); }
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     check(await until('window.genie', 60_000, () => cdp.evaluate('typeof window.genie === "object" && document.readyState === "complete"')) === true, 'the main window came up, with its preload');

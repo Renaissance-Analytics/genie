@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import type { RelayHostHandle, RelayHostStatus } from './tynn-network.js';
@@ -18,33 +19,80 @@ export interface RelayHostServicePorts {
     readonly workstation: Pick<WorkstationPort, 'identity' | 'ensure' | 'legacyDone'>;
     /** The `remote_access` setting. */
     readonly enabled: () => boolean;
-    readonly readRole: (request: TynnRequest) => Promise<WorkstationRole | null>;
+    /** Tynn's role for this sign-in. `unbound`: Tynn answered, and this sign-in is not bound to a workstation (its own null). */
+    readonly readRole: (request: TynnRequest) => Promise<WorkstationRole | null | { readonly role: WorkstationRole | null; readonly unbound?: boolean }>;
     /** Start the link on this identity (`startRelayHost`, wired in genie-host). */
     readonly start: (input: { host: string; workstationId: string; fingerprint: string; onStatus: (status: RelayHostStatus) => void }) => RelayHostHandle;
     readonly onChange: () => void;
+    /** A timer, for reading the role again when Tynn did not answer. Absent = only the callers' own reads. */
+    readonly schedule?: (ms: number, fn: () => void) => () => void;
 }
+
+/** How long before the role is read again after no answer: 5 s, 15 s, 1 min, then every 5 min until Tynn answers. */
+const ROLE_RETRY_MS = [5_000, 15_000, 60_000, 300_000] as const;
 
 export interface RelayHostView {
     readonly workstation: TynnWorkstationState | null;
     readonly role: WorkstationRole | null;
+    /** What Tynn answered, `null` = no answer yet: what a window shows, and what tells a drone from "not known". */
+    readonly said?: WorkstationRole | null;
+    /** Why the role is not known, in words a person can act on, when genie-host knows; `null` = a read that got no answer. */
+    readonly unknownWhy?: string | null;
     readonly relay: RelayHostStatus;
+    /**
+     * WHICH VIEW THIS IS (Tynn #656): this genie-host's run, and how many changes it had told when the view was taken. A
+     * window keeps the newest: a call's reply settles a turn after the read that carried it, so an event that came in the
+     * same read — a first ticket failing just after `register` answered "connecting" — was overwritten by the older reply,
+     * and the window said "connecting" for good while genie-host said "unavailable".
+     */
+    readonly epoch: string;
+    readonly rev: number;
 }
 
 export class RelayHostService {
     readonly #ports: RelayHostServicePorts;
     #workstation: TynnWorkstationState | null = null;
-    /** A drone until Tynn's first answer (fail closed). */
+    /** A drone until Tynn's first answer (fail closed): what connecting out is gated on. */
     #role: WorkstationRole | null = 'drone';
+    /**
+     * What Tynn SAID, and nothing else: what a window shows (beta.61.1). A Pilot whose read had not answered, or had failed,
+     * was shown as a drone and lost its host picker; showing is not the boundary (Tynn refuses a drone, and connecting out
+     * still reads `#role`).
+     */
+    #said: WorkstationRole | null = null;
+    #unbound = false;
+    #retries = 0;
+    #registerRetries = 0;
+    #registerWaiting = false;
+    #retryWaiting = false;
+    #cancelRetry: () => void = () => {};
     #relay: RelayHostStatus = { state: 'off' };
     #handle: RelayHostHandle | null = null;
     #relayFor: string | null = null;
     #registering: Promise<void> | null = null;
     #legacy: LegacyIdentity | null = null;
     #again = false;
+    readonly #epoch = randomUUID();
+    #rev = 0;
 
     constructor(ports: RelayHostServicePorts) { this.#ports = ports; }
 
-    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, relay: this.#relay }; }
+    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, said: this.#said, unknownWhy: this.unknownWhy(), relay: this.#relay, epoch: this.#epoch, rev: this.#rev }; }
+
+    /** Every change is numbered before the windows are told, so the view they are sent is newer than any taken before it. */
+    #changed(): void {
+        this.#rev += 1;
+        this.#ports.onChange();
+    }
+
+    /** Why connecting out cannot be decided, when it is not "Tynn did not answer" (beta.61.1): true words, with what to do. */
+    unknownWhy(): string | null {
+        if (this.#said !== null || this.#role === null) return null;
+        if (this.#workstation && !this.#workstation.registered) return `This machine is not registered with Tynn, so it did not connect: ${this.#workstation.reason}`;
+        if (this.#unbound) return 'Tynn says this sign-in is not attached to this workstation yet, so Genie did not connect. Genie is attaching it again; try again in a moment. If this stays, sign out of Tynn in Genie and sign in again.';
+        return null;
+    }
+    said(): WorkstationRole | null { return this.#said; }
     role(): WorkstationRole | null { return this.#role; }
 
     /** Register with the Tynn in use, one at a time. Genie 1's record arriving during a run gets a run of its own. */
@@ -68,23 +116,54 @@ export class RelayHostService {
             const settled = legacy ? await this.#ports.workstation.legacyDone(host).catch(() => null) : null;
             const result = await this.#ports.workstation.ensure({ host, legacy: legacy && legacy.workstationId !== settled ? legacy : null })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
-            this.#workstation = result.ok ? { registered: true, host, workstationId: result.workstationId, role: this.#role } : { registered: false, reason: result.reason, role: this.#role };
+            // Not registered (a key that could not be read, Tynn not reached): tried again by itself, backing off.
+            if (!result.ok) this.#registerLater(); else { this.#registerRetries = 0; }
+            this.#workstation = result.ok ? { registered: true, host, workstationId: result.workstationId, role: this.#said } : { registered: false, reason: result.reason, role: this.#said };
         }
         await this.readRole();
         await this.apply();
-        this.#ports.onChange();
+        this.#changed();
     }
 
     /** What Tynn says this machine is: Tynn's answer only; signed in, no answer is a drone. */
     async readRole(): Promise<void> {
         const account = this.#ports.account();
         const signedIn = account?.status().signedIn === true;
-        const role = signedIn && account ? await this.#ports.readRole(account.request) : null;
+        // A read that fails is no answer: connecting out fails closed, and nothing is said in the window's name.
+        const answer = signedIn && account ? await this.#ports.readRole((path, init) => account.request(path, init)).catch(() => null) : null;
+        const role = answer !== null && typeof answer === 'object' ? answer.role : answer;
+        const unbound = answer !== null && typeof answer === 'object' && answer.unbound === true && role === null;
         const next = signedIn ? effectiveRoleOf({ signedIn: true, role }) : effectiveRoleOf({ signedIn: false });
-        if (next === this.#role) return;
+        // Signed in and unanswered: read again by itself, backing off, so a slow or failed first read is not the session's.
+        if (signedIn && role === null) this.#readRoleLater();
+        else { this.#retries = 0; this.#cancelRetry(); this.#cancelRetry = () => {}; this.#retryWaiting = false; }
+        if (next === this.#role && role === this.#said && unbound === this.#unbound) return;
         this.#role = next;
-        if (this.#workstation) this.#workstation = { ...this.#workstation, role: next };
-        this.#ports.onChange();
+        this.#said = role;
+        this.#unbound = unbound;
+        if (this.#workstation) this.#workstation = { ...this.#workstation, role };
+        this.#changed();
+    }
+
+    #registerLater(): void {
+        if (!this.#ports.schedule || this.#registerWaiting) return;
+        this.#registerWaiting = true;
+        const wait = ROLE_RETRY_MS[Math.min(this.#registerRetries, ROLE_RETRY_MS.length - 1)]!;
+        this.#registerRetries += 1;
+        this.#ports.schedule(wait, () => { this.#registerWaiting = false; void this.register().catch(() => {}); });
+    }
+
+    #readRoleLater(): void {
+        if (!this.#ports.schedule || this.#retryWaiting) return;
+        this.#retryWaiting = true;
+        const wait = ROLE_RETRY_MS[Math.min(this.#retries, ROLE_RETRY_MS.length - 1)]!;
+        this.#retries += 1;
+        // With a workstation on record, no role may mean this sign-in is not bound to it: register again (its proof attaches
+        // it), which reads the role again. With none, only the read.
+        this.#cancelRetry = this.#ports.schedule(wait, () => {
+            this.#retryWaiting = false;
+            if (this.#workstation?.registered) void this.register().catch(() => {}); else void this.readRole();
+        });
     }
 
     /** The link follows the switch and the registration: on while `remote_access` is on and this machine is registered. */
@@ -94,20 +173,20 @@ export class RelayHostService {
         if (want === this.#relayFor) return;
         this.#stopLink();
         this.#relayFor = want;
-        if (!want || !registered) { this.#ports.onChange(); return; }
+        if (!want || !registered) { this.#changed(); return; }
         const identity = await this.#ports.workstation.identity(registered.host).catch(() => null);
-        if (!identity || this.#relayFor !== want) { this.#ports.onChange(); return; }
+        if (!identity || this.#relayFor !== want) { this.#changed(); return; }
         this.#handle = this.#ports.start({
             host: registered.host, workstationId: identity.workstationId, fingerprint: identity.fingerprint,
-            onStatus: (status) => { this.#relay = status; this.#ports.onChange(); },
+            onStatus: (status) => { this.#relay = status; this.#changed(); },
         });
-        this.#ports.onChange();
+        this.#changed();
     }
 
     stop(): void {
         this.#stopLink();
         this.#relayFor = null;
-        this.#ports.onChange();
+        this.#changed();
     }
 
     #stopLink(): void {

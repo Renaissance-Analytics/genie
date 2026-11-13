@@ -1,5 +1,7 @@
+import { decodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
@@ -73,7 +75,7 @@ import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
-import type { CrashStateView } from '../core/crash-record.js';
+import type { CrashStateView, WindowBeatPayload } from '../core/crash-record.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -152,6 +154,8 @@ interface Replica {
     ledger: { seq: number; rows: TimedEvent[] } | null;
     /** When the window last read the ledger: an agent nobody reads for `ledgerIdleMs` is unwatched. */
     ledgerReadAt: number;
+    /** A change cut in frames is part-applied: its last frame has not come (`EngineAgentUpdate.more`, Tynn #659). */
+    partial: boolean;
 }
 
 const EMPTY_VIEW: EngineAgentView = { probe: null, runOf: null, promptable: null, lastTurnEnd: null, turns: 0, turnsEndedThisRun: 0, recentStderr: [], refusal: null, unusableThreadId: null, models: { state: false, switch: false }, deliverable: null, inTurn: false, queued: [] };
@@ -190,6 +194,7 @@ export class SessionEngineClient {
     #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
     #gapps: GAppBookApi | null = null;
+    readonly #gappsChanged = new Set<() => void>();
     #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
@@ -252,7 +257,7 @@ export class SessionEngineClient {
                     this.#welcome = welcomed;
                     this.#seenSinceWelcome = new Set();
                     // Every replica is re-based: the host sends each running agent in full.
-                    for (const r of this.#agents.values()) { r.rows = null; r.ledger = null; }
+                    for (const r of this.#agents.values()) { r.rows = null; r.ledger = null; r.partial = false; }
                     return;
                 }
                 if (m.kind === 'event') {
@@ -391,6 +396,9 @@ export class SessionEngineClient {
             case 'catalog.changed':
                 void this.catalog().apply(payload as CatalogChange).catch(() => {});
                 return;
+            case 'gapps.changed':
+                for (const listener of [...this.#gappsChanged]) listener();
+                return;
             case 'plugins.event':
                 this.plugins().rebase(payload as PluginsDump);
                 return;
@@ -485,7 +493,7 @@ export class SessionEngineClient {
 
     #applyAgent(update: EngineAgentUpdate): void {
         let r = this.#agents.get(update.id);
-        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0 }; this.#agents.set(update.id, r); }
+        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0, partial: false }; this.#agents.set(update.id, r); }
         this.#seenSinceWelcome.add(update.id);
         r.view = update.view;
         const id = update.id as AgentId;
@@ -494,6 +502,10 @@ export class SessionEngineClient {
         const seq = update.seq;
         r.rows = applyPatch(r.rows, update.rows, seq, this.#options.log);
         if (update.ledger) r.ledger = applyPatch(r.ledger, update.ledger, seq, this.#options.log);
+        // ONE CHANGE IS ONE ANNOUNCEMENT (Tynn #659): a long patch comes in frames, and announcing each one showed a first
+        // ledger in parts, oldest first — the chat's replies "slowly build". Said once its last frame is in.
+        r.partial = update.more === true;
+        if (r.partial) return;
         this.#emit(id);
     }
 
@@ -527,7 +539,7 @@ export class SessionEngineClient {
             }
             if (method === 'client.remoteInvoke') {
                 if (!this.#options.onRemoteInvoke) throw new Error('this window answers no remote calls');
-                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), Array.isArray(args[1]) ? args[1] : [], forwardedCallContext(args[2])) };
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), decodeRemoteInvokeArgs(String(args[0]), Array.isArray(args[1]) ? args[1] : []), forwardedCallContext(args[2])) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -863,14 +875,21 @@ export class SessionEngineClient {
             install: (folder, options) => this.#gappsRequest('install', [folder, options]),
             setOn: async (id, on) => { await this.#gappsRequest('setOn', [id, on]); },
             uninstall: async (id) => { await this.#gappsRequest('uninstall', [id]); },
+            allowPreviewNetwork: async (id, allowed) => { await this.#gappsRequest('allowPreviewNetwork', [id, allowed]); },
         };
         return this.#gapps;
+    }
+
+    /** The host's GApp book changed (Tynn #596). */
+    onGappsChanged(listener: () => void): () => void {
+        this.#gappsChanged.add(listener);
+        return () => { this.#gappsChanged.delete(listener); };
     }
 
     /** One window of one app (Tynn #595): this process opens it, and the token stays here. */
     gappSessions(): GAppSessionsApi {
         return {
-            open: (packageId) => this.#gappsRequest('openSession', [packageId]),
+            open: (packageId, options) => this.#gappsRequest('openSession', [packageId, options ?? {}]),
             close: (token) => { void this.#gappsRequest('closeSession', [token]).catch(() => undefined); },
         };
     }
@@ -1136,13 +1155,24 @@ export class SessionEngineClient {
      */
     ledgerFor(agentId: AgentId): readonly TimedEvent[] {
         let r = this.#agents.get(agentId);
-        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0 }; this.#agents.set(agentId, r); }
+        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0, partial: false }; this.#agents.set(agentId, r); }
         r.ledgerReadAt = (this.#options.now ?? Date.now)();
         if (!this.#watched.has(agentId)) {
             this.#watched.add(agentId);
             void this.call('engine.watchLedger', [agentId]);
         }
         return r.ledger?.rows ?? NO_ROWS;
+    }
+
+    /**
+     * WHETHER THE LEDGER THIS WINDOW HOLDS IS NOT YET THE AGENT'S CONVERSATION (Tynn #659): watched, and none sent yet (a
+     * first read, or a switch back after `sweepLedgers` dropped it), a change still coming in frames, or the host still
+     * reading its recorded history. `ledgerFor` answers no rows then, which is "loading", never "no conversation".
+     */
+    historyPending(agentId: AgentId): boolean {
+        if (!this.#watched.has(agentId)) return false;
+        const r = this.#agents.get(agentId);
+        return !r || r.ledger === null || r.partial || r.view.historyPending === true;
     }
 
     start(record: AgentRecord, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -1207,6 +1237,11 @@ export class SessionEngineClient {
         return this.#value('engine.deliverOwed', [agentId, then ?? null], 0);
     }
 
+    /** A deleted agent's last shown rows go with it, on the host (`SessionHost.forgetShown`, Tynn #647). */
+    async forgetShown(agentId: AgentId): Promise<void> {
+        await this.#value('engine.forgetShown', [agentId], false);
+    }
+
     ended(agentId: AgentId): Promise<StopVerdict | null> {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
     }
@@ -1221,12 +1256,28 @@ export class SessionEngineClient {
         return this.#value<ToolOutputReply>('engine.toolOutput', [agentId, toolCallId], { ok: false, reason: 'Genie’s agents are not running yet' });
     }
 
+    /** One image a thread kept, read by the host from its own store (`SessionHost.attachment`, Tynn #642). */
+    attachment(agentId: AgentId, attachmentId: string): Promise<AttachmentReply> {
+        return this.#value<AttachmentReply>('engine.attachment', [agentId, attachmentId], { ok: false, reason: 'Genie’s agents are not running yet' });
+    }
+
     async settled(): Promise<void> {
         await this.#value('engine.settled', [], false);
     }
 
     async drained(exitWithinMs: number): Promise<void> {
         await this.#value('engine.drained', [exitWithinMs], false);
+    }
+
+    /**
+     * A PROVIDER'S MODELS, ASKED OF GENIE-HOST (beta.61.1). The window used to launch the provider's CLI itself to ask, and only
+     * genie-host prepares the process supervisor a launch needs on Windows: a new agent's model list failed. Never throws: a
+     * link that is down is a reason, like any other.
+     */
+    async providerModels(provider: string, options: { refresh?: boolean } = {}): Promise<import('../core/provider-models.js').ModelChoices> {
+        const reply = await this.call('engine.providerModels', [provider, options.refresh === true]);
+        if (!reply.ok) return { ok: false, provider, reason: reply.reason };
+        return reply.value as import('../core/provider-models.js').ModelChoices;
     }
 
     /** `null` when the agent is not running or its driver cannot say (as the host answers); otherwise the host's answer. */
@@ -1256,7 +1307,7 @@ export class SessionEngineClient {
     }
 
     /** Window main's heartbeat to genie-host's hang watchdog (Tynn #386): a notification (call id 0), no reply. Nothing while not linked. */
-    heartbeat(beat: { pid: number; rss: number; bye?: true }): void {
+    heartbeat(beat: WindowBeatPayload): void {
         const t = this.#transport;
         if (t === null || this.#welcome === null) return;
         t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.heartbeat', args: [beat] }));

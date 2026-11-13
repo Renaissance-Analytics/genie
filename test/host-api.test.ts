@@ -36,7 +36,6 @@ function fakes() {
             subscribe: (cb) => { listeners.agent.add(cb); return () => listeners.agent.delete(cb); },
         },
         registerAgent: async (workspaceId, input) => { calls.push(`register:${workspaceId}:${input.name}:${input.provider}`); return { ok: true, id: 'agent_new', name: input.name }; },
-        attention: { finished: () => [{ id: 'fin_1', agentId: 'agent_a', agentName: 'atlas', handoff: 'carry on', at: 't', seen: false }] as never, markSeen: (id) => { calls.push(`seen:${id}`); } },
         terminals: {
             open: (o) => { calls.push(`term-open:${o.workspaceId}:${o.cwd}:${o.cols ?? '-'}:${o.env?.DB_PORT ?? '-'}`); return { id: 'term_1', pid: 7, shell: 'sh', scrollback: '' }; },
             write: (id, d) => { calls.push(`term-write:${id}:${d}`); return true; },
@@ -56,6 +55,7 @@ function fakes() {
             confirmAddFromTynn: async (parent, projectId) => { calls.push(`ws-add-tynn:${parent}:${projectId}`); return { ok: true }; },
             hibernate: async (id) => { calls.push(`ws-hibernate:${id}`); return { ok: true }; },
             setDefaultAgent: async (id, agentId) => { calls.push(`ws-default:${id}:${agentId}`); return { ok: true }; },
+            setMcpServer: async (id, name, on) => { calls.push(`ws-mcp:${id}:${String(name)}:${String(on)}`); return { ok: true }; },
             wake: async (id) => { calls.push(`ws-wake:${id}`); return { ok: true }; },
             remove: async (id) => { calls.push(`ws-remove:${id}`); return { ok: true }; },
             listRepos: async (id) => { calls.push(`ws-repos:${id}`); return { ok: true, repos: [] }; },
@@ -79,6 +79,7 @@ function fakes() {
             setAutoApprove: async (id, on) => { calls.push(`agent-auto:${id}:${on}`); return { ok: true }; },
             setManageTabs: async (id, on) => { calls.push(`agent-tabs:${id}:${on}`); return { ok: true }; },
             setDrivePages: async (id, on) => { calls.push(`agent-pages:${id}:${on}`); return { ok: true }; },
+            setMcpServer: async (id, name, on) => { calls.push(`agent-mcp:${id}:${String(name)}:${String(on)}`); return { ok: true }; },
             setIssueWatch: async (id, setting) => { calls.push(`agent-issue-watch:${id}:${JSON.stringify(setting)}`); return { ok: true }; },
             setPermissions: async (id, permissions) => { calls.push(`agent-permissions:${id}:${permissions}`); return { ok: true }; },
             setModel: async (id, model) => { calls.push(`agent-model:${id}:${model}`); return { ok: true }; },
@@ -115,9 +116,8 @@ describe('invoke', () => {
         // An approval's note crosses the wire too (beta.33 item 16): a remote window's rejection reaches the agent.
         expect(await api.invoke('answerApproval', ['agent_a', 'deny', 'not that file'])).toEqual({ ok: true });
         expect(await api.invoke('addAgent', ['tynn', { name: 'scout', purpose: 'Triage', provider: 'codex' }])).toEqual({ ok: true, id: 'agent_new' });
-        expect(await api.invoke('restartWithHandoff', ['agent_a', 'fin_1'])).toEqual({ ok: true });
         // Opening starts nothing any more (q_04ce323c): no `start:` before the stop.
-        expect(f.calls).toEqual(['stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'approve:agent_a:deny:not that file', 'register:tynn:scout:codex', 'agent-restart:agent_a:graceful', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
+        expect(f.calls).toEqual(['stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'approve:agent_a:deny:not that file', 'register:tynn:scout:codex']);
         expect(api.workspaceOfAgent('agent_a')).toBe('tynn');
         expect(api.workspaceOfAgent('nope')).toBeNull();
     });
@@ -173,6 +173,19 @@ describe('invoke', () => {
         expect(await api.invoke('agents.toolOutput' as never, ['agent_a', 7])).toMatchObject({ ok: false });
         expect(asked).toHaveLength(1);
         expect(capabilityOf('agents.toolOutput' as never)).toBe('read');
+    });
+
+    it('agents.attachment (Tynn #642): one image a thread kept, on demand, from the host; a read, agent-scoped; its arguments narrowed', async () => {
+        const f = fakes();
+        const asked: string[] = [];
+        const attachment = async (agentId: string, id: string) => { asked.push(`${agentId}:${id}`); return { ok: true as const, mimeType: 'image/png', data: 'iVBORw0K', bytes: 6 }; };
+        const api = buildHostApi({ ...f.deps, agentOps: { ...f.deps.agentOps, attachment } } as typeof f.deps);
+        expect(await api.invoke('agents.attachment' as never, ['agent_a', 'abc'])).toEqual({ ok: true, mimeType: 'image/png', data: 'iVBORw0K', bytes: 6 });
+        expect(asked).toEqual(['agent_a:abc']);
+        expect(await api.invoke('agents.attachment' as never, ['agent_a', 7])).toMatchObject({ ok: false });
+        expect(await api.invoke('agents.attachment' as never, ['agent_a', ''])).toMatchObject({ ok: false });
+        expect(asked).toHaveLength(1);
+        expect(capabilityOf('agents.attachment' as never)).toBe('read');
     });
 
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {

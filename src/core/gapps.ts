@@ -6,7 +6,7 @@
 import type { GrantScope, ReviewItem } from './gapp-grants.js';
 
 /** What a window can ask of the GApp book (V7), its own window's, never another machine's. */
-export const GAPP_METHODS = ['gapps.list', 'gapps.review', 'gapps.install', 'gapps.setOn', 'gapps.uninstall', 'gapps.open'] as const;
+export const GAPP_METHODS = ['gapps.list', 'gapps.review', 'gapps.install', 'gapps.setOn', 'gapps.uninstall', 'gapps.open', 'gapps.preview', 'gapps.allowPreviewNetwork'] as const;
 export type GAppMethod = (typeof GAPP_METHODS)[number];
 export const isGappMethod = (method: unknown): method is GAppMethod => typeof method === 'string' && (GAPP_METHODS as readonly string[]).includes(method);
 
@@ -36,10 +36,23 @@ export interface GAppsApi {
     uninstall(id: string): Promise<void>;
     /** Open the app's own window, or bring it to the front. Rejects with why it could not. */
     open(id: string): Promise<void>;
+    /** Run a workspace's preview of this app in its own window; its first run asks the person on the Deck (V8). */
+    preview(packageId: string): Promise<void>;
+    /** Let an Unverified preview reach its hosts, or take that back. */
+    allowPreviewNetwork(packageId: string, allowed: boolean): Promise<void>;
+    /** The book changed, here or in another window: read the list again. Returns the function that stops listening. */
+    onChanged(listener: () => void): () => void;
 }
 
-/** What the host's book does; opening is the window process's own. */
-export type GAppBookApi = Omit<GAppsApi, 'open'>;
+/** What the host's book does; opening and listening are the window's own. */
+export type GAppBookApi = Omit<GAppsApi, 'open' | 'onChanged' | 'preview'>;
+
+/** The review, as the Deck says it: everything it asks for, in Genie's words, and where it would act. */
+export function gappInstallDetail(review: GAppReview, where: string): string {
+    const asks = review.items.map((item) => (item.kind === 'element' ? `${item.name} (${item.description})` : item.kind === 'network' ? `network access to ${item.host}` : `a new publisher, ${item.to}, was ${item.from}`));
+    const who = review.publisher === 'unverified' ? 'Unverified: no publisher has signed it' : `signed by ${review.publisher}`;
+    return `${review.name} ${review.version}, ${who}, to act in ${where}. It asks for: ${asks.length === 0 ? 'nothing' : asks.join('; ')}`;
+}
 
 /** One window of one app, from the host to the process that opens it. The token never reaches a Genie page. */
 export interface GAppSessionInfo {
@@ -51,7 +64,7 @@ export interface GAppSessionInfo {
 }
 
 export interface GAppSessionsApi {
-    open(packageId: string): Promise<GAppSessionInfo>;
+    open(packageId: string, options?: { preview?: boolean }): Promise<GAppSessionInfo>;
     close(token: string): void;
 }
 
@@ -66,6 +79,13 @@ export interface GAppListing {
     readonly dev: boolean;
     /** A dev launcher's workspace, by name. */
     readonly workspace?: string;
+    /** A dev launcher's app (its `id` is the launcher's own). */
+    readonly packageId?: string;
+    /** A dev launcher not signed as it is now: no network until the person allows it. */
+    readonly unverified?: boolean;
+    readonly networkAllowed?: boolean;
+    /** Why this workspace has no launcher (its package is offered from another): said in the row, with nothing to run. */
+    readonly reason?: string;
 }
 
 /**

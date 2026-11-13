@@ -1,4 +1,4 @@
-import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS, UNKNOWN_HEADER, mainStalls, parseBeat, toMb, type CrashHeader, type CrashRecord, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
+import { EXIT_UNSEEN, HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS, UNKNOWN_HEADER, mainStalls, parseBeat, toMb, type CrashHeader, type CrashRecord, type LostExit, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
 
 /**
  * GENIE-HOST'S HANG WATCHDOG (Tynn story #386; spec `.ai/plans/genie-crash-safe-mode-reporting-spec.md` §1).
@@ -18,16 +18,29 @@ import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS,
  *    {@link LOST_GRACE_MS}: its process gone, and this host not ending itself (its own end writes the clean-exit marker),
  *    it is a `lost` record with its last beat and RSS. A window still alive only lost its link; it reconnects.
  *
- * A GAP IN THIS HOST'S OWN CLOCK (the machine asleep — the window slept too — or this host's loop held) PAUSES every
- * wait: the tick runs every second, so a tick that comes over 5 s late says the host was not running either, and that
- * stalled time comes off each window's silence. It used to restart the wait, and on a loaded machine (omarchy-test,
- * 2026-11-06: the host's loop 8–12 s late twice in every 40 s hold) a real hang was never reached. A window silent for
- * 30 s of the host's awake time is a hang; a sleep is one stalled span, so a window that beats after it is not. Each late
+ * A GAP IN THIS HOST'S OWN CLOCK (the machine asleep, or this host's loop held) HOLDS JUDGMENT for {@link STALL_GRACE_MS}:
+ * the tick runs every second, so a tick that comes over 5 s late says the host was not running, and a window's beats sent
+ * meanwhile are still waiting in its socket, read just after that late tick. Once they have had that time to land, a
+ * window's real silence is what counts. A hung window stays silent; a window whose beats were queued does not.
+ *
+ * A GAP FAR BEYOND ANY LOOP STALL ({@link SLEEP_GAP_MS}: the machine slept) STARTS EVERY WAIT AGAIN FROM THE WAKE: the
+ * window slept too, and on a loaded machine (or throttled) it can take well over a few seconds to beat again. Silence
+ * before the sleep does not count, so a window is judged hung only after a full {@link HANG_MS} of silence awake. A false
+ * hang kills the person's window; a real one after a sleep is still recorded, 30 s later. The loop stalls that hid real
+ * hangs (3.5 to 12 s) are far under this, so they still get only the short grace above.
+ *
+ * History: a gap first RESTARTED every wait, then (2026-11-06) took the stalled time off each window's silence. On a
+ * loaded machine both missed real hangs: omarchy-test, the 61.2 gate's hang row (2026-11-12), the host's loop 3.5, 8.4
+ * and 11.6 s late inside a 40 s hold left about 16 s of counted silence, and the second hang was never recorded. Each late
  * tick is logged with the CPU this host spent across it and its memory: busy (its own work) or not run at all.
  */
 
-/** A tick this late says the host itself did not run (sleep, or its own loop held): nobody's silence is counted across it. */
+/** A tick this late says the host itself did not run (sleep, or its own loop held). */
 const CLOCK_GAP_MS = 5_000;
+/** After such a tick, how long the beats a window sent meanwhile have to land before its silence is judged. */
+const STALL_GRACE_MS = 3_000;
+/** A tick this late says the machine slept (no loop stall seen on a loaded machine comes near it): waits restart at the wake. */
+const SLEEP_GAP_MS = 60_000;
 const SAMPLES_KEPT = 60;
 
 export interface HangWatchdogOptions {
@@ -58,6 +71,13 @@ export interface HangWatchdogOptions {
     readonly released?: (pid: number) => Promise<boolean>;
     /** Each hang: when, how many within the window of {@link RELAUNCH_WINDOW_MS}, and whether a new window was started. */
     readonly onHang?: (hang: { at: number; hangs: number; relaunched: boolean }) => void;
+    /**
+     * How a window genie-host STARTED itself ended (after a hang, or an update): its exit code and signal, or `null` for
+     * a pid it did not start (#711). Absent = none known.
+     */
+    readonly exitOf?: (pid: number) => { code: number | null; signal: string | null } | null;
+    /** The window's OWN exit record for `pid`, written at or after `since` (its first beat), or `null` (#711). */
+    readonly ownExit?: (pid: number, since: number) => { reason: string; code: number | null } | null;
     readonly hangMs?: number;
     readonly lostMs?: number;
     readonly rssEveryMs?: number;
@@ -65,8 +85,14 @@ export interface HangWatchdogOptions {
 
 interface Watched {
     pid: number;
+    /** Its first beat on this connection: which window, by when it came (#711). */
+    firstBeatAt: number;
     lastBeatAt: number;
     rss: number;
+    route: string | null;
+    heap: { used: number; limit: number } | null;
+    /** How long it had been silent when its link dropped. */
+    silentBeforeDrop: number | null;
     bye: boolean;
     /** The watchdog ended it for a hang: recorded once, and never again as lost. */
     ended: boolean;
@@ -117,13 +143,16 @@ export class HangWatchdog {
         if (beat === null) return;
         const now = this.#now();
         const known = this.#windows.get(connId);
+        const heap = beat.heapUsed !== undefined && beat.heapLimit !== undefined ? { used: beat.heapUsed, limit: beat.heapLimit } : null;
         if (known) {
             known.pid = beat.pid;
             known.lastBeatAt = now;
             known.rss = beat.rss;
+            if (beat.route !== undefined) known.route = beat.route;
+            if (heap !== null) known.heap = heap;
             if (beat.bye) known.bye = true;
         } else {
-            this.#windows.set(connId, { pid: beat.pid, lastBeatAt: now, rss: beat.rss, bye: beat.bye === true, ended: false, droppedAt: null });
+            this.#windows.set(connId, { pid: beat.pid, firstBeatAt: now, lastBeatAt: now, rss: beat.rss, route: beat.route ?? null, heap, silentBeforeDrop: null, bye: beat.bye === true, ended: false, droppedAt: null });
         }
         this.#newestRss = { at: now, rss: beat.rss, ...(beat.rendererRss !== undefined ? { pageRss: beat.rendererRss } : {}) };
     }
@@ -134,6 +163,7 @@ export class HangWatchdog {
         if (!w) return;
         if (w.bye || w.ended || this.#shuttingDown) { this.#windows.delete(connId); return; }
         w.droppedAt = this.#now();
+        w.silentBeforeDrop = w.droppedAt - w.lastBeatAt;
     }
 
     /** This host is ending (it writes the clean-exit marker last): no window that drops with it is lost, and none is ended. */
@@ -145,6 +175,9 @@ export class HangWatchdog {
         return this.#samples;
     }
 
+    /** No hang is judged before this: a late tick's grace for the beats that were waiting behind it. */
+    #judgeAfter = 0;
+
     #tick(): void {
         try {
             const now = this.#now();
@@ -154,14 +187,17 @@ export class HangWatchdog {
             const cpuSpent = cpu !== null && this.#lastCpu !== null ? Math.round(cpu - this.#lastCpu) : null;
             this.#lastCpu = cpu;
             if (gap > CLOCK_GAP_MS) {
-                // Only the stalled span comes off (the tick's own second is the window's): its wait pauses, never restarts.
+                // The beats a window sent meanwhile land after this tick: judged again once they have had time to (no hang
+                // before then). A dropped window's grace still pauses: the host held is not the window gone.
+                this.#judgeAfter = now + STALL_GRACE_MS;
                 const stalled = gap - 1_000;
+                const slept = gap > SLEEP_GAP_MS;
                 for (const w of this.#windows.values()) {
-                    w.lastBeatAt = Math.min(now, w.lastBeatAt + stalled);
+                    if (slept) w.lastBeatAt = Math.max(w.lastBeatAt, now);
                     if (w.droppedAt !== null) w.droppedAt = Math.min(now, w.droppedAt + stalled);
                 }
                 const rss = toMb(this.#safe(() => this.#o.hostRss(), 0));
-                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} cpu_ms=${cpuSpent ?? '-'} host_rss_mb=${rss} (asleep, or its loop held); the window waits pause for it`);
+                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} cpu_ms=${cpuSpent ?? '-'} host_rss_mb=${rss} (asleep, or its loop held); ${slept ? 'the machine slept: the window waits start again from now' : `the window waits are judged again after ${STALL_GRACE_MS} ms`}`);
             }
             if (now - this.#lastRssAt >= (this.#o.rssEveryMs ?? RSS_EVERY_MS)) {
                 this.#lastRssAt = now;
@@ -176,7 +212,7 @@ export class HangWatchdog {
                     }
                     continue;
                 }
-                if (!w.ended && !w.bye && now - w.lastBeatAt >= (this.#o.hangMs ?? HANG_MS)) this.#hang(w, now);
+                if (!w.ended && !w.bye && now >= this.#judgeAfter && now - w.lastBeatAt >= (this.#o.hangMs ?? HANG_MS)) this.#hang(w, now);
             }
         } catch (error) {
             // The watchdog's own fault never takes the host down with it.
@@ -232,6 +268,11 @@ export class HangWatchdog {
     }
 
     #lost(w: Watched, now: number): void {
+        // HOW IT ENDED, as far as anyone saw (#711): the exit genie-host saw for a window it started, else the window's own
+        // exit record (an exit path it caught), else nothing — and the record says what that leaves.
+        const child = this.#safe(() => this.#o.exitOf?.(w.pid) ?? null, null);
+        const own = child === null ? this.#safe(() => this.#o.ownExit?.(w.pid, w.firstBeatAt) ?? null, null) : null;
+        const exit: LostExit | null = child !== null ? { code: child.code, signal: child.signal, seenBy: 'genie-host' } : own !== null ? { code: own.code, signal: null, seenBy: 'window', reason: own.reason } : null;
         const record: CrashRecord = {
             ...this.#safe(() => this.#o.header(), UNKNOWN_HEADER),
             kind: 'lost',
@@ -241,9 +282,20 @@ export class HangWatchdog {
             lastRssMb: toMb(w.rss),
             lifecycle: this.#safe(() => this.#o.lifecycle(), []),
             memory: [...this.#samples],
+            window: {
+                pid: w.pid,
+                firstBeatAt: new Date(w.firstBeatAt).toISOString(),
+                route: w.route,
+                heapMb: w.heap === null ? null : toMb(w.heap.used),
+                heapLimitMb: w.heap === null ? null : toMb(w.heap.limit),
+                silentMsBeforeDrop: w.silentBeforeDrop,
+            },
+            exit,
+            ...(exit === null ? { exitUnseen: EXIT_UNSEEN } : {}),
         };
         this.#safe(() => this.#o.write(record), undefined);
-        this.#o.log(`lost window pid=${w.pid}: its link dropped with no goodbye and the process is gone`);
+        const how = exit === null ? 'its exit was not seen' : `exit code=${exit.code ?? '-'} signal=${exit.signal ?? '-'} seen by ${exit.seenBy}`;
+        this.#o.log(`lost window pid=${w.pid} since=${new Date(w.firstBeatAt).toISOString()} silent_ms=${w.silentBeforeDrop ?? '-'} heap_mb=${w.heap === null ? '-' : `${toMb(w.heap.used)}/${toMb(w.heap.limit)}`}: its link dropped with no goodbye and the process is gone; ${how}`);
     }
 
     #safe<T>(fn: () => T, fallback: T): T {

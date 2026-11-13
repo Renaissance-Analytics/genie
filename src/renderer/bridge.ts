@@ -51,6 +51,7 @@ import type { EnvelopePlan } from '../core/envelope-plan.js';
 import type { Published, RemoteChoice } from '../core/agi-remote.js';
 import type { RepoListing } from '../core/github.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
 
 /**
@@ -119,10 +120,15 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; /** Its MCP servers (Tynn #628): switched off, and ever reported. */ mcpOff?: readonly string[]; mcpSeen?: readonly string[]; /** On for it over its workspace's default; and that default. */ mcpOn?: readonly string[]; workspaceMcpOff?: readonly string[]; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
+    /**
+     * `rows` are not yet the agent's conversation (Tynn #659): its host is still reading or sending them. The chat keeps
+     * the rows it last showed for this agent, or draws loading — never its mail rows alone. Absent = whole (an older host).
+     */
+    rowsPending?: boolean | undefined;
     /** The agent's recent AgentInbox mail with other agents (its chat shows each as a system row); absent = not read. */
     comms?: readonly MailLike[] | null | undefined;
     turns: number;
@@ -130,6 +136,8 @@ export interface AgentDetail {
     cost: number | null;
     /** Why a start was refused, if one was. Reported, never swallowed. */
     refusal: string | null;
+    /** Its provider's CLI says it is signed out (Tynn #698): Log in is offered beside Start. Absent = not known to be. */
+    providerSignedOut?: boolean | undefined;
     /** The provider's recent stderr, oldest first — the process-ended block's log. Absent from an older host = nothing known. */
     log?: readonly string[] | undefined;
     /**
@@ -282,12 +290,6 @@ export interface GenieBridge {
      * Fire-and-forget left the card locked on a refusal nobody saw (the owner, 2026-10-22).
      */
     answerApproval(agentId: string, optionId: string, note?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
-    /**
-     * "Restart with this" on a finish (§4.5): stop, start, and send the agent its own handoff note
-     * as the first prompt; the finish is marked seen only when the prompt was taken. A refusal
-     * names its reason and leaves the item on the Deck.
-     */
-    restartWithHandoff(agentId: string, finishedId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** The New agent form's answer (renderer/components/NewAgentModal.tsx): created, or the host's refusal in words. */
     addAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string } | { ok: false; reason: string }>;
     /**
@@ -406,6 +408,8 @@ export interface GenieBridge {
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<{ ok: true; governs: string[] } | { ok: false; reason: string }>;
         /** Genie 1's default agent: one of this workspace's agents, or `null` for none. */
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** One MCP server on or off as this workspace's default for its agents (Tynn #628). */
+        setMcpServer(workspaceId: string, name: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Its colour (genie#1300), written to its project.json as `appearance.color`. Optional: an older host has none. */
         setColor?(workspaceId: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
@@ -426,6 +430,11 @@ export interface GenieBridge {
          * ledger and answers it, bounded, when a person opens the row. A call with none kept is a refusal with a reason.
          */
         toolOutput(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
+        /**
+         * ONE IMAGE A THREAD KEPT (Tynn #642): what a sent message's pill shows on hover, read from the host when the pill
+         * asks — never with the thread. Named by the message row's `attachmentRefs`.
+         */
+        attachment(agentId: string, attachmentId: string): Promise<AttachmentReply>;
         /** Mode is wording for the agent (§6.2), not a permission boundary. */
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */
@@ -438,6 +447,8 @@ export interface GenieBridge {
         setManageTabs(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** May drive pages (browser rebuild step 7). */
         setDrivePages(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** One MCP server on or off for this agent (Tynn #628); it applies at the agent's next session start. */
+        setMcpServer(agentId: string, name: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What the agent hears from IssueWatch (Tynn #806). */
         setIssueWatch(agentId: string, setting: IssueWatchSetting): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What a Claude agent may do: all tools, ask before shell commands, or edits only. Refused for a Codex agent. */
@@ -560,6 +571,7 @@ export interface GenieBridge {
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
         install(): Promise<{ report: string } | null>;
+        forceDrain?(): Promise<boolean>;
         /** Read the release notes again when what is held is empty, unavailable or partial (UpdateHost.refreshNotes). */
         notes?(): Promise<UpdateState | null>;
     };
@@ -589,10 +601,12 @@ export interface UpdateState {
     percent: number | null;
     error: string | null;
     checkedAt: number | null;
+    /** Explicit check intent from the host; omitted for background checks and successful answers. */
+    userInitiated?: boolean;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('../core/update-notes.js').UpdateChangelog | 'unavailable' | null;
     /** Restart to install, as it goes (genie#1201): the restart screen's progress. */
-    installing?: { step: 'agents' | 'processes' | 'restarting'; agents: number; left: number };
+    installing?: { step: 'waiting' | 'agents' | 'processes' | 'restarting'; agents: number; left: number; reason?: 'upgrade' | 'quit'; waiting?: readonly { id: string; name: string }[]; deadline?: number; interrupted?: readonly { id: string; name: string }[] };
 }
 
 /** The updates bridge when there is no bridge: idle forever, every action refused. */
@@ -655,7 +669,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'restartWithHandoff' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;

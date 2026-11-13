@@ -102,12 +102,14 @@ function Drain([string]$file, [string]$prefix = '') {
             $stream.Seek($at, [System.IO.SeekOrigin]::Begin) | Out-Null
             $bytes = New-Object byte[] ($stream.Length - $at)
             $count = $stream.Read($bytes, 0, $bytes.Length)
-            $text = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $count)
-            # Only whole lines: the rest waits for the next look.
-            $end = $text.LastIndexOf("`n")
+            # Only whole lines: the rest waits for the next look. The position moves by the BYTES up to the last newline,
+            # found in the bytes: decoding first and counting the decoded text back into bytes drifted on any byte that
+            # is not UTF-8 (each became a 3-byte U+FFFD), and the drift ate the start of the next line read (Tynn #692).
+            $end = [Array]::LastIndexOf($bytes, [byte]10, $count - 1)
             if ($end -lt 0) { return }
-            $script:positions[$file] = $at + [System.Text.Encoding]::UTF8.GetByteCount($text.Substring(0, $end + 1))
-            foreach ($line in ($text.Substring(0, $end) -split "`r?`n")) { Write-Output "$prefix$line" }
+            $script:positions[$file] = $at + $end + 1
+            $text = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $end)
+            foreach ($line in ($text -split "`r?`n")) { Write-Output "$prefix$line" }
         } finally { $stream.Dispose() }
     } catch { Write-Output "--- could not read $file : $($_.Exception.Message)" }
 }

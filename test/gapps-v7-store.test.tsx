@@ -54,6 +54,9 @@ function fakeApi(): Fake {
         setOn: vi.fn<GAppsApi['setOn']>().mockResolvedValue(undefined),
         uninstall: vi.fn<GAppsApi['uninstall']>().mockResolvedValue(undefined),
         open: vi.fn<GAppsApi['open']>().mockResolvedValue(undefined),
+        preview: vi.fn<GAppsApi['preview']>().mockResolvedValue(undefined),
+        allowPreviewNetwork: vi.fn<GAppsApi['allowPreviewNetwork']>().mockResolvedValue(undefined),
+        onChanged: vi.fn<GAppsApi['onChanged']>(() => () => undefined),
     };
 }
 
@@ -104,7 +107,7 @@ describe('install', () => {
     it('installs what was reviewed, in this workspace by default, then says so and reads the list again', async () => {
         draw();
         await startInstall();
-        await press('consent');
+        await press('request-install');
         expect(api.install).toHaveBeenCalledWith('/packages/new', { scope: ['w1'], consent: { digest: 'd1', items: review.items } });
         expect(q('[data-gapp-success]')!.textContent).toContain('New App');
         expect(q('[data-gapp-review]')).toBeNull();
@@ -115,7 +118,7 @@ describe('install', () => {
         draw();
         await startInstall();
         act(() => { q('[data-gapp-scope] [role="switch"]')!.click(); });
-        await press('consent');
+        await press('request-install');
         expect(api.install.mock.calls[0]![1].scope).toBe('workstation');
     });
 
@@ -123,7 +126,7 @@ describe('install', () => {
         draw([notes], { ...actions, workspace: null });
         await startInstall();
         expect(q('[data-gapp-scope] [role="switch"]')).toBeNull();
-        await press('consent');
+        await press('request-install');
         expect(api.install.mock.calls[0]![1].scope).toBe('workstation');
     });
 
@@ -154,7 +157,7 @@ describe('install', () => {
         api.install.mockRejectedValueOnce(new Error('New App changed since the person reviewed it; nothing was installed.'));
         draw();
         await startInstall();
-        await press('consent');
+        await press('request-install');
         expect(q('[data-gapp-failure]')!.textContent).toContain('nothing was installed');
         expect(q('[data-gapp-success]')).toBeNull();
         await press('retry');
@@ -176,7 +179,7 @@ describe('install', () => {
         expect(q('[data-gapp-progress]')).toBeNull();
         const installing = deferred<GAppListing>();
         api.install.mockReturnValueOnce(installing.promise);
-        await press('consent');
+        await press('request-install');
         expect(q('[data-gapp-progress]')).not.toBeNull();
         installing.resolve(notes);
         await settle();
@@ -203,7 +206,7 @@ describe('update', () => {
         expect(text).toContain('new.example.com');
         expect(text).not.toContain('Knowledge base');
         expect(q('[data-gapp-scope]')).toBeNull();
-        await press('consent');
+        await press('request-install');
         expect(api.install).toHaveBeenCalledWith('/packages/new', { scope: 'workstation', consent: { digest: 'd1', items } });
     });
 });
@@ -270,7 +273,8 @@ describe('what the store shows', () => {
 
     it('a launcher of a workspace\'s app has no install-book actions', () => {
         draw([launcher]);
-        expect(q('[data-gapp="ws-shop"] [data-gapp-action]')).toBeNull();
+        // A launcher runs a preview (V8); the book's own actions are an installed app's only.
+        for (const action of ['open', 'turn-off', 'turn-on', 'uninstall']) expect(q(`[data-gapp="ws-shop"] [data-gapp-action="${action}"]`), action).toBeNull();
     });
 
     it('a window with no actions only lists', () => {
@@ -314,7 +318,7 @@ describe('the host side, over the real book', () => {
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
     it('reviews, installs, lists, turns off, and uninstalls', async () => {
-        const gapps = gappsApi(book);
+        const gapps = gappsApi(book, async () => 'allowed');
         expect(await gapps.list()).toEqual([]);
         const seen = await gapps.review(source);
         expect(seen.items[0]).toMatchObject({ kind: 'element', id: 'knowledge', name: genieCatalog().get('knowledge')!.docs.name });
@@ -326,7 +330,7 @@ describe('the host side, over the real book', () => {
     });
 
     it('what the book refuses is thrown in the book\'s words', async () => {
-        const gapps = gappsApi(book);
+        const gapps = gappsApi(book, async () => 'allowed');
         await expect(gapps.review(join(dir, 'nowhere'))).rejects.toThrow(/no readable genie-package\.json/);
         await expect(gapps.install(source, { scope: 'workstation' })).rejects.toThrow(/needs the person's consent/);
         await expect(gapps.setOn('com.example.nobody', true)).rejects.toThrow(/com\.example\.nobody/);
@@ -427,7 +431,7 @@ describe('the actions cross to the host only from a local window', () => {
     it('the engine answers a local window only, and the host hands it the book (source guard)', () => {
         const server = readFileSync(join('src', 'main', 'session-engine-server.ts'), 'utf8');
         expect(server).toMatch(/if \(method === 'engine\.gapps'\) \{\s*if \(!conn\.local \|\| !conn\.window\) throw/);
-        expect(readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8')).toMatch(/gappBook \? \{ gapps: gappsApi\(gappBook\) \} : \{\}/);
+        expect(readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8')).toMatch(/gappBook \? \{ gapps: gappsApi\(gappBook, gappAsk, /);
         expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).toMatch(/gapps: \(\) => withGappWindows\(agentEngineLink\?\.client\)/);
     });
 

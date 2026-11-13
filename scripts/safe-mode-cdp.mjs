@@ -63,6 +63,17 @@ try {
     step('A3', 'a CLEAN quit: the product\'s own, answered "Shut down everything"');
     const hostA = hostPid(h);
     check(await cleanQuit(session.inspector) === 'ok', 'A3. the quit was asked through the product\'s own app.quit()');
+    /*
+     * A QUIT WAITS FOR AGENTS MID-TURN (Tynn #616): up to 120 s, on the quit screen, for each turn to reach a safe point.
+     * These stubs stream until they are stopped, so they never do; the 62c gate's row sat out the whole wait and read
+     * "the window did not end". A person who will not wait presses the screen's "Quit now" — the product's own escape,
+     * pressed here through the same call the button makes (Shell.tsx onForce → updates.forceDrain). It answers true only
+     * once the wait is under way, so it is asked until it is. The quit is no less clean for it: the turns are cut off
+     * and recorded as such, and B2 below holds that both agents start again.
+     */
+    const page = session.cdp;
+    const forced = await until(async () => (await page.evaluate(`Promise.resolve((window.genieTest ?? window.genie).updates?.forceDrain?.() ?? false)`, 5_000)) === true || null, 30_000);
+    check(forced === true, 'A3b. the quit screen waits for the turns, and its "Quit now" ends the wait', forced === true ? '' : 'forceDrain never answered true');
     session = null;
     check(await Promise.race([app.exit, sleep(60_000).then(() => false)]) === true, 'A4. the window process ended');
     check(hostA !== null && await gone(hostA, 60_000), 'A5. genie-host ended with it (the record\'s pid is gone)', String(hostA));

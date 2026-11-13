@@ -178,7 +178,7 @@ describe('which questions are stale (the source)', () => {
     };
     const input = {
         questions: [pending('q_live', 'kai'), pending('q_ended', 'wren'), pending('q_earlier', 'ivy'), pending('q_gone', 'ghost')],
-        userList: [], unreadDms: [], finished: [], agents,
+        userList: [], unreadDms: [], agents,
     };
 
     it('gone from the roster, session ended, an earlier run asked it — each said; control: the agent still waiting is not marked', () => {

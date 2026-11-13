@@ -119,8 +119,8 @@ describe('input sent during a Codex turn', () => {
         const message = s.messages().find((m) => m.text === 'do not lose this');
         expect(message).toMatchObject({ who: 'you', delivered: false, resend: 'restart' });
         const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: s.record.id, name: 'worker', fidelity: 'declared', unread: null, messages: message ? [message] : [], context: null }} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
-        // The chat's one Restart (genie#1238): it restarts worker and sends what was not delivered.
-        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
+        // The chat's one Restart (genie#1238), the queue bar's Send all now (Tynn #702): it restarts worker and sends what was not delivered.
+        expect(control(html, 'data-action="send-all"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send all now' });
         expect(s.prompts).toEqual(['first']);
     });
 

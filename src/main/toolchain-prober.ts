@@ -79,7 +79,7 @@ export function latestIndex(ports: LatestIndexPorts): LatestIndex {
             const def = HOST_TOOLS.find((t) => t.name === tool);
             if (!def) return null;
             // npm-distributed tools (claude-code, codex): `npm outdated -g` names them by the registry's own package.
-            if (def.ownUpdater?.manager === 'npm' && def.npmPackage) return latestFromNpmOutdated((await run('npm', ['outdated', '-g', '--json'])).stdout, def.npmPackage);
+            if (def.npmPackage) return latestFromNpmOutdated((await run('npm', ['outdated', '-g', '--json'])).stdout, def.npmPackage);
             if (ports.platform === 'win32' && def.packages.winget) return latestFromWingetUpgrade((await run('winget', ['upgrade', '--id', def.packages.winget])).stdout, def.packages.winget);
             if (ports.platform === 'darwin' && def.packages.brew) return latestFromBrewOutdated((await run('brew', ['outdated', '--json'])).stdout, def.packages.brew);
             return null;
@@ -135,7 +135,8 @@ export async function runUpdate(
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
     const def = HOST_TOOLS.find((t) => t.name === tool)!;
     const before = await probeInstalled(def, run, where.platform);
-    const [binary, args] = argv(plan.command, where.platform);
+    // A vendor installer is one argv of constants (its pipe is its shell's); every other plan is a plain command line.
+    const [binary, args] = plan.argv ? [plan.argv[0]!, [...plan.argv.slice(1)]] : argv(plan.command, where.platform);
     let exitCode: number;
     try {
         exitCode = (await run(binary, args)).exitCode;

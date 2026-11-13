@@ -108,7 +108,7 @@ export function ShareWorkspaceForm({ workspaceName, workstation = false, links, 
                         <span className="text-xs font-medium text-[var(--fg-3)]">Links that reach {workspaceName}</span>
                         {revoked ? <span data-share-revoked="" role="status" className="flex items-center gap-1.5 text-xs text-[var(--fg-2)]"><Icon name="check" size="xs" />{revoked}</span> : null}
                         {links === null ? (
-                            <span className="text-xs text-[var(--fg-4)]">Asking Tynn…</span>
+                            <span className="text-xs text-[var(--fg-4)]">{problem ? 'Not loaded.' : 'Asking Tynn…'}</span>
                         ) : links.length === 0 ? (
                             <span className="text-xs text-[var(--fg-4)]">None.</span>
                         ) : (

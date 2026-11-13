@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { linuxRow, windowsFunction } from './helpers/ci-scripts.js';
 import WebSocket from 'ws';
 import { APP_BRIDGE } from '../src/core/catalog.js';
 import { appHost } from '../src/core/gapp-origin.js';
@@ -271,7 +272,7 @@ describe('the crossing', () => {
         expect(main).toMatch(/gapps: \(\) => withGappWindows\(agentEngineLink\?\.client\)/);
         expect(main).toMatch(/gapp-preload\.cjs/);
         const host = readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8');
-        expect(host).toMatch(/gappSessions: gappSessions\(gappBook, gappServer\)/);
+        expect(host).toMatch(/gappSessions: gappSessions\(gappBook, gappServer, /);
         const engine = readFileSync(join('src', 'main', 'session-engine-server.ts'), 'utf8');
         expect(engine).toMatch(/new GAppSessionOwner/);
         expect(engine).toMatch(/\.closeAll\(\)/);
@@ -281,11 +282,11 @@ describe('the crossing', () => {
         const binding = readFileSync(join('src', 'main', 'gapp-windows-electron.ts'), 'utf8');
         expect(binding).toMatch(/guardSession\(/);
         expect(binding).toMatch(/routeSession\(/);
-        expect(binding).toMatch(/session\.fromPartition\(`gapp-\$\{appSlug\(packageId\)\}`\)/);
+        expect(binding).toMatch(/session\.fromPartition\(preview \? `gapp-preview-\$\{appSlug\(packageId\)\}` : `gapp-\$\{appSlug\(packageId\)\}`\)/);
     });
 
     it('a real window row opens a real installed app, on both platforms', () => {
-        const ci = readFileSync(join('.github', 'workflows', 'ci.yml'), 'utf8');
-        expect(ci.match(/node scripts\/gapp-open-cdp\.mjs/g)).toHaveLength(2);
+        expect(linuxRow('gapp-open')).toMatch(/node scripts\/gapp-open-cdp\.mjs/);
+        expect(windowsFunction('Row-gapp-open')).toMatch(/node scripts\/gapp-open-cdp\.mjs/);
     });
 });

@@ -97,7 +97,7 @@ function activateLane(agentId: string, deckItems: readonly DeckItem[], how: How)
     }
     const route = navigated.at(-1) ?? ROUTE;
     const parsed = parseRoute(route);
-    const subject = chatSubjectFor(parsed, snapshot.agents.concat(snapshot.osAgent!), snapshot.workspaces ?? [], parsed.surface === 'dashboard' ? (chatted.at(-1) ?? null) : null);
+    const subject = chatSubjectFor(parsed, snapshot.agents.concat(snapshot.osAgent!), chatted.at(-1) ?? null);
     return { navigated, opened, parsed, subject };
 }
 
@@ -112,10 +112,10 @@ const expectAgentTab = (r: ReturnType<typeof activateLane>, id: string) => {
 };
 
 describe('a workspace dashboard agent click', () => {
-    it('CONTROL: before any click the docked chat is the workspace’s default agent, not the one clicked next', () => {
+    it('CONTROL: before any click the docked chat is genie (nothing selected yet, Tynn #639), not the one clicked next', () => {
         const parsed = parseRoute(ROUTE);
         expect(parsed.surface).toBe('workspace');
-        expect(chatSubjectFor(parsed, [row('a_kai', 'waiting'), row('a_wren'), row('a_genie')], [{ id: 'ws', defaultAgentId: 'a_kai' }])).toBe('a_kai');
+        expect(chatSubjectFor(parsed, [row('a_kai', 'waiting'), row('a_wren'), { ...row('a_genie', 'idle'), name: 'genie', workspaceId: '__genie__' }], null)).toBe('a_genie');
     });
 
     for (const how of ['click', 'Enter', 'Space'] as const) {

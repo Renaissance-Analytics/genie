@@ -165,6 +165,10 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             return withQuery(`${ws}/deck`, params);
         case 'hosting':
             if (r.tab) params.set('tab', r.tab);
+            if (r.commandRun) {
+                params.set('process', r.commandRun.processId);
+                params.set('workspace', r.commandRun.workspaceId);
+            }
             return withQuery(`${ws}/hosting`, params);
         case 'settings':
             return `genie://${ws}/settings${r.section ? `/${r.section}` : ''}`;
@@ -222,7 +226,7 @@ function routeOfPage(address: string, ctx: AddressContext): string | null {
     switch (second) {
         case 'dashboard': return `genie://dashboard?group=${params.get('group') === 'status' ? 'status' : 'workspace'}`;
         case 'deck': return `genie://deck${q(keep(['item']))}`;
-        case 'hosting': return `genie://hosting${q(keep(['tab']))}`;
+        case 'hosting': return `genie://hosting${q(keep(['tab', 'process', 'workspace']))}`;
         case 'settings': return third ? `genie://settings/${third}` : 'genie://settings';
         case 'browser': return `genie://browser${q(keep(['url']))}`;
         case 'takeover': return third ? `genie://takeover/${third}${q(keep(['login']))}` : null;
