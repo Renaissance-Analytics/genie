@@ -126,6 +126,7 @@ import {
 } from '../core/session.js';
 import type { NativeStopVerdict } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
+import type { CommandRunRef } from '../core/command-run.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
@@ -1608,6 +1609,15 @@ export class SessionHost {
      */
     needsNewDriver(agentId: AgentId): boolean {
         return this.#running.get(agentId)?.session.needsNewDriver ?? false;
+    }
+
+    /** A host-authored live command reference in this agent's ledger; never starts an absent session (#633). */
+    commandStarted(agentId: AgentId, run: CommandRunRef): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        entry.session.commandStarted(run);
+        this.#emit(agentId);
+        return true;
     }
 
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */

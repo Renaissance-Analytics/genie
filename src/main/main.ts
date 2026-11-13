@@ -2573,6 +2573,7 @@ async function boot(): Promise<void> {
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
+    composed.supervisor.onForget?.(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
     // window not in front asks for attention (taskbar flash / urgency) WITHOUT taking focus (q_8c07b142).

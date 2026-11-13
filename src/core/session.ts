@@ -1,5 +1,6 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
+import type { CommandRunRef } from './command-run.js';
 import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
 import { boundToolEvent, utf8Bytes } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
@@ -2175,6 +2176,14 @@ export class AgentSession {
      */
     reportPlan(entries: readonly { content: string; status: string }[]): void {
         void this.#emitRow({ kind: 'plan', entries: entries.map((e) => ({ content: e.content, status: e.status })) });
+        this.#changed();
+    }
+
+    /** A host-authored link to the command's existing Processes entry, published before it finishes (#633). */
+    commandStarted(run: CommandRunRef): void {
+        // Internal executor metadata includes credentials; only these safe fields belong in the ledger.
+        const commandRun = { processId: run.processId, workspaceId: run.workspaceId, command: run.command };
+        void this.#emitRow({ kind: 'notice', level: 'info', message: `Started ${commandRun.command} via services`, commandRun });
         this.#changed();
     }
 
