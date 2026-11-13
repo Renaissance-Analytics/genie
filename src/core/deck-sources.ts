@@ -88,24 +88,27 @@ function truncate(text: string, max: number): string {
  * re-ask, a done, a read are all new objects) — so an item is kept per SOURCE OBJECT, beside what else it was built from:
  * its workspace's name and colour, its agent's name, whether its agent still waits. When the object and those are the
  * same, the item is the same object as last time and nothing is built. Weakly held: a question answered, an item done, a
- * message read drops out with its source. Callers hand fresh records every time (deck-assembly.ts), so `deps` compares
- * VALUES, never the records' identity.
+ * message read drops out with its source. Callers hand fresh records every time (deck-assembly.ts), so the four values an
+ * item was built from are compared as VALUES, never the records' identity. A reused item allocates NOTHING: the values
+ * are compared as arguments, never gathered into an array or a builder closure first — those alone, for 240 questions
+ * 20 times a second, were still about 900 MB per 5 minutes in the soak.
  */
-const built = new WeakMap<object, { readonly deps: readonly unknown[]; readonly item: DeckItem }>();
+interface Kept { readonly a: unknown; readonly b: unknown; readonly c: unknown; readonly d: unknown; readonly item: DeckItem }
+const built = new WeakMap<object, Kept>();
 
-function reuse(source: object, deps: readonly unknown[], build: () => DeckItem): DeckItem {
+function keptItem(source: object, a: unknown, b: unknown, c: unknown, d: unknown): DeckItem | undefined {
     const kept = built.get(source);
-    if (kept && kept.deps.length === deps.length && kept.deps.every((d, i) => d === deps[i])) return kept.item;
-    const item = build();
-    built.set(source, { deps, item });
+    return kept !== undefined && kept.a === a && kept.b === b && kept.c === c && kept.d === d ? kept.item : undefined;
+}
+
+function keep(source: object, a: unknown, b: unknown, c: unknown, d: unknown, item: DeckItem): DeckItem {
+    built.set(source, { a, b, c, d, item });
     return item;
 }
 
 export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
-    const who = (agentId: string) => {
-        const a = input.agents[agentId];
-        return { agentId, agentName: a?.name ?? UNNAMED_AGENT, workspaceId: a?.workspaceId ?? null };
-    };
+    const nameOfAgent = (agentId: string): string => input.agents[agentId]?.name ?? UNNAMED_AGENT;
+    const workspaceOfAgent = (agentId: string): string | null => input.agents[agentId]?.workspaceId ?? null;
     const nameOf = (workspaceId: string | null) => (workspaceId === null ? undefined : input.workspaceNames?.[workspaceId]);
     const colorOf = (workspaceId: string | null) => (workspaceId === null ? undefined : input.workspaceColors?.[workspaceId]);
     const named = (workspaceId: string | null): { workspaceName?: string; workspaceColor?: string } => {
@@ -121,7 +124,14 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
         // from an earlier run. Its age on the Deck stays the first ask's — it has been waiting that long.
         const lastAsked = Date.parse(q.reaskedAt ?? q.askedAt);
         const stale = live === undefined ? null : questionStale(lastAsked, input.agents[q.agentId] !== undefined, live);
-        items.push(reuse(q, [nameOf(q.workspaceId), colorOf(q.workspaceId), stale], () => ({
+        const workspaceName = nameOf(q.workspaceId);
+        const workspaceColor = colorOf(q.workspaceId);
+        const kept = keptItem(q, workspaceName, workspaceColor, stale, undefined);
+        if (kept) {
+            items.push(kept);
+            continue;
+        }
+        items.push(keep(q, workspaceName, workspaceColor, stale, undefined, {
             id: q.id,
             source: 'agent-question',
             agentId: q.agentId,
@@ -142,17 +152,24 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             ...(q.asks ? { asks: q.asks } : {}),
             // Its agent no longer waits: kept, and marked (the Deck greys it and offers Dismiss / Dismiss all stale).
             ...(stale ? { stale } : {}),
-        })));
+        }));
     }
 
     for (const { workspaceId, item } of input.userList) {
         if (item.done) continue;
-        const asked = who(item.askedBy);
-        items.push(reuse(item, [workspaceId, asked.agentName, nameOf(workspaceId), colorOf(workspaceId)], () => ({
+        const agentName = nameOfAgent(item.askedBy);
+        const workspaceName = nameOf(workspaceId);
+        const workspaceColor = colorOf(workspaceId);
+        const kept = keptItem(item, workspaceId, agentName, workspaceName, workspaceColor);
+        if (kept) {
+            items.push(kept);
+            continue;
+        }
+        items.push(keep(item, workspaceId, agentName, workspaceName, workspaceColor, {
             id: item.id,
             source: 'user-list',
             agentId: item.askedBy,
-            agentName: asked.agentName,
+            agentName,
             workspaceId,
             ...named(workspaceId),
             title: item.text,
@@ -161,26 +178,34 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             at: Date.parse(item.createdAt),
             answer: { kind: 'inline', options: [option('done', 'Done')] },
             forwardedFrom: null,
-        })));
+        }));
     }
 
     for (const m of input.unreadDms) {
         if (m.to !== HUMAN || m.from === HUMAN || m.readAt !== null) continue;
-        const sender = who(m.from);
-        items.push(reuse(m, [sender.agentName, sender.workspaceId, nameOf(sender.workspaceId), colorOf(sender.workspaceId)], () => {
-            const firstLine = m.text.split(/\r?\n/)[0] ?? '';
-            return {
-                id: m.id,
-                source: 'unread-dm',
-                ...sender,
-                ...named(sender.workspaceId),
-                title: `${sender.agentName}: ${firstLine}`,
-                blocking: false,
-                priority: 'low',
-                at: Date.parse(m.sentAt),
-                answer: { kind: 'inline', options: [option('read', 'Mark read')] },
-                forwardedFrom: null,
-            };
+        const agentName = nameOfAgent(m.from);
+        const workspaceId = workspaceOfAgent(m.from);
+        const workspaceName = nameOf(workspaceId);
+        const workspaceColor = colorOf(workspaceId);
+        const kept = keptItem(m, agentName, workspaceId, workspaceName, workspaceColor);
+        if (kept) {
+            items.push(kept);
+            continue;
+        }
+        const firstLine = m.text.split(/\r?\n/)[0] ?? '';
+        items.push(keep(m, agentName, workspaceId, workspaceName, workspaceColor, {
+            id: m.id,
+            source: 'unread-dm',
+            agentId: m.from,
+            agentName,
+            workspaceId,
+            ...named(workspaceId),
+            title: `${agentName}: ${firstLine}`,
+            blocking: false,
+            priority: 'low',
+            at: Date.parse(m.sentAt),
+            answer: { kind: 'inline', options: [option('read', 'Mark read')] },
+            forwardedFrom: null,
         }));
     }
 
