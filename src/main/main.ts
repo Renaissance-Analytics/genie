@@ -211,7 +211,7 @@ import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycle
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteAccess } from './remote-access.js';
-import { ensureFirewallRule, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
+import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { uploadSender } from './uploads.js';
 import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
@@ -2252,11 +2252,13 @@ async function boot(): Promise<void> {
     let requestFeaturePush = (): void => {};
     // GENIE'S FIREWALL RULE (Windows; Tynn #685): read from Windows at start and after every Allow or Remove, so Settings →
     // Remote access shows whether the rule is there, never a button that assumes it is not.
-    let firewallRuleNow: import('../renderer/features.js').FirewallRuleView | null = null;
+    // Opening the page re-reads it (debounced: 5 s), so a rule changed outside Genie shows without a restart.
+    const firewallRule = firewallReader(() => readFirewallRule(REMOTE_PORT), { minIntervalMs: 5000 });
     const firewallPort: FeaturePorts['firewall'] = process.platform === 'win32'
         ? {
-            rule: () => firewallRuleNow,
-            refresh: async () => { firewallRuleNow = await readFirewallRule(REMOTE_PORT); },
+            rule: () => firewallRule.rule(),
+            refresh: () => firewallRule.refresh(),
+            reread: () => firewallRule.reread(),
             allow: () => ensureFirewallRule(REMOTE_PORT),
             remove: () => removeFirewallRule(),
         }

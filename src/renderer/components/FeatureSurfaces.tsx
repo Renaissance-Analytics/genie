@@ -2568,6 +2568,16 @@ function HostUpgradeRow({ host, upgrade, onUpgradeHost }: { host: string; upgrad
  * whatever the switch says, because the rule outlives it.
  */
 function FirewallRow({ rule, enabled, outcome, onAction, button }: { rule: FirewallRuleView | null; enabled: boolean; outcome: string | null; onAction: SurfaceProps['onAction']; button: string }) {
+    // What Windows has NOW: ask main to read again when the page opens and when its window regains focus (Tynn #685).
+    // Main debounces the read, so this never spawns netsh in a burst. Once per mount, not per snapshot.
+    const askRead = useRef(onAction);
+    askRead.current = onAction;
+    useEffect(() => {
+        const read = (): void => { askRead.current({ kind: 'remote.readFirewall' }); };
+        read();
+        window.addEventListener('focus', read);
+        return () => window.removeEventListener('focus', read);
+    }, []);
     const present = rule?.state === 'present' ? rule : null;
     const state = !present ? (rule?.state === 'absent' ? 'absent' : rule?.state === 'unknown' ? 'unknown' : 'unread')
         : present.covers === true ? 'allowed' : present.covers === false ? 'not-allowing' : 'present';

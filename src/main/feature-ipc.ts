@@ -100,6 +100,8 @@ export interface FeaturePorts {
     readonly firewall?: {
         rule(): import('../renderer/features.js').FirewallRuleView | null;
         refresh(): Promise<void>;
+        /** Read Windows again, debounced: Settings → Remote access opened, or its window focused. */
+        reread(): Promise<void>;
         allow(): Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
         remove(): Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
     };
@@ -1705,6 +1707,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const r = await ports.firewall.allow();
             await ports.firewall.refresh();
             next.firewallOutcome = r.ok ? 'Allowed: devices on your tailnet can reach this port.' : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.' : (r.error ?? 'The firewall rule could not be added.');
+            break;
+        }
+        // The page opened, or its window regained focus: what Windows has NOW (a rule changed outside Genie), debounced.
+        case 'remote.readFirewall': {
+            if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
+            await ports.firewall.reread();
             break;
         }
         case 'remote.removeFirewall': {

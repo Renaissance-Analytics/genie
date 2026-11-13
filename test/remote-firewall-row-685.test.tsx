@@ -64,7 +64,8 @@ describe('Genie’s rule is there and lets the port in', () => {
         const root = createRoot(host);
         act(() => { root.render(<RemoteAccess remote={{ ...base, firewallRule: present }} workspaces={[]} onAction={(a) => { actions.push(a); }} />); });
         act(() => { (host.querySelector(`[${REMOVE}]`) as HTMLElement).click(); });
-        expect(actions).toEqual([{ kind: 'remote.removeFirewall' }]);
+        // Opening the row asks main to read Windows (Tynn #685 review); the click is the next action, and the only other one.
+        expect(actions).toEqual([{ kind: 'remote.readFirewall' }, { kind: 'remote.removeFirewall' }]);
         act(() => root.unmount());
         host.remove();
     });

@@ -300,6 +300,36 @@ export async function readFirewallRule(port: number, run: NetshExec = runNetsh):
     }
 }
 
+/**
+ * MAIN'S READING OF THE RULE, DEBOUNCED (Tynn #685). `reread()` is what opening Settings → Remote access (or the window's
+ * focus while it is open) asks for: it joins a read in flight, and does not read again within `minIntervalMs` of the last
+ * one, so opening the page over and over never spawns netsh in a burst. `refresh()` is for after Allow or Remove: it always
+ * reads, and if a read is in flight it waits for it and reads AGAIN, because that read began before the change.
+ */
+export function firewallReader(
+    read: () => Promise<FirewallRuleView>,
+    { minIntervalMs, now = Date.now }: { minIntervalMs: number; now?: () => number },
+): { rule(): FirewallRuleView | null; reread(): Promise<void>; refresh(): Promise<void> } {
+    let current: FirewallRuleView | null = null;
+    let lastAt = Number.NEGATIVE_INFINITY;
+    let inflight: Promise<void> | null = null;
+    const run = (): Promise<void> => {
+        if (inflight) return inflight;
+        inflight = read()
+            .then((v) => { current = v; lastAt = now(); })
+            .finally(() => { inflight = null; });
+        return inflight;
+    };
+    return {
+        rule: () => current,
+        reread: () => (inflight ? inflight : now() - lastAt < minIntervalMs ? Promise.resolve() : run()),
+        refresh: async () => {
+            if (inflight) await inflight.catch(() => undefined);
+            await run();
+        },
+    };
+}
+
 /** The ELEVATED script that removes Genie's rule: ONE netsh delete, by the exact name, and its exit code. Pure. */
 export function buildRemoveInnerScript(): string {
     return [netshCmdline(buildDeleteRuleArgs()), 'exit $LASTEXITCODE'].join('\n');

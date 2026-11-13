@@ -31,6 +31,7 @@ function fakeFirewall(opts: { initial: FirewallRuleView | null; afterAllow?: Fir
     const port: NonNullable<FeaturePorts['firewall']> = {
         rule: () => now,
         refresh: async () => { calls.push('refresh'); if (pending) now = pending; },
+        reread: async () => { calls.push('reread'); },
         allow: async () => { calls.push('allow'); pending = opts.afterAllow ?? now; return opts.allow ?? { ok: true }; },
         remove: async () => { calls.push('remove'); pending = opts.afterRemove ?? now; return opts.remove ?? { ok: true }; },
     };

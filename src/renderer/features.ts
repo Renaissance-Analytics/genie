@@ -589,6 +589,8 @@ export type FeatureAction =
     | { kind: 'remote.allowFirewall' }
     /** Windows: delete Genie's own firewall rule, by its exact name, one UAC prompt (Tynn #685). */
     | { kind: 'remote.removeFirewall' }
+    /** Windows: read Genie's firewall rule from Windows again (the page opened, or its window focused); debounced in main. */
+    | { kind: 'remote.readFirewall' }
     /** Bring this machine onto the tailnet (`tailscale up`); a sign-in link opens in the browser (Genie 1's tailscale.up). */
     | { kind: 'tailscale.up' }
     /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */
