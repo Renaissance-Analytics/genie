@@ -36,6 +36,8 @@ export interface RemoteState {
     readonly host: string | null;
     readonly isOwner: boolean;
     readonly workspaceId: string | null;
+    /** The host's word that this window may only read (Tynn #688); absent/false = it may act (an older host says nothing). */
+    readonly readonly?: boolean;
     readonly driver: string | null;
     readonly driving: boolean;
     readonly locked: boolean;
@@ -185,7 +187,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 // An older host than this client needs is not a connection (Tynn #651): nothing is asked of it.
                 const tooOld = options.minBuild !== undefined ? welcomeSkew(m, options.minBuild) : null;
                 if (tooOld) { setState({ hostBuild }); skewed(tooOld); return; }
-                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null, hostBuild, skew: null });
+                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, readonly: m.readonly === true, token: m.token ?? null, pairing: null, hostBuild, skew: null });
                 resolveReady({ ok: true });
                 // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
                 if (options.drive === true && options.companion === undefined && auth.kind !== 'local') {

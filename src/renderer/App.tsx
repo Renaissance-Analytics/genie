@@ -32,6 +32,7 @@ import { rewrittenAddress, routeFor, windowBridge } from './window-address.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
+import { chatSubjectInScope, routeInScope, windowScopeOf } from '../core/workspace-window.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import { RemoteRefusalBar } from './components/RemoteRefusalBar.js';
 import { FilesWindow } from './components/FilesWindow.js';
@@ -1028,8 +1029,15 @@ function DesktopApp({ bridge }: AppProps) {
     const addressContext: AddressContext | null = snapshot.workstation && snapshot.workspaces
         ? { workstation: snapshot.workstation.name, workspaces: snapshot.workspaces, agents: snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents, tabsOf: (id) => tabsByWorkspace.get(id) }
         : null;
+    // WHAT THIS WINDOW MAY SHOW (Tynn #690): the host's welcome, never a flag of this client's — a guest the host admitted to
+    // one workspace gets a window of that workspace, and every route outside it (a deep link included) lands on its page.
+    const windowScope = windowScopeOf(remote.state);
     // Not readable yet (no snapshot): an old internal route is used as it is; an address waits on the Dashboard.
-    const route = routeFor(address, addressContext);
+    const askedRoute = routeFor(address, addressContext);
+    const route = routeInScope(askedRoute, windowScope, snapshot.agents);
+    useEffect(() => {
+        if (route !== askedRoute) window.location.replace(`#${addressContext ? addressOf(route, addressContext) : route}`);
+    }, [route, askedRoute]);
     /*
      * WHERE AN AGENT ACTED (genie#1265; the owner, 2026-10-27): an agent's file, tab or site never moves this window — its
      * workspace is marked, and the rail row (and the Dashboard's header) pulses until the person ARRIVES there; the arrival
@@ -1154,7 +1162,8 @@ function DesktopApp({ bridge }: AppProps) {
     const [chatPick, setChatPick] = useState<string | null>(null);
     const routeAgent = parsed.surface === 'agent' ? parsed.agentId : null;
     useEffect(() => { setChatPick((pick) => chatPickAfter(parsed, chatRoster, pick)); }, [routeAgent, chatRoster]);
-    const chatSubject = visibleAgentSubject(snapshot, chatSubjectFor(parsed, chatRoster, chatPick));
+    // A workspace window's chat is one of ITS agents, never Genie's own or another workspace's (Tynn #690).
+    const chatSubject = chatSubjectInScope(visibleAgentSubject(snapshot, chatSubjectFor(parsed, chatRoster, chatPick)), windowScope, snapshot.agents, snapshot.workspaces);
     // The chat SUBJECT's detail — never the route's `chat=` alone (the owner, 2026-10-19, three times: "THE CHAT DOES NOT
     // EVER CLOSE"). The subject is permanent (the route's, else the agent the view says); loading only for `chat=` left
     // every page reached without it showing an empty chat, which reads as a closed one. The flyout's transcript is derived
@@ -1844,7 +1853,7 @@ function DesktopApp({ bridge }: AppProps) {
             const action = hotkeyAction(press, bindings, promptPlatform);
             if (action === 'open-palette') {
                 e.preventDefault();
-                setPaletteOpen(true);
+                if (windowScope.kind === 'workstation') setPaletteOpen(true);
                 return;
             }
             if (paletteOpen) return;
@@ -2208,9 +2217,11 @@ function DesktopApp({ bridge }: AppProps) {
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
             onOpenPalette={() => setPaletteOpen(true)}
+            windowScope={windowScope}
         />
         <CommandWindow
-            open={paletteOpen}
+            // The Command Window jumps across the workstation: not in a workspace window (Tynn #690).
+            open={paletteOpen && windowScope.kind === 'workstation'}
             items={paletteItems}
             onClose={() => setPaletteOpen(false)}
             onActivate={(item) => {
@@ -2221,7 +2232,7 @@ function DesktopApp({ bridge }: AppProps) {
             }}
         />
         {/* What's New, once per version (Tynn #762): closing records the version as seen. */}
-        {features.whatsNew ? (
+        {features.whatsNew && windowScope.kind === 'workstation' ? (
             <WhatsNewWindow
                 whatsNew={features.whatsNew}
                 onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
@@ -2229,7 +2240,7 @@ function DesktopApp({ bridge }: AppProps) {
         ) : null}
         {/* ADD A WORKSPACE (Genie 1's modal). Before the picker, so Browse opens on top of it. */}
         <AddWorkspaceModal
-            open={addOpen}
+            open={addOpen && windowScope.kind === 'workstation'}
             primaryWorkspace={primaryWorkspace}
             sep={hostSep}
             browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
@@ -2305,7 +2316,7 @@ function DesktopApp({ bridge }: AppProps) {
                 onCancel={() => { pickerAsk.resolve(null); setPickerAsk(null); }}
             />
         ) : null}
-        {share && shares ? (
+        {share && shares && windowScope.kind === 'workstation' ? (
             <ShareWorkspaceModal
                 workspaceName={share.name}
                 workstation={share.workspaceId === null}
@@ -2326,7 +2337,7 @@ function DesktopApp({ bridge }: AppProps) {
                 }}
             />
         ) : null}
-        {connectDialog ? (
+        {connectDialog && windowScope.kind === 'workstation' ? (
             <ConnectDialog
                 key={connectDialog}
                 mode={connectDialog}
