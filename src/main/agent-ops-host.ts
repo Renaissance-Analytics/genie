@@ -7,6 +7,7 @@ import { providerLogin } from '../core/provider-login.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { buildCarryOver, type CarryOver } from '../core/carry-over.js';
 import type { StreamEvent } from '../core/stream-event.js';
+import { withMcpServer } from '../core/agent-mcp.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
@@ -40,6 +41,9 @@ export interface AgentOpsPorts {
         setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
         setManageTabs(id: AgentRecord['id'], manageTabs: boolean): Promise<AgentRecord | null>;
         setDrivePages(id: AgentRecord['id'], drivePages: boolean): Promise<AgentRecord | null>;
+        setMcpOff(id: AgentRecord['id'], mcpOff: readonly string[], mcpOn?: readonly string[]): Promise<AgentRecord | null>;
+        /** What its workspace has off by default. Absent = a registry with no workspace defaults. */
+        workspaceMcpOff?(workspaceId: string): readonly string[];
         setIssueWatch(id: AgentRecord['id'], setting: IssueWatchSetting): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
@@ -67,6 +71,8 @@ export interface AgentOpsPorts {
          * them their work again.
          */
         deliverOwed(id: AgentRecord['id'], then?: { text: string; by: string }): Promise<number>;
+        /** A deleted or unmounted agent: the host drops what its ledger last showed (`SessionHost.forgetShown`, Tynn #647). */
+        forgetShown?(id: AgentRecord['id']): void | Promise<void>;
     };
     /**
      * WHY A START WOULD BE REFUSED (§6.1, main.ts's `startRefusal`): an asleep workspace, the agent cap — what Start
@@ -260,6 +266,8 @@ export async function deleteAgent(ports: AgentOpsPorts, agentId: string, outcome
     if (!folder.ok) return folder;
     const handoff = options.handoff === true ? await askForHandoff(ports, record, outcome) : 'not-asked';
     ports.host.stop(record.id);
+    // Nothing of it stands in for its history again (Tynn #647): the host drops what its ledger last showed.
+    await ports.host.forgetShown?.(record.id);
     await ports.registry.forget(record.id);
     // A handoff asked for and written is the one thing a delete keeps: Genie 1's "that note survives even though its
     // .agents/ files do not". Without a fresh one, an old note goes with the agent as before.
@@ -499,6 +507,20 @@ export async function setManageTabs(ports: AgentOpsPorts, agentId: string, manag
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const updated = await ports.registry.setManageTabs(record.id, manageTabs);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/**
+ * ONE MCP SERVER ON OR OFF FOR ONE AGENT (Tynn #628). Kept on its record; its provider is told at the agent's next session
+ * start (session-host.ts mcpPolicyOptions), so nothing restarts here. Genie's own server is refused in words.
+ */
+export async function setMcpServer(ports: AgentOpsPorts, agentId: string, name: unknown, on: unknown): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    // Against its workspace's default: a choice equal to it is not kept, so the agent inherits (core/agent-mcp.ts).
+    const changed = withMcpServer(record, name, on, ports.registry.workspaceMcpOff?.(record.workspaceId) ?? []);
+    if (!changed.ok) return changed;
+    const updated = await ports.registry.setMcpOff(record.id, changed.record.mcpOff ?? [], changed.record.mcpOn ?? []);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

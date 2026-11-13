@@ -3,6 +3,7 @@ import { countRender } from '../render-count.js';
 import { memo, useEffect, useRef, useState } from 'react';
 import type { LedgerRow, Tone } from '../../core/stream-view.js';
 import type { ToolOutputReply } from '../../core/tool-row-bound.js';
+import type { CommandRunRef } from '../../core/command-run.js';
 import { chatLinkTarget, type ChatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
 import { ChatProse } from './ChatProse.js';
 
@@ -65,6 +66,7 @@ export interface StreamRowProps {
 export interface StreamMarkup {
     refs: ChatRefs;
     onOpen: (target: ChatLinkTarget) => void;
+    onCommandRun?: ((run: CommandRunRef) => void) | undefined;
 }
 
 /** MEMOISED (genie#1340): a push redraws only the rows whose props changed. Rows keep their object while unchanged
@@ -190,6 +192,15 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
     // A control row is a REAL button (real buttons, 2026-11-01): react-fancy's Button, ghost so a list row is not boxed,
     // full width, its cells laid out by the row's own flex (labelClassName="contents"). Its cells are plain text — a
     // control row never carries prose, so no link ever sits inside the button.
+    const commandRun = row.commandRun;
+    const openCommandRun = markup?.onCommandRun;
+    if (commandRun && openCommandRun) {
+        return (
+            <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} aria-label={`Open command log: ${commandRun.command}`} onClick={() => openCommandRun(commandRun)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal hover:bg-[var(--bg-2)]`}>
+                {cells}
+            </Button>
+        );
+    }
     if (control === 'inspect') {
         return (
             <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} onClick={() => onSelect(row.id)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal hover:bg-[var(--bg-2)]`}>

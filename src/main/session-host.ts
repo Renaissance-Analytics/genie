@@ -17,6 +17,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
+import { mcpOffFor } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 
 /**
@@ -125,10 +126,12 @@ import {
 } from '../core/session.js';
 import type { NativeStopVerdict } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
+import type { CommandRunRef } from '../core/command-run.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
@@ -158,7 +161,7 @@ import { sessionsDir } from './paths.js';
 
 /** Injected so a test can run this host without spawning a provider CLI. */
 /** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>>; /** The MCP servers its workspace has off by default (Tynn #628). */ workspaceMcpOff?: readonly string[] }) => SessionDriverFactory | null;
 
 /**
  * THE AGENT'S SERVICE VARIABLES, AS PRISM-ACP TAKES THEM (the owner, 2026-10-16: "ONLY let through Genie-managed
@@ -418,6 +421,9 @@ export const realListModels: ListProviderModels = (provider) => {
 export const LIMIT_REREAD_MS = 15 * 60_000;
 
 /** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
+/** What the chat shows when Genie's instructions go to an agent ahead of its work: the text itself is the agent's. */
+export const INSTRUCTIONS_SENT = 'Genie sent this agent its instructions.';
+
 export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string; readonly codexPromptText?: string }
 
 /**
@@ -449,24 +455,40 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
     return untrusted === null ? record : { ...record, autoApprove: false };
 }
 
+/**
+ * THE MCP SERVERS THIS LAUNCH MAY NOT LOAD (prism-acp's `disabledMcpServers`, the same option for Claude Code and Codex):
+ *
+ * - the ones the person switched off for THIS agent (Tynn #628; core/agent-mcp.ts), read from the record being launched,
+ *   so a change applies at the agent's next session start and one agent's switch is never another's;
+ * - an inherited `tynn`, when Genie supplies no private Tynn server: neither provider may recover one from user or
+ *   project config.
+ *
+ * Genie's own servers are never in the first list, whatever the record holds.
+ *
+ * `workspaceOff`: what the agent's workspace has off by default. The agent inherits it where it made no choice of its own;
+ * a server it switched on is launched with it.
+ */
+export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] | undefined; readonly mcpOn?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[], workspaceOff: readonly string[] = []): { disabledMcpServers?: readonly string[] } {
+    const disabled = [...new Set([...mcpOffFor(record, workspaceOff), ...(supplied.some((server) => server.name === 'tynn') ? [] : ['tynn'])])].sort((a, b) => a.localeCompare(b));
+    return disabled.length > 0 ? { disabledMcpServers: disabled } : {};
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     // Said in Genie's words, naming the file, before the driver refuses in its own.
     const problem = providerStartProblem(record.provider);
     if (problem !== null) return () => { throw new Error(problem); };
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
-    // Without an explicit private Tynn server, neither provider may recover one from user/project config.
-    const inheritedPolicy = extras?.mcpServers?.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
     // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
     const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         default:
             return null;
@@ -521,6 +543,8 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
+    readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
+    readonly #workspaceMcpOffFor: ((record: AgentRecord) => readonly string[]) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
@@ -537,6 +561,15 @@ export class SessionHost {
     readonly #stopped = new Set<AgentSession>();
     /** Each agent's recorded history, read once per run: `before` is the run it was read for (`null` = not running). */
     readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[]; turns: number } | 'loading'>();
+    /**
+     * WHAT EACH AGENT'S LEDGER LAST SHOWED (Tynn #647): while a new run's history is being read — the first send after a
+     * quiet spell starts a session, a restart starts a run — the rows already shown stand in for it, so no reply a person
+     * saw disappears until the read lands. It used to be this run's rows alone, leaving only the inbox's mail rows.
+     */
+    readonly #lastShown = new Map<AgentId, readonly TimedEvent[]>();
+    readonly #renamedRows = new WeakMap<TimedEvent, TimedEvent>();
+    /** The stand-in each agent's ledger is serving, and the run it was built for (`before`, as `#histories`). */
+    readonly #standIns = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[] }>();
     #listeners = new Set<(agentId: AgentId) => void>();
     #runs = 0;
 
@@ -612,6 +645,10 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
+        /** Ends every Genie tool call still running for the agent whose turn is cancelled (Tynn #702; main/mcp-interrupt.ts). */
+        endToolCalls?: (agentId: AgentId, intent: CancelIntent) => number;
+        /** The MCP servers this agent's workspace has off by default (Tynn #628). Asked before each launch. Absent = none. */
+        workspaceMcpOffFor?: (record: AgentRecord) => readonly string[];
         /** Genie's own words are in this agent's thread now (`AgentRecord.genieWordsInThread`). */
         markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
@@ -656,7 +693,16 @@ export class SessionHost {
          * agent on that provider is held; a timer (`schedule`, no polling) wakes the host at the gate's resume time.
          * Defaults: a 2-minute margin, the real setTimeout.
          */
-        rateLimit?: { gate?: RateLimitGate; schedule?: (ms: number, fn: () => void) => () => void };
+        rateLimit?: {
+            gate?: RateLimitGate;
+            schedule?: (ms: number, fn: () => void) => () => void;
+            /**
+             * The provider's signed-in account now (`accountIdentityFrom` of its status command), `null` when there is
+             * nothing to tell it by. Asked for a HELD login only, when the hold begins and at each re-read: a different
+             * account releases every agent held on it (Tynn #699). Absent = an account switch is noticed only by a Log in.
+             */
+            accountOf?: (provider: string) => Promise<string | null>;
+        };
         /** Where the threads are kept. Default: the durable file store under `userData` — a test may hand in its own. */
         store?: () => SessionStore;
         /** A graceful stop's grace for a provider that has one (`gracefulEndFor`). Default `STOP_GRACE_MS`. */
@@ -674,6 +720,8 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
+        this.#endToolCalls = options.endToolCalls;
+        this.#workspaceMcpOffFor = options.workspaceMcpOffFor;
         this.#untrustedNow = options.untrustedNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
@@ -696,6 +744,27 @@ export class SessionHost {
         this.#heldElsewhere = options.heldElsewhere;
         this.#gate = options.rateLimit?.gate ?? new RateLimitGate();
         this.#schedule = options.rateLimit?.schedule ?? ((ms, fn) => { const t = setTimeout(fn, Math.max(0, ms)); t.unref?.(); return () => clearTimeout(t); });
+        this.#accountOf = options.rateLimit?.accountOf;
+    }
+
+    readonly #accountOf: ((provider: string) => Promise<string | null>) | undefined;
+    /** The account each held login was signed in to when its hold began (`null`: not known yet). Forgotten when it opens. */
+    readonly #heldAccount = new Map<string, string | null>();
+    /** When each held login's account was last read: its own interval, so a login no session can read limits for is read too. */
+    readonly #lastAccountRead = new Map<string, number>();
+
+    /** Read a held login's account: the first read is the one it is held on; a different one later releases it (Tynn #699). */
+    #readAccount(provider: string): void {
+        const read = this.#accountOf;
+        if (!read) return;
+        void read(provider).then((account) => {
+            if (account === null || !this.#heldAccount.has(provider)) return;
+            const was = this.#heldAccount.get(provider) ?? null;
+            if (was === null) { this.#heldAccount.set(provider, account); return; }
+            if (was === account) return;
+            this.#heldAccount.delete(provider);
+            this.resumeLimit(provider);
+        }, () => {});
     }
 
     readonly #currentRecord: ((agentId: AgentId) => AgentRecord | null) | undefined;
@@ -792,7 +861,17 @@ export class SessionHost {
         const ask: Array<() => void> = [];
         for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
             const state = this.#gate.view(this.#loginOf(provider), now).state;
-            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); continue; }
+            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); this.#heldAccount.delete(provider); this.#lastAccountRead.delete(provider); continue; }
+            // The account it is held on, read when the hold begins and every LIMIT_REREAD_MS after (Tynn #699).
+            if (this.#accountOf) {
+                if (!this.#heldAccount.has(provider)) this.#heldAccount.set(provider, null);
+                const lastAccount = this.#lastAccountRead.get(provider);
+                if (lastAccount === undefined || now >= lastAccount + LIMIT_REREAD_MS) {
+                    ask.push(() => this.#readAccount(provider));
+                    this.#lastAccountRead.set(provider, now);
+                    next = Math.min(next, now + LIMIT_REREAD_MS);
+                } else next = Math.min(next, lastAccount + LIMIT_REREAD_MS);
+            }
             // The session that will be asked: the first on this login whose driver can read. None — nothing to wait for.
             const reader = [...this.#running.values()].find((e) => e.provider === provider && e.session.canReadRateLimits);
             if (!reader) { this.#lastLimitRead.delete(provider); continue; }
@@ -888,9 +967,28 @@ export class SessionHost {
      * a second. §6.2 is explicit about it, and the alternative is two provider processes
      * answering as one agent — which is how a user ends up unable to stop something.
      */
+    #shutdownPending = false;
+    readonly #shutdownAgents = new Set<AgentId>();
+
+    /** Let current turns finish; keep queued/new work for the next run, without cancelling a tool. */
+    holdForShutdown(): void {
+        if (this.#shutdownPending) return;
+        for (const id of this.#running.keys()) this.#shutdownAgents.add(id);
+        this.#shutdownPending = true;
+    }
+    /** Resume held work only if shutdown is abandoned or this host survived it. */
+    releaseAfterShutdown(): void {
+        this.#shutdownPending = false;
+        this.#shutdownAgents.clear();
+        for (const [id, entry] of this.#running) { entry.session.releaseWork(); this.#emit(id); }
+    }
+
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
+        // A setting/crash replacement of an existing identity must still get its session in the
+        // host, so the final restore record cannot drop it. Its work remains held by mayTakeWork.
+        if (this.#shutdownPending && !this.#shutdownAgents.has(record.id)) return { ok: false, reason: 'Genie is shutting down; new agent sessions wait for restart.' };
 
         /*
          * ONE PROVIDER PER AGENT, IN-PROCESS, AT ALL TIMES (hosting plan 1.3; Tynn #796). A run that is still stopping,
@@ -933,7 +1031,7 @@ export class SessionHost {
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, ...(untrusted ? { untrusted } : {}) });
+            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
             if (current) {
@@ -942,14 +1040,14 @@ export class SessionHost {
                 // A prompt file does not reach a resumed thread (measured): one that began without Genie's words is given them with its next work, once.
                 if (untrusted) {
                     if (record.provider === 'claude' && record.threadId === null) this.#markGenieWords?.(record.id);
-                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(record.provider === 'codex' ? untrusted.codexPromptText ?? untrusted.promptText : untrusted.promptText, () => this.#markGenieWords?.(record.id));
+                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(record.provider === 'codex' ? untrusted.codexPromptText ?? untrusted.promptText : untrusted.promptText, () => this.#markGenieWords?.(record.id), INSTRUCTIONS_SENT);
                 }
                 this.#emit(record.id);
             }
             waitingFor = 'the provider to answer';
             startPhase('handshake');
             return factory;
-        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
+        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [] });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);
@@ -1047,6 +1145,7 @@ export class SessionHost {
             onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
+            onRestartForQueue: () => this.#restartForQueue(record, cwd),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
             // Autonomous answers the same questions, at the same moment (Tynn #439): Claude's shell calls, and what Codex asks.
             // Where it does not apply, the card says why (`askedWhy`).
@@ -1058,7 +1157,7 @@ export class SessionHost {
                 askWhy: () => askedWhy(this.#approvalWhere(record)),
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
-            mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
+            mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
             onLimitBreach: (reason) => this.#limitBreach(record.id, record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -1397,19 +1496,23 @@ export class SessionHost {
             for (const { event: e } of rows) {
                 if (e.kind !== 'message' || !e.pending) continue;
                 const status = states.get(e.pending.id);
-                if (status !== 'queued' && status !== 'undelivered') continue;
+                if (status !== 'queued' && status !== 'undelivered' && status !== 'carried') continue;
                 if (entry.session.hasQueuedPrompt(e.pending.id)) continue;
                 try {
+                    // Held, then sent together below (Tynn #702): one at a time, each after the first waited for a turn of its own.
                     entry.session.redeliver(e.pending.id, e.text, e.speaker === 'you' ? 'you' : e.peerName,
                         e.pending.content ? { content: e.pending.content, attachments: e.attachments ?? [] } : null,
-                        e.mail ? { mail: e.mail } : {});
+                        e.mail ? { mail: e.mail } : {}, { hold: true });
                     handed += 1;
                 } catch {
                     // The run ended under us: what was not handed over stays owed for the next Restart.
                     break;
                 }
             }
-            if (handed > 0) this.#emit(agentId);
+            if (handed > 0) {
+                if (this.#running.get(agentId) === entry && entry.session.running) entry.session.flushOwed();
+                this.#emit(agentId);
+            }
             after();
             return handed;
         };
@@ -1508,6 +1611,15 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.needsNewDriver ?? false;
     }
 
+    /** A host-authored live command reference in this agent's ledger; never starts an absent session (#633). */
+    commandStarted(agentId: AgentId, run: CommandRunRef): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        entry.session.commandStarted(run);
+        this.#emit(agentId);
+        return true;
+    }
+
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
     notice(agentId: AgentId, message: string): boolean {
         const entry = this.#running.get(agentId);
@@ -1546,8 +1658,9 @@ export class SessionHost {
 
     /**
      * STOP THE TURN, keep the agent: `Stop this turn` in the chat and the Agent view. The session stays in the map — its
-     * slot, its provider and its conversation untouched — and the turn ends when the provider reports it cancelled.
-     * Ending the agent is `stop` below, a different action. `not-running` for an agent with no session here.
+     * slot and conversation stay. A confirmed cancel keeps its provider; an unconfirmed one ends the old run after
+     * the session's bounded wait, preserving input for the existing same-conversation restart path (Tynn #661).
+     * Ending the agent explicitly is `stop` below. `not-running` for an agent with no session here.
      */
     cancel(agentId: AgentId, by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
         const entry = this.#running.get(agentId);
@@ -1555,8 +1668,31 @@ export class SessionHost {
 
         // `intent`: a Stop latches the session until the person acts; an interrupt-and-send does not (Tynn #672 part 3).
         const outcome = entry.session.cancel(by, intent);
+        // GENIE'S OWN TOOL CALLS END WITH THE TURN (Tynn #702): a call of Genie's the provider waits on (a long `services exec`)
+        // returns at once with the reason, so the provider can answer the cancel before prism-acp gives up on it.
+        if (outcome.ok) { try { this.#endToolCalls?.(agentId, intent); } catch { /* the cancel itself stands */ } }
         this.#emit(agentId);
         return outcome;
+    }
+
+    /**
+     * AN INTERRUPT THE PROVIDER NEVER CONFIRMED (Tynn #702): prism-acp ended that run. The agent is started again on the same
+     * conversation, and what waited (kept `carried`) is sent, in order. After prism's own events for the run it ended, which
+     * come in one go; a run that will not end, or a start refused, leaves what waited owed to the next Restart.
+     */
+    #restartForQueue(record: AgentRecord, cwd: string): void {
+        const id = record.id;
+        setTimeout(() => {
+            void (async () => {
+                if (!this.#running.get(id)?.session.needsNewDriver) return;
+                this.stop(id, { graceful: false });
+                const verdict = await this.ended(id);
+                if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
+                const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
+                if (!started.ok) return;
+                await this.deliverOwed(id);
+            })().catch(() => { /* what waited stays owed: the chat offers Send all now */ });
+        }, 0);
     }
 
     /**
@@ -1690,6 +1826,23 @@ export class SessionHost {
     }
 
     /**
+     * ONE IMAGE A THREAD KEPT (Tynn #642): what a sent message's pill shows, read from this host's own store beside the
+     * agent's ledger when the pill asks. An id this host did not make, or one no longer kept (the thread's bounds let the
+     * oldest go), is a refusal with its reason.
+     */
+    async attachment(agentId: AgentId, attachmentId: string): Promise<AttachmentReply> {
+        await this.settled();
+        const store = this.#store();
+        if (!(store instanceof ThreadStore)) return { ok: false, reason: 'this agent’s history keeps no images' };
+        try {
+            const kept = await store.readAttachment(threadKeyFor(agentId), attachmentId);
+            return kept === null ? { ok: false, reason: 'this image is no longer kept' } : { ok: true, ...kept };
+        } catch (error) {
+            return { ok: false, reason: `the image could not be read (${error instanceof Error ? error.message : String(error)})` };
+        }
+    }
+
+    /**
      * WHAT THE AGENT VIEW AND THE CHAT SHOW: the agent's recorded history, then this run. Claude resumes a conversation
      * without replaying it, so this run alone showed one turn of an agent holding 740k tokens of context (the owner,
      * beta.21) — and a stopped agent showed nothing at all. The history is read from the thread the session writes,
@@ -1711,11 +1864,15 @@ export class SessionHost {
                     this.#histories.set(agentId, { before, rows, turns: lastNumberedTurn(rows) });
                     this.#emit(agentId);
                 })
-                .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); });
+                // Announced too (Tynn #659): a window waiting on the read must hear it is over, or it waits for good.
+                .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); this.#emit(agentId); });
         }
         const loaded = cached !== undefined && cached !== 'loading' && cached.before === before ? cached : null;
-        const history = loaded ? loaded.rows : NO_ROWS;
-        if (!entry) return history;
+        // Built ONCE per run (`#standInFor`), so serving it costs nothing per event: built per call, it walked the whole
+        // ledger three times a read (test/agent-stream-perf.test.ts: 359,502 old rows read per event at 60k rows).
+        if (loaded) this.#standIns.delete(agentId);
+        const history = loaded ? loaded.rows : this.#standInFor(agentId, entry, before);
+        if (!entry) { this.#lastShown.set(agentId, history); return history; }
         /*
          * SERVED FROM WHAT IS KEPT (the owner, 2026-10-20: the window lagged seconds behind a busy agent): built again only
          * when a row changed, from rows that keep their identity while unchanged — which is what lets main send the window
@@ -1737,7 +1894,64 @@ export class SessionHost {
         }
         const rows = [...history, ...marker, ...run];
         entry.ledger = { history: loaded, rows };
+        this.#lastShown.set(agentId, rows);
         return rows;
+    }
+
+    /**
+     * WHETHER THE LEDGER IS STILL WAITING ON ITS HISTORY (Tynn #659): the recorded history is being read and no rows already
+     * shown stand in for it (#647), so what `ledgerFor` answers is not yet the agent's conversation — a window draws it as
+     * loading, never as a chat of mail rows alone. Never asked, or read: not pending.
+     */
+    historyPending(agentId: AgentId): boolean {
+        if (this.#histories.get(agentId) !== 'loading') return false;
+        return (this.#standIns.get(agentId)?.rows.length ?? 0) === 0;
+    }
+
+    /**
+     * The history to show while the real one is read (Tynn #647), built once for the run it stands in for (`before`) and
+     * then served as it is: the ledger built over it is grown in place, so it is never walked again per event.
+     */
+    #standInFor(agentId: AgentId, entry: Running | undefined, before: number | null): readonly TimedEvent[] {
+        const kept = this.#standIns.get(agentId);
+        if (kept && kept.before === before) return kept.rows;
+        const rows = this.#standIn(agentId, entry);
+        this.#standIns.set(agentId, { before, rows });
+        return rows;
+    }
+
+    /**
+     * What this agent's ledger last showed, without this run's own rows and its marker (they follow it). Nothing shown yet →
+     * nothing.
+     */
+    #standIn(agentId: AgentId, entry: Running | undefined): readonly TimedEvent[] {
+        const shown = this.#lastShown.get(agentId);
+        if (!shown) return NO_ROWS;
+        if (!entry) return shown;
+        const mine = new Set<TimedEvent>(entry.rows);
+        if (entry.numbered) for (const r of entry.numbered.rows) mine.add(r);
+        // A previous run's own rows were numbered from 0 (`<agent>:<n>`) as this run's are and will be. Built once, the
+        // stand-in cannot see the ids this run has not made yet, so EVERY such row is renamed for this run, not only one
+        // colliding now: no two rows of one ledger share an id as the run grows. The same object each time it is built
+        // for this run, so the window is not sent it again.
+        const prefix = `${agentId}:`;
+        const runRow = (id: string) => id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length));
+        return shown.filter((r) => !mine.has(r) && r.id !== entry.marker.id).map((r) => {
+            if (!runRow(r.id)) return r;
+            const id = `${r.id}~before-run-${entry.run}`;
+            let renamed = this.#renamedRows.get(r);
+            if (!renamed || renamed.id !== id) { renamed = { ...r, id }; this.#renamedRows.set(r, renamed); }
+            return renamed;
+        });
+    }
+
+    /**
+     * AN AGENT DELETED OR UNMOUNTED (Tynn #647 review): what its ledger last showed goes with it, so nothing of it stands in
+     * again (and nothing of it is kept for the life of the host).
+     */
+    forgetShown(agentId: AgentId): void {
+        this.#lastShown.delete(agentId);
+        this.#standIns.delete(agentId);
     }
 
     /** THIS RUN's ledger only (what the doctor channel and file attribution read). Empty for one not running. */

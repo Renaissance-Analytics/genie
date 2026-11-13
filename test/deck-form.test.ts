@@ -21,7 +21,7 @@ const questions = [
 const input = {
     agents: { a1: { name: 'lark', workspaceId: 'moic' } },
     questions: [{ id: 'q_1', key: 'k1', agentId: 'a1', agentName: 'lark', workspaceId: 'moic', priority: 'normal' as const, askedAt: '2026-10-12T14:00:00Z', questions }],
-    userList: [], unreadDms: [], finished: [],
+    userList: [], unreadDms: [],
 };
 
 describe('a form item carries its questions', () => {

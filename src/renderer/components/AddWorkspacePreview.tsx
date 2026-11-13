@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { filterRepos, type AccessibleRepo, type RepoListing } from '../../core/github.js';
 import type { FolderKind, PlanStep } from '../../core/workspace-model.js';
 import type { TynnContent, TynnProject } from '../../core/tynn.js';
+import { bringIntoView } from './TynnProjectPicker.js';
 
 /**
  * ADDING A FOLDER, PREVIEWED (§6.1) — what Genie found the folder to be and every step it would take,
@@ -170,20 +171,27 @@ export function AddFromGitForm({ onPreview, onCancel, busy = false, repos, onRel
 /**
  * `busy` (parity row 25): the confirmed add is running — the button is disabled and says what is happening, so a double
  * click cannot start a second clone into the same folder (src/renderer/add-confirm.ts refuses it as well).
+ *
+ * `onRetry` (Tynn #688): the failure can be tried again as it was asked (an import from Tynn: the same project and
+ * folder), so it has Try again beside its words; `busy` while that runs. The plan and the refusal are each brought into
+ * view when they appear; their keys differ so one replacing the other counts as appearing.
  */
-export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; busy?: boolean | undefined; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string, projectId: string) => void) | undefined }) {
+export function AddWorkspacePreview({ preview, busy = false, onRetry, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; busy?: boolean | undefined; onRetry?: (() => void) | undefined; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string, projectId: string) => void) | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     if (!preview.ok) {
         return (
-            <section data-add-preview="refused" className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--danger)] p-4 text-sm">
-                <p className="font-semibold">Genie will not add that folder</p>
+            <section key="refused" ref={bringIntoView} role="alert" data-add-preview="refused" className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--danger)] p-4 text-sm">
+                <p className="font-semibold">{onRetry ? 'Genie could not add that workspace' : 'Genie will not add that folder'}</p>
                 <p className="text-[var(--fg-2)]">{preview.reason}</p>
-                <div><Button size="xs" type="button" className={button} onClick={onCancel}>Pick another folder</Button></div>
+                <div className="flex gap-2">
+                    {onRetry ? <Button size="xs" type="button" data-action="retry-add" loading={busy} disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => (busy ? undefined : onRetry())}>Try again</Button> : null}
+                    <Button size="xs" type="button" className={button} onClick={onCancel}>{onRetry ? 'Cancel' : 'Pick another folder'}</Button>
+                </div>
             </section>
         );
     }
     return (
-        <section data-add-preview={preview.kind} {...(preview.source ? { 'data-add-source': preview.source } : {})} className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm">
+        <section key="plan" ref={bringIntoView} data-add-preview={preview.kind} {...(preview.source ? { 'data-add-source': preview.source } : {})} className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm">
             <p className="font-semibold">Add <span className="font-mono">{preview.path}</span>?</p>
             {preview.source === 'git' ? <p className="text-[var(--fg-2)]">From <span className="font-mono">{preview.url}</span> — cloned into this folder first. Nothing is cloned until you confirm.</p> : null}
             {preview.source === 'tynn' ? (

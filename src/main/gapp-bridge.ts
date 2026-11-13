@@ -3,6 +3,7 @@ import { APP_BRIDGE, type ElementDefinition } from '../core/catalog.js';
 import { callDecision, type CatalogLookup, type GAppGrant } from '../core/gapp-grants.js';
 import type { AgentId } from '../core/identity.js';
 import { GAPP_STORAGE_QUOTA, GAppStore, storeKeyProblem } from './gapp-storage.js';
+import type { GAppPreviews } from './gapp-previews.js';
 import type { GAppBook, GAppEntry } from './gapps-host.js';
 import type { Caller, Registration } from './mcp-tools.js';
 
@@ -25,6 +26,8 @@ export type BridgeEvent = (typeof APP_BRIDGE.events)[number];
 
 export interface GAppBridgePorts {
     readonly book: Pick<GAppBook, 'list' | 'appElement' | 'storageDir' | 'onChange'>;
+    /** A workspace's previews (V8): a preview's window answers for the preview, never the installed app. */
+    readonly previews?: Pick<GAppPreviews, 'entry' | 'appElement'>;
     /** Genie's catalog as it is now. */
     readonly catalog: CatalogLookup;
     readonly run: GAppRun;
@@ -62,9 +65,9 @@ export class GAppBridge {
     /** One call from one app's window. `app` is who the channel's token says it is, never anything the call says. */
     async handle(app: GAppIdentity, method: string, params?: unknown): Promise<BridgeAnswer> {
         if (!(APP_BRIDGE.calls as readonly string[]).includes(method)) return { error: `${method} is not part of the app bridge` };
-        const entry = this.#ports.book.list().find((e) => e.packageId === app.packageId);
-        if (!entry) return { error: `${app.packageId} is no longer installed` };
-        if (entry.state !== 'installed') return { error: `${entry.name} is turned off` };
+        const found = this.#entryOf(app);
+        if ('error' in found) return found;
+        const { entry } = found;
         const input = isRecord(params) ? params : {};
         try {
             if (method === 'app.me') return { result: this.#me(entry, app.preview) };
@@ -73,6 +76,19 @@ export class GAppBridge {
         } catch (error) {
             return { error: error instanceof Error ? error.message : String(error) };
         }
+    }
+
+    /** The record a window answers by: the installed app's, or its workspace's preview's, as each is now. */
+    #entryOf(app: GAppIdentity): { entry: GAppEntry } | { error: string } {
+        if (app.preview) {
+            const p = this.#ports.previews?.entry(app.packageId) ?? null;
+            if (!p || !p.grant) return { error: `the preview of ${app.packageId} is not open in any workspace` };
+            return { entry: { packageId: p.packageId, name: p.name, version: p.version, digest: p.digest, state: 'installed', unverified: p.unverified, grant: p.grant } };
+        }
+        const entry = this.#ports.book.list().find((e) => e.packageId === app.packageId);
+        if (!entry) return { error: `${app.packageId} is no longer installed` };
+        if (entry.state !== 'installed') return { error: `${entry.name} is turned off` };
+        return { entry };
     }
 
     #me(entry: GAppEntry, preview: boolean): unknown {
@@ -98,7 +114,8 @@ export class GAppBridge {
     }
 
     async #storage(entry: GAppEntry, preview: boolean, method: string, input: Record<string, unknown>): Promise<BridgeAnswer> {
-        if (this.#ports.book.appElement(entry.packageId)?.payload.storage === 'none') return { error: `${entry.name} keeps no data: it declares storage "none"` };
+        const element = preview ? this.#ports.previews?.appElement(entry.packageId) : this.#ports.book.appElement(entry.packageId);
+        if (element?.payload.storage === 'none') return { error: `${entry.name} keeps no data: it declares storage "none"` };
         const store = this.#storeOf(entry, preview);
         if (method === 'app.storage.list') return { result: await store.list(typeof input.prefix === 'string' ? input.prefix : '') };
         const problem = storeKeyProblem(input.key);

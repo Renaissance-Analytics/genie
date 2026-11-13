@@ -27,6 +27,7 @@
  * mode at a hostile width is what tells you whether the layout degrades or breaks. 2560 catches
  * the opposite — things that only look right because they were cramped.
  */
+import { isMainWindow } from './cdp-main-window.mjs';
 
 const PORT = Number(process.env.CDP_PORT ?? 9222);
 const WIDTHS = [800, 1024, 1280, 1440, 1920, 2560];
@@ -53,7 +54,7 @@ say(`listing CDP targets on :${PORT}`);
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 // The smoke may have opened a Take Over window; the sweep measures the MAIN window.
 // A Take Over window: genie://takeover/<id>, or its address genie://{workstation}/takeover/<id> (Tynn #831).
-const pages = list.filter((t) => t.type === 'page' && !/#genie:\/\/(?:[^/?#]+\/)?takeover\//.test(String(t.url)));
+const pages = list.filter(isMainWindow);
 say(`${list.length} target(s), ${pages.length} page(s): ${pages.map((p) => p.url).join(' | ') || '(none)'}`);
 const page = pages[0];
 if (!page) {

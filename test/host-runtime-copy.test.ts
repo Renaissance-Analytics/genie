@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { windowsFunction } from './helpers/ci-scripts.js';
 import { materializeHostRuntime, runtimeFiles, type HostRuntimeInput } from '../src/main/host-runtime.js';
 
 /**
@@ -112,11 +113,10 @@ describe('the copy', () => {
     });
 });
 
-describe('CI: what was packaged really comes up (Tynn #597)', () => {
-    const steps = () => (require('js-yaml').load(readFileSync('.github/workflows/ci.yml', 'utf8')) as { jobs: { package: { steps: Array<{ name?: string; run?: string }> } } }).jobs.package.steps;
+describe('CI: what was packaged really comes up (Tynn #597; scripts/ci/windows.ps1)', () => {
 
     it('the packaged app’s step waits for the window to be linked to its host, and says why not', () => {
-        const run = steps().find((s) => s.name === 'the packaged app starts genie-host through genie-launch.exe')?.run ?? '';
+        const run = windowsFunction('Row-packaged-launcher');
         expect(run, 'the step exists').toContain('host spawn via=');
         expect(run).toContain('agent host (started|replaced|adopted) pid=');
         expect(run).toContain('did not come up');

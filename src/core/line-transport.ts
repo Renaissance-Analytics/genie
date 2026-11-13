@@ -30,10 +30,21 @@ export interface LineTransport extends ClientTransport {
     trusted(): void;
 }
 
+/**
+ * A LINE COSTS ITS OWN SIZE (Tynn #662). The reader keeps a line's BYTES, read by read, and searches only each new read
+ * for the newline; a line is joined and decoded once, when its newline comes. It used to be `buffer += chunk;
+ * buffer.indexOf('\n')`: V8 flattens the joined string to search it, so every read copied everything still waiting. A
+ * frame of L characters read c at a time cost about L^2 / 2c characters copied — for the owner's 24 MB stores dump in 64 KB
+ * pipe reads, about 4.6 G characters, each copy a large-object string only a full GC frees: window main at 1.5-3.6 GB, a
+ * hang, and windows that vanished. Bytes, not text, because a read can end inside a character; decoding the joined line
+ * once is also what makes that safe (no `setEncoding`).
+ */
 export function lineTransport(stream: StreamLike): LineTransport {
     const messageListeners = new Set<(text: string) => void>();
     const closeListeners = new Set<() => void>();
-    let buffer = '';
+    /** The current line's bytes so far (before its newline), read by read, and how many. */
+    let pending: Buffer[] = [];
+    let pendingBytes = 0;
     let limit = UNTRUSTED_LINE_LIMIT;
     let closed = false;
     const fireClose = (): void => {
@@ -41,19 +52,28 @@ export function lineTransport(stream: StreamLike): LineTransport {
         closed = true;
         for (const listener of [...closeListeners]) listener();
     };
-    stream.setEncoding?.('utf8');
     stream.on('data', (chunk) => {
         if (closed) return;
-        buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-        let newline = buffer.indexOf('\n');
-        while (newline >= 0) {
-            const line = buffer.slice(0, newline);
-            buffer = buffer.slice(newline + 1);
+        const data = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+        let from = 0;
+        for (let newline = data.indexOf(0x0a); newline >= 0; newline = data.indexOf(0x0a, from)) {
+            let line: string;
+            if (pending.length === 0) line = data.toString('utf8', from, newline);
+            else {
+                pending.push(data.subarray(from, newline));
+                line = Buffer.concat(pending, pendingBytes + (newline - from)).toString('utf8');
+                pending = [];
+                pendingBytes = 0;
+            }
+            from = newline + 1;
             if (line.length > 0) for (const listener of [...messageListeners]) listener(line);
             if (closed) return;
-            newline = buffer.indexOf('\n');
         }
-        if (buffer.length > limit) {
+        if (from < data.length) {
+            pending.push(from === 0 ? data : data.subarray(from));
+            pendingBytes += data.length - from;
+        }
+        if (pendingBytes > limit) {
             fireClose();
             stream.destroy();
         }

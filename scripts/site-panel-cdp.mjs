@@ -10,6 +10,7 @@
  * It launches Electron, so it refuses to run anywhere but CI or a test machine (SITE_PANEL_CDP_ALLOW=1). Exit 0 all passed; 1 a
  * check failed; 2 cannot run here. Every wait has a deadline, and the whole run has one.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -17,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { codeLiteral } from './code-literal.mjs';
 
-if (process.env.CI !== 'true' && process.env.SITE_PANEL_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
+if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1' && process.env.SITE_PANEL_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 
 const PORT = Number(process.env.CDP_PORT ?? 9333);
 // With no key: nothing may open a store (core/browser-store.ts). A launch of its own, that a keyring can't help.
@@ -75,7 +76,12 @@ mkdirSync(join(home, 'runtime'), { recursive: true });
 writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WORKSPACE, path: ws }], null, 2));
 
 const log = openSync(join(tmpdir(), 'site-panel-electron.log'), 'a');
-const launcher = process.platform === 'linux' ? ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox', STORE_ARG]] : ['npx', ['electron', '.']];
+// THE DISPLAY: the session's own when there is one (a Wayland session, as on an Omarchy machine: scripts/ci/linux.sh), and
+// a virtual X screen where there is none (a bare runner) or when CI_DISPLAY=xvfb asks for one. Nothing here needs X.
+const inSession = process.platform === 'linux' && process.env.CI_DISPLAY !== 'xvfb' && process.env.XDG_SESSION_TYPE === 'wayland' && !!process.env.WAYLAND_DISPLAY;
+const launcher = process.platform !== 'linux' ? ['npx', ['electron', '.']]
+    : inSession ? ['npx', ['electron', '.', '--no-sandbox', STORE_ARG]]
+    : ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox', STORE_ARG]];
 const app = spawn(launcher[0], [...launcher[1], `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { env: { ...process.env, HOME: user, USERPROFILE: user, GENIE_HOME: home, GENIE_PAGE_PROBE: '1' }, stdio: ['ignore', log, log], detached: process.platform !== 'win32', shell: process.platform === 'win32' });
 const end = (code) => {
     try { if (process.platform !== 'win32') process.kill(-app.pid, 'SIGKILL'); else app.kill(); } catch { /* gone */ }
@@ -86,7 +92,7 @@ setTimeout(() => { console.log('FAIL the run\'s own deadline, 260 s'); end(1); }
 
 const targets = async () => (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 try {
-    const page = await until('the window', 60_000, async () => (await targets()).find((t) => t.type === 'page' && /index\.html/.test(t.url)));
+    const page = await until('the window', 60_000, async () => mainWindow(await targets()));
     if (!page) { check(false, 'the main window came up'); end(1); }
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     const ready = await until('window.genie', 60_000, () => cdp.evaluate('typeof window.genie === "object" && document.readyState === "complete"'));

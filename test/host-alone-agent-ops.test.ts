@@ -54,6 +54,8 @@ function engine(state: { probe: Probe | null } = { probe: IDLE }) {
         settleParked: (_id: string, decision: string) => { calls.push(`settleParked ${decision}`); return true; },
         historyRows: async () => ({ rows: [], truncated: false }),
         toolOutput: async (_id: string, callId: string) => { calls.push(`toolOutput ${callId}`); return { ok: true, output: 'the whole output' }; },
+        forgetShown: () => { calls.push('forgetShown'); },
+        attachment: async (_id: string, attachmentId: string) => { calls.push(`attachment ${attachmentId}`); return { ok: true, mimeType: 'image/png', data: 'iVBORw0K', bytes: 6 }; },
         emit: (id: string) => { for (const l of subscribers) l(id); },
     };
     return fake as unknown as HostAloneEngine & { emit(id: string): void };
@@ -68,7 +70,6 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         startRefusal: () => null,
         attention: {
             finished: () => [],
-            markSeen: () => {},
             answer: async () => true as never,
             lists: { done: async () => true },
         },
@@ -127,12 +128,14 @@ const CALLS: Record<string, (id: string) => unknown[]> = {
     'agents.setAutoApprove': (id) => [id, true],
     'agents.setManageTabs': (id) => [id, true],
     'agents.setDrivePages': (id) => [id, true],
+    'agents.setMcpServer': (id) => [id, 'slack', false],
     'agents.setIssueWatch': (id) => [id, { delivery: 'off', kinds: [] }],
     'agents.setPermissions': (id) => [id, 'edits'],
     'agents.setModel': (id) => [id, 'opus'],
     'agents.models': (id) => [id, false],
     'agents.diagnose': (id) => [id],
     'agents.toolOutput': (id) => [id, 'call_1'],
+    'agents.attachment': (id) => [id, 'att_1'],
 };
 
 describe('every agents.* call is answered with no window', () => {
@@ -195,7 +198,8 @@ describe('they do what the window\'s do', () => {
         expect(await api.invoke('agents.previewDelete', [atlas.id, 'delete', []])).toMatchObject({ ok: true, plan: {} });
         expect(registry.find(atlas.id)).not.toBeNull();
         expect(await api.invoke('agents.delete', [atlas.id, 'delete', [], false])).toMatchObject({ ok: true });
-        expect(calls).toEqual(['stop']);
+        // Stopped, and what its ledger last showed dropped (Tynn #647): nothing of it stands in again.
+        expect(calls).toEqual(['stop', 'forgetShown']);
         expect(registry.find(atlas.id)).toBeNull();
         await expect(stat(join(workspace, '.agents', 'atlas'))).rejects.toThrow();
     });
@@ -213,6 +217,8 @@ describe('they do what the window\'s do', () => {
         expect(calls).toEqual(['models claude true']);
         expect(await api.invoke('agents.toolOutput', [atlas.id, 'call_9'])).toMatchObject({ ok: true, output: 'the whole output' });
         expect(calls).toContain('toolOutput call_9');
+        expect(await api.invoke('agents.attachment', [atlas.id, 'att_9'])).toMatchObject({ ok: true, mimeType: 'image/png' });
+        expect(calls).toContain('attachment att_9');
     });
 
     it('Diagnose reads the agent from genie-host', async () => {
@@ -280,7 +286,7 @@ describe('the wiring', () => {
     it('every write in the adapter refreshes what clients see', () => {
         const whole = src('src/main/agent-ops-api.ts');
         const adapter = whole.slice(whole.indexOf('export function agentOpsApi'));
-        for (const method of ['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAccessAgents', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setIssueWatch', 'setPermissions', 'setModel']) {
+        for (const method of ['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAccessAgents', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setMcpServer', 'setIssueWatch', 'setPermissions', 'setModel']) {
             const line = adapter.split('\n').find((l) => l.trimStart().startsWith(`${method}:`));
             expect(line, method).toBeDefined();
             expect(line, method).toContain('.finally(touch)');

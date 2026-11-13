@@ -3,11 +3,9 @@ import { UpdateHost, type DrainAgentsPort, type UpdaterPort, type UpdateState } 
 import type { RunningProcess } from '../src/main/upgrade.js';
 
 /**
- * AN UPGRADE ASKS NO AGENT FOR A HANDOFF (the owner, 2026-10-12: "agents no longer need to write a handoff when genie
- * upgrades. the only point of the handoff was in case the TUI chat was not able to be resumed"). An agent is a session
- * that resumes its own thread; the drain that asked every live agent to write one with imDone and waited up to two
- * minutes is gone. Install ends every agent session (§7.4 — none revived), runs the §7.2 teardown and hands the
- * installer the app, at once; the report names the sessions it ended and says each resumes its thread when started.
+ * Legacy ports without a safe-point hook still stop immediately, with no handoff requirement.
+ * The real host's bounded current-turn/early-thumb gate (Tynn #616) is covered separately in
+ * graceful-install-616.test.ts. These controls retain the pre-existing stop/teardown contract.
  */
 function fakes(live: Array<{ id: string; name: string }>) {
     let stops = 0;

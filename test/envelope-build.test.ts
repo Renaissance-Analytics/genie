@@ -135,7 +135,8 @@ async function buildFrom(src: string, shape: (d: WizardDraft) => WizardDraft = (
     const analysis = (read as { analysis: SourceAnalysis }).analysis;
     const plan = buildPlan(shape(startDraft(analysis, { parent })));
     const built = await buildEnvelope(ops(), env(), plan);
-    expect(built).toMatchObject({ ok: true });
+    // A build that refuses says why in the failure (a bare `ok: false` in a CI log names nothing).
+    expect(built.ok ? 'built' : `refused: ${built.reason}`).toBe('built');
     expect(await treeHash(src)).toBe(before);
     // Positive control for the gauge: the hash does see a one-byte change in the source (then it is put back).
     await writeFile(join(src, 'probe.tmp'), 'x');

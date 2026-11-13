@@ -166,7 +166,8 @@ export type Repair =
     | { action: 'restart-fresh'; reason: string };
 
 export interface Diagnosis {
-    readonly state: 'dormant' | 'starting' | 'healthy' | 'broken';
+    /** `signed-out` (Tynn #698): the provider's CLI runs and its own status call says not signed in. Never `broken`, which is a CLI that cannot run. */
+    readonly state: 'dormant' | 'starting' | 'healthy' | 'broken' | 'signed-out';
     readonly fault: boolean;
     readonly cause: string | null;
     readonly repair: Repair | null;
@@ -177,7 +178,7 @@ const RESUMABLE = /^[A-Za-z0-9._:-]{1,200}$/;
 export function diagnoseAgent(input: DiagnoseInput): Diagnosis {
     const provider = input.provider ?? 'claude';
     if (!input.providerInstalled) return { state: 'broken', fault: true, cause: `${provider} is not installed`, repair: { action: 'install-provider' } };
-    if (!input.signedIn) return { state: 'broken', fault: true, cause: `${provider} is not signed in`, repair: { action: 'sign-in' } };
+    if (!input.signedIn) return { state: 'signed-out', fault: true, cause: `${provider} is not signed in`, repair: { action: 'sign-in' } };
     const s = input.session;
     if (s === null) {
         if (input.threadId === null && input.lastUsedAt === null) return { state: 'dormant', fault: false, cause: 'registered, never started', repair: null };

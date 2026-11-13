@@ -79,35 +79,95 @@ const preview = (text: string): string => {
     return one.length > PREVIEW_CHARS ? `${one.slice(0, PREVIEW_CHARS - 1)}…` : one;
 };
 
+/*
+ * BUILT ONCE PER CHANGE (Tynn #663). Every features snapshot in window main lists the threads over ALL the mail; at the
+ * owner's scale (9,500 mails) building every thread each time — joining every message's text into a haystack only to keep
+ * its last 20,000 characters — was about 2.7 GB of garbage per 5 minutes in the #662 soak. The inbox never edits a message
+ * in place: a send appends one, a read or a refusal replaces it, a delete drops it. So a thread whose messages are the SAME
+ * objects as last time, under the same two names, is the same summary, and it is not built again. Everything a summary
+ * says comes from its messages and the names of its two participants (the last sender and a waiting recipient are one of
+ * them), so those are all it is checked against. Kept weakly, under the thread's first message: when that message goes
+ * or is replaced, the entry goes with it.
+ */
+const pairOfMail = new WeakMap<ThreadMail, string>();
+const builtThreads = new WeakMap<ThreadMail, { readonly list: readonly ThreadMail[]; readonly aName: string; readonly bName: string; readonly summary: ThreadSummary }>();
+
+function mailPair(m: ThreadMail): string {
+    let key = pairOfMail.get(m);
+    if (key === undefined) {
+        key = pairKey(m.from, m.to);
+        pairOfMail.set(m, key);
+    }
+    return key;
+}
+
+/**
+ * What search reads: both names and every text, joined, lower-cased, the LAST `HAYSTACK_CHARS`. Read from the end, so a
+ * thread of thousands of messages reads only the texts that reach into the window. Whole messages only, each after a
+ * newline as in the full join, so lower-casing sees the same context (a final sigma never looks across a newline) and the
+ * window is exactly the full join's. Anything shorter than the window is the full join.
+ */
+function haystackOf(aName: string, bName: string, sorted: readonly ThreadMail[]): string {
+    const tail: string[] = [];
+    let length = 0;
+    let i = sorted.length - 1;
+    for (; i >= 0 && length < HAYSTACK_CHARS; i -= 1) {
+        const text = sorted[i]!.text;
+        length += text.length + (tail.length > 0 ? 1 : 0);
+        tail.push(text);
+    }
+    tail.reverse();
+    if (i < 0) return [aName, bName, ...tail].join('\n').toLowerCase().slice(-HAYSTACK_CHARS);
+    const lowered = tail.join('\n').toLowerCase();
+    // Lower-casing does not shorten text, so this always holds; if it ever did not, the full join is still the answer.
+    return lowered.length >= HAYSTACK_CHARS ? lowered.slice(-HAYSTACK_CHARS) : [aName, bName, ...sorted.map((m) => m.text)].join('\n').toLowerCase().slice(-HAYSTACK_CHARS);
+}
+
+function threadSummary(key: string, list: readonly ThreadMail[], aName: string, bName: string): ThreadSummary {
+    const sorted = [...list].sort((x, y) => x.seq - y.seq);
+    const last = sorted[sorted.length - 1]!;
+    const [a, b] = pairOf(key)!;
+    const nameOf = (participant: string): string => (participant === a ? aName : bName);
+    const waitingMail = sorted.filter((m) => m.to !== HUMAN && m.readAt === null);
+    const oldest = waitingMail[0];
+    return {
+        key, a, b, aName, bName,
+        withHuman: a === HUMAN || b === HUMAN,
+        count: sorted.length,
+        lastFrom: nameOf(last.from),
+        lastPreview: preview(last.text),
+        lastAt: Date.parse(last.sentAt),
+        lastSeq: last.seq,
+        unread: sorted.filter((m) => m.to === HUMAN && m.readAt === null).length,
+        waiting: oldest ? { agent: nameOf(oldest.to), count: waitingMail.length, since: Date.parse(oldest.sentAt) } : null,
+        attachments: sorted.reduce((n, m) => n + m.attachments.length, 0),
+        haystack: haystackOf(aName, bName, sorted),
+    };
+}
+
 /** Every thread in the mail, newest activity first. `name` names a participant (`human` → `you`). */
 export function inboxThreads(mail: readonly ThreadMail[], name: (participant: string) => string): ThreadSummary[] {
     const groups = new Map<string, ThreadMail[]>();
     for (const m of mail) {
-        const key = pairKey(m.from, m.to);
+        const key = mailPair(m);
         const list = groups.get(key);
         if (list) list.push(m);
         else groups.set(key, [m]);
     }
     const out: ThreadSummary[] = [];
     for (const [key, list] of groups) {
-        const sorted = [...list].sort((x, y) => x.seq - y.seq);
-        const last = sorted[sorted.length - 1]!;
         const [a, b] = pairOf(key)!;
-        const waitingMail = sorted.filter((m) => m.to !== HUMAN && m.readAt === null);
-        const oldest = waitingMail[0];
-        out.push({
-            key, a, b, aName: name(a), bName: name(b),
-            withHuman: a === HUMAN || b === HUMAN,
-            count: sorted.length,
-            lastFrom: name(last.from),
-            lastPreview: preview(last.text),
-            lastAt: Date.parse(last.sentAt),
-            lastSeq: last.seq,
-            unread: sorted.filter((m) => m.to === HUMAN && m.readAt === null).length,
-            waiting: oldest ? { agent: name(oldest.to), count: waitingMail.length, since: Date.parse(oldest.sentAt) } : null,
-            attachments: sorted.reduce((n, m) => n + m.attachments.length, 0),
-            haystack: [name(a), name(b), ...sorted.map((m) => m.text)].join('\n').toLowerCase().slice(-HAYSTACK_CHARS),
-        });
+        const aName = name(a);
+        const bName = name(b);
+        const first = list[0]!;
+        const kept = builtThreads.get(first);
+        if (kept && kept.aName === aName && kept.bName === bName && kept.list.length === list.length && kept.list.every((m, i) => m === list[i])) {
+            out.push(kept.summary);
+            continue;
+        }
+        const summary = threadSummary(key, list, aName, bName);
+        builtThreads.set(first, { list, aName, bName, summary });
+        out.push(summary);
     }
     // Newest activity first, by when it was sent (Genie 1: ts, then seq) — an imported history keeps its own seqs.
     const time = (t: ThreadSummary): number => (Number.isNaN(t.lastAt) ? -Infinity : t.lastAt);

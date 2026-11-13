@@ -33,7 +33,6 @@ function fakeApi() {
             if (method === 'terminals.open') return { id: 'term_9', pid: 9, shell: 'sh', scrollback: '' };
             if (method === 'terminals.list') return [{ id: 'term_9', pid: 9, shell: 'sh' }];
             if (method === 'updates.state') return { phase: 'idle', version: null, percent: null, error: null, checkedAt: null };
-            if (method === 'restartWithHandoff') return { ok: false, reason: 'no handoff fin_1 for atlas' };
             // Tynn #529 part A: the host's Take Over host started the TUI, with no window there.
             if (method === 'takeOver') return { ok: true, terminalId: 'term_9', started: true };
             return { ok: true };
@@ -136,7 +135,6 @@ describe('the bridge over the wire', () => {
         await remote.takeBaton();
         const { bridge } = remote;
 
-        expect(await bridge.restartWithHandoff('agent_a', 'fin_1')).toEqual({ ok: false, reason: 'no handoff fin_1 for atlas' });
         expect(await bridge.resolvePrompt('agent_a', 'draft1', 'send')).toEqual({ ok: true });
         expect(api.calls).toContainEqual({ method: 'resolvePrompt', args: ['agent_a', 'draft1', 'send'] });
         expect(await bridge.takeOver('agent_a')).toEqual({ ok: true, terminalId: 'term_9', started: true, ticket: expect.any(String) });

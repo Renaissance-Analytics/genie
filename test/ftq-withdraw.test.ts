@@ -43,7 +43,7 @@ async function call(args: JsonObject) {
     const result = await reg.handler(args, { server: 'genie', tool: 'ForceTheQuestion', headers: {} });
     return { ...result, json: JSON.parse(result.text) as Record<string, unknown> };
 }
-const items = (): DeckItem[] => deckItemsFrom({ questions: attention.pending(), userList: [], unreadDms: [], finished: [], agents: {} });
+const items = (): DeckItem[] => deckItemsFrom({ questions: attention.pending(), userList: [], unreadDms: [], agents: {} });
 const mailCount = () => inbox.unread(atlas.id).length + inbox.unread(kai.id).length + inbox.unread(HUMAN).length;
 
 beforeEach(async () => {

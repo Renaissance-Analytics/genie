@@ -15,7 +15,7 @@ import type { InboxStore } from './inbox-store.js';
 export type DeckAnswerAction = Extract<FeatureAction, { kind: 'deck.answer' | 'deck.answerForm' }>;
 
 export interface DeckAnswerPorts {
-    readonly attention: Pick<AttentionStore, 'answer' | 'markSeen' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
+    readonly attention: Pick<AttentionStore, 'answer' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
     /** As the window's approvals API types it (a replica may answer later); read exactly as the feature action always did. */
     readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean> };
     readonly inbox: Pick<InboxStore, 'unread' | 'receive'>;
@@ -23,7 +23,8 @@ export interface DeckAnswerPorts {
     readonly trustCertificate?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly deferTrustCertificate?: () => void;
     readonly syncHosts?: () => Promise<HostsSyncResult>;
-    readonly mainErrors?: { dismiss(id: string): boolean };
+    /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
+    readonly mainErrors?: { dismiss(id: string): boolean; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
 }
 
 const NEEDS_WINDOW = (what: string): string => `${what} needs Genie’s window on this machine: open Genie there`;
@@ -67,9 +68,6 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             await ports.inbox.receive({ participant: HUMAN, limit: unread.filter((m) => m.seq < target.seq).length + 1 });
             break;
         }
-        case 'mark-seen':
-            ports.attention.markSeen(command.finishedId);
-            break;
         case 'trust-certificate': {
             // The same Trust as Hosting's line: one elevation, and a failure comes back with its reason.
             if (!ports.trustCertificate) throw new Error(NEEDS_WINDOW('trusting Genie’s certificate'));
@@ -93,10 +91,27 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
             if (!ports.mainErrors.dismiss(command.id)) throw new Error(`no recorded error ${command.id}`);
             break;
+        case 'retry-host-copy': {
+            // The copy is made by the window that starts the host; its failure comes back in words (Tynn #693).
+            if (!ports.mainErrors?.retryHostCopy) throw new Error(NEEDS_WINDOW('making the host’s copy'));
+            const r = await ports.mainErrors.retryHostCopy(command.id);
+            if (!r.ok) throw new Error(r.reason);
+            break;
+        }
+        case 'open-lifecycle-log': {
+            if (!ports.mainErrors?.openLog) throw new Error(NEEDS_WINDOW('opening the log'));
+            const failed = await (command.id ? ports.mainErrors.openLog(command.id) : ports.mainErrors.openLog());
+            if (failed !== null) throw new Error(`Genie could not open the log: ${failed}`);
+            break;
+        }
+        case 'report-main-error': {
+            if (!ports.mainErrors?.report) throw new Error(NEEDS_WINDOW('opening an issue draft'));
+            const failed = await ports.mainErrors.report(command.id);
+            if (failed !== null) throw new Error(`Genie could not open the issue draft: ${failed}`);
+            break;
+        }
         case 'answer-provider-approval':
-        case 'restart-with-handoff':
-        case 'navigate':
-            // Session-layer and renderer concerns: main.ts routes these to the session host and the window.
+            // A session-layer concern: main.ts routes it to the session host.
             throw new Error(`${command.kind} is handled by the session host, not the feature IPC`);
     }
 }
