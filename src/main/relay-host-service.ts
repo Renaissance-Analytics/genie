@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import type { RelayHostHandle, RelayHostStatus } from './tynn-network.js';
@@ -38,6 +39,14 @@ export interface RelayHostView {
     /** Why the role is not known, in words a person can act on, when genie-host knows; `null` = a read that got no answer. */
     readonly unknownWhy?: string | null;
     readonly relay: RelayHostStatus;
+    /**
+     * WHICH VIEW THIS IS (Tynn #656): this genie-host's run, and how many changes it had told when the view was taken. A
+     * window keeps the newest: a call's reply settles a turn after the read that carried it, so an event that came in the
+     * same read — a first ticket failing just after `register` answered "connecting" — was overwritten by the older reply,
+     * and the window said "connecting" for good while genie-host said "unavailable".
+     */
+    readonly epoch: string;
+    readonly rev: number;
 }
 
 export class RelayHostService {
@@ -63,10 +72,18 @@ export class RelayHostService {
     #registering: Promise<void> | null = null;
     #legacy: LegacyIdentity | null = null;
     #again = false;
+    readonly #epoch = randomUUID();
+    #rev = 0;
 
     constructor(ports: RelayHostServicePorts) { this.#ports = ports; }
 
-    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, said: this.#said, unknownWhy: this.unknownWhy(), relay: this.#relay }; }
+    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, said: this.#said, unknownWhy: this.unknownWhy(), relay: this.#relay, epoch: this.#epoch, rev: this.#rev }; }
+
+    /** Every change is numbered before the windows are told, so the view they are sent is newer than any taken before it. */
+    #changed(): void {
+        this.#rev += 1;
+        this.#ports.onChange();
+    }
 
     /** Why connecting out cannot be decided, when it is not "Tynn did not answer" (beta.61.1): true words, with what to do. */
     unknownWhy(): string | null {
@@ -105,7 +122,7 @@ export class RelayHostService {
         }
         await this.readRole();
         await this.apply();
-        this.#ports.onChange();
+        this.#changed();
     }
 
     /** What Tynn says this machine is: Tynn's answer only; signed in, no answer is a drone. */
@@ -125,7 +142,7 @@ export class RelayHostService {
         this.#said = role;
         this.#unbound = unbound;
         if (this.#workstation) this.#workstation = { ...this.#workstation, role };
-        this.#ports.onChange();
+        this.#changed();
     }
 
     #registerLater(): void {
@@ -156,20 +173,20 @@ export class RelayHostService {
         if (want === this.#relayFor) return;
         this.#stopLink();
         this.#relayFor = want;
-        if (!want || !registered) { this.#ports.onChange(); return; }
+        if (!want || !registered) { this.#changed(); return; }
         const identity = await this.#ports.workstation.identity(registered.host).catch(() => null);
-        if (!identity || this.#relayFor !== want) { this.#ports.onChange(); return; }
+        if (!identity || this.#relayFor !== want) { this.#changed(); return; }
         this.#handle = this.#ports.start({
             host: registered.host, workstationId: identity.workstationId, fingerprint: identity.fingerprint,
-            onStatus: (status) => { this.#relay = status; this.#ports.onChange(); },
+            onStatus: (status) => { this.#relay = status; this.#changed(); },
         });
-        this.#ports.onChange();
+        this.#changed();
     }
 
     stop(): void {
         this.#stopLink();
         this.#relayFor = null;
-        this.#ports.onChange();
+        this.#changed();
     }
 
     #stopLink(): void {
