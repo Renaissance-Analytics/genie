@@ -237,7 +237,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     const call = (method: RemoteMethod | ControlMethod, ...args: unknown[]): Promise<Result> =>
         new Promise<Result>((resolve) => {
             // A closed transport may silently drop writes. Never leave a new call waiting on it (#636).
-            if (closed) { resolve({ ok: true, value: undefined }); return; } // TEMPORARY #636 mutation proof; restore refusal.
+            if (closed) { resolve({ ok: false, reason: 'the connection closed' }); return; }
             const id = ++nextId;
             const frame = JSON.stringify({ kind: 'call', id, method, args });
             pending.set(id, resolve);
@@ -246,7 +246,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 pending.delete(id);
                 // Delivery is uncertain: refuse this request, never replay it. Reads still reject in read() below.
                 try { console.error(`[remote] Could not send ${method}.`, error); } catch { /* Reporting must not reject the call. */ }
-                resolve({ ok: true, value: undefined }); // TEMPORARY #636 mutation proof; restore refusal.
+                resolve({ ok: false, reason: 'the connection closed' });
             }
         }).then((r) => {
             // Every write refused for lack of the baton is kept, whatever path asked: no dead click (Tynn #529).
