@@ -422,17 +422,18 @@ async function defaultModelOf(ports: AgentOpsPorts, record: AgentRecord): Promis
 export async function listModels(ports: AgentOpsPorts, agentId: string, refresh = false): Promise<ModelChoices | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
+    // THE PROVIDER'S LIST, RUNNING OR NOT (Tynn #608; the owner: the list would not refresh while the agent ran). A running
+    // session's own state is fixed at its start, so it says only which model is in use, and is the list only when the
+    // provider cannot be asked now, with why.
     const live = ports.host.modelState?.(record.id) ?? null;
-    if (live) {
-        try {
-            const state = await live;
-            if (state.availableModels.length > 0) return { ok: true, provider: record.provider, source: 'session', models: state.availableModels, current: state.currentModelId };
-        } catch {
-            // The session could not say (an older CLI, a refused model/list): the provider's CLI is asked below instead.
-        }
+    const session = live ? await live.then((s) => s, () => null) : null;
+    const asked = ports.models ? await ports.models.get(record.provider, { refresh }) : null;
+    if (asked?.ok) return session ? { ...asked, inUse: session.currentModelId } : asked;
+    if (session && session.availableModels.length > 0) {
+        const why = asked && !asked.ok ? asked.reason : 'this Genie cannot ask a provider for its models';
+        return { ok: true, provider: record.provider, source: 'session', models: session.availableModels, current: session.currentModelId, note: `Couldn’t ask ${record.provider} for its models now (${why}): this is the list the running session started with.` };
     }
-    if (!ports.models) return { ok: false, provider: record.provider, reason: 'this Genie cannot ask a provider for its models' };
-    return ports.models.get(record.provider, { refresh });
+    return asked ?? { ok: false, provider: record.provider, reason: 'this Genie cannot ask a provider for its models' };
 }
 
 /**

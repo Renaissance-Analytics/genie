@@ -1233,7 +1233,7 @@ function AgentViewBody({
                                                         const listed = choices !== undefined && choices !== 'loading' && choices.ok ? choices : null;
                                                         // IN USE: the running session's own answer (modelState) — a provider list asked before any session
                                                         // knows only the provider's default, which is not a reading of this agent.
-                                                        const inUseId = listed?.source === 'session' ? listed.current : null;
+                                                        const inUseId = listed?.inUse ?? (listed?.source === 'session' ? listed.current : null);
                                                         const inUse = inUseId === null ? null : listed?.models.find((m) => m.modelId === inUseId) ?? null;
                                                         const reading = inUse ? modelLabel(inUse) : inUseId ?? session?.model ?? null;
                                                         const defaultEntry = listed?.models.find((m) => m.isDefault === true) ?? null;
@@ -1287,36 +1287,29 @@ function AgentViewBody({
                                                                         {refresh}
                                                                     </label>
                                                                 ) : (
+                                                                    // NO FALLBACK (Tynn #608; the owner: "Do not use a pre compiled list"): with no list from the
+                                                                    // provider there is nothing to choose from, only why, and Retry. What it starts with stays said.
                                                                     <>
                                                                         {choices !== undefined && !choices.ok ? (
                                                                             <p data-model-list="failed" className="mb-1 text-[var(--fg-4)]">
                                                                                 Couldn’t get {agent.provider}’s list of models: {choices.reason}
-                                                                                {refresh}
+                                                                                {ops.onRefreshModels ? (
+                                                                                    <Button size="xs" type="button" data-action="models-retry" onClick={() => ops.onRefreshModels?.()} className="ml-2 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 hover:bg-[var(--bg-2)]">
+                                                                                        Retry
+                                                                                    </Button>
+                                                                                ) : null}
                                                                                 {ops.onChooseProviderProgram ? <ProviderProgramChoice provider={agent.provider} reason={choices.reason} onChoose={() => ops.onChooseProviderProgram!(agent.provider)} /> : null}
                                                                             </p>
+                                                                        ) : (
+                                                                            <p data-model-list="unavailable" className="mb-1 text-[var(--fg-4)]">This window can’t ask {agent.provider} for its models.</p>
+                                                                        )}
+                                                                        {ops.model ? (
+                                                                            <p className="text-[var(--fg-4)]">Starts with <span data-model-chosen={ops.model} className="font-mono text-[var(--fg-2)]">{ops.model}</span></p>
                                                                         ) : null}
-                                                                        <label className="block" title={applies}>
-                                                                            Start {agent.name} with
-                                                                            {/* The other path, only when the provider's list could not be had: any name the provider
-                                                                                accepts, suggesting only the model the provider reported. */}
-                                                                            <input
-                                                                                key={ops.model ?? ''}
-                                                                                data-model-input={ops.model ?? ''}
-                                                                                type="text"
-                                                                                list={session?.model ? `models-${agent.id}` : undefined}
-                                                                                defaultValue={ops.model ?? ''}
-                                                                                placeholder="provider default"
-                                                                                spellCheck={false}
-                                                                                onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) { touch('model'); ops.onSetModel?.(v === '' ? null : v); } }}
-                                                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                                                                className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
-                                                                            />
-                                                                            {session?.model ? (
-                                                                                <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist>
-                                                                            ) : null}
-                                                                        </label>
                                                                     </>
                                                                 )}
+                                                                {/* The list is the running session's own, the provider not being reachable now: said, with why (Tynn #608). */}
+                                                                {listed?.note ? <p data-model-note className="mt-1 text-[var(--fg-4)]">{listed.note}</p> : null}
                                                                 {selectedEntry?.description || beside?.control === 'model' ? (
                                                                     <p className="mt-1 truncate text-[var(--fg-4)]">
                                                                         {selectedEntry?.description ? <span data-model-description={selectedEntry.modelId}>{selectedEntry.description}</span> : null}
