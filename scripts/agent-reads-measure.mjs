@@ -37,7 +37,7 @@ const MODE = arg('mode', 'door');
 const SCOPE = arg('scope', 'full');
 const OUT = arg('out', `agent-reads-${MODE}.json`);
 if (!['ipc', 'door', 'door-revision'].includes(MODE)) { console.error(`unknown --mode=${MODE}`); process.exit(2); }
-if (!['full', 'm4-diagnostic'].includes(SCOPE)) throw new Error(`unknown --scope=${SCOPE}`);
+if (!['full', 'm4-diagnostic', 'm4', 'm5-m6'].includes(SCOPE)) throw new Error(`unknown --scope=${SCOPE}`);
 
 // Check the child's actual checkout/machine before creating any home or launching anything. Only the nonce is supplied.
 const request = process.env.AGENT_READS_REQUEST ? JSON.parse(process.env.AGENT_READS_REQUEST) : null;
@@ -221,7 +221,7 @@ async function main() {
     result.control = { blockedGapMs };
     check(blockedGapMs >= 80, 'the gauge saw a deliberate 120 ms block', `${Math.round(blockedGapMs)} ms`);
 
-    for (const rows of [5000, 20000]) {
+    for (const rows of SCOPE === 'm5-m6' ? [] : [5000, 20000]) {
         step('M4', `opening an agent with ${rows} rows, five times`);
         const id = await agentThat(cdp, workspaceId, `m4-${rows}`, rows, 0);
         const measure = `m4_${rows}`;
@@ -252,10 +252,10 @@ async function main() {
         await cdp.evaluate(`window.genieTest.stopAgent(${JSON.stringify(id)}); true`, 10_000);
     }
 
-    if (SCOPE === 'm4-diagnostic') {
+    if (SCOPE === 'm4-diagnostic' || SCOPE === 'm4') {
         result.finished = true;
         writeResult();
-        console.log(`M4-only diagnostic acquired: ${OUT}; NOT ACCEPTANCE; no M5/M6 workloads`);
+        console.log(`M4-only ${SCOPE === 'm4' ? 'acceptance sample' : 'diagnostic (NOT ACCEPTANCE)'} acquired: ${OUT}; no M5/M6 workloads`);
         await cleanQuit(inspector).catch(() => {});
         return;
     }
@@ -320,7 +320,9 @@ async function main() {
 
     result.finished = true;
     writeResult();
-    console.log(`\nwrote ${OUT}\n${JSON.stringify({ ...result, m4_5000: { ...result.m4_5000, runs: undefined }, m4_20000: { ...result.m4_20000, runs: undefined } }, null, 2)}`);
+    const concise = { ...result };
+    for (const group of ['m4_5000', 'm4_20000']) if (result[group]) concise[group] = { ...result[group], runs: undefined };
+    console.log(`\nwrote ${OUT}\n${JSON.stringify(concise, null, 2)}`);
     await cleanQuit(inspector).catch(() => {});
 }
 

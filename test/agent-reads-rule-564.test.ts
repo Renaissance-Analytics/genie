@@ -84,4 +84,8 @@ describe('approved fixed M4 acceptance rule, separate from M5/M6 (Tynn #564)', (
     it('CONTROL: M5/M6 still need their original three complete alternating pairs', () => {
         expect(row(report(3), 'pairs.count', 'm5-m6')).toMatchObject({ value: 3, limit: 3, pass: true });
     });
+
+    it.each([2, 4])('does not silently change the M5/M6 schedule to %s pairs', count => {
+        expect(row(report(count), 'pairs.count', 'm5-m6')).toMatchObject({ value: count, limit: 3, pass: false });
+    });
 });

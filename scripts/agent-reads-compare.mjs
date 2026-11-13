@@ -20,10 +20,13 @@ const CONTROL_ROWS = [['m4_5000', 'ms'], ['m4_20000', 'ms'], ['m5', 'windowCpuMs
 
 const number = (run, group, key) => { const v = run?.[group]?.[key]; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
 
-/** Numeric verdicts for measurements and their controls; actual acquisition and run identity belong to the opt-in VM job. */
-export function comparePairedRuns(report) {
+/** Acceptance uses explicit scopes: twelve M4 pairs, three M5/M6 pairs. Full remains the earlier diagnostic API. */
+export function comparePairedRuns(report, { scope = 'full' } = {}) {
+    if (!['full', 'm4', 'm5-m6'].includes(scope)) throw new Error('unknown paired comparison scope');
     const pairs = Array.isArray(report?.pairs) ? Array.from(report.pairs) : [];
-    const enough = pairs.length >= 3;
+    const required = scope === 'm4' ? 12 : 3;
+    const enough = scope === 'full' ? pairs.length >= required : pairs.length === required;
+    const included = ([group]) => scope === 'full' || (scope === 'm4' ? group.startsWith('m4_') : !group.startsWith('m4_'));
     const first = pairs[0]?.order?.[0];
     const ordered = pairs.filter((pair, i) => {
         if (!Array.isArray(pair?.order) || pair.order.length !== 2 || !['ipc', 'door'].includes(first)) return false;
@@ -31,7 +34,7 @@ export function comparePairedRuns(report) {
         return pair.order[0] === start && pair.order[1] === (start === 'ipc' ? 'door' : 'ipc');
     }).length;
     const rows = [
-        { row: 'pairs.count', base: null, value: pairs.length, limit: 3, pass: enough },
+        { row: 'pairs.count', base: null, value: pairs.length, limit: required, pass: enough },
         { row: 'pairs.order', base: null, value: ordered, limit: pairs.length, pass: enough && ordered === pairs.length },
     ];
     const ratio = (base, value) => {
@@ -45,14 +48,14 @@ export function comparePairedRuns(report) {
         const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
         return sorted.length % 2 === 1 ? sorted[middle] : sorted[middle - 1] / 2 + sorted[middle] / 2;
     };
-    for (const [group, key] of RATIO_ROWS) {
+    for (const [group, key] of RATIO_ROWS.filter(included)) {
         const ratios = pairs.map((pair) => ratio(number(pair?.ipc, group, key), number(pair?.door, group, key)));
         const value = complete(ratios) ? median(ratios) : null;
         rows.push({ row: `${group}.${key}`, base: null, value, limit: RATIO, pass: value !== null && value <= RATIO });
     }
     // A bad gap or retained heap is never hidden by the median of the other pairs.
     const maximum = (values) => complete(values) ? values.reduce((max, value) => Math.max(max, value), 0) : null;
-    for (const [group, key] of GAP_ROWS) {
+    for (const [group, key] of GAP_ROWS.filter(included)) {
         const gaps = pairs.map((pair) => {
             const value = number(pair?.door, group, key);
             return value !== null && value >= 0 ? value : null;
@@ -60,13 +63,15 @@ export function comparePairedRuns(report) {
         const value = maximum(gaps);
         rows.push({ row: `${group}.${key}`, base: null, value, limit: GAP_MS, pass: value !== null && value <= GAP_MS });
     }
-    const heaps = pairs.map((pair) => {
-        const before = number(pair?.door, 'm5', 'heapBeforeBytes'), after = number(pair?.door, 'm5', 'heapAfterGcBytes');
-        return pair?.door?.m5?.gc === true && after !== null && after > 0 ? ratio(before, after) : null;
-    });
-    const heap = maximum(heaps);
-    rows.push({ row: 'm5.heapAfterGc', base: null, value: heap, limit: RATIO, pass: heap !== null && heap <= RATIO });
-    for (const [group, metric] of CONTROL_ROWS) {
+    if (scope !== 'm4') {
+        const heaps = pairs.map((pair) => {
+            const before = number(pair?.door, 'm5', 'heapBeforeBytes'), after = number(pair?.door, 'm5', 'heapAfterGcBytes');
+            return pair?.door?.m5?.gc === true && after !== null && after > 0 ? ratio(before, after) : null;
+        });
+        const heap = maximum(heaps);
+        rows.push({ row: 'm5.heapAfterGc', base: null, value: heap, limit: RATIO, pass: heap !== null && heap <= RATIO });
+    }
+    for (const [group, metric] of CONTROL_ROWS.filter(included)) {
         const ratios = pairs.map((pair) => {
             const ipc = pair?.ipc?.measureControls, door = pair?.door?.measureControls;
             if (ipc?.[group]?.metric !== metric || door?.[group]?.metric !== metric) return null;

@@ -4,6 +4,8 @@ Outer queue job writes ci-measure564-source.txt (the queued source SHA, provenan
     In-Session scripts/measure/agent-reads-windows.ps1 115
 The app is built fresh; parent and samplers independently fingerprint built artifacts when the shipped tree has no .git.
 No gate row is added. A failed bound ends the paired job; its numbers and partial checkpoints remain under ci-out.
+Acceptance uses12 M4 pairs (six each order) and3 M5/M6 pairs per candidate, with the existing bounds unchanged.
+One fixed run; no diagnostic reuse or retry-until-green.
 #>
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -35,7 +37,16 @@ $runLog = Join-Path (Join-Path (Get-Location).Path 'ci-out') ($runName + '.log')
 $measurementExit = $LASTEXITCODE
 if ($measurementExit -eq 0) {
     $summary = Get-Content -LiteralPath (Join-Path $reportDir 'summary.json') -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-    if ($summary.pass -ne $true -or $summary.finished -ne $true) { Write-Error 'Missing completed paired PASS verdict.'; $measurementExit = 1 }
+    $valid = $summary.pass -eq $true -and $summary.finished -eq $true -and $summary.schedule.m4 -eq 12 -and $summary.schedule.'m5-m6' -eq 3 -and @($summary.verdicts).Count -eq 2
+    $candidates = @('door', 'door-revision')
+    for ($candidateIndex = 0; $candidateIndex -lt 2 -and $valid; $candidateIndex++) {
+        $verdict = $summary.verdicts[$candidateIndex]
+        $valid = $verdict.candidateMode -eq $candidates[$candidateIndex] -and $verdict.pass -eq $true -and @($verdict.phases).Count -eq 2 -and @($verdict.rows).Count -eq 18 -and @($verdict.rows | Where-Object { $_.pass -ne $true }).Count -eq 0
+        if ($valid) {
+            $valid = $verdict.phases[0].scope -eq 'm4' -and $verdict.phases[0].pairCount -eq 12 -and $verdict.phases[0].pass -eq $true -and $verdict.phases[1].scope -eq 'm5-m6' -and $verdict.phases[1].pairCount -eq 3 -and $verdict.phases[1].pass -eq $true
+        }
+    }
+    if (-not $valid) { Write-Error 'Missing completed 12-pair M4 / 3-pair M5-M6 acceptance verdict.'; $measurementExit = 1 }
 }
 if (Test-Path -LiteralPath $reportDir) { Copy-Item -LiteralPath 'ci-measure564-source.txt' -Destination (Join-Path $reportDir 'queued-source-commit.txt') -ErrorAction Stop }
 Write-Output "MEASUREMENT_EXIT $measurementExit artifacts=$reportDir log=$runLog"

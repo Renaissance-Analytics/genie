@@ -15,17 +15,27 @@ export async function runPairedMeasurement({ outDir }) {
     const output = resolve(outDir), cwd = process.cwd();
     await mkdir(output, { recursive: false }); // Existing evidence is never reused or overwritten by another job.
     const identity = readMeasurementIdentity(randomUUID());
-    const summary = { identity, pass: false, finished: false, verdicts: [] };
+    const summary = { identity, schedule: { m4: 12, 'm5-m6': 3 }, pass: false, finished: false, verdicts: [] };
     const save = (name, value) => writeFile(join(output, name), `${JSON.stringify(value, null, 2)}\n`, 'utf8');
     try {
         for (const candidateMode of ['door', 'door-revision']) {
-            const report = await acquirePairedRuns({
-                identity, candidateMode, pairCount: 3,
-                runSample: (request) => runMeasurementProcess({ request, cwd, out: join(output, `${candidateMode}-pair-${request.pairIndex}-${request.mode}.json`) }),
-                checkpoint: (partial) => save(`${candidateMode}.json`, partial),
-            });
-            const rows = comparePairedRuns(report);
-            const verdict = { candidateMode, pass: rows.length > 0 && rows.every((row) => row.pass), rows };
+            const rows = [], phases = [];
+            for (const [scope, pairCount] of [['m4', 12], ['m5-m6', 3]]) {
+                const report = await acquirePairedRuns({
+                    identity, candidateMode, pairCount,
+                    runSample: (request) => runMeasurementProcess({ request, scope, cwd,
+                        out: join(output, `${candidateMode}-${scope}-pair-${request.pairIndex}-${request.mode}.json`) }),
+                    checkpoint: (partial) => save(`${candidateMode}-${scope}.json`, partial),
+                });
+                // The complete predeclared sample is acquired before judging it. No early numerical success or retry.
+                const measured = comparePairedRuns(report, { scope });
+                await save(`${candidateMode}-${scope}-rows.json`, measured);
+                const pass = measured.length > 0 && measured.every((row) => row.pass);
+                phases.push({ scope, pairCount, pass });
+                rows.push(...measured.map((row) => ({ ...row, row: row.row.startsWith('pairs.') ? `${scope}.${row.row}` : row.row })));
+                if (!pass) break; // A completed failed phase is reported, never traded for a different sample.
+            }
+            const verdict = { candidateMode, phases, pass: phases.length === 2 && phases.every((phase) => phase.pass), rows };
             await save(`${candidateMode}-verdict.json`, verdict);
             summary.verdicts.push(verdict);
             if (!verdict.pass) {
@@ -50,7 +60,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const arg = process.argv.slice(2).find((value) => value.startsWith('--out-dir='));
     if (!arg || process.argv.length !== 3) { console.error('usage: node scripts/agent-reads-paired.mjs --out-dir=<fresh-directory>'); process.exitCode = 2; }
     else {
-        console.log('PAIRED MEASURE START: three alternating pairs each, inline and revision; stop on any failed bound');
+        console.log('PAIRED MEASURE START: twelve M4 pairs (six each order), three M5/M6 pairs per candidate; one fixed acceptance run');
         runPairedMeasurement({ outDir: arg.slice('--out-dir='.length) }).then((result) => {
             console.log(`IDENTITY ${JSON.stringify(result.identity)}`);
             for (const verdict of result.verdicts) {
