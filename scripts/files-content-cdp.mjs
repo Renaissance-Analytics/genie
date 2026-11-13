@@ -10,11 +10,12 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 import { SourceMap } from 'node:module';
 import { measureFilesPage } from './files-content-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { builtFramePath } from './built-frame-path.mjs';
+import { isGeniePage } from './cdp-main-window.mjs';
 
 const WIN = process.platform === 'win32', started = Date.now(), OUT = resolve('smoke-out');
 const PORT = 9344, INSPECT = 9345, reports = [], sessions = [];
@@ -59,8 +60,7 @@ class Cdp {
 function cpuSummary(profile) {
     // Map only this checkout's own built files. No paths from a profile can escape dist.
     for (const node of profile.nodes) {
-        const frame = node.callFrame; if (!frame.url?.startsWith('file:')) continue;
-        const path = fileURLToPath(frame.url); if (!path.startsWith(resolve('dist') + sep) || !existsSync(path + '.map')) continue;
+        const frame = node.callFrame; const path = builtFramePath(frame.url); if (!path || !existsSync(path + '.map')) continue;
         let map = sourceMaps.get(path); if (!map) { map = new SourceMap(json(path + '.map')); sourceMaps.set(path, map); }
         const entry = map.findEntry(frame.lineNumber, frame.columnNumber);
         if (entry.originalSource) { frame.url = entry.originalSource; frame.lineNumber = entry.originalLine; }
@@ -131,7 +131,7 @@ try {
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd);
     app.on('error', error => console.error(`owned app launch failed: ${error.message}`));
-    const target = await until('owned app page', async () => (await targets(PORT)).find(t => t.type === 'page' && /index\.html/.test(t.url)), 60000);
+    const target = await until('owned app page', async () => (await targets(PORT)).find(t => t.type === 'page' && isGeniePage(t.url)), 60000);
     page = await Cdp.connect(target.webSocketDebuggerUrl); main = await Cdp.connect((await until('owned app inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
     await waitForPageProbe(page); await until('ready app connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'));
     hostRecord = json(join(root, '.genie', 'runtime', 'host.json'));

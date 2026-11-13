@@ -144,7 +144,7 @@ describe('the window is wired to it', () => {
     it('main opens it with that preload, answers its two actions, and the link takes Restart', () => {
         const main = src('src/main/main.ts');
         expect(main).toMatch(/preload: join\(here, 'host-wait-preload\.cjs'\)/);
-        expect(main).toMatch(/loadFile\(join\(here, '\.\.\/renderer\/host-wait\.html'\)\)/);
+        expect(main).toMatch(/loadWindowPage\(win\.webContents, 'host-wait'\)/);
         expect(main).toMatch(/ipcMain\.handle\('host-wait:act'/);
         expect(main).toMatch(/restart: hostRestart,/);
     });

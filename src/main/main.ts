@@ -27,6 +27,7 @@ import type { Caller } from './mcp-tools.js';
 import { CommsCache } from '../core/comms.js';
 import { askerLiveFrom } from './asker-live.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
+import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
 import { guardWindowLinks } from './external-links.js';
@@ -284,6 +285,8 @@ installMainErrorPolicy(process, mainErrors);
 let remakeHostCopy: () => Promise<string | null> = async () => 'Genie has not finished starting; try again in a moment';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
+// Genie's windows load from http://genie.localhost:<port>, served from the build by this process (Tynn #683, main/window-pages.ts).
+configureWindowPages({ root: join(here, '../renderer'), portFile: join(app.getPath('userData'), 'window-origin.json'), log: (line) => console.log(line) });
 
 /**
  * A single instance, with no exception.
@@ -838,7 +841,7 @@ function takeOverWindow(route: string, request: ActivationRequest, remote: { sea
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    void win.loadFile(join(here, '../renderer/index.html'), remote ? { search: remote.search, hash: route } : { hash: route });
+    void loadWindowPage(win.webContents, 'index', remote ? { search: remote.search, hash: route } : { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
     return win;
 }
 
@@ -890,7 +893,7 @@ function openFilesWindow(route: string, activation: Activation): void {
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
-    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+    void loadWindowPage(win.webContents, 'index', { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
 }
 
 /**
@@ -917,7 +920,7 @@ function openFlowEditorWindow(route: string, activation: Activation): void {
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+    void loadWindowPage(win.webContents, 'index', { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
 }
 
 function closeWindowAt(route: string): void {
@@ -1070,7 +1073,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
     if (show) onceShowable(win, process.platform, () => showWhenReady(win, { activation: 'user-gesture', reason: search ? 'remote window' : 'launch', ledger: activationLedger, label: search ? 'remote' : 'main' }));
 
     // A remote host's window carries the host in its query (core/remote-window.ts); the main window carries none.
-    void win.loadFile(join(here, '../renderer/index.html'), search ? { search } : undefined);
+    void loadWindowPage(win.webContents, 'index', search ? { search } : undefined).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
     return win;
 }
 
@@ -1586,7 +1589,7 @@ async function boot(): Promise<void> {
                 });
                 guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
                 hostWaitWindow = win;
-                void win.loadFile(join(here, '../renderer/host-wait.html'));
+                void loadWindowPage(win.webContents, 'host-wait').catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
             },
             update: (view) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.webContents.send('host-wait:show', view); },
             close: () => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.destroy(); hostWaitWindow = null; },

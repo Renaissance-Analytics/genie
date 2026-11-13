@@ -24,3 +24,15 @@ export function isMainWindow(target) {
 export function mainWindow(targets) {
     return (Array.isArray(targets) ? targets : []).find(isMainWindow) ?? null;
 }
+
+/**
+ * WHETHER A URL IS ONE OF GENIE'S OWN PAGES (Tynn #683): `http://genie.localhost:<port>/<page>.html` now, or the built
+ * file `.../renderer/<page>.html` it was loaded from before. One rule for every row; a script that runs it inside
+ * Electron's main takes geniePageSource() and builds the same RegExp there.
+ */
+export function geniePageSource(page = 'index') {
+    return String.raw`^(?:http://genie\.localhost:\d+/|file:.*[\\/]renderer[\\/])` + String(page).replace(/[^a-z-]/g, '') + String.raw`\.html(?:[?#]|$)`;
+}
+export function isGeniePage(url, page = 'index') {
+    return new RegExp(geniePageSource(page)).test(String(url ?? ''));
+}
