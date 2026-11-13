@@ -109,7 +109,16 @@ export function questionRef(text: string): { id: string; kind: 'answer' | 'menti
     return found ? { id: found[0], kind: 'mention', rest: text } : null;
 }
 
-/** `q_e07a0573…` — the id as shown; the whole id goes in its tooltip. */
+/**
+ * WHAT AN FTQ ANSWER IS ABOUT, in the person's words (Tynn #696: no internal id is shown): the first question's header, as
+ * the answer mail writes it (`- **E-sign** — Which provider?`). `null` = the text names none.
+ */
+export function questionHeader(rest: string): string | null {
+    const m = /^\s*-\s+\*\*(.+?)\*\*/m.exec(rest);
+    return m ? m[1]!.trim() || null : null;
+}
+
+/** `q_e07a0573…` — the id shortened. Not for the person's eyes (Tynn #696); kept for the app's own use. */
 export function shortQuestionId(id: string): string {
     return id.length > 10 ? `${id.slice(0, 10)}…` : id;
 }

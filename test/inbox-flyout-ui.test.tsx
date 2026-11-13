@@ -303,14 +303,18 @@ describe('searching the open thread', () => {
     });
 });
 
-describe('an FTQ answer’s question id', () => {
-    it('is a link Button, shortened, the full id on hover; the "Answer to…" line is not repeated under it', () => {
+describe('an FTQ answer’s question', () => {
+    // Tynn #696 (the owner, 2026-11-13: "make sure we aren't showing agent ids in any ui"): the link is named by the
+    // question's HEADER, never its id — the id stays the app's (data-question-ref, the toggle), out of sight.
+    it('is a link Button named by its question’s header, no id in its words, tooltip or name; the "Answer to…" line is not repeated under it', () => {
         const toggled: string[] = [];
         const p = props({ openKey: humanKey, thread: ftqThread(), onToggleQuestion: (id) => toggled.push(id) });
         const out = html(p);
         expect(out).toMatch(/<a[^>]*data-question-ref="q_e07a0573-1b2c-4d5e-8f90-123456789abc"/);
-        expect(out).toContain('q_e07a0573…');
-        expect(out).toMatch(new RegExp(`title="${esc(QID)}"`));
+        expect(out).toMatch(/<a[^>]*data-question-ref="q_e07a0573[^"]*"[^>]*>[\s\S]*?Deploy[\s\S]*?<\/a>/);
+        expect(out).not.toContain('q_e07a0573…');
+        expect(out).not.toMatch(new RegExp(`(?:title|aria-label)="[^"]*${esc(QID)}`));
+        expect(out).toMatch(/aria-label="Show the questions asked: Deploy"/);
         expect(out).toContain('aria-expanded="false"');
         expect(out).not.toContain('Answer to your question');
         const [ref] = findAll(InboxFlyoutView(p), (x) => x['data-question-ref'] !== undefined);

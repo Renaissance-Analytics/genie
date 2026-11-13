@@ -1,6 +1,7 @@
 import { Badge, Button, Icon } from '@particle-academy/react-fancy';
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { QuestionForm } from './QuestionForm.js';
+import { personText } from '../../core/person-text.js';
 import { answeringFor, type ApprovalAnswering } from '../../core/approval-answering.js';
 import {
     ageLabel,
@@ -308,6 +309,8 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
     // This row's own flight: an agent parks one approval at a time, so the agent is the identity (core/approval-answering.ts).
     // Any other row stays live — one answer used to grey every row in the window for good.
     const answeringHere = answeringFor(answering, item.agentId ?? '', null);
+    // The title as the person reads it (Tynn #696): no internal id. An approval's own card still shows its command whole.
+    const title = personText(item.title);
     return (
         <div
             ref={focused ? focusRef : undefined}
@@ -332,16 +335,16 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                 {/* An agent's question is titled by its header — short, plain — and set like a title. */}
                 {/* Anything else (a to-do, a message) is its own text: it wraps, read whole — the row is where it is read. */}
                 {questions ? (
-                    <span data-deck-title={item.id} className="min-w-0 flex-1 truncate font-semibold text-[var(--fg-1)]">{item.title}</span>
+                    <span data-deck-title={item.id} className="min-w-0 flex-1 truncate font-semibold text-[var(--fg-1)]">{title}</span>
                 ) : (() => {
                     // A short bold title (Tynn #602): the item's first line, and all the closed row shows.
                     // The folded detail (Tynn #693) is something to open too, even under a title that fits.
-                    const { preview, more: longer } = deckPreview(item.title);
+                    const { preview, more: longer } = deckPreview(title);
                     const more = longer || Boolean(item.detail);
                     if (!more) return <span data-deck-title={item.id} className="min-w-0 flex-1 break-words font-semibold text-[var(--fg-1)]">{preview}</span>;
                     return (
                         <span data-deck-title={item.id} className="flex min-w-0 flex-1 items-baseline gap-2">
-                            {expanded ? <span className="min-w-0 break-words font-semibold text-[var(--fg-1)]">{deckBody(item.title).title}</span> : (
+                            {expanded ? <span className="min-w-0 break-words font-semibold text-[var(--fg-1)]">{deckBody(title).title}</span> : (
                                 <Button size="xs" type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left font-semibold text-[var(--fg-1)] justify-start">{preview}</Button>
                             )}
                             <Button size="xs" type="button" data-action="deck-expand" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)} className="shrink-0 text-[12px] text-[var(--accent)]">{expanded ? 'Show less' : 'Show all'}</Button>
@@ -456,7 +459,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
  * browser (the window sends every new-window link out, main/external-links.ts). One long line with no steps is shown whole.
  */
 function DeckItemBody({ item }: { item: DeckItem }) {
-    const body = deckBody(item.title);
+    const body = deckBody(personText(item.title));
     // ONLY what the title does not already say (Tynn #693): an item that is one long line is whole in its opened title, and
     // was drawn a second time here.
     const paragraphs = body.text;
@@ -470,7 +473,7 @@ function DeckItemBody({ item }: { item: DeckItem }) {
                 </ol>
             ) : null}
             {/* The technical detail (an error, its paths): once, here, as it was written. */}
-            {item.detail ? <pre data-deck-detail={item.id} className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 font-mono text-[12px] text-[var(--fg-3)]">{item.detail}</pre> : null}
+            {item.detail ? <pre data-deck-detail={item.id} className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 font-mono text-[12px] text-[var(--fg-3)]">{personText(item.detail)}</pre> : null}
         </div>
     );
 }
