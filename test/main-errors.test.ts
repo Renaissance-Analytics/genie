@@ -62,8 +62,8 @@ describe('an uncaught exception and an unhandled rejection are recorded, logged,
         expect(items).toHaveLength(1);
         expect(items[0]).toMatchObject({ source: 'genie', agentId: null, agentName: null, workspaceId: null, blocking: false, priority: 'high', at: 1_000, forwardedFrom: null });
         expect(items[0]!.id.startsWith(MAIN_ERROR_DECK_PREFIX)).toBe(true);
-        expect(items[0]!.title).toBe('Genie kept running after an uncaught exception: write EPIPE (at PtyHost.write (file:///opt/genie/example/fancy-term-host.js:10:5)). The stack is in Genie’s log.');
-        expect(items[0]!.answer).toEqual({ kind: 'inline', options: [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' }] });
+        expect(items[0]!.title.split('\n')[0]).toBe('Genie recovered from an internal error.');
+        expect(items[0]!.answer).toEqual({ kind: 'inline', options: [{ id: 'open-log', label: 'Open the log', tone: 'neutral' }, { id: 'report', label: 'Report', tone: 'neutral' }, { id: 'dismiss', label: 'Dismiss', tone: 'neutral' }] });
         expect(lines).toHaveLength(1);
         expect(lines[0]).toContain('[genie] uncaught exception in the main process, recorded on the Deck; Genie keeps running: Error: write EPIPE');
         expect(lines[0]).toContain('at Socket.emit (node:events:519:28)');
@@ -74,7 +74,7 @@ describe('an uncaught exception and an unhandled rejection are recorded, logged,
         proc.emit('unhandledRejection', 'connect ECONNREFUSED genie.example:443', Promise.resolve());
         expect(book.list()).toHaveLength(1);
         expect(book.list()[0]).toMatchObject({ kind: 'unhandled-rejection', message: 'connect ECONNREFUSED genie.example:443', topFrame: '', stack: null, count: 1 });
-        expect(book.deckItems()[0]!.title).toBe('Genie kept running after an unhandled promise rejection: connect ECONNREFUSED genie.example:443. The stack is in Genie’s log.');
+        expect(book.deckItems()[0]!.title.split('\n')[0]).toBe('Genie recovered from an internal error.');
         expect(lines).toEqual(['[genie] unhandled promise rejection in the main process, recorded on the Deck; Genie keeps running: connect ECONNREFUSED genie.example:443']);
     });
 
@@ -108,7 +108,7 @@ describe('a repeat is a COUNT, never N items', () => {
         expect(book.list()).toHaveLength(1);
         expect(book.list()[0]).toMatchObject({ count: 3, firstAt: 1, lastAt: 3 });
         expect(book.deckItems()).toHaveLength(1);
-        expect(book.deckItems()[0]!.title).toMatch(/— 3 times\. The stack is in Genie’s log\.$/);
+        expect(book.deckItems()[0]!.detail).toContain('3 times');
         expect(book.deckItems()[0]!.at).toBe(1);
         // A dead stderr can raise an EPIPE for every write: logging every repeat would feed itself. Powers of two stop it.
         expect(lines).toHaveLength(2);

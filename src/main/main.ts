@@ -223,6 +223,7 @@ import type { TerminalsApi } from './terminals-host.js';
 import type { ProcessBookApi } from './processes-host.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
+import { watchRegistryRefresh } from './registry-refresh.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -1669,7 +1670,7 @@ async function boot(): Promise<void> {
         // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them through the host, and
         // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
         theRegistry.useStore(new HostRegistryStore(engineLink.stores()));
-        engineLink.stores().onRegistryChanged(() => { void theRegistry.refresh(); });
+        watchRegistryRefresh(engineLink.stores(), theRegistry, (error) => console.error('[registry] Background refresh failed; waiting for the next host update.', error));
         // This window reaches the `processes` child (exec and streams). Supervised processes and terminals are the host's
         // own (P3.3b, P3.3e): their state comes by replica, so nothing here is taken back after a loss.
         const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
@@ -3151,11 +3152,21 @@ async function boot(): Promise<void> {
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
         deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
-        // The Deck's actions on a recorded main-process error: Dismiss; the host's copy made now; the lifecycle log opened.
+        // Error actions stay local; Report opens a draft the person edits, with no diagnostic text attached (#636).
         mainErrors: {
             dismiss: (id) => mainErrors.dismiss(id),
             retryHostCopy: (id) => retryHostCopy(mainErrors, id, () => remakeHostCopy()),
-            openLog: () => shell.openPath(join(runtimeDir(genieRoot()), 'lifecycle.log')).then((failed) => failed || null),
+            openLog: (id) => {
+                if (id && !mainErrors.list().some((error) => error.id === id && (error.kind === 'uncaught-exception' || error.kind === 'unhandled-rejection'))) return Promise.resolve('This error is no longer available.');
+                const path = id ? join(genieRoot(), 'logs', 'genie-browser.log') : join(runtimeDir(genieRoot()), 'lifecycle.log');
+                return shell.openPath(path).then((failed) => failed || null, () => 'The log could not be opened. Try again from Genie’s logs folder.');
+            },
+            report: async (id) => {
+                if (!mainErrors.list().some((error) => error.id === id && (error.kind === 'uncaught-exception' || error.kind === 'unhandled-rejection'))) return 'This error is no longer available.';
+                const query = new URLSearchParams({ title: `[v${app.getVersion()}] Genie recovered from an internal error`, body: 'What were you doing when this happened?\n\nWhat did you expect, and what happened instead?\n\nTechnical details remain in your local Genie log. Review any details you choose to share before submitting this issue.' });
+                try { await shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?${query}`); return null; }
+                catch { return 'The draft could not be opened. Try again, or open Genie’s GitHub issues page.'; }
+            },
         },
         toolchain: {
             // A Broken agent CLI's Repair (Tynn #698): the vendor's installer, step by step, judged by checking it again.

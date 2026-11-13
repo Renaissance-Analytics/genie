@@ -84,7 +84,6 @@ import { PanelHostContext } from './components/PluginPane.js';
 import type { ClaimingEditor } from '../core/plugin-editors.js';
 
 const NO_PLUGIN_EDITORS: readonly ClaimingEditor[] = [];
-import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
@@ -104,6 +103,11 @@ import type { ModelChoices } from '../core/provider-models.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
+import { useFilesPopped } from './use-files-popped.js';
+import { moveFilePanel } from './file-window-action.js';
+import { useAppInboxView } from './use-app-inbox-view.js';
+import { useShareView } from './use-share-view.js';
+import { forgetPairedHost } from './forget-paired-host.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
 import type { AppInboxCardProps, AppInboxCardState } from './components/AppInboxCard.js';
@@ -217,7 +221,7 @@ const detailCache = new AgentDetailCache<AgentDetail>();
  * — and the Shell renders a not-found for the second. Merging them would flash an error on
  * every navigation to a perfectly good agent while its detail loaded.
  */
-function useAgentDetail(
+export function useAgentDetail(
     bridge: GenieBridge | undefined,
     agentId: string | null,
     /** Settle an agent ROUTE reached by name on its id. Off for the chat subject: its id must not rewrite the agent route. */
@@ -240,21 +244,46 @@ function useAgentDetail(
         setState(detailCache.show(agentId));
 
         let off: (() => void) | null = null;
-        void bridge.agentDetail(agentId).then((detail) => {
+        let retryOff: (() => void) | null = null;
+        let reading = false;
+        const failed = (error: unknown): void => {
+            reading = false;
             if (!live) return;
-            // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
-            // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
-            const id = chatSubscriptionId(agentId, detail);
-            // A push is a transition (use-snapshot.ts `pushed`): typing is committed before it.
-            // Every detail LANDS through the cache (Tynn #659): one whose rows are still pending shows this agent's kept rows.
-            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; const shown = detailCache.land(agentId, next); pushed(() => setState({ detail: shown, resolved: true })); });
-            // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
-            // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
-            const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
-            if (canonical) { window.location.replace(`#${canonical}`); return; }
-            setState({ detail: detailCache.land(agentId, detail), resolved: true });
-        });
-        return () => { live = false; off?.(); };
+            // A failed read is not a not-found answer. Keep this agent's cached detail (or loading state).
+            try {
+                console.error('Could not read agent detail.', error);
+                const reason = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+                const closed = reason.includes('the connection closed') || reason.includes("Genie's agent host is not connected; it is being restarted.");
+                // Retry a closed link on an actual host update, never permission failures or on a timer.
+                if (!closed) { retryOff?.(); retryOff = null; return; }
+                if (!retryOff) retryOff = bridge.subscribe(() => read());
+            } catch { /* A refused retry subscription or diagnostic reporter must not escape the failure handler. */ }
+        };
+        const read = (): void => {
+            if (!live || reading) return;
+            reading = true;
+            try {
+                void bridge.agentDetail(agentId).then((detail) => {
+                    reading = false;
+                    if (!live) return;
+                    retryOff?.(); retryOff = null;
+                    off?.(); off = null;
+                    // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
+                    // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
+                    const id = chatSubscriptionId(agentId, detail);
+                    // A push is a transition (use-snapshot.ts `pushed`): typing is committed before it.
+                    // Every detail LANDS through the cache (Tynn #659): one whose rows are still pending shows this agent's kept rows.
+                    if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; const shown = detailCache.land(agentId, next); pushed(() => setState({ detail: shown, resolved: true })); });
+                    // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
+                    // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
+                    const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
+                    if (canonical) { window.location.replace(`#${canonical}`); return; }
+                    setState({ detail: detailCache.land(agentId, detail), resolved: true });
+                }).catch(failed);
+            } catch (error) { failed(error); }
+        };
+        read();
+        return () => { live = false; off?.(); retryOff?.(); };
     }, [bridge, agentId]);
 
     return agentId === null ? { detail: null, resolved: false } : state;
@@ -287,11 +316,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const hosts = typeof window === 'undefined' ? null : knownHosts(window.localStorage, {
         hosts: () => pairedNow.current,
         forget: (url) => {
-            pairedNow.current = pairedNow.current.filter((u) => u !== url);
-            void link?.forget(url).then((forgot) => {
-                if (!forgot) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'This machine’s keychain would not forget that pairing, so it is still kept.' }));
-                return readPaired();
-            });
+            void forgetPairedHost(() => link?.forget(url), readPaired, (reason) => setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: reason })), () => { pairedNow.current = pairedNow.current.filter((u) => u !== url); });
         },
     });
     const [remembered, setRemembered] = useState<string[]>([]);
@@ -1346,25 +1371,13 @@ function DesktopApp({ bridge }: AppProps) {
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839, #587): this machine's, or the host's while its owner drives it; a guest has none.
     const shares = shareDoor({ connected: remote.state?.connected === true, isOwner: remote.state?.isOwner === true, own: ownWindowBridge()?.tynnNetwork?.shares, remote: remote.client?.shares });
-    const [share, setShare] = useState<{ workspaceId: string | null; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
-    const readShares = (forWorkspace: string | null) => {
-        void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
-    };
+    const { share, setShare, readShares, mintShare } = useShareView(shares);
     /*
      * APPS AND SCRIPTS (genie#1345): the workspace's keys, read from THIS host's local protocol — never from a window
      * driving another machine. Each action shows itself in flight, then its result; a new script key is shown once.
      */
     const appInboxBridge = !remote.state?.connected ? ownWindowBridge()?.appInbox : undefined;
-    const [appInboxView, setAppInboxView] = useState<{ workspaceId: string; state: AppInboxCardState | null; busy: AppInboxCardProps['busy']; revealed: AppInboxCardProps['revealed']; outcome: AppInboxCardProps['outcome'] } | null>(null);
-    useEffect(() => {
-        if (!appInboxBridge || !workspaceId) { setAppInboxView(null); return; }
-        let live = true;
-        setAppInboxView({ workspaceId, state: null, busy: null, revealed: null, outcome: null });
-        void appInboxBridge.state(workspaceId).then((r) => {
-            if (live) setAppInboxView((v) => (v && v.workspaceId === workspaceId ? { ...v, state: r.ok ? r.state : null, outcome: r.ok ? v.outcome : { ok: false, text: r.reason } } : v));
-        });
-        return () => { live = false; };
-    }, [appInboxBridge, workspaceId, wsSettings]);
+    const [appInboxView, setAppInboxView] = useAppInboxView(appInboxBridge, workspaceId, wsSettings);
     const appInboxAct = (busy: NonNullable<AppInboxCardProps['busy']>, run: () => Promise<{ ok: true; state: AppInboxCardState; text?: string; token?: string; name?: string } | { ok: false; reason: string }>, done: string): void => {
         const forWorkspace = workspaceId;
         const attempt = (): void => {
@@ -1597,15 +1610,8 @@ function DesktopApp({ bridge }: AppProps) {
     // Which workspace's file panel holds the dock when files are pinned (§4.3). One panel per workspace.
     const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | null>(null);
     // The panels in their own windows (§4.3): the host's list, pushed; a remote bridge has none.
-    const [filesPopped, setFilesPopped] = useState<readonly string[]>([]);
     const filesWindows = resolvedBridge?.files.windows;
-    useEffect(() => {
-        if (!filesWindows) { setFilesPopped([]); return; }
-        let live = true;
-        void filesWindows.list().then((l) => { if (live) setFilesPopped(l); });
-        const off = filesWindows.onChange((l) => { if (live) setFilesPopped(l); });
-        return () => { live = false; off(); };
-    }, [filesWindows]);
+    const filesPopped = useFilesPopped(filesWindows);
     // An agent writing a file you have dirty is ASKED to pause, over its inbox (§4.3); lifted the same way.
     const tellAgent = (agent: string, text: string) => {
         void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'inbox.send', to: agent, text }).then(setFeatures).catch((error: unknown) => {
@@ -2164,15 +2170,13 @@ function DesktopApp({ bridge }: AppProps) {
             dockNotice={dockNotice}
             onDismissDockNotice={() => setDockNotice(null)}
             onFilesDirtyChange={setFilesDirty}
-            onPopOutFiles={filesWindows ? (id) => {
-                void filesWindows.popOut(id);
+            onPopOutFiles={filesWindows ? (id) => moveFilePanel(() => filesWindows.popOut(id), () => {
                 // The route says where the panel is: on this workspace, `?files=detached`.
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
-            } : undefined}
-            onBringBackFiles={(id) => {
-                void filesWindows?.bringBack(id);
+            }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address) : undefined}
+            onBringBackFiles={(id) => moveFilePanel(() => filesWindows?.bringBack(id), () => {
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
-            }}
+            }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address)}
             onPauseAgent={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
@@ -2310,14 +2314,7 @@ function DesktopApp({ bridge }: AppProps) {
                 problem={share.problem}
                 busy={share.busy}
                 onClose={() => setShare(null)}
-                onMint={(input) => {
-                    const forWorkspace = share.workspaceId;
-                    setShare((s) => (s ? { ...s, busy: true, problem: null, minted: null } : s));
-                    void shares.mint({ workspaceId: input.whole ? null : forWorkspace, capability: input.capability, expiresInDays: input.expiresInDays }).then((r) => {
-                        setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, busy: false, minted: r.ok ? r.link : null, problem: r.ok ? null : r.reason } : s));
-                        if (r.ok) readShares(forWorkspace);
-                    });
-                }}
+                onMint={mintShare}
                 onRevoke={(link) => {
                     // The row shows where its Revoke stands (ShareWorkspaceForm); the list is read again after it.
                     const forWorkspace = share.workspaceId;
