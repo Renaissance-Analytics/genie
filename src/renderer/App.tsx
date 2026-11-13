@@ -107,6 +107,7 @@ import { useFilesPopped } from './use-files-popped.js';
 import { moveFilePanel } from './file-window-action.js';
 import { useAppInboxView } from './use-app-inbox-view.js';
 import { useShareView } from './use-share-view.js';
+import { forgetPairedHost } from './forget-paired-host.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
 import type { AppInboxCardProps, AppInboxCardState } from './components/AppInboxCard.js';
@@ -316,10 +317,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         hosts: () => pairedNow.current,
         forget: (url) => {
             pairedNow.current = pairedNow.current.filter((u) => u !== url);
-            void link?.forget(url).then((forgot) => {
-                if (!forgot) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'This machine’s keychain would not forget that pairing, so it is still kept.' }));
-                return readPaired();
-            });
+            void forgetPairedHost(() => link?.forget(url), readPaired, (reason) => setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: reason })));
         },
     });
     const [remembered, setRemembered] = useState<string[]>([]);
