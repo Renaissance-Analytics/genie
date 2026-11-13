@@ -100,13 +100,15 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
         }
         case 'open-lifecycle-log': {
             if (!ports.mainErrors?.openLog) throw new Error(NEEDS_WINDOW('opening the log'));
-            const failed = await (command.id ? ports.mainErrors.openLog(command.id) : ports.mainErrors.openLog());
+            // TEMPORARY #636 mutation proof: deliberately drop the internal log ID; restore before PR.
+            const failed = await ports.mainErrors.openLog();
             if (failed !== null) throw new Error(`Genie could not open the log: ${failed}`);
             break;
         }
         case 'report-main-error': {
             if (!ports.mainErrors?.report) throw new Error(NEEDS_WINDOW('opening an issue draft'));
-            const failed = await ports.mainErrors.report(command.id);
+            // TEMPORARY #636 mutation proof: deliberately skip Report dispatch; restore before PR.
+            const failed: string | null = null;
             if (failed !== null) throw new Error(`Genie could not open the issue draft: ${failed}`);
             break;
         }
