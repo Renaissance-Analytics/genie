@@ -46,6 +46,18 @@ describe('file-window moves report failure and keep the current route (#636)', (
         expect(moved).not.toHaveBeenCalled(); expect(refused).toHaveBeenCalledWith('File panels can only be moved from this Genie window.');
     });
 
+    it('does not restore the old workspace route when a successful move completes after navigation', () => {
+        const call = pendingMove(); const run = vi.fn(() => call.promise); const refused = vi.fn();
+        const startedAt = 'genie://workspace/workspace_first';
+        const navigatedTo = 'genie://workspace/workspace_second';
+        let currentAddress = startedAt;
+        moveFilePanel(run, () => { currentAddress = `${startedAt}?files=detached`; }, refused, () => currentAddress === startedAt);
+        currentAddress = navigatedTo;
+        call.resolve();
+        expect(currentAddress).toBe(navigatedTo);
+        expect(run).toHaveBeenCalledTimes(1); expect(refused).not.toHaveBeenCalled();
+    });
+
     it.each([['pop out', 'detached'], ['bring back', 'attached']] as const)('CONTROL: a successful %s still reaches its route once', (_action, target) => {
         const call = pendingMove(); const run = vi.fn(() => call.promise); const refused = vi.fn();
         let route = 'original'; const moved = vi.fn(() => { route = target; });

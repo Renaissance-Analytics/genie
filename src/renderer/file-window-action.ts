@@ -3,6 +3,7 @@ export function moveFilePanel(
     run: () => Promise<void> | undefined,
     moved: () => void,
     refused: (reason: string) => void,
+    _stillCurrent: () => boolean = () => true,
 ): void {
     const failed = (error: unknown): void => {
         try { console.error('[files] Could not move the file panel.', error); }
