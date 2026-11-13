@@ -20,6 +20,7 @@ import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHeapSampler } from './agent-reads-heap.mjs';
 import { WIN, alive, attach, check, cleanQuit, failures, finish, gone, hostPid, killHard, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
 
 refuseOffTestMachines('agent-reads-measure');
@@ -160,11 +161,17 @@ async function main() {
     await cdp.evaluate(`(() => { window.__updates = 0; window.__off = window.genieTest.subscribeAgent(${JSON.stringify(streaming)}, () => { window.__updates += 1; }); return true; })()`, 10_000);
     await sleep(5_000);
     const host = hostPid(h);
+    const heap = createHeapSampler(cdp);
+    await heap.start(); // GC and baseline precede the CPU/gap window, while the watched agent/view stay alive.
+    const m5Started = performance.now();
     const before = { win: await windowCpu(inspector), host: cpuMsOf(host), updates: await cdp.evaluate('window.__updates', 5_000) };
     await cdp.evaluate('window.__gauge.reset(); true', 5_000);
-    await sleep(60_000);
+    for (let i = 0; i < 4; i += 1) { await sleep(15_000); await heap.sample(); }
     const after = { win: await windowCpu(inspector), host: cpuMsOf(host), updates: await cdp.evaluate('window.__updates', 5_000), gap: await cdp.evaluate('window.__gauge.max()', 5_000) };
-    result.m5 = { windowCpuMs: after.win - before.win, hostCpuMs: after.host - before.host, maxGapMs: after.gap, updatesPerSec: (after.updates - before.updates) / 60 };
+    const elapsedMs = performance.now() - m5Started;
+    // Final forced GC is outside CPU/gap timing; keep the subscription and view, so cleanup cannot hide retained state.
+    const memory = await heap.finish();
+    result.m5 = { windowCpuMs: after.win - before.win, hostCpuMs: after.host - before.host, maxGapMs: after.gap, elapsedMs, updatesPerSec: (after.updates - before.updates) / (elapsedMs / 1_000), ...memory };
     check(result.m5.updatesPerSec > 0, 'M5 saw updates at all', String(result.m5.updatesPerSec));
     await cdp.evaluate(`window.__off(); window.genieTest.stopAgent(${JSON.stringify(streaming)}); true`, 10_000);
 
