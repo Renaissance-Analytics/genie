@@ -1,4 +1,4 @@
-import { parseAgentManifest } from './agent-manifest.js';
+import type { AgentConfig } from './agent-config.js';
 import { isAcpProvider, type AcpProvider } from './engine.js';
 
 /**
@@ -8,7 +8,8 @@ import { isAcpProvider, type AcpProvider } from './engine.js';
  * `.agents/<name>/AGENT.md` travels with the repository; the registry that names agents lives on each machine. A workspace
  * added here therefore arrives with its agents on disk and none of them registered, and the next screen offered only
  * "create an agent" — the act that discards the identity the file carries. This lists them so they can be ADOPTED:
- * registered with their AGENT.md as their instructions, the file read and never rewritten.
+ * registered with their AGENT.md as their instructions. Their config — the provider among it — is the workspace's
+ * project.json `agents.<name>` (Tynn #694), where any old front matter was moved the first time Genie read the workspace.
  *
  * OFFERED, NEVER AUTOMATIC (Genie 1's rule): adopting whatever a clone contains would make `git pull` a way to gain agents.
  *
@@ -27,17 +28,16 @@ export const RESERVED_AGENT_NAMES: readonly string[] = Object.freeze(['general',
 /** An agent name in Genie 2 — createAgent's shape (mcp-tools-agents.ts). */
 export const AGENT_NAME = /^[a-z][a-z0-9-]{0,39}$/;
 
-/** A folder under `.agents/` that holds an `AGENT.md`, with the file's text. */
+/** A folder under `.agents/` that holds an `AGENT.md`. */
 export interface AgentFile {
     readonly folder: string;
-    readonly text: string;
 }
 
 export interface ImportedAgent {
     readonly name: string;
     /**
-     * The provider it is adopted on: Genie's default — or, as a legacy hint, the first provider Genie runs that an old
-     * `tuis:` line names (Tynn story #380: AGENT.md names no provider now, and a `tuis:` line is never a refusal).
+     * The provider it is adopted on: its project.json `provider` when Genie runs it; else, as a hint, the first provider
+     * Genie runs that its `tuis` names (never a refusal); else Genie's default (Tynn #694).
      */
     readonly provider: AcpProvider;
     /** Its persona, relative to the workspace — what the registry records as its instructions. */
@@ -60,9 +60,10 @@ export function adoptionRefusal(folder: string, sacredName: string | null): stri
 /** Genie's default provider for an adopted agent. */
 export const ADOPTION_DEFAULT_PROVIDER: AcpProvider = 'claude';
 
-/** The provider to adopt on: a legacy `tuis:` line's first provider Genie runs, as a hint; otherwise the default. */
-function providerOf(text: string, folder: string, fallback: AcpProvider): AcpProvider {
-    const hint = parseAgentManifest(text === '' ? null : text, folder).tuis?.find((t) => isAcpProvider(t));
+/** The provider to adopt on: project.json's `provider`, else its `tuis`' first provider Genie runs, else the default. */
+function providerOf(config: AgentConfig | undefined, fallback: AcpProvider): AcpProvider {
+    if (config?.provider !== undefined && isAcpProvider(config.provider)) return config.provider;
+    const hint = config?.tuis?.find((t) => isAcpProvider(t));
     return hint && isAcpProvider(hint) ? hint : fallback;
 }
 
@@ -70,14 +71,15 @@ function providerOf(text: string, folder: string, fallback: AcpProvider): AcpPro
  * The agents a workspace brought and has not registered, alphabetically — each with its reason when it cannot be adopted,
  * so a refused file is said rather than silently missing. A name already registered in the workspace (any case) is left out.
  */
-export function importedAgents(input: { files: readonly AgentFile[]; registered: readonly { name: string }[]; sacredName?: string | null; defaultProvider?: AcpProvider }): ImportedAgent[] {
+export function importedAgents(input: { files: readonly AgentFile[]; registered: readonly { name: string }[]; configs?: Readonly<Record<string, AgentConfig>>; sacredName?: string | null; defaultProvider?: AcpProvider }): ImportedAgent[] {
     const have = new Set(input.registered.map((a) => a.name.trim().toLowerCase()));
     return [...input.files]
         .filter((f) => !have.has(f.folder.toLowerCase()))
         .sort((a, b) => a.folder.localeCompare(b.folder))
         .map((f) => {
             const named = adoptionRefusal(f.folder, input.sacredName ?? null);
-            const provider = providerOf(f.text, f.folder, input.defaultProvider ?? ADOPTION_DEFAULT_PROVIDER);
+            const config = input.configs && Object.hasOwn(input.configs, f.folder) ? input.configs[f.folder] : undefined;
+            const provider = providerOf(config, input.defaultProvider ?? ADOPTION_DEFAULT_PROVIDER);
             return { name: f.folder, provider, instructions: `.agents/${f.folder}/AGENT.md`, refusal: named };
         });
 }

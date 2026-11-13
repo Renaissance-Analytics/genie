@@ -101,6 +101,7 @@ import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { mkdir, readdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
+import { moveAgentFrontmatter, nodeAgentConfigFs } from './agent-config-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
@@ -674,13 +675,30 @@ function tynnProjectFor(workspaceId: string): string | null {
  * THE NEW AGENT FORM ON THIS HOST (main/agent-create-host.ts): the local window's `genie:add-agent` and a remote window's
  * `addAgent` both land here — the AGENT.md written under the workspace, then the agent registered on it.
  */
+/** The workspace folders this run has already moved AGENT.md front matter out of (Tynn #694). */
+const agentConfigsMoved = new Set<string>();
+async function moveAgentConfigs(workspaces: readonly { id: string; path: string }[]): Promise<void> {
+    const fs = nodeAgentConfigFs();
+    for (const w of workspaces) {
+        if (agentConfigsMoved.has(w.path)) continue;
+        agentConfigsMoved.add(w.path);
+        try {
+            const moved = await moveAgentFrontmatter(fs, w.path);
+            if (!moved.ok) console.warn(`[genie] agent config for ${w.id}: ${moved.reason}`);
+            else if (moved.moved.length > 0) console.log(`[genie] agent config for ${w.id}: moved ${moved.moved.join(', ')} from AGENT.md front matter into project.json`);
+        } catch (error) {
+            console.warn(`[genie] agent config for ${w.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+}
 function agentCreatePorts(): AgentCreatePorts {
     return {
         workspace: (id) => registry?.workspace(id) ?? null,
         agentsOf: (id) => registry?.agentsOf(id) ?? [],
         exists: async (path) => existsSync(path),
         mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
-        writeText: async (path, text) => { await writeFileText(path, text, 'utf8'); },
+        // project.json (the agent's config, Tynn #694) and AGENT.md (its persona), each written whole: temp + rename.
+        ...nodeAgentConfigFs(),
         register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
         sacredName: async (workspaceId) => {
             const projectId = tynnProjectFor(workspaceId);
@@ -1443,7 +1461,12 @@ async function boot(): Promise<void> {
             // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
             const current = theRegistry.snapshot().workspaces ?? [];
             const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
-            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path }))).catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`));
+            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path })))
+                .catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`))
+                // AGENT CONFIG INTO project.json (Tynn #694): the first time this Genie reads a workspace, any AGENT.md front
+                // matter is moved into its project.json `agents` and stripped from the file. After the colour pass, so the
+                // two never write one project.json at once; once per folder per run (a later move is a no-op anyway).
+                .then(() => moveAgentConfigs(current.filter((w) => theRegistry.workspaceStates().find((s) => s.path === w.path)?.asleep !== true)));
         }, 0);
     });
     // AN AUTOMATED AGENT WITH AN OPEN PLAN DOES NOT JUST STOP (the owner, 2026-10-21; core/plan-keepalive.ts): a turn that

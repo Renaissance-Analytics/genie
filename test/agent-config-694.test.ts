@@ -118,9 +118,9 @@ describe('agents in project.json (pure)', () => {
         expect(r.ok && r.backup).toEqual({ name: 'project.json.pre-schema-0.4.0.bak', text: legacy });
     });
 
-    it('reads only entries the schema allows; a malformed one is ignored, not guessed at', () => {
+    it('reads only the four config keys of each well-formed entry; a malformed entry or name is ignored, not guessed at', () => {
         expect(agentConfigsOf({ agents: { lift: { purpose: 'L', tuis: ['claude'], model: 'opus', apiKey: 'x' }, bad: { provider: 'claude' }, Nope: { purpose: 'p' }, odd: 'p', t: { purpose: 'p', tuis: 'claude' } } }))
-            .toEqual({ lift: { purpose: 'L', tuis: ['claude'], model: 'opus' }, t: { purpose: 'p' } });
+            .toEqual({ lift: { purpose: 'L', tuis: ['claude'], model: 'opus' } });
         expect(agentConfigsOf(null)).toEqual({});
         expect(agentConfigsOf({ agents: [] })).toEqual({});
     });

@@ -1,21 +1,20 @@
 import { join } from 'node:path';
 import { importedAgents, type AgentFile, type ImportedAgent } from '../core/agent-adoption.js';
+import { agentConfigsOf } from '../core/agent-config.js';
 import type { AcpProvider } from '../core/engine.js';
+import { moveAgentFrontmatter, type AgentConfigFs } from './agent-config-host.js';
 
 /**
  * "IT CAME WITH AGENTS" ON THE HOST (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt). Reads a
  * workspace's `.agents/<name>/AGENT.md` files and the registry, and adopts one on request: registered in the registry with
- * its AGENT.md as its instructions, on the provider the file allows. These ports can only READ the workspace — adopting
- * never writes to the file or the folder. Every port is injected; main.ts passes the real ones.
+ * its AGENT.md as its instructions, on the provider its project.json `agents.<name>` names (Tynn #694). Listing is reading
+ * the workspace, so it first MOVES any old AGENT.md front matter into project.json (main/agent-config-host.ts) — the one
+ * write here; adopting never writes anything else. Every port is injected; main.ts passes the real ones.
  */
 
-export interface AgentAdoptionPorts {
+export interface AgentAdoptionPorts extends AgentConfigFs {
     workspace(id: string): { id: string; path: string } | null;
     agentsOf(workspaceId: string): readonly { name: string }[];
-    /** The folders directly under `dir`; rejects when it does not exist. */
-    listDirs(dir: string): Promise<readonly string[]>;
-    /** A file's text, or `null` when there is none. */
-    readText(path: string): Promise<string | null>;
     register(input: { workspaceId: string; provider: AcpProvider; name: string; instructions: string }): Promise<{ id: string; name: string }>;
     /** The workspace's sacred grant from its linked Tynn project (`sacred_agent_name`); a failure grants nothing. */
     sacredName?(workspaceId: string): Promise<string | null>;
@@ -38,6 +37,8 @@ async function sacredOf(ports: AgentAdoptionPorts, workspaceId: string): Promise
 export async function readImportedAgents(ports: AgentAdoptionPorts, workspaceId: string): Promise<{ ok: true; agents: ImportedAgent[] } | Refusal> {
     const workspace = ports.workspace(workspaceId);
     if (!workspace) return { ok: false, reason: `no workspace ${workspaceId}` };
+    // A move that cannot be made (no project.json, a newer schema) leaves the files as they are; the listing goes on.
+    await moveAgentFrontmatter(ports, workspace.path);
     const dir = join(workspace.path, '.agents');
     let folders: readonly string[];
     try {
@@ -51,9 +52,11 @@ export async function readImportedAgents(ports: AgentAdoptionPorts, workspaceId:
         // Only a folder holding an AGENT.md is an agent: `_genie/` and `skills/` live here too.
         if (!SEGMENT.test(folder) || folder === '.' || folder === '..') continue;
         const text = await ports.readText(join(dir, folder, 'AGENT.md'));
-        if (text !== null) files.push({ folder, text });
+        if (text !== null) files.push({ folder });
     }
-    return { ok: true, agents: importedAgents({ files, registered: ports.agentsOf(workspaceId), sacredName: await sacredOf(ports, workspaceId) }) };
+    let manifest: unknown = null;
+    try { manifest = JSON.parse((await ports.readText(join(workspace.path, 'project.json'))) ?? 'null'); } catch { manifest = null; }
+    return { ok: true, agents: importedAgents({ files, registered: ports.agentsOf(workspaceId), configs: agentConfigsOf(manifest), sacredName: await sacredOf(ports, workspaceId) }) };
 }
 
 /** Adoptions in flight, by workspace and name: two clicks (or two windows) at once register the agent once. */

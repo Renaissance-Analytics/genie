@@ -1,7 +1,6 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { providerLogin } from '../core/provider-login.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
@@ -83,8 +82,6 @@ export interface AgentOpsPorts {
     models?: { get(provider: string, options?: { refresh?: boolean }): Promise<ModelChoices> };
     cwdFor(record: AgentRecord): string;
     workspacePathFor(record: AgentRecord): string | null;
-    /** The persona file's text, or `null` when there is none. */
-    readManifest(record: AgentRecord): Promise<string | null>;
     /**
      * The agent's recorded conversation (Genie's own ledger, core/thread-store.ts), oldest first: what a switch carries to the
      * new provider (Tynn story #380). Absent = nothing is carried.
@@ -289,8 +286,8 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (!isAcpProvider(to)) return { ok: false, reason: `Genie cannot run a "${to}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
-    // The persona is READ (its name), never written: AGENT.md names no provider, and nothing in it refuses a switch (Tynn story #380).
-    const manifest = parseAgentManifest(await ports.readManifest(record), record.name);
+    // The persona is not read at all: AGENT.md names no provider, and nothing in it refuses a switch (Tynn story #380); its
+    // config is project.json's (Tynn #694), and the name the carry-over uses is the agent's own.
     const decision = switchDriverDecision(record.provider, to);
     if (!decision.ok || decision.noop) return decision;
     // Refused BEFORE anything is stopped: a provider that cannot run here would leave the agent on nothing.
@@ -310,7 +307,7 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     await ports.host.ended(record.id);
     const since = record.leftAt?.[to] !== undefined ? Date.parse(record.leftAt[to]!) : null;
     const rows = ports.history ? await ports.history(record).catch(() => []) : [];
-    const carryOver = buildCarryOver({ from: record.provider, to, agentName: manifest.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
+    const carryOver = buildCarryOver({ from: record.provider, to, agentName: record.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
     const switched = await ports.registry.setProvider(record.id, to, { keepModel, carryOver });
     if (!switched.ok) return switched;
     return {
