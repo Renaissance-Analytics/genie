@@ -44,8 +44,6 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'attention-bounded-'
 afterEach(async () => {
     try {
         // A future in-place write through a case's link must fail here, before another case can silently use it.
-        // TEMPORARY BREAK PROBE #671: corrupt after the last body, so only the source guard should fail. Restore exactly.
-        if (expect.getState().currentTestName?.includes('never read at start (a broken archive opens fine), and readable on demand')) await writeFile(sourceFile, '!', { flag: 'a' });
         expect(createHash('sha256').update(await readFile(sourceFile)).digest('hex')).toBe(sourceHash);
     } finally {
         await rm(dir, { recursive: true, force: true });
