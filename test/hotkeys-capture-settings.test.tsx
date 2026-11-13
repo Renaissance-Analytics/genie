@@ -20,15 +20,16 @@ afterEach(() => { act(() => root.unmount()); el.remove(); });
 function page(values: Record<string, string> = {}) {
     const onAction = vi.fn();
     act(() => root.render(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={onAction} onNavigate={() => {}} section="keyboard" />));
-    const control = (name: string) => el.querySelector(`[data-hotkey-capture="${name}"]`) as HTMLButtonElement;
+    // The kit's capture control (react-fancy 6.20+, Tynn #637): its trigger takes the click and the keys.
+    const control = (name: string) => el.querySelector(`[data-hotkey-capture="${name}"] [data-react-fancy-hotkey-capture-trigger]`) as HTMLButtonElement;
     const press = (name: string, init: KeyboardEventInit) => act(() => { control(name).dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })); });
     const start = (name: string) => act(() => { control(name).click(); });
     return { onAction, control, press, start };
 }
 
 const KEYS: Array<{ name: string; setting: string; fresh: KeyboardEventInit; stored: string; taken: KeyboardEventInit; takenBy: RegExp }> = [
-    { name: 'commandWindow', setting: 'command_window_hotkey', fresh: { key: 'p', ctrlKey: true, shiftKey: true }, stored: 'CommandOrControl+Shift+P', taken: { key: 'F5' }, takenBy: /ForceTheQuestion/ },
-    { name: 'ftqNudge', setting: 'ftq_nudge_hotkey', fresh: { key: 'F6' }, stored: 'F6', taken: { key: 'k', ctrlKey: true }, takenBy: /Command Window/ },
+    { name: 'commandWindow', setting: 'command_window_hotkey', fresh: { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true }, stored: 'CommandOrControl+Shift+P', taken: { key: 'F5', code: 'F5' }, takenBy: /ForceTheQuestion/ },
+    { name: 'ftqNudge', setting: 'ftq_nudge_hotkey', fresh: { key: 'F6', code: 'F6' }, stored: 'F6', taken: { key: 'k', code: 'KeyK', ctrlKey: true }, takenBy: /Command Window/ },
 ];
 
 describe.each(KEYS)('$name', (k) => {
@@ -59,7 +60,7 @@ describe.each(KEYS)('$name', (k) => {
     it('refusal: a bare typing key', () => {
         const p = page();
         p.start(k.name);
-        p.press(k.name, { key: 'a' });
+        p.press(k.name, { key: 'a', code: 'KeyA' });
         expect(p.onAction).not.toHaveBeenCalled();
         expect(el.querySelector('[data-hotkey-refused]')?.textContent).toMatch(/typing/i);
     });
@@ -74,7 +75,7 @@ describe.each(KEYS)('$name', (k) => {
     it('pressing Genie\'s own default for it stores empty, as before (CONTROL: the stored value is unchanged)', () => {
         const p = page({ [k.setting]: k.stored });
         p.start(k.name);
-        p.press(k.name, k.name === 'commandWindow' ? { key: 'k', ctrlKey: true } : { key: 'F5' });
+        p.press(k.name, k.name === 'commandWindow' ? { key: 'k', code: 'KeyK', ctrlKey: true } : { key: 'F5', code: 'F5' });
         expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: 'settings.set', key: k.setting, value: '' });
     });
 });
@@ -89,6 +90,6 @@ describe('a stored key Genie cannot read', () => {
 
 describe('the wiring', () => {
     it('Genie\'s own keys do not fire while one is being captured', () => {
-        expect(readFileSync('src/renderer/App.tsx', 'utf8')).toContain(`[data-hotkey-capture][data-capturing="true"]`);
+        expect(readFileSync('src/renderer/App.tsx', 'utf8')).toContain(`[data-react-fancy-hotkey-capture][data-state="capturing"]`);
     });
 });

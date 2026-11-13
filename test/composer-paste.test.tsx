@@ -110,10 +110,11 @@ function expectQuietFooter(html: string): void {
     expect(count(html, 'data-react-fancy-prompt-input-attach=""')).toBe(1);
     expect(count(html, 'aria-label="Attach files"')).toBe(1);
     expect(count(html, 'data-react-fancy-prompt-input-send=""')).toBe(1);
-    expect(count(html, 'aria-label="Send"')).toBe(1);
-    // The shortcut lives in the send button's tooltip now: no inline `Ctrl + Enter to send`.
+    // react-fancy 6.20+: the icon send button's name carries its shortcut. The keys line is Genie's, in the action row's
+    // beforeSend slot (Tynn #641); the kit's own hint is off, so it is said once.
+    expect(count(html, 'aria-label="Send (')).toBe(1);
     expect(count(html, 'data-react-fancy-prompt-input-hint')).toBe(0);
-    expect(count(html, 'to send</span>')).toBe(0);
+    expect(count(html, 'data-react-fancy-prompt-input-before-send')).toBe(1);
 }
 
 describe('every composer has the quiet footer and holds pastes as pills', () => {
