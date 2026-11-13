@@ -104,6 +104,7 @@ import type { ModelChoices } from '../core/provider-models.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
+import { useFilesPopped } from './use-files-popped.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
 import type { AppInboxCardProps, AppInboxCardState } from './components/AppInboxCard.js';
@@ -1622,15 +1623,8 @@ function DesktopApp({ bridge }: AppProps) {
     // Which workspace's file panel holds the dock when files are pinned (§4.3). One panel per workspace.
     const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | null>(null);
     // The panels in their own windows (§4.3): the host's list, pushed; a remote bridge has none.
-    const [filesPopped, setFilesPopped] = useState<readonly string[]>([]);
     const filesWindows = resolvedBridge?.files.windows;
-    useEffect(() => {
-        if (!filesWindows) { setFilesPopped([]); return; }
-        let live = true;
-        void filesWindows.list().then((l) => { if (live) setFilesPopped(l); });
-        const off = filesWindows.onChange((l) => { if (live) setFilesPopped(l); });
-        return () => { live = false; off(); };
-    }, [filesWindows]);
+    const filesPopped = useFilesPopped(filesWindows);
     // An agent writing a file you have dirty is ASKED to pause, over its inbox (§4.3); lifted the same way.
     const tellAgent = (agent: string, text: string) => {
         void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'inbox.send', to: agent, text }).then(setFeatures).catch((error: unknown) => {
