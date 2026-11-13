@@ -16,7 +16,7 @@ describe('shared.md teaches the chat markup', () => {
         expect(md).toMatch(/<result>/);
         expect(md).toMatch(/fence|```/i);
         expect(md).toMatch(/<highlight>/);
-        expect(md).toMatch(/<followup>/);
+        // <followup> is no longer taught: questions go through ForceTheQuestion (test/protocol-no-chat-questions.test.ts).
     });
 
     it('names Genie’s ONLY destinations: file, agent, workspace — and says a URL is not one', () => {
