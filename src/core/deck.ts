@@ -354,7 +354,7 @@ export function deckSections(items: readonly DeckItem[]): readonly DeckSection[]
 export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
 
 /** The one kind of door that is an action rather than a place: the update's next step. */
-export type SignalAction = 'update-download' | 'update-install';
+export type SignalAction = 'update-check' | 'update-download' | 'update-install';
 
 export interface Signal {
     kind: SignalKind;
@@ -375,6 +375,8 @@ export interface UpdateSignalInput {
     phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
     version: string | null;
     percent: number | null;
+    /** A failed check/download remains actionable, even before a version is known. */
+    error?: string | null;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('./update-notes.js').UpdateChangelog | 'unavailable' | null;
 }

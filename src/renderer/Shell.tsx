@@ -611,6 +611,7 @@ export function Shell({
                     onAction={(action) => {
                         if (action === 'update-download') void updates.download();
                         else if (action === 'update-install') askInstall();
+                        else if (action === 'update-check') void updates.check();
                     }}
                 />
             ) : null}

@@ -310,7 +310,9 @@ export class UpdateHost {
     check(): Promise<UpdateState> {
         this.retryInstallState = null;
         if (this.inFlight) return this.inFlight;
-        this.set({ phase: 'checking', version: null, percent: null, error: null, checkedAt: this.current.checkedAt });
+        // A recheck has not disproved the known offer. Keep its window present until a new answer arrives (#670).
+        const heldOffer = { version: this.current.version, ...(this.current.changelog !== undefined ? { changelog: this.current.changelog } : {}) };
+        this.set({ phase: 'checking', ...heldOffer, percent: null, error: null, checkedAt: this.current.checkedAt });
         this.inFlight = this.options.port.check().then(
             (found) => {
                 const checkedAt = this.clock();
@@ -324,7 +326,7 @@ export class UpdateHost {
             },
             (error: unknown) => {
                 const message = error instanceof Error ? error.message : String(error);
-                this.set({ phase: 'error', version: null, percent: null, error: message, checkedAt: this.clock() });
+                this.set({ phase: 'error', ...heldOffer, percent: null, error: message, checkedAt: this.clock() });
                 return this.current;
             },
         ).finally(() => { this.inFlight = null; });
