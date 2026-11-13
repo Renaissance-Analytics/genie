@@ -33,26 +33,30 @@ beforeEach(() => {
     io.writes.length = 0;
     io.mkdir.mockResolvedValue(undefined); io.uuid.mockReturnValue(identity.runId);
     io.identity.mockImplementation((runId: string) => ({ ...identity, runId }));
-    io.sample.mockImplementation(async ({ request }: { request: SampleRequest }) => sample(request));
+    io.sample.mockImplementation(async ({ request, scope = 'full' }: { request: SampleRequest; scope?: string }) => ({ ...sample(request), scope }));
     io.write.mockImplementation(async (file: string, content: string) => { io.writes.push({ file, value: JSON.parse(content) as Evidence }); });
 });
 const verdicts = () => io.writes.filter((entry) => entry.file.endsWith('-verdict.json'));
 
 describe('executable paired parent job (Tynn #564)', () => {
-    it('runs three alternated pairs for inline and revision on one measured identity with unique sample files', async () => {
+    it('runs twelve M4 pairs and three M5/M6 pairs for each candidate on one identity with unique fresh files', async () => {
         const result = await runPairedMeasurement({ outDir });
         expect(result.pass).toBe(true);
         expect(io.guard).toHaveBeenCalledWith('agent-reads-paired');
         expect(io.mkdir).toHaveBeenCalledWith(outDir, { recursive: false });
         expect(io.uuid).toHaveBeenCalledTimes(1);
         expect(io.identity).toHaveBeenCalledWith(identity.runId);
-        const calls = io.sample.mock.calls.map(([options]) => options as { request: SampleRequest; out: string });
-        expect(calls.map(({ request }) => [request.pairIndex, request.mode])).toEqual([
-            [0, 'ipc'], [0, 'door'], [1, 'door'], [1, 'ipc'], [2, 'ipc'], [2, 'door'],
-            [0, 'ipc'], [0, 'door-revision'], [1, 'door-revision'], [1, 'ipc'], [2, 'ipc'], [2, 'door-revision'],
-        ]);
+        const calls = io.sample.mock.calls.map(([options]) => options as { request: SampleRequest; out: string; scope: string });
+        const expected = ['door', 'door-revision'].flatMap(candidate => [['m4', 12], ['m5-m6', 3]].flatMap(([scope, count]) =>
+            Array.from({ length: Number(count) }, (_, index) => (index % 2 === 0 ? ['ipc', candidate] : [candidate, 'ipc']).map(mode => [scope, index, mode])).flat()));
+        expect(calls.map(({ request, scope }) => [scope, request.pairIndex, request.mode])).toEqual(expected);
         expect(calls.every(({ request }) => JSON.stringify(request.identity) === JSON.stringify(identity))).toBe(true);
-        expect(new Set(calls.map(({ out }) => out)).size).toBe(12);
+        expect(new Set(calls.map(({ out }) => out)).size).toBe(60);
+        for (const candidate of ['door', 'door-revision']) {
+            // Exact per-candidate sequence above proves six of each order, and that streaming runs occur only three times.
+            expect(calls.filter(({ scope, request }) => scope === 'm4' && request.mode === candidate).map(({ request }) => request.pairIndex))
+                .toEqual(Array.from({ length: 12 }, (_, i) => i));
+        }
         expect(verdicts()).toHaveLength(2);
         expect(verdicts().every(({ value }) => value.rows?.length && value.rows.every((row) => row.pass))).toBe(true);
     });
@@ -61,7 +65,7 @@ describe('executable paired parent job (Tynn #564)', () => {
         await runPairedMeasurement({ outDir });
         const checkpoints = io.writes.filter(({ value }) => Array.isArray(value.pairs));
         expect(checkpoints.map(({ value }) => value.pairs?.reduce((count, pair) => count + Number(Boolean(pair.ipc)) + Number(Boolean(pair.door)), 0)))
-            .toEqual([1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6]);
+            .toEqual([24, 6, 24, 6].flatMap(count => Array.from({ length: count }, (_, i) => i + 1)));
         expect(checkpoints[0]?.value.pairs?.[0]?.door).toBeUndefined();
     });
 
@@ -90,7 +94,7 @@ describe('executable paired parent job (Tynn #564)', () => {
             return observation;
         });
         const result = await runPairedMeasurement({ outDir });
-        expect(result.pass).toBe(false); expect(io.sample).toHaveBeenCalledTimes(6);
+        expect(result.pass).toBe(false); expect(io.sample).toHaveBeenCalledTimes(24);
         expect(verdicts()).toHaveLength(1);
         expect(verdicts()[0]?.value.rows?.find((row) => row.row === 'm4_5000.ms')?.pass).toBe(false);
     });
@@ -101,7 +105,7 @@ describe('executable paired parent job (Tynn #564)', () => {
             return request.mode === 'door' ? { ...observation, m4_20000: undefined } : observation;
         });
         const result = await runPairedMeasurement({ outDir });
-        expect(result.pass).toBe(false); expect(io.sample).toHaveBeenCalledTimes(6);
+        expect(result.pass).toBe(false); expect(io.sample).toHaveBeenCalledTimes(24);
         expect(verdicts()[0]?.value.rows?.find((row) => row.row === 'm4_20000.ms')?.pass).toBe(false);
     });
 
@@ -112,7 +116,7 @@ describe('executable paired parent job (Tynn #564)', () => {
             return observation;
         });
         const result = await runPairedMeasurement({ outDir });
-        expect(result.pass).toBe(false); expect(io.sample).toHaveBeenCalledTimes(12);
+        expect(result.pass).toBe(false); expect(io.sample).toHaveBeenCalledTimes(60);
         expect(verdicts().map(({ value }) => value.rows?.every((row) => row.pass))).toEqual([true, false]);
     });
 
@@ -120,5 +124,19 @@ describe('executable paired parent job (Tynn #564)', () => {
         io.guard.mockImplementation(() => { throw new Error('test machine only'); });
         await expect(runPairedMeasurement({ outDir })).rejects.toThrow(/test machine/);
         expect(io.mkdir).not.toHaveBeenCalled(); expect(io.sample).not.toHaveBeenCalled();
+    });
+
+    it('retains a failing twelfth M4 pair after eleven good pairs, with no early success or retry', async () => {
+        io.sample.mockImplementation(async ({ request, scope }: { request: SampleRequest; scope?: string }) => {
+            const observation = sample(request);
+            if (scope === 'm4' && request.mode === 'door' && request.pairIndex === 11) observation.m4_5000.maxGapMs = 201;
+            return { ...observation, scope: scope ?? 'full' };
+        });
+        const result = await runPairedMeasurement({ outDir });
+        expect(result.pass).toBe(false); expect(io.sample).toHaveBeenCalledTimes(24);
+        const last = io.sample.mock.calls.at(-1)?.[0] as { request: SampleRequest; scope: string };
+        expect(last.scope).toBe('m4'); expect(last.request.pairIndex).toBe(11);
+        expect(verdicts()).toHaveLength(1);
+        expect(verdicts()[0]?.value.rows?.find(r => r.row === 'm4_5000.maxGapMs')).toMatchObject({ value: 201, limit: 200, pass: false });
     });
 });

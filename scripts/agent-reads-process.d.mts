@@ -6,5 +6,5 @@ export function runMeasurementProcess(options: {
     readonly cwd: string;
     readonly out: string;
     readonly timeoutMs?: number;
-    readonly scope?: 'full' | 'm4-diagnostic';
+    readonly scope?: 'full' | 'm4-diagnostic' | 'm4' | 'm5-m6';
 }): Promise<AcquiredSample>;

@@ -73,8 +73,8 @@ beforeEach(() => {
 });
 
 describe('actual sampler adopts M4-only scope (Tynn #564)', () => {
-    function diagnostic() {
-        vi.stubEnv('AGENT_READS_PROBE_ONLY', '0'); process.argv.push('--scope=m4-diagnostic');
+    function diagnostic(scope = 'm4-diagnostic') {
+        vi.stubEnv('AGENT_READS_PROBE_ONLY', '0'); process.argv.push(`--scope=${scope}`);
         let nextAgent = 0, opens = 0;
         const expressions: string[] = [];
         const cdp = { closed: vi.fn(async () => true), evaluate: vi.fn(async (expression: string) => {
@@ -120,6 +120,38 @@ describe('actual sampler adopts M4-only scope (Tynn #564)', () => {
         expect(result.code).toBe(1); expect(result.report?.finished).toBe(false);
         expect(result.report?.cleanup?.complete).toBe(true); expect(io.stages).toHaveBeenCalledTimes(1);
         expect(result.report?.failures).toContain('the run finished');
+    });
+
+    it('M4 acceptance runs five ordinary opens per size and controls, without stage extras or M5/M6', async () => {
+        const r = diagnostic('m4'); const pending = runSampler();
+        await expect(pending).resolves.toMatchObject({ code: 0, report: { scope: 'm4', finished: true } });
+        const { report } = await pending;
+        expect(report?.m4_5000?.runs).toHaveLength(5); expect(report?.m4_20000?.runs).toHaveLength(5);
+        expect(io.sleep.mock.calls.filter(([ms]) => ms === 500)).toHaveLength(10);
+        expect(r.expressions.filter(text => text.includes('subscribeAgent'))).toHaveLength(12);
+        expect(r.expressions.filter(text => text.includes('genieTest.addAgent'))).toHaveLength(2);
+        expect(io.stages).not.toHaveBeenCalled(); expect(report?.m4Stages).toBeUndefined();
+        expect(report?.m5).toBeUndefined(); expect(report?.m6).toBeUndefined();
+        expect(report?.cleanup?.complete).toBe(true);
+    });
+
+    it('the separate M5/M6 scope starts at M5 without opening either M4 ledger', async () => {
+        const r = diagnostic('m5-m6');
+        const evaluate = r.cdp.evaluate.getMockImplementation()!;
+        r.cdp.evaluate.mockImplementation(async expression => {
+            if (expression.includes('genieTest.addAgent')) {
+                r.expressions.push(expression);
+                return { ok: false, reason: 'fixture stops at the first requested agent' };
+            }
+            return evaluate(expression);
+        });
+        const pending = runSampler();
+        await expect(pending).resolves.toMatchObject({ code: 1, report: { scope: 'm5-m6', finished: false } });
+        const adds = r.expressions.filter(text => text.includes('genieTest.addAgent'));
+        expect(adds).toHaveLength(1); expect(adds[0]).toContain('"m5"');
+        expect(r.expressions.some(text => text.includes('m4-') || text.includes('subscribeAgent'))).toBe(false);
+        expect(io.stages).not.toHaveBeenCalled();
+        expect((await pending).report?.cleanup?.complete).toBe(true);
     });
 });
 afterEach(() => { process.argv = [...originalArgv]; vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });

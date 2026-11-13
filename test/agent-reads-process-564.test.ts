@@ -75,6 +75,16 @@ describe('real paired measurement process adapter (Tynn #564)', () => {
         expect(value.scope).toBe('m4-diagnostic');
     });
 
+    it.each(['m4', 'm5-m6'] as const)('launches fresh acceptance scope %s and requires its matching receipt', async scope => {
+        io.readFile.mockResolvedValue(JSON.stringify({ ...report(), scope }));
+        const pending = runMeasurementProcess({ request, cwd, out, scope });
+        child.emit('close', 0, null);
+        await expect(pending).resolves.toMatchObject({ scope, samplerPid });
+        expect(io.spawn).toHaveBeenCalledWith(process.execPath,
+            [resolve(cwd, 'scripts/agent-reads-measure.mjs'), '--mode=ipc', `--out=${out}`, `--scope=${scope}`],
+            expect.objectContaining({ shell: false }));
+    });
+
     it('rejects diagnostic evidence when a full measurement was requested', async () => {
         io.readFile.mockResolvedValue(JSON.stringify({ ...report(), scope: 'm4-diagnostic' }));
         await expect(closed()).rejects.toThrow(/scope|diagnostic|full/i);
