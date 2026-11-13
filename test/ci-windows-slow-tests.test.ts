@@ -116,6 +116,6 @@ describe('both unit rows run it after the suite, whatever happened, and it chang
         expect(row).toMatch(/return "\$code"/);
     });
     it('the Windows suite itself is unchanged: the same command, the same 30 s budget', () => {
-        expect(windowsFunction('Row-unit')).toMatch(/npm test -- --testTimeout=30000 --reporter=default --reporter=json "--outputFile\.json=\$results"/);
+        expect(windowsFunction('Row-unit')).toMatch(/npm test -- --testTimeout=30000 --hookTimeout=30000 --reporter=default --reporter=json "--outputFile\.json=\$results"/);
     });
 });
