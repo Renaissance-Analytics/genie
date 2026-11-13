@@ -155,6 +155,6 @@ describe('the wiring these steps stand for', () => {
 
     it('main loads the flow editor window on the renderer’s index.html with the route as its hash', () => {
         const fn = main.slice(main.indexOf('function openFlowEditorWindow('), main.indexOf('function closeWindowAt('));
-        expect(fn).toMatch(/win\.loadFile\(join\(here, '\.\.\/renderer\/index\.html'\), \{ hash: route \}\)/);
+        expect(fn).toMatch(/loadWindowPage\(win\.webContents, 'index', \{ hash: route \}\)/);
     });
 });

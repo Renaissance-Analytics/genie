@@ -15,7 +15,7 @@
  *
  * Exit: 0 every check passed; 1 a check failed; 2 cannot run here.
  */
-import { mainWindow } from './cdp-main-window.mjs';
+import { geniePageSource, isGeniePage, mainWindow } from './cdp-main-window.mjs';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -40,7 +40,7 @@ setTimeout(() => { check(false, 'the run finished within its deadline (480 s)');
 const crashThePage = (inspector) => inspector.evaluate(`(() => {
     const m = process.getBuiltinModule('node:module');
     const { webContents } = m.createRequire(process.execPath)('electron');
-    const page = webContents.getAllWebContents().find((w) => !w.isDestroyed() && w.getType() === 'window' && /renderer[\\\\/]index\\.html/.test(w.getURL()));
+    const page = webContents.getAllWebContents().find((w) => !w.isDestroyed() && w.getType() === 'window' && new RegExp(${JSON.stringify(geniePageSource('index'))}).test(w.getURL()));
     if (!page) return 'no main page';
     page.forcefullyCrashRenderer();
     return 'ok';
@@ -112,7 +112,7 @@ try {
         step('D1', 'Restart Genie');
         await cdp.evaluate(`document.querySelector('[data-action="renderer-restart"]').click(); true`, 10_000).catch(() => null);
         await cdp.closed(2_000);
-        const back = await until(async () => { const p = await pageNow(); return p && /renderer[\\/]index\.html/.test(String(p.url)) ? p : null; }, 30_000);
+        const back = await until(async () => { const p = await pageNow(); return p && isGeniePage(p.url) ? p : null; }, 30_000);
         check(back !== null, 'D1. the window was built again with the app in it', back?.url?.slice(-40) ?? 'none');
         if (back) {
             session = await attach({ port: PORT, inspect: INSPECT, label: 'rebuilt' });

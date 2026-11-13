@@ -11,6 +11,7 @@ import { genieBrowserWindows, rerouteGenieBrowserSession, watchWorkspaceStores, 
 import { drivablePages, onPagesChanged } from './page-navigation-electron.js';
 import { genieRoot, runtimeDir } from './paths.js';
 import { SessionEngineClient } from './session-engine-client.js';
+import { configureWindowPages } from './window-pages.js';
 
 /**
  * THE GENIE BROWSER AS ITS OWN PROCESS (the host split, P2b; decision 5: "genie browser should be its own process as well,
@@ -36,6 +37,8 @@ const SHARED_STORE = '_shared';
 export async function runBrowserProcess(): Promise<void> {
     if (!app.requestSingleInstanceLock()) { app.exit(0); return; }
     const here = dirname(fileURLToPath(import.meta.url));
+    // The chrome (browser.html) loads from http://genie.localhost:<port> of this process's own userData (Tynn #683).
+    configureWindowPages({ root: join(here, '../renderer'), portFile: join(app.getPath('userData'), 'window-origin.json'), log: (line) => console.log(line) });
     const log = (line: string): void => { console.log(`[genie-browser] ${line}`); };
     app.on('window-all-closed', () => { app.quit(); });
     await app.whenReady();
