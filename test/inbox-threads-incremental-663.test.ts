@@ -18,7 +18,7 @@ let seq = 0;
 const m = (from: string, to: string, text: string, readAt: string | null = null): ThreadMail => {
     seq += 1;
     const msg = { seq, id: `msg_${seq}`, from, to, attachments: [], sentAt: new Date(T + seq * 1000).toISOString(), readAt };
-    return Object.defineProperty(msg, 'text', { enumerable: true, get: () => { reads += 1; return text; } }) as ThreadMail;
+    return Object.defineProperty(msg, 'text', { enumerable: true, get: () => { reads += 1; return text; } }) as unknown as ThreadMail;
 };
 const names: Record<string, string> = { human: 'you', a1: 'atlas', a2: 'wren', a3: 'vesper' };
 const name = (p: string): string => names[p] ?? p;
@@ -62,7 +62,7 @@ describe('inboxThreads reuses what did not change (Tynn #663)', () => {
         const first = byKey(inboxThreads(mail, name));
         expect(first[pairKey('a1', 'human')]!.unread).toBe(1);
         // The inbox's read: a new object for the message, the rest untouched.
-        const read = Object.defineProperty({ ...mail[0]!, readAt: new Date(T).toISOString() }, 'text', { enumerable: true, value: 'notes ready' }) as ThreadMail;
+        const read = Object.defineProperty({ ...mail[0]!, readAt: new Date(T).toISOString() }, 'text', { enumerable: true, value: 'notes ready' }) as unknown as ThreadMail;
         const afterRead = byKey(inboxThreads([read, mail[1]!], name));
         expect(afterRead[pairKey('a1', 'human')]!.unread).toBe(0);
         expect(afterRead[pairKey('a2', 'human')]).toBe(first[pairKey('a2', 'human')]);

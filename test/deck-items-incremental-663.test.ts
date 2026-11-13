@@ -30,17 +30,17 @@ const question = (id: string, over: Partial<PendingQuestion> = {}): PendingQuest
         askedAt: '2026-10-11T05:00:00.000Z',
         ...over,
     };
-    return Object.defineProperty(q, 'questions', { enumerable: true, get: () => { reads.questions += 1; return over.questions ?? qs; } }) as PendingQuestion;
+    return Object.defineProperty(q, 'questions', { enumerable: true, get: () => { reads.questions += 1; return over.questions ?? qs; } }) as unknown as PendingQuestion;
 };
 
 const listItem = (text: string): ListItem => {
     const item = { id: `li_${text}`, askedBy: 'agent_a', createdAt: '2026-10-11T04:00:00.000Z', done: false };
-    return Object.defineProperty(item, 'text', { enumerable: true, get: () => { reads.listText += 1; return text; } }) as ListItem;
+    return Object.defineProperty(item, 'text', { enumerable: true, get: () => { reads.listText += 1; return text; } }) as unknown as ListItem;
 };
 
 const dm = (id: string, text: string): InboxMessage => {
     const m = { seq: 1, id, from: 'agent_a' as InboxMessage['from'], to: HUMAN, attachments: [], sentAt: '2026-10-11T05:30:00.000Z', readAt: null };
-    return Object.defineProperty(m, 'text', { enumerable: true, get: () => { reads.text += 1; return text; } }) as InboxMessage;
+    return Object.defineProperty(m, 'text', { enumerable: true, get: () => { reads.text += 1; return text; } }) as unknown as InboxMessage;
 };
 
 const reset = () => { reads.questions = 0; reads.text = 0; reads.listText = 0; };
