@@ -240,21 +240,46 @@ export function useAgentDetail(
         setState(detailCache.show(agentId));
 
         let off: (() => void) | null = null;
-        void bridge.agentDetail(agentId).then((detail) => {
+        let retryOff: (() => void) | null = null;
+        let reading = false;
+        const failed = (error: unknown): void => {
+            reading = false;
             if (!live) return;
-            // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
-            // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
-            const id = chatSubscriptionId(agentId, detail);
-            // A push is a transition (use-snapshot.ts `pushed`): typing is committed before it.
-            // Every detail LANDS through the cache (Tynn #659): one whose rows are still pending shows this agent's kept rows.
-            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; const shown = detailCache.land(agentId, next); pushed(() => setState({ detail: shown, resolved: true })); });
-            // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
-            // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
-            const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
-            if (canonical) { window.location.replace(`#${canonical}`); return; }
-            setState({ detail: detailCache.land(agentId, detail), resolved: true });
-        });
-        return () => { live = false; off?.(); };
+            // A failed read is not a not-found answer. Keep this agent's cached detail (or loading state).
+            try {
+                console.error('Could not read agent detail.', error);
+                const reason = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+                const closed = reason.includes('the connection closed') || reason.includes("Genie's agent host is not connected; it is being restarted.");
+                // Retry a closed link on an actual host update, never permission failures or on a timer.
+                if (!closed) { retryOff?.(); retryOff = null; return; }
+                if (!retryOff) retryOff = bridge.subscribe(() => read());
+            } catch { /* A refused retry subscription or diagnostic reporter must not escape the failure handler. */ }
+        };
+        const read = (): void => {
+            if (!live || reading) return;
+            reading = true;
+            try {
+                void bridge.agentDetail(agentId).then((detail) => {
+                    reading = false;
+                    if (!live) return;
+                    retryOff?.(); retryOff = null;
+                    off?.(); off = null;
+                    // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
+                    // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
+                    const id = chatSubscriptionId(agentId, detail);
+                    // A push is a transition (use-snapshot.ts `pushed`): typing is committed before it.
+                    // Every detail LANDS through the cache (Tynn #659): one whose rows are still pending shows this agent's kept rows.
+                    if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; const shown = detailCache.land(agentId, next); pushed(() => setState({ detail: shown, resolved: true })); });
+                    // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
+                    // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
+                    const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
+                    if (canonical) { window.location.replace(`#${canonical}`); return; }
+                    setState({ detail: detailCache.land(agentId, detail), resolved: true });
+                }).catch(failed);
+            } catch (error) { failed(error); }
+        };
+        read();
+        return () => { live = false; off?.(); retryOff?.(); };
     }, [bridge, agentId]);
 
     return agentId === null ? { detail: null, resolved: false } : state;
