@@ -19,6 +19,10 @@ const GAP_ROWS = [['m4_5000', 'maxGapMs'], ['m4_20000', 'maxGapMs'], ['m5', 'max
 
 const number = (run, group, key) => { const v = run?.[group]?.[key]; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
 
+// RED checkpoint seam: the paired numeric contract must fail on assertions, not a missing export.
+// No caller uses this as a measurement verdict until the tests have been measured RED and implemented.
+export function comparePairedRuns(_report) { return []; }
+
 export function compareRuns(baseline, candidate) {
     const rows = [];
     for (const [group, key] of RATIO_ROWS) {
