@@ -34,12 +34,44 @@ const LABEL = arg('label', fileArg('label') ?? 'soak');
 const OUT = resolve('soak-out');
 const PORT = 9372, INSPECT = 9373, HOST_INSPECT = 9374;
 const SWITCH_MS = 3000, DISMISS_MS = 20000, SAMPLE_MS = 10000, PROFILE_WINDOW_MS = 5 * 60_000, SNAPSHOT_RSS_MB = 1024;
+// The PAGE's heap snapshot (Tynn #665): once, the first time the renderer's heap passes this, read by heap-retainers.mjs.
+const PAGE_SNAPSHOT_MB = Number(arg('page-snapshot-mb', fileArg('page-snapshot-mb') ?? '1200'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const targets = async (port) => (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })).json();
 async function until(label, read, ms = 30000) { const end = Date.now() + ms; while (Date.now() < end) { const v = await read().catch(() => null); if (v) return v; await sleep(200); } throw new Error(`${label} was not ready`); }
 const mainWindow = (list) => (Array.isArray(list) ? list : []).find((t) => t?.type === 'page' && t.webSocketDebuggerUrl && /\/index\.html(?:[?#]|$)/.test(String(t.url)) && !/#genie:\/\/(?:[^/?#]+\/)?(?:takeover|flow|files)\//.test(String(t.url))) ?? null;
 const mb = (b) => Math.round((b / 1048576) * 10) / 10;
+
+/**
+ * THE PAGE'S REACT QUEUES (Tynn #665), read from the fiber tree each sample: per state hook, the updates React holds that
+ * are not committed yet (its pending ring and its base queue), the most any one hook holds, and the most an ESTATE hook
+ * (a state whose value has `agents` and `workspaces`) holds; with the root's pending and expired lanes. A pushed update
+ * that never commits is retained here with whatever its updater closes over.
+ */
+const PAGE_REACT = `(() => {
+    const el = document.getElementById('root'); if (!el) return null;
+    const key = Object.keys(el).find((k) => k.startsWith('__reactContainer$')); if (!key) return null;
+    const fr = el[key].stateNode;
+    const ring = (last) => { if (!last) return 0; let n = 0; let u = last.next; do { n += 1; u = u.next; } while (u && u !== last.next && n < 1e6); return n; };
+    const bits = (x) => { let n = 0; for (let v = x >>> 0; v; v &= v - 1) n += 1; return n; };
+    let fibers = 0, hooks = 0, queued = 0, maxQueued = 0, estateHooks = 0, estateQueued = 0;
+    const stack = [fr.current];
+    while (stack.length) {
+        const f = stack.pop(); fibers += 1;
+        if (f.child) stack.push(f.child); if (f.sibling) stack.push(f.sibling);
+        if (f.tag !== 0 && f.tag !== 11 && f.tag !== 15) continue;
+        for (let h = f.memoizedState; h && typeof h === 'object' && 'next' in h; h = h.next) {
+            if (!h.queue || typeof h.queue.lastRenderedReducer !== 'function') continue;
+            hooks += 1;
+            const q = ring(h.queue.pending) + ring(h.baseQueue);
+            queued += q; if (q > maxQueued) maxQueued = q;
+            const v = h.memoizedState;
+            if (v && typeof v === 'object' && 'agents' in v && 'workspaces' in v) { estateHooks += 1; estateQueued += q; }
+        }
+    }
+    return { fibers, hooks, queued, maxQueued, estateHooks, estateQueued, pendingLanes: bits(fr.pendingLanes), expiredLanes: bits(fr.expiredLanes) };
+})()`;
 
 class Cdp {
     next = 0; pending = new Map(); listeners = new Map(); dead = null;
@@ -132,6 +164,14 @@ function topAllocators(profile, n = 30) {
     return { totalMb: mb(total), top: [...by.entries()].sort((a, b) => b[1].self - a[1].self).slice(0, n).map(([fn, e]) => ({ fn, mb: mb(e.self), via: [...e.via.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([s, v]) => `${mb(v)} MB: ${s}`) })) };
 }
 
+/** A heap snapshot streamed to a file, whole. */
+async function writeSnapshot(cdp, file) {
+    const out = createWriteStream(file);
+    const stop = cdp.on('HeapProfiler.addHeapSnapshotChunk', (p) => out.write(p.chunk));
+    try { await cdp.request('HeapProfiler.takeHeapSnapshot', { reportProgress: false, captureNumericValue: false }, 900000); }
+    finally { stop(); await new Promise((r) => out.end(r)); }
+}
+
 /** A heap snapshot to a file, and its retained summary by constructor (self size). */
 async function snapshot(cdp, file) {
     const out = createWriteStream(file);
@@ -156,7 +196,7 @@ async function snapshot(cdp, file) {
     return { file: basename(file), totalMb: mb(total), top: [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => `${k} ${mb(v)} MB`) };
 }
 
-let app = null, root = null, page = null, main = null, host = null, code = 1;
+let app = null, root = null, page = null, main = null, host = null, code = 1, pageAnalysis = null;
 const summary = { label: LABEL, minutes: MINUTES, head: null, seeded: null, switches: 0, dismissals: 0, dismissFailures: 0, errors: [], pageErrors: [], failedSurfaces: null, died: null, snapshots: [], profiles: { main: [], host: [] } };
 const samplesFile = join(OUT, `${LABEL}-samples.jsonl`);
 try {
@@ -199,6 +239,7 @@ try {
     // What's new over a first run: closed as a person closes it.
     try { await until('What’s new', () => page.evaluate(`Boolean(document.querySelector('[data-whats-new]'))`), 20000); await page.evaluate(`document.querySelector('[data-action="whats-new-close"]')?.click(); true`); } catch { /* not shown */ }
     for (const c of [main, host]) { await c.evaluate(`(${installWireGauge.toString()})()`); await c.request('HeapProfiler.enable'); }
+    await page.request('HeapProfiler.enable');
     const startProfiles = async () => { for (const c of [main, host]) if (!c.dead) await c.request('HeapProfiler.startSampling', { samplingInterval: 65536, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true }).catch((e) => summary.errors.push(e.message)); };
     let profileN = 0;
     const saveProfiles = async () => {
@@ -216,6 +257,7 @@ try {
     const t0 = Date.now(), end = t0 + MINUTES * 60_000;
     let nextSample = t0, nextSwitch = t0, nextDismiss = t0 + 10_000, nextProfile = t0 + PROFILE_WINDOW_MS, i = 0;
     const snapped = new Set();
+    let pageSnapped = false, pageUsedMb = 0;
     console.log(`SOAK_START ${new Date(t0).toISOString()} for ${MINUTES} min`);
     while (Date.now() < end) {
         if (main.dead) { summary.died = { at: new Date().toISOString(), after_s: Math.round((Date.now() - t0) / 1000), what: main.dead }; break; }
@@ -225,7 +267,9 @@ try {
             const read = async (c) => (c.dead ? null : c.evaluate(MEMORY, 20000).catch((e) => ({ error: e.message })));
             const [m, h] = await Promise.all([read(main), read(host)]);
             const p = page.dead ? null : await page.request('Runtime.getHeapUsage', {}, 20000).catch(() => null);
-            const s = { t: Math.round((Date.now() - t0) / 1000), main: m, host: h, page: p ? { used: p.usedSize, total: p.totalSize } : null };
+            const react = page.dead ? null : await page.evaluate(PAGE_REACT, 20000).catch((e) => ({ error: e.message }));
+            const s = { t: Math.round((Date.now() - t0) / 1000), main: m, host: h, page: p ? { used: p.usedSize, total: p.totalSize, react } : null };
+            if (p) pageUsedMb = mb(p.usedSize);
             writeFileSync(samplesFile, `${JSON.stringify(s)}\n`, { flag: 'a' });
             // A surface that failed to draw (react-fancy's TabsList update loop, React #185, seen on the line too) is retried as a
             // person would, so the soak keeps measuring a page that draws; each one is counted.
@@ -237,12 +281,28 @@ try {
                     await page.evaluate(`document.querySelectorAll('[data-surface-retry]').forEach((b) => b.click()); true`, 10000).catch(() => {});
                 }
             }
-            console.log(`SOAK_SAMPLE t=${s.t}s main rss=${m?.rss ? mb(m.rss) : '-'} heap=${m?.heapUsed ? mb(m.heapUsed) : '-'} host rss=${h?.rss ? mb(h.rss) : '-'} heap=${h?.heapUsed ? mb(h.heapUsed) : '-'} page=${p ? mb(p.usedSize) : '-'} wire.maxLine=${m?.wire?.maxLine ?? '-'}`);
+            console.log(`SOAK_SAMPLE t=${s.t}s main rss=${m?.rss ? mb(m.rss) : '-'} heap=${m?.heapUsed ? mb(m.heapUsed) : '-'} host rss=${h?.rss ? mb(h.rss) : '-'} heap=${h?.heapUsed ? mb(h.heapUsed) : '-'} page=${p ? mb(p.usedSize) : '-'} react=${react ? JSON.stringify(react) : '-'} wire.maxLine=${m?.wire?.maxLine ?? '-'}`);
             for (const [name, c, r] of [['main', main, m], ['host', host, h]]) {
                 if (snapped.has(name) || !r?.rss || r.rss / 1048576 < SNAPSHOT_RSS_MB) continue;
                 snapped.add(name);
                 try { summary.snapshots.push({ proc: name, t: s.t, rssMb: mb(r.rss), ...(await snapshot(c, join(OUT, `${LABEL}-${name}-peak.heapsnapshot`))) }); } catch (e) { summary.errors.push(`snapshot ${name}: ${e.message}`); }
             }
+        }
+        if (!pageSnapped && !page.dead && pageUsedMb >= PAGE_SNAPSHOT_MB) {
+            pageSnapped = true;
+            const file = join(OUT, `${LABEL}-page-peak.heapsnapshot`);
+            try {
+                const at = Math.round((Date.now() - t0) / 1000), usedMb = pageUsedMb, react = await page.evaluate(PAGE_REACT, 20000).catch(() => null);
+                await writeSnapshot(page, file);
+                console.log(`SOAK_PAGE_SNAPSHOT t=${at}s used=${usedMb} MB file=${mb(statSync(file).size)} MB`);
+                // Read off the soak's loop (it can take minutes): a child node, the file deleted after.
+                pageAnalysis = new Promise((done) => {
+                    const child = spawn(process.execPath, ['--max-old-space-size=24000', resolve('scripts/perf-lag/heap-retainers.mjs'), file, join(OUT, `${LABEL}-page-retainers.json`)], { stdio: ['ignore', 'ignore', 'pipe'] });
+                    let err = '';
+                    child.stderr.on('data', (d) => { err += d; });
+                    child.on('exit', (exit) => { rmSync(file, { force: true }); summary.pageSnapshot = { t: at, usedMb, react, exit, err: err.slice(-2000) || undefined }; done(); });
+                });
+            } catch (e) { summary.errors.push(`page snapshot: ${e.message}`); rmSync(file, { force: true }); }
         }
         if (now >= nextProfile) { nextProfile += PROFILE_WINDOW_MS; await saveProfiles(); await startProfiles(); }
         if (now >= nextDismiss) {
@@ -263,6 +323,7 @@ try {
         await sleep(250);
     }
     if (!main.dead) await saveProfiles();
+    if (pageAnalysis) await pageAnalysis;
     // The end state, after a full GC: what each process RETAINS (not what it churned).
     for (const [name, c] of [['main', main], ['host', host]]) {
         if (c.dead) continue;
@@ -278,7 +339,8 @@ try {
         const rows = existsSync(samplesFile) ? readFileSync(samplesFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
         const stat = (xs) => { const v = xs.filter((x) => Number.isFinite(x)).sort((a, b) => a - b); if (v.length === 0) return null; const q = (p) => mb(v[Math.min(v.length - 1, Math.floor(p * v.length))]); return { min: mb(v[0]), p50: q(0.5), p95: q(0.95), max: mb(v.at(-1)), n: v.length }; };
         for (const name of ['main', 'host']) summary[name] = { rss: stat(rows.map((r) => r[name]?.rss)), heapUsed: stat(rows.map((r) => r[name]?.heapUsed)), external: stat(rows.map((r) => r[name]?.external)), wire: rows.at(-1)?.[name]?.wire ?? null };
-        summary.page = { heapUsed: stat(rows.map((r) => r.page?.used)) };
+        const counts = (xs) => { const v = xs.filter((x) => Number.isFinite(x)).sort((x, y) => x - y); return v.length === 0 ? null : { p50: v[Math.floor(v.length / 2)], max: v.at(-1), n: v.length }; };
+        summary.page = { heapUsed: stat(rows.map((r) => r.page?.used)), estateQueued: counts(rows.map((r) => r.page?.react?.estateQueued)), maxQueued: counts(rows.map((r) => r.page?.react?.maxQueued)), pendingLanes: counts(rows.map((r) => r.page?.react?.pendingLanes)) };
         // Ten points of the curve: rss of each process every tenth of the run.
         summary.curve = rows.filter((_, k) => k % Math.max(1, Math.floor(rows.length / 12)) === 0).map((r) => ({ t: r.t, main: r.main?.rss ? mb(r.main.rss) : null, host: r.host?.rss ? mb(r.host.rss) : null, page: r.page ? mb(r.page.used) : null }));
     } catch (e) { summary.errors.push(`summary: ${e.message}`); }
