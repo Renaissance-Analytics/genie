@@ -19,7 +19,7 @@ import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.j
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, soundPickerList, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
-import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
+import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -2558,6 +2558,68 @@ function HostUpgradeRow({ host, upgrade, onUpgradeHost }: { host: string; upgrad
 }
 
 /**
+ * THE WINDOWS FIREWALL ROW (Tynn #685; the owner: "If it's already allowed I should see that it is already allowed and I
+ * should have a button for clearing that rule"). It draws main's reading of Genie's rule from Windows:
+ *  - there and letting the port in: "Allowed", with what Windows reports, and Remove;
+ *  - there but not letting it in (turned off, blocking, another port): why, Allow to put it right, and Remove;
+ *  - there, in words Genie cannot read: its lines as Windows printed them, and Remove;
+ *  - absent, unreadable or not read yet: Allow (offer the fix rather than hide a missing rule).
+ * Allow is offered only while Remote access is on (there is nothing to let in otherwise); the rule and Remove are shown
+ * whatever the switch says, because the rule outlives it.
+ */
+function FirewallRow({ rule, enabled, outcome, onAction, button }: { rule: FirewallRuleView | null; enabled: boolean; outcome: string | null; onAction: SurfaceProps['onAction']; button: string }) {
+    const present = rule?.state === 'present' ? rule : null;
+    const state = !present ? (rule?.state === 'absent' ? 'absent' : rule?.state === 'unknown' ? 'unknown' : 'unread')
+        : present.covers === true ? 'allowed' : present.covers === false ? 'not-allowing' : 'present';
+    const allowButton = <Button size="xs" type="button" icon="shield-check" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</Button>;
+    const removeButton = <Button size="xs" type="button" icon="trash-2" data-action="remote-firewall-remove" className={button} onClick={() => onAction({ kind: 'remote.removeFirewall' })}>Remove</Button>;
+    const reported = (r: FirewallRuleFacts): string => [
+        `${r.protocol ?? ''} ${r.localPort ?? ''}`.trim(),
+        r.remoteIp ? `from ${r.remoteIp}` : '',
+        r.profiles ? `profiles ${r.profiles}` : '',
+    ].filter(Boolean).join(', ');
+    const why = (r: FirewallRuleFacts, port: number): string =>
+        r.enabled === false ? 'it is turned off'
+            : r.allow === false ? 'it blocks the port'
+            : r.inbound === false ? 'it is for outgoing traffic'
+            : r.protocol !== null && r.protocol !== 'TCP' && r.protocol !== 'Any' ? `it is for ${r.protocol}, not TCP`
+            : r.localPort !== null ? `it lets in ${r.localPort}, and remote access uses ${port}` : 'Windows does not say';
+    return (
+        <div data-firewall-rule={state} className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="font-medium">Windows Firewall</span>
+            {state === 'allowed' && present ? (
+                <>
+                    <span className="flex items-center gap-1.5 text-[var(--success)]"><Icon name="shield-check" size="sm" />Allowed through Windows Firewall</span>
+                    <span data-firewall-reported="" className="font-mono text-xs text-[var(--fg-3)]">{present.rules.map(reported).join('; ')}</span>
+                    {removeButton}
+                </>
+            ) : state === 'not-allowing' && present ? (
+                <>
+                    <span className="text-[var(--warning)]">{`Genie’s rule does not let remote access in: ${present.rules.map((r) => why(r, present.port)).join('; ')}.`}</span>
+                    <span data-firewall-reported="" className="font-mono text-xs text-[var(--fg-3)]">{present.rules.map(reported).join('; ')}</span>
+                    {enabled ? allowButton : null}
+                    {removeButton}
+                </>
+            ) : state === 'present' && present ? (
+                <>
+                    <span>Windows has Genie’s rule:</span>
+                    <span data-firewall-reported="" className="font-mono text-xs text-[var(--fg-3)]">{present.rules.map((r) => r.fields.map((f) => `${f.label} ${f.value}`).join(' · ')).join('; ')}</span>
+                    {enabled ? allowButton : null}
+                    {removeButton}
+                </>
+            ) : (
+                <>
+                    {state === 'absent' ? <span className="text-[var(--fg-2)]">No rule lets remote access through yet.</span> : null}
+                    {rule?.state === 'unknown' ? <span className="text-[var(--fg-2)]">{`Windows Firewall could not be read: ${rule.reason}`}</span> : null}
+                    {enabled ? allowButton : null}
+                </>
+            )}
+            {outcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{outcome}</span> : null}
+        </div>
+    );
+}
+
+/**
  * REMOTE ACCESS (§6.8) — the PIN this screen shows, the paired devices (Revoke each), who is connected
  * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
  * link, made from a workspace's Share (ShareWorkspaceModal); the old local share link here was removed (audit M-d).
@@ -2591,9 +2653,9 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                         <Switch checked={remote.enabled} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: 'remote_access', value: checked })} aria-label="Let your other machines reach this Genie" />
                         <span>{remote.enabled ? `Your other machines can reach ${remote.host} through Tynn, and devices on your tailnet.` : `Remote access is off: your other machines cannot reach ${remote.host} through Tynn or your tailnet.`}</span>
                         {remote.enabled ? <Button size="xs" type="button" data-action="remote-restart" className={button} onClick={() => onAction({ kind: 'remote.restart' })}>Restart</Button> : null}
-                        {remote.enabled && remote.firewall ? <Button size="xs" type="button" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</Button> : null}
-                        {remote.firewallOutcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.firewallOutcome}</span> : null}
                     </div>
+                    {/* WINDOWS FIREWALL (Tynn #685): whether Genie's rule is there, as Windows reports it; Remove when it is. */}
+                    {remote.firewall ? <FirewallRow rule={remote.firewallRule ?? null} enabled={remote.enabled} outcome={remote.firewallOutcome ?? null} onAction={onAction} button={button} /> : null}
                     {/* TAILSCALE (Tynn #821; Genie 1's tailscale.status / install / up): remote access runs over the tailnet, so
                         where Tailscale stands, and the one action that moves it on. */}
                     {remote.tailscale ? (

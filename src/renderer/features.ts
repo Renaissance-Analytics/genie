@@ -161,6 +161,31 @@ export interface KnowledgeAdded {
 }
 
 /** Remote access (§6.8) as the host sees it. Sharing is a Tynn link (tynn-share-links.ts), not part of this section. */
+/**
+ * ONE RULE AS WINDOWS REPORTED IT (main/remote-firewall.ts `parseShowRule`, Tynn #685). `fields` is every line netsh printed
+ * for the rule, label and value in Windows' own words and order. The named facts are read from English labels only; on a
+ * Windows in another language they are `null` (never guessed), and `fields` still says everything.
+ */
+export interface FirewallRuleFacts {
+    readonly fields: readonly { readonly label: string; readonly value: string }[];
+    readonly enabled: boolean | null;
+    readonly inbound: boolean | null;
+    readonly allow: boolean | null;
+    readonly protocol: string | null;
+    readonly localPort: string | null;
+    readonly remoteIp: string | null;
+    readonly profiles: string | null;
+}
+
+/**
+ * Genie's firewall rule on this machine: `present` with each rule by that name and whether one lets remote access's `port`
+ * in (`covers`; `null` = Windows answered in words Genie cannot read), `absent`, or `unknown` with the reason in words.
+ */
+export type FirewallRuleView =
+    | { readonly state: 'present'; readonly port: number; readonly covers: boolean | null; readonly rules: readonly FirewallRuleFacts[] }
+    | { readonly state: 'absent' }
+    | { readonly state: 'unknown'; readonly reason: string };
+
 export interface RemoteSection {
     readonly host: string;
     readonly url: string | null;
@@ -176,7 +201,9 @@ export interface RemoteSection {
     readonly enabled: boolean;
     /** Windows: the firewall rule can be added here (Genie 1's allowFirewall). */
     readonly firewall: boolean;
-    /** What the last Allow through the firewall did, in words; absent = not tried. */
+    /** Windows: Genie's firewall rule as main last read it from Windows (Tynn #685); absent/`null` = not read yet. */
+    readonly firewallRule?: FirewallRuleView | null | undefined;
+    /** What the last Allow or Remove through the firewall did, in words; absent = not tried. */
     readonly firewallOutcome?: string | null | undefined;
     /** Where Tailscale stands on this machine (main/tailscale-cli.ts, Tynn #821); absent/`null` = not read yet. */
     readonly tailscale?: TailscaleStatus | null | undefined;
@@ -560,6 +587,8 @@ export type FeatureAction =
     | { kind: 'remote.restart' }
     /** Windows: add the tailnet-scoped inbound rule for the port, one UAC prompt (Genie 1's allowFirewall). */
     | { kind: 'remote.allowFirewall' }
+    /** Windows: delete Genie's own firewall rule, by its exact name, one UAC prompt (Tynn #685). */
+    | { kind: 'remote.removeFirewall' }
     /** Bring this machine onto the tailnet (`tailscale up`); a sign-in link opens in the browser (Genie 1's tailscale.up). */
     | { kind: 'tailscale.up' }
     /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */
