@@ -1376,6 +1376,8 @@ async function main(): Promise<void> {
                         return (await startForWork({ probe: (x) => host.probe(x), start: (r, cwd) => host.start(r, cwd), cwdFor: cwdOf, startRefusal: refusal }, record)).ok;
                     },
                     prompt: (id, text, by) => host.prompt(id as AgentId, text, by),
+                    queue: (id, text, by, replacing) => host.queueFlowPrompt(id as AgentId, text, by, replacing),
+                    isQueued: (id, promptId) => host.isPromptQueued(id as AgentId, promptId),
                     subscribe: (listener) => host.subscribe(listener),
                 },
                 resolve: (text) => resolveOnRoster(text, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
