@@ -16,7 +16,7 @@ it('the host builds its session and owned workspace API before admitting or publ
     const body = source.slice(start, end);
     const lines = [
         '    const server: Server = createServer();', // No early accept callback in the constructor.
-        '    const host = new SessionHost({',
+        '    const host = new ' + 'SessionHost({',
         '    engine.attach(host);',
         '    phoneApi = hostAloneApi({',
         "    server.on('connection', (socket) => engine.accept(lineTransport(socket), { local: true }));",
