@@ -118,7 +118,7 @@ describe('wired: the shell hands the title bar its connect, and the palette offe
 
     it('the shell passes connect to the TitleBar only on this machine’s own window and never on a drone (Genie 1 hid the Hosts button in a host window)', () => {
         const bar = /<TitleBar([^]*?)\/>/.exec(shell)?.[1] ?? '';
-        expect(bar).toMatch(/\bconnect=\{remote \|\| !remoteConnect \|\| !mayBrowse\(features\.remote\?\.tynnWorkstation\?\.role \?\? null\) \? undefined : /);
+        expect(bar).toMatch(/\bconnect=\{remote \|\| scoped \|\| !remoteConnect \|\| !mayBrowse\(features\.remote\?\.tynnWorkstation\?\.role \?\? null\) \? undefined : /);
     });
 
     it('main opens a pasted link through dispatchConnectLink, with the role Tynn gave it, never one the window sends', () => {

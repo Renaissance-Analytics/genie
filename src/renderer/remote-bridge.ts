@@ -8,6 +8,7 @@ import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
+import { isFeaturesRevision } from '../core/remote-frame.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
 import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
@@ -524,7 +525,13 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         },
         features: {
             snapshot: () => read<FeatureData>('features.snapshot'),
-            subscribe: (onChange) => on('features', (p) => onChange(p as FeatureData)),
+            // A snapshot too large for the wire arrives as a revision only (Tynn #579): it is read, as the host's own windows do.
+            subscribe: (onChange) => on('features', (p) => {
+                if (!isFeaturesRevision(p)) return onChange(p as FeatureData);
+                void read<FeatureData>('features.snapshot').then(onChange).catch((error: unknown) => {
+                    console.warn(`[genie] the feature snapshot could not be read: ${error instanceof Error ? error.message : String(error)}`);
+                });
+            }),
             act: (action) => read<FeatureData>('features.act', action),
             // Nothing to place on a screen that is not the host's.
             setBrowserBounds: async () => {},

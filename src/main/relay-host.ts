@@ -3,6 +3,7 @@ import type { ServerConnection, ServerTransport } from '../core/remote-protocol.
 import { principalOf, type GrantCheck, type HostGrant } from './relay-grant.js';
 import { isGenHost, pipeSiteStream, type SiteDial, type SiteFrame, type SitePipe } from './relay-site.js';
 import { decodeFrame, encodeFrame, jwkThumbprint, OPEN, popSignedInput, textOf, type Frame, type RelaySocket, type RelaySocketFactory, type TicketHostHello } from './relay-wire.js';
+import { fitRemoteFrame } from '../core/remote-frame.js';
 
 /**
  * THIS GENIE ON THE TYNN NETWORK, AS A HOST (Tynn #838) — Genie 1's `host-core/relay-host/link.ts`, feeding Genie 2's
@@ -170,7 +171,12 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         const connection: ServerConnection = {
             remoteAddress: `relay:${grant.name ?? grant.sub}`,
             preAuth: who.principal,
-            send: (text) => { if (sessions.get(sid) === session) send({ kind: 'data', channel: 'rest', sid, payload: text }); },
+            // The relay's size cap (Tynn #579): a frame over it is a refusal or not sent, never a disconnect.
+            send: (text) => {
+                if (sessions.get(sid) !== session) return;
+                const fit = fitRemoteFrame(text);
+                if (fit.text !== null) send({ kind: 'data', channel: 'rest', sid, payload: fit.text });
+            },
             onMessage: (l) => { session.messages.add(l); return () => { session.messages.delete(l); }; },
             onClose: (l) => { session.closes.add(l); return () => { session.closes.delete(l); }; },
             close: () => {

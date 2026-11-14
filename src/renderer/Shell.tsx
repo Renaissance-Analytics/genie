@@ -1,3 +1,5 @@
+import { readOnlyTerminals } from './read-only-terminals.js';
+import { routeInScope, workspaceHome, WORKSTATION_SCOPE, type WindowScope } from '../core/workspace-window.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnTabHost } from '../core/tynn-pages.js';
@@ -267,6 +269,12 @@ export interface ShellProps {
     onSelectRow: (rowId: string | null) => void;
     /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
     remote?: ShellRemote | undefined;
+    /**
+     * WHAT THIS WINDOW MAY SHOW (Tynn #690), from the host's welcome (core/workspace-window.ts windowScopeOf): a workstation
+     * window, or ONE workspace's — that workspace and nothing of the workstation; read-only, no send or act controls.
+     * Absent = a workstation window.
+     */
+    windowScope?: WindowScope | undefined;
     /** The client side of remote: this window driving another machine (Settings → Workstation). */
     remoteConnect?: RemoteConnectProps | undefined;
     /** Share this workstation through Tynn (Tynn #587); absent for a guest. */
@@ -336,11 +344,15 @@ export type ShellRemote = {
 /** The dock's panels, as the notice names them (§4.4). */
 const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel', lists: 'lists' };
 
+/** What a read-only workspace share's chat says where the composer would be (Tynn #690). */
+const READ_ONLY_CHAT = { kind: 'blocked' as const, reason: 'You have read-only access to this workspace: you can follow its agents, not message them.' };
+
 /** No Deck items yet: one array, so the toasts see the same list on every render until the snapshot brings one. */
 const NO_DECK_ITEMS: readonly DeckItem[] = [];
 
 export function Shell({
-    route,
+    route: askedRoute,
+    windowScope = WORKSTATION_SCOPE,
     address,
     snapshot,
     chatDrafts,
@@ -447,6 +459,14 @@ export function Shell({
     const agentDetail = suppliedAgentDetail?.agent.workspaceId && hiddenWorkspaces.has(suppliedAgentDetail.agent.workspaceId) ? null : suppliedAgentDetail;
     // Without the window's pick (a test, a remote window) a Dashboard row opens the agent's page, as before.
     const onChatAgent = onChatAgentProp ?? onOpenAgent;
+    // A workspace window shows its workspace's page or one of its agents' and nothing else (Tynn #690): any other route —
+    // App redirects it — draws that page here meanwhile, never a surface of the workstation's.
+    const scoped = windowScope.kind === 'workspace' ? windowScope : null;
+    const readOnly = scoped?.readonly === true;
+    const route = routeInScope(askedRoute, windowScope, snapshot.agents);
+    const remoteShown = remote && readOnly ? { ...remote, onTakeControl: undefined } : remote;
+    // A read-only share's terminals send nothing that acts (Tynn #691), wherever one is drawn. One object per bridge.
+    const shownTerminals = useMemo(() => (readOnly ? readOnlyTerminals(terminals) : terminals), [readOnly, terminals]);
     const parsed = parseRoute(route);
     // The open workspace's agents' activity feeds, kept live by the host's pushes — its Dashboard's lanes.
     const activityFeeds = useActivityFeeds(activity, parsed.surface === 'workspace' ? parsed.workspaceId : null);
@@ -583,34 +603,35 @@ export function Shell({
         <WorkspaceColorsContext.Provider value={colorMap}>
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <TitleBar
-                route={address ?? route}
+                route={scoped ? route : address ?? route}
                 controlsInset={controlsInset}
                 workstation={snapshot.workstation}
-                remote={remote}
-                share={onShareWorkstation ? { onShare: onShareWorkstation } : undefined}
+                remote={remoteShown}
+                scopedHome={scoped ? workspaceHome(scoped.workspaceId) : undefined}
+                share={onShareWorkstation && !scoped ? { onShare: onShareWorkstation } : undefined}
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
-                update={updateNotice}
-                version={features.version ?? null}
+                update={scoped ? null : updateNotice}
+                version={scoped ? null : features.version ?? null}
                 onOpenUpdate={() => { setUpdateOpen(true); void updates.notes?.(); }}
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
-                inbox={featureAsk ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
+                inbox={featureAsk && !scoped ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
-                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
+                connect={remote || scoped || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
                 // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it, over the host's book (V7) in a local window.
-                gapps={gappStore}
+                gapps={scoped ? undefined : gappStore}
                 // DO NOT DISTURB (Tynn #655): Settings → General's own setting, read from this window's host snapshot and
                 // written through its feature channel — so a window on another machine shows and sets that machine's.
-                dnd={dndView ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
+                dnd={dndView && !scoped ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
             />
-            {remote?.onTakeControl ? (
-                <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />
+            {remoteShown?.onTakeControl ? (
+                <RemoteRefusalBar refusal={remoteShown.refusal ?? null} needsBaton={remoteShown.needsBaton === true && !remoteShown.driving} driver={remoteShown.driver} onTakeControl={remoteShown.onTakeControl} onDismiss={() => remoteShown.onDismissRefusal?.()} />
             ) : null}
             {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
-            {updateOpen && updateNotice ? (
+            {updateOpen && updateNotice && !scoped ? (
                 <UpdateWindow
                     update={updateNotice}
                     onClose={() => setUpdateOpen(false)}
@@ -621,9 +642,9 @@ export function Shell({
                     }}
                 />
             ) : null}
-            {restartScreen ? <InstallScreen screen={restartScreen} onForce={() => { void updates.forceDrain?.(); }} /> : null}
+            {restartScreen && !scoped ? <InstallScreen screen={restartScreen} onForce={() => { void updates.forceDrain?.(); }} /> : null}
             {/* A workspace's background processes or sites, from its row's indicator (Genie 1's modals). */}
-            {runtimeModal && runtimeWorkspace ? (
+            {runtimeModal && runtimeWorkspace && !scoped ? (
                 <WorkspaceRuntimeModal kind={runtimeModal.kind} workspace={runtimeWorkspace} data={features} onAction={onFeature} onClose={() => setRuntimeModal(null)} />
             ) : null}
 
@@ -644,6 +665,7 @@ export function Shell({
             ) : null}
 
             {/* SAFE MODE (Tynn #386): after an unclean end nothing was started; each thing that ran has its own Start. */}
+            {scoped ? null : <>
             <SafeModeBanner
                 view={snapshot.safeMode}
                 agentName={(id) => snapshot.agents.find((a) => a.id === id)?.name ?? (snapshot.osAgent?.id === id ? snapshot.osAgent.name : id)}
@@ -670,6 +692,7 @@ export function Shell({
                 onDismiss={async () => ((await onFeature({ kind: 'rendererNotice.dismiss' })) as ActOutcome | undefined) ?? { ok: true }}
                 crashReport={crashReport}
             />
+            </>}
 
             <div className="relative flex min-h-0 flex-1">
                 {/*
@@ -678,6 +701,7 @@ export function Shell({
                  * (react-fancy's TabsList looping, React #185) took the WHOLE window to "Genie failed to draw". Each is its own
                  * card now, with Retry and the error in Genie's log; the page and the chat beside it keep working.
                  */}
+                {scoped ? null : <>
                 <ErrorBoundary surface="Sidebar">
                 <Sidebar
                     route={route}
@@ -715,6 +739,7 @@ export function Shell({
                     onAnswer={(id, allow) => (featureAsk ? featureAsk({ kind: 'remote.answerPair', id, allow }) : Promise.resolve(onFeature({ kind: 'remote.answerPair', id, allow })))}
                 />
                 </ErrorBoundary>
+                </>}
 
                 <main className="min-w-0 flex-1 overflow-auto">
                     {/*
@@ -742,9 +767,9 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true || Boolean(tynnPlanning)} onRetry={onRetryAdd} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
-                    {addFromGit && !addPreview ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} repos={gitRepos} onReloadRepos={onReloadGitRepos} onGithub={onGitGithub} /> : null}
-                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} planning={tynnPlanning} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
+                    {addPreview && !scoped ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true || Boolean(tynnPlanning)} onRetry={onRetryAdd} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addFromGit && !addPreview && !scoped ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} repos={gitRepos} onReloadRepos={onReloadGitRepos} onGithub={onGitGithub} /> : null}
+                    {tynnPick !== undefined && !addPreview && !scoped ? <TynnProjectPicker state={tynnPick} planning={tynnPlanning} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*
                      * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
@@ -832,9 +857,9 @@ export function Shell({
                                     designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
                                     agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
                                     current={{ kind: 'agent', id: parsed.agentId }}
-                                    onShare={workspaceOps?.onShare}
+                                    onShare={scoped ? undefined : workspaceOps?.onShare}
                                     color={agentWorkspace.color ?? null}
-                                    canDesign={Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
+                                    canDesign={!readOnly && Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
                                     hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
                                     github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
                                     // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
@@ -883,24 +908,27 @@ export function Shell({
                                 }}
                                 range={parsed.range}
                                 onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
-                                onTakeOver={onTakeOver}
+                                // Take over is the host owner's (main/remote-host.ts), never a shared workspace's.
+                                onTakeOver={scoped ? undefined : onTakeOver}
                                 answeringApproval={answeringFor(answeringApproval, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 approvalRefusal={refusalFor(approvalRefusal, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
-                                onAnswerApproval={(optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note, agentDetail.session?.pendingApproval ?? null)}
-                                onTrustWorkspace={trustFromCard(agentDetail.agent.workspaceId ?? null)}
-                                ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
+                                onAnswerApproval={readOnly ? undefined : (optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note, agentDetail.session?.pendingApproval ?? null)}
+                                onTrustWorkspace={scoped ? undefined : trustFromCard(agentDetail.agent.workspaceId ?? null)}
+                                ops={agentDetail.agent.fidelity === 'declared' && !readOnly ? agentOps : undefined}
                                 files={files}
                                 workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
                                 takeOver={agentDetail.takeOver ?? null}
                                 log={agentDetail.log ?? []}
-                                onStop={onStopAgent}
-                                onCancelTurn={onCancelTurn}
-                                onResumeLimit={onResumeLimit}
-                                onProviderLogin={onProviderLogin}
-                                onAccountRetry={onAccountRetry}
-                                onDesignLogin={onDesignLogin}
-                                onStart={onStartAgent}
-                                terminals={terminals}
+                                // A read-only share acts on nothing; a provider's login and an account retry are the host's own.
+                                onStop={readOnly ? undefined : onStopAgent}
+                                onCancelTurn={readOnly ? undefined : onCancelTurn}
+                                onResumeLimit={readOnly ? undefined : onResumeLimit}
+                                onProviderLogin={scoped ? undefined : onProviderLogin}
+                                onAccountRetry={scoped ? undefined : onAccountRetry}
+                                onDesignLogin={scoped ? undefined : onDesignLogin}
+                                onStart={readOnly ? undefined : onStartAgent}
+                                terminals={shownTerminals}
+                                terminalsReadOnly={readOnly}
                             />
                             </ErrorBoundary>
                             </div>
@@ -917,18 +945,19 @@ export function Shell({
                         <Workspace
                             key={parsed.workspaceId}
                             trustStep={features.trust?.find((row) => row.workspaceId === parsed.workspaceId) ?? null}
-                            onTrust={() => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
+                            onTrust={scoped ? undefined : () => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
                             // Offered once the trust steps are known (so a workspace not read yet is not offered an Untrust).
-                            onUntrust={features.trust ? () => Promise.resolve(onFeature({ kind: 'workspace.untrust', workspaceId: parsed.workspaceId })) : undefined}
+                            onUntrust={features.trust && !scoped ? () => Promise.resolve(onFeature({ kind: 'workspace.untrust', workspaceId: parsed.workspaceId })) : undefined}
                             // Settings → Hosting opens the same modals as the row's indicators.
-                            onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
+                            onOpenRuntime={scoped ? undefined : (kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}
-                            terminals={terminals}
+                            terminals={shownTerminals}
+                            readOnly={readOnly}
                             files={files}
-                            {...(onOpenScratchTerminal ? { onOpenScratchTerminal: () => onOpenScratchTerminal(parsed.workspaceId) } : {})}
+                            {...(onOpenScratchTerminal && !readOnly ? { onOpenScratchTerminal: () => onOpenScratchTerminal(parsed.workspaceId) } : {})}
                             sitePanels={sitePanels}
                             feeds={activityFeeds}
-                            onStartAgent={onStartAgent}
+                            onStartAgent={readOnly ? undefined : onStartAgent}
                             panel={parsed.panel}
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
@@ -939,10 +968,10 @@ export function Shell({
                             rows={snapshot.agents}
                             // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Deck.
                             deckItems={snapshot.deckItems ?? NO_DECK_ITEMS}
-                            onOpenDeckItem={(id) => onNavigate(`genie://deck?item=${encodeURIComponent(id)}`)}
+                            onOpenDeckItem={scoped ? undefined : (id) => onNavigate(`genie://deck?item=${encodeURIComponent(id)}`)}
                             onOpenAgent={onOpenAgent}
                             agentTabs={agentTabsOf(snapshot.agents, parsed.workspaceId)}
-                            onAddAgent={() => onAddAgent(parsed.workspaceId)}
+                            onAddAgent={readOnly ? undefined : () => onAddAgent(parsed.workspaceId)}
                             // Another tab leaves the Files tab (beta.35 #41) — unless the files are popped out into their own window.
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view, ...(parsed.detached ? {} : { panel: null, file: null, line: null, filter: null }) }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}
@@ -956,11 +985,11 @@ export function Shell({
                             filesPopped={filesPopped.includes(parsed.workspaceId)}
                             onPopOutFiles={onPopOutFiles ? () => onPopOutFiles(parsed.workspaceId) : undefined}
                             onBringBackFiles={() => onBringBackFiles?.(parsed.workspaceId)}
-                            onPauseAgent={onPauseAgent}
-                            onResumeAgent={onResumeAgent}
+                            onPauseAgent={readOnly ? undefined : onPauseAgent}
+                            onResumeAgent={readOnly ? undefined : onResumeAgent}
                             pluginPanels={features.plugins?.panels ?? []}
                             pluginEntries={features.plugins?.entries ?? []}
-                            ops={workspaceOps}
+                            ops={readOnly ? undefined : scoped && workspaceOps ? { ...workspaceOps, onShare: undefined } : workspaceOps}
                         />
                         </ErrorBoundary>
                     ) : null}
@@ -1013,7 +1042,7 @@ export function Shell({
                  * THE AGENTINBOX FLYOUT (beta.33 item 19): over the content row, under the title bar — whose inbox icon stays
                  * reachable to close it — like Genie 1's, which slid in below its title bar over a scrim.
                  */}
-                {featureAsk ? (
+                {featureAsk && !scoped ? (
                     <ErrorBoundary surface="AgentInbox" resetKeys={[parsed.inbox ?? null]}>
                     <InboxFlyout
                         value={inboxOpen ? parsed.inbox ?? '' : null}
@@ -1037,7 +1066,7 @@ export function Shell({
                  * so answering in either place clears both. Clear of the chat strip, a docked panel or an open flyout. Not
                  * drawn over the Deck itself, which shows the same requests with the same buttons.
                  */}
-                <ErrorBoundary surface="Approvals">
+                {scoped ? null : <ErrorBoundary surface="Approvals">
                 <ApprovalToasts
                     items={snapshot.deckItems ?? NO_DECK_ITEMS}
                     dnd={features.settings.values?.do_not_disturb === true}
@@ -1046,7 +1075,7 @@ export function Shell({
                     onOpenDeck={(item) => onNavigate(`genie://deck?item=${encodeURIComponent(item.id)}`)}
                     right={chatDockWidth + 16}
                 />
-                </ErrorBoundary>
+                </ErrorBoundary>}
                 {/* THE CHAT, always: a column of this row, after the page — never over it, never closed. */}
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ErrorBoundary surface="Chat" resetKeys={[chatThread?.agentId ?? null]}>
@@ -1060,13 +1089,14 @@ export function Shell({
                         dockWidth={chatDockWidth}
                         onDockWidth={setChatDockWidth}
                         contextUsage={chatThread ? composerMeter(chatSession) : null}
-                        approval={chatApproval}
+                        approval={readOnly ? null : chatApproval}
                         commands={chatSession?.extensions?.commands ?? null}
                         answeringApproval={chatThread ? answeringFor(answeringApproval, chatThread.agentId, chatApproval) : null}
                         approvalRefusal={chatThread ? refusalFor(approvalRefusal, chatThread.agentId, chatApproval) : null}
                         onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note, chatApproval); }}
-                        onTrustWorkspace={trustFromCard(chatWorkspaceId)}
-                        scope={scope}
+                        onTrustWorkspace={scoped ? undefined : trustFromCard(chatWorkspaceId)}
+                        // A read-only share has nothing to type into: its reason in the composer's place (Tynn #690).
+                        scope={readOnly ? READ_ONLY_CHAT : scope}
                         // The chat the message was TYPED in (genie#1261): each chat keeps its own composer.
                         onSend={(text, attachments, agentId) => (scope.kind !== 'blocked' ? onSend(agentId || chatThread?.agentId || '', text, attachments) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: scope.reason }))}
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
@@ -1076,18 +1106,18 @@ export function Shell({
                         onOpenAgent={onOpenAgent}
                         onOpenWorkspace={(workspaceId: string) => onNavigate(`genie://workspace/${encodeURIComponent(workspaceId)}`)}
                         // A piece of mail the chat shows opens the AgentInbox, this chat kept beside it (beta.33 item 18).
-                        {...(featureAsk ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
+                        {...(featureAsk && !scoped ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
-                        onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'stop') : undefined}
+                        onStopTurn={chatTurnStop && chatThread && !readOnly ? () => onCancelTurn?.(chatThread.agentId, 'stop') : undefined}
                         // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
                         // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).
-                        onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'interrupt') : undefined}
+                        onInterruptAndSend={chatTurnStop && chatThread && !readOnly ? () => onCancelTurn?.(chatThread.agentId, 'interrupt') : undefined}
                         loadAttachment={loadAttachment}
-                        onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
-                        onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
-                        onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
-                        onDesignLogin={chatThread && onDesignLogin && chatSession?.designLogin ? () => onDesignLogin(chatThread.agentId) : undefined}
+                        onResumeLimit={chatThread && onResumeLimit && !readOnly && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
+                        onProviderLogin={chatThread && onProviderLogin && !scoped && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
+                        onAccountRetry={chatThread && onAccountRetry && !scoped && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
+                        onDesignLogin={chatThread && onDesignLogin && !scoped && chatSession?.designLogin ? () => onDesignLogin(chatThread.agentId) : undefined}
                     />
                     </ErrorBoundary>
                 </div>

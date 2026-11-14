@@ -205,7 +205,7 @@ describe('main wires it', () => {
         expect(main).toContain('features: featureReplica(() => agentEngineLink!.client, context => {');
         const replica = readFileSync('src/main/feature-replica.ts', 'utf8');
         expect(replica).toContain("act: (action, context) => call('act', [action], context)");
-        expect(replica).toContain("[method, args, context, browser(context)]");
+        expect(replica).toContain("[method, args, context, context ? browser(context) : null]");
         expect(readFileSync('src/main/features-host.ts', 'utf8')).toContain('featureOriginOf(context, caller.picks)');
         expect(main).toMatch(/onRemoteInvoke: \(method: string, args: unknown\[\], context: CallContext\) =>[^\n]*, args, context\)/);
     });

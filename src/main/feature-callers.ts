@@ -13,6 +13,7 @@ export class FeatureCallers {
 
     async call(owner: string, method: string, args: unknown[], raw: unknown, effect: FeatureEffect, browser: FeatureBrowser | null): Promise<unknown> {
         if (method === 'invalidate') { this.service()?.invalidate(); return null; }
+        if (method === 'soundData') { const service = this.service(); if (!service) throw new Error('Genie’s feature services are still starting'); return service.soundData(String(args[0] ?? '')); }
         if (method === 'syncAgentDocs' || method === 'syncConfig') {
             const services = this.service()?.ports.machine?.services;
             if (!services || typeof args[0] !== 'string') throw new Error('workspace file services are still starting');
@@ -34,7 +35,6 @@ export class FeatureCallers {
             case 'snapshot': return service.snapshot(scoped);
             case 'act': return service.act(args[0] as FeatureAction, scoped);
             case 'picked': service.picked(Array.isArray(args[0]) ? args[0] : [], scoped); return null;
-            case 'soundData': return service.soundData(String(args[0] ?? ''));
             default: throw new Error('unknown feature operation');
         }
     }

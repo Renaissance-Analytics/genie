@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { REMOTE_FRAME_MAX_BYTES } from '../src/core/remote-frame.js';
 import { Baton, PairingPins } from '../src/core/remote.js';
 import { inMemoryPair, RESTRICTED_CALL_CONTEXT, type CallContext, type ServerConnection } from '../src/core/remote-protocol.js';
 import { HOST_FEATURE_CALLER_LIMIT } from '../src/main/features-host.js';
@@ -35,14 +36,15 @@ async function door() {
         api: { ...f.api, invoke: (method, args, context) => { if (context) contexts.push(context); return f.api.invoke(method, args, context); } },
         transport: { onConnection: listener => { accept = listener; return () => {}; } } });
     const connect = async (label: string) => {
-        const pair = inMemoryPair();
+        const pair = inMemoryPair(), frames: string[] = [];
+        pair.client.onMessage(text => { frames.push(text); });
         accept({ ...pair.server, preAuth: { label, isOwner: true, workspaceId: null, readonly: false } });
         const client = connectRemote(pair.client, { kind: 'relay' }, label); closers.push(() => client.close());
         expect(await client.ready).toEqual({ ok: true });
         expect(await client.takeBaton({ force: true })).toEqual({ ok: true });
         await client.bridge.features.act({ kind: 'knowledge.search', query: label });
         const context = contexts.at(-1)!;
-        expect(context.connectionId).not.toBe(''); return { client, context };
+        expect(context.connectionId).not.toBe(''); return { client, context, frames };
     };
     return { connect };
 }
@@ -56,6 +58,25 @@ describe('host feature caller state has an owned lifetime and bounded retention 
         await f.settings.set('publisher_checks_off', f.settings.get('publisher_checks_off') !== true);
         await vi.waitFor(() => { expect(aSeen.at(-1)).toBe('private A'); expect(bSeen.at(-1)).toBe('private B'); });
         expect(aSeen).not.toContain('private B'); expect(bSeen).not.toContain('private A');
+    });
+    it('an oversized owned feature push uses a revision, keeps the remote frame bound, and leaves the connection usable', async () => {
+        const d = await door(), a = await d.connect('private bounded view');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const original = f.service.snapshot.bind(f.service);
+        vi.spyOn(f.service, 'snapshot').mockImplementation(async context => {
+            const data = await original(context);
+            return { ...data, knowledge: { ...data.knowledge, query: 'x'.repeat(REMOTE_FRAME_MAX_BYTES) } };
+        });
+        const seen = vi.fn(); closers.push(a.client.bridge.features.subscribe(seen));
+        await f.settings.set('publisher_checks_off', f.settings.get('publisher_checks_off') !== true);
+        await vi.waitFor(() => {
+            expect(a.frames.map(text => JSON.parse(text)).some(frame => frame.kind === 'event' && frame.channel === 'features'
+                && typeof frame.payload?.revision === 'number' && Object.keys(frame.payload).length === 1)).toBe(true);
+            expect(warn).toHaveBeenCalledWith(expect.stringMatching(/too large/));
+        });
+        expect(a.frames.every(text => Buffer.byteLength(text) <= REMOTE_FRAME_MAX_BYTES)).toBe(true);
+        expect(seen).not.toHaveBeenCalled();
+        await expect(a.client.bridge.snapshot()).resolves.toMatchObject({ workspaces: expect.any(Array) });
     });
     it('release clears only that caller query and form, leaving the other caller intact', async () => {
         await search('A'); await f.act({ kind: 'knowledge.openAdd', workspaceId: 'work' }); await search('B', CALLER_B);

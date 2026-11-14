@@ -270,7 +270,7 @@ export interface HostApiDeps {
         snapshot(context: CallContext): Promise<FeatureData>;
         act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
         /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
-        soundData?(key: string, context?: CallContext): Promise<string | null>;
+        soundData?(key: string): Promise<string | null>;
         /** What the host's own file picker picked, from this machine's window: the only host paths a send may attach (genie#1354). */
         picked?(paths: unknown[], context: CallContext): void | Promise<void>;
         /** Connection teardown, supplied internally by the protocol owner. */
@@ -670,7 +670,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!context.connectionId) throw new Error('features.snapshot needs an admitted caller before reading its state');
                 return deps.features.snapshot(context);
             case 'features.soundData':
-                return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0], context) : null;
+                return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
             case 'features.picked':
                 if (context.origin === 'local-window' && Array.isArray(args[0])) await deps.features.picked?.(args[0] as unknown[], context);
                 return null;

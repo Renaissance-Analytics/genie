@@ -65,6 +65,9 @@ export async function connectableWorkstations(request: SessionRequest, thisMachi
         // No entitlement at all: Tynn still lists a machine whose share link was claimed, after its one session is over
         // (tynn.ai #394), with no source and not connectable. It is not this person's to reach, so it is not offered.
         if (typeof r.source !== 'string' || r.source === '') continue;
+        // A redeemed share LINK is a session-only pass (Tynn #724): it opens through the link's own handoff and never joins
+        // the account's hosts. (An older Tynn that does not say is not session-only.)
+        if (r.session_only === true) continue;
         byId.set(r.id, {
             id: r.id,
             name: typeof r.name === 'string' && r.name !== '' ? r.name : r.id,
