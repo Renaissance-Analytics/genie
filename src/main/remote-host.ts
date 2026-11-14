@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
+import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
 import { AgentPush } from './agent-push.js';
 import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
@@ -260,6 +261,7 @@ export class RemoteHost {
     readonly #schedule: (ms: number, fn: () => void) => () => void;
     #stopLocalAgents: (() => void) | null = null;
     #snapshotRevision = 0;
+    #featuresRevision = 0;
 
     /**
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
@@ -525,7 +527,15 @@ export class RemoteHost {
     }
 
     #send(connection: Connection, message: WireMessage): void {
-        connection.socket.send(JSON.stringify(message));
+        const text = JSON.stringify(message);
+        // Another device (Tynn #579): a frame over the cap ends its connection at the transport, so it is a refusal or not sent.
+        if (connection.local) return connection.socket.send(text);
+        const fit = fitRemoteFrame(text);
+        if (fit.text === null) {
+            console.warn(`[genie] a ${message.kind} to another device was over ${REMOTE_FRAME_MAX_BYTES} bytes and was not sent`);
+            return;
+        }
+        connection.socket.send(fit.text);
     }
 
     #refuse(connection: Connection, reason: string, close: boolean): void {
@@ -1083,6 +1093,8 @@ export class RemoteHost {
             if (out === NOT_SENT) continue;
             // THE GUARD (P4 family 11): a frame over the door's cap ends a window's whole connection, so a local event that
             // large is dropped and said, never sent. Local events are signals; content crosses through a read.
+            // Another device the same (Tynn #579): the whole features snapshot only when it fits, else a revision it reads.
+            if (!c.local && channel === 'features' && Buffer.byteLength(JSON.stringify(out)) > REMOTE_FRAME_MAX_BYTES - 4 * 1024) out = { revision: ++this.#featuresRevision };
             if (c.local && Buffer.byteLength(JSON.stringify(out)) > LOCAL_EVENT_MAX_BYTES) {
                 console.warn(`[genie] the local event ${channel} was too large to send and was dropped`);
                 continue;
