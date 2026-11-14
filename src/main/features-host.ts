@@ -336,7 +336,8 @@ export class HostFeatures {
 
 const OWN_WINDOW = 'this feature action needs its caller’s own admitted local window; open Genie there and try again';
 function needsPresentation(action: FeatureAction): boolean {
-    return action.kind === 'flows.openEditor' || action.kind === 'flows.newFlow' || action.kind === 'hosting.openSite'
+    // Site opening keeps the shared hosting handler's canonical no-browser refusal; it receives only this caller's port.
+    return action.kind === 'flows.openEditor' || action.kind === 'flows.newFlow'
         || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss' || action.kind === 'toolchain.login'
         || action.kind === 'integrations.githubOpen' || action.kind === 'tailscale.install'
         || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && action.item.source === 'genie' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));

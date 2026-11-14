@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HUMAN } from '../src/core/inbox.js';
+import { isDismissable } from '../src/core/deck.js';
 import { answerDeck } from '../src/main/deck-answer.js';
 import { RECIPIENT } from './helpers/features-host-workspace-caller.js';
 import { CALLER_A, item, presentationFixture, type PresentationFixture } from './helpers/features-host-presentation.js';
@@ -8,10 +9,13 @@ let f: PresentationFixture;
 beforeEach(async () => { f = await presentationFixture(); });
 afterEach(async () => { await f?.close(); vi.restoreAllMocks(); });
 const questions = [{ header: 'Choice', question: 'Pick one fixture option', options: [{ label: 'Yes' }, { label: 'No' }] }];
-async function ask(name = 'fixture') {
+async function ask(name = 'fixture', form = false) {
+    const currentQuestions = questions.map(q => ({ ...q, question: q.question + name }));
     const made = await f.attention.ask({ agentId: RECIPIENT, agentName: name, workspaceId: 'work',
-        questions: questions.map(q => ({ ...q, question: q.question + name })) }, { userActive: true });
-    return item({ id: made.questionId, answer: { kind: 'inline', options: [{ id: 'Yes', label: 'Yes', tone: 'neutral' }] } });
+        questions: currentQuestions }, { userActive: true });
+    // Real agent questions are forms (deck-sources.ts); inline cases below explicitly test the legacy answer contract.
+    return item({ id: made.questionId, answer: form ? { kind: 'form', fields: currentQuestions.length, questions: currentQuestions }
+        : { kind: 'inline', options: [{ id: 'Yes', label: 'Yes', tone: 'neutral' }] } });
 }
 
 describe('the last host feature ports retain their human action contracts (Tynn #720)', () => {
@@ -54,7 +58,8 @@ describe('the last host feature ports retain their human action contracts (Tynn 
         expect(f.attention.pending()).toHaveLength(1); expect(f.inbox.unread(RECIPIENT)).toHaveLength(0);
     });
     it('dismissing a question records the person notes and mails the asker', async () => {
-        const question = await ask(); await f.answer({ kind: 'deck.dismiss', item: question, notes: ['fixture later'] });
+        const question = await ask('fixture', true); expect(isDismissable(question)).toBe(true);
+        await f.answer({ kind: 'deck.dismiss', item: question, notes: ['fixture later'] });
         expect(f.attention.asked(question.id)).toMatchObject({ outcome: 'dismissed', notes: ['fixture later'] });
         expect(f.inbox.unread(RECIPIENT)).toHaveLength(1);
     });
@@ -64,14 +69,15 @@ describe('the last host feature ports retain their human action contracts (Tynn 
         expect(f.calls).toEqual([]);
     });
     it('Dismiss stale rechecks the actual Deck and leaves an unseen stale question pending', async () => {
-        const seen = await ask('seen'), unseen = await ask('unseen');
+        const seen = await ask('seen', true), unseen = await ask('unseen', true);
+        expect(isDismissable(seen)).toBe(true); expect(isDismissable(unseen)).toBe(true);
         f.deckItems.push({ ...seen, stale: 'agent-gone' }, { ...unseen, stale: 'agent-gone' });
         await f.answer({ kind: 'deck.dismissStale', ids: [seen.id] });
         expect(f.attention.pending().map(q => q.id)).toEqual([unseen.id]);
         expect(f.attention.asked(seen.id)?.outcome).toBe('dismissed');
     });
     it('Dismiss stale with no still-stale item says why and does not mail anyone', async () => {
-        const question = await ask(); f.deckItems.push(question);
+        const question = await ask('fixture', true); expect(isDismissable(question)).toBe(true); f.deckItems.push(question);
         expect(await f.invoke({ kind: 'deck.dismissStale', ids: [question.id] }))
             .toMatchObject({ ok: false, reason: expect.stringContaining('None of these questions is still waiting as a stale one here') });
         expect(f.attention.pending()).toHaveLength(1); expect(f.inbox.unread(RECIPIENT)).toHaveLength(0);
