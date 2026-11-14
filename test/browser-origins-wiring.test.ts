@@ -63,8 +63,14 @@ describe('main and compose', () => {
         expect(count(main, /caPem: browserTrust\.caPem/g)).toBe(2); // frontDoorNow's first read, and the site panels' first read
     });
 
-    it('main applies back / forward / reload to the pane, and pushes what the pane reports', () => {
-        expect(count(main, /action\.kind === 'browser\.(back|forward|reload)'\) browserPane\?\.(back|forward|reload)\(\)/g)).toBe(3);
+    it('the admitted caller applies back / forward / reload to its own pane, and pushes what the pane reports', () => {
+        const effects = code('../src/main/feature-window.ts');
+        for (const method of ['back', 'forward', 'reload']) {
+            expect(effects).toContain(`case 'browser.${method}': return browser().${method}();`);
+            expect(count(main, new RegExp(`${method}: \\(\\) => browserPane\\?\\.${method}\\(\\)`, 'g'))).toBe(1);
+        }
+        expect(effects).toContain('const contents = door.contentsFor(connectionId);');
+        expect(effects).toContain("if (contents.id !== browserOwner() || !ports.browser) throw new Error('this caller has no browser pane of its own');");
         expect(count(main, /browserPane\.onChange\(/g)).toBe(1);
     });
 

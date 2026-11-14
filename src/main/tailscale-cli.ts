@@ -5,8 +5,9 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { genieRoot } from './paths.js';
+import { scratchArea } from './scratch-area.js';
 
 const pexecFile = promisify(execFile);
 
@@ -698,6 +699,8 @@ export interface InstallPorts {
     readonly download: (url: string) => Promise<Response>;
     readonly verify: (file: string) => Promise<AuthenticodeAnswer>;
     readonly launch: (file: string) => void;
+    /** An owned scratch directory, under the same root as the host. */
+    readonly scratch: () => string;
 }
 
 export async function installTailscale(over: Partial<InstallPorts> & Pick<InstallPorts, 'download'>): Promise<{
@@ -716,7 +719,7 @@ export async function installTailscale(over: Partial<InstallPorts> & Pick<Instal
         const res = await over.download(WIN_INSTALLER_URL);
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
         const buf = Buffer.from(await res.arrayBuffer());
-        const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'tailscale-setup-'));
+        const folder = fs.mkdtempSync(path.join((over.scratch ?? (() => scratchArea(genieRoot()).directory()))(), 'tailscale-setup-'));
         const dest = path.join(folder, 'tailscale-setup.exe');
         fs.writeFileSync(dest, buf);
         // Windows' verdict before anything runs. A check that cannot run is a refusal, never a pass.

@@ -550,7 +550,7 @@ export class GithubAccount implements GithubAccountPort {
     }
 
     /** One button: GitHub's code shown, its page opened, then Genie waits for GitHub by itself. */
-    async startSignIn(): Promise<void> {
+    async startSignIn(open: ((url: string) => Promise<void>) | null = this.#open ?? null): Promise<void> {
         // A sign-in already under way ends first (and puts its status back), so two flows never share the state.
         const previous = this.#flow;
         this.cancelSignIn();
@@ -585,7 +585,7 @@ export class GithubAccount implements GithubAccountPort {
         this.#flow = { abort, done };
         this.#changed();
         try {
-            await this.#open?.(code.verificationUri);
+            await open?.(code.verificationUri);
         } catch {
             // No browser here: the page and the code stay on screen to use on any device.
         }
@@ -696,14 +696,14 @@ export class GithubAccount implements GithubAccountPort {
     }
 
     /** Opens one of GitHub's pages — always a URL of Genie's own or GitHub's own answer, never one a window sent. */
-    async openPage(target: GithubPage): Promise<void> {
+    async openPage(target: GithubPage, open: ((url: string) => Promise<void>) | null = this.#open ?? null): Promise<void> {
         let url: string | null = null;
         if (target.page === 'install') url = GITHUB_INSTALL_URL;
         else if (target.page === 'authorizations') url = GITHUB_AUTHORIZATIONS_URL;
         else if (target.page === 'device') url = this.#device?.verificationUri ?? null;
         else url = this.#installations?.find((i) => i.id === target.installationId)?.settingsUrl ?? null;
         if (!url || !/^https:\/\/github\.com\//.test(url)) return;
-        await this.#open?.(url);
+        await open?.(url);
     }
 
     /**

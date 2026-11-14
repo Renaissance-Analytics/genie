@@ -61,20 +61,28 @@ describe('the downloads', () => {
     });
 });
 
-describe('wired through the window\'s network', () => {
+describe('wired through the owning process\'s network', () => {
     const main = readFileSync('src/main/main.ts', 'utf8');
+    const native = readFileSync('src/main/feature-native-toolchain.ts', 'utf8');
+    const host = readFileSync('src/main/genie-host.ts', 'utf8');
     it('every toolchain and PHP download', () => {
-        expect(main).toMatch(/const httpFetch = httpFetchOver\(\(url, init\) => net\.fetch\(url, init\)\);/);
+        expect(native).toContain('const httpFetch = httpFetchOver(url => deps.download(url));');
+        expect(host).toContain("const downloadFeature = featureDownload({ proxyRoutes: url => (proxyMemoryNow?.routesFor(url) ?? [{ kind: 'direct' }]) });");
+        expect(host).toContain('download: downloadFeature');
+        const network = readFileSync('src/main/feature-download.ts', 'utf8');
+        expect(network).toContain('rootsOfThisMachine()');
+        expect(network).toContain('options.proxyRoutes(url)');
+        expect(network).toContain('rejectUnauthorized: true');
     });
     it('the toolchain version index', () => {
-        expect(main).toMatch(/latestIndex\(\{[^\n]*fetchJson: async \(url\) => \(await net\.fetch\(url\)\)\.json\(\)/);
+        expect(native).toContain('latestIndex({ run: execFileRunner, fetchJson: async url => (await deps.download(url)).json(), platform: process.platform as Platform })');
     });
     it('the release notes are genie-host’s: the window no longer asks for them (Tynn #585)', () => {
         expect(main).not.toMatch(/api\.github\.com\/repos\/Renaissance-Analytics\/genie\/releases/);
         expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/await send\('https:\/\/api\.github\.com\/repos\/Renaissance-Analytics\/genie\/releases\?per_page=100'/);
     });
     it('the Tailscale installer', () => {
-        expect(main).toMatch(/installTailscale\(\{ download: \(url\) => net\.fetch\(url\) \}\)/);
+        expect(host).toContain('installTailscale({ download: url => downloadFeature(url) })');
     });
 });
 
