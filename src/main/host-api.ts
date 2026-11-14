@@ -273,6 +273,8 @@ export interface HostApiDeps {
         soundData?(key: string): Promise<string | null>;
         /** What the host's own file picker picked, from this machine's window: the only host paths a send may attach (genie#1354). */
         picked?(paths: unknown[], context: CallContext): void;
+        /** Connection teardown, supplied internally by the protocol owner. */
+        releaseCaller?(context: CallContext): void;
         onChange(listener: (data: FeatureData) => void): () => void;
     };
     updates: {

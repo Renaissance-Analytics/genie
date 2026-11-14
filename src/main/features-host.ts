@@ -60,6 +60,9 @@ export interface HostFeaturesPorts {
 
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 
+/** Caller view caches are disposable; durable business state stays in its owned service. */
+export const HOST_FEATURE_CALLER_LIMIT = 64;
+
 /**
  * Incremental host aggregator (Tynn #720). Measured groups use owned services and shared business rules.
  * Production composition follows the remaining measured groups; this does not open another store or scheduler.
@@ -143,6 +146,11 @@ export class HostFeatures {
     }
 
     soundData(key: string): Promise<string | null> { return customSoundData(this.ports.settings, key); }
+
+    // Typed, deliberately inert RED seams. Admission, picks and disposal are measured before implementation (#720).
+    picked(_paths: readonly unknown[], _context: CallContext): void {}
+
+    releaseCaller(_context: CallContext): void {}
 
     onChange(listener: (data: FeatureData) => void): () => void {
         if (this.#closed) throw new Error('the host feature service is closed');

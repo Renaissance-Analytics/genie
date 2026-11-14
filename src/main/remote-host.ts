@@ -74,6 +74,8 @@ export type LocalAgentDetail = { readonly rows: readonly unknown[] };
 export interface HostApi {
     /** The owned aggregator is supplied; its reads and events must not be answered by a window replica (Tynn #720). */
     readonly ownsFeatures?: boolean;
+    /** Release transient view state for this admitted connection; never an invocation from the wire. */
+    releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
     readonly gapps?: () => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
