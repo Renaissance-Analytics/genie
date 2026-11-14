@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { link, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mintAgentId, type AgentId } from '../src/core/identity.js';
 import { SETTINGS } from '../src/core/settings.js';
 import { AttentionStore } from '../src/main/attention-store.js';
@@ -24,14 +25,35 @@ let dir: string;
 let clock = T0;
 const now = () => new Date(clock).toISOString();
 const agents: AgentId[] = Array.from({ length: 12 }, () => mintAgentId());
+let sourceDirectory: string | undefined;
+let sourceFile: string;
+let sourceHash: string;
+
+beforeAll(async () => {
+    // Tynn #671: keep the full owner-scale input, but write it once. Each case gets its own hard link; the store's
+    // atomic rename replaces that case's link, leaving the owned source intact. Link failures never fall back to copies.
+    sourceDirectory = await mkdtemp(join(tmpdir(), 'attention-history-source-'));
+    sourceFile = join(sourceDirectory, 'attention.json');
+    const text = ownersHistoryText();
+    sourceHash = createHash('sha256').update(text).digest('hex');
+    await writeFile(sourceFile, text);
+});
+afterAll(async () => { if (sourceDirectory !== undefined) await rm(sourceDirectory, { recursive: true, force: true }); });
 
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'attention-bounded-')); clock = T0; });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => {
+    try {
+        // A future in-place write through a case's link must fail here, before another case can silently use it.
+        expect(createHash('sha256').update(await readFile(sourceFile)).digest('hex')).toBe(sourceHash);
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
 
 const question = (i: number) => ({ header: 'Next', question: `Question ${i}: ${'q'.repeat(300)}`, options: [{ label: 'Agent: do it' }, { label: 'You: hold' }] });
 
 /** The owner's history, in the old single-file form: 713 finished (8.1 MB), 255 answered (≈480 KB), 21 KB of lists, 7 pending. */
-async function ownersHistory(): Promise<void> {
+function ownersHistoryText(): string {
     const finished = Array.from({ length: 713 }, (_, i) => {
         const size = i % 50 === 0 ? 159_000 : 9_800;
         return {
@@ -48,8 +70,12 @@ async function ownersHistory(): Promise<void> {
     }));
     const lists = Array.from({ length: 120 }, (_, i) => ({ list: 'user', workspaceId: 'ws', item: { id: `li_${i}`, text: 't'.repeat(140), askedBy: agents[0], createdAt: now(), done: false } }));
     const questions = Array.from({ length: 7 }, (_, i) => ({ id: `q_p${i}`, key: `k${i}`, agentId: agents[i]!, agentName: 'a', workspaceId: 'ws', questions: [question(i)], priority: 'normal', askedAt: new Date(T0 - 3 * DAY).toISOString() }));
+    return JSON.stringify({ lists, questions, finished, asked });
+}
+
+async function ownersHistory(): Promise<void> {
     await mkdir(runtimeDir(dir), { recursive: true });
-    await writeFile(join(runtimeDir(dir), 'attention.json'), JSON.stringify({ lists, questions, finished, asked }));
+    await link(sourceFile, join(runtimeDir(dir), 'attention.json'));
 }
 
 async function sizes(): Promise<Map<string, { size: number; mtimeMs: number }>> {

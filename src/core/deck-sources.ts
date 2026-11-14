@@ -81,26 +81,57 @@ function truncate(text: string, max: number): string {
     return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
+/**
+ * BUILT ONCE PER CHANGE (Tynn #663). Window main builds the Deck on every snapshot, up to 20 a second; at the owner's scale
+ * (240 open questions) building every item every time was about 3 GB of garbage per 5 minutes, the largest single source
+ * in the #662 soak. The stores never change a question, a list item or a message in place — they replace it (an update, a
+ * re-ask, a done, a read are all new objects) — so an item is kept per SOURCE OBJECT, beside what else it was built from:
+ * its workspace's name and colour, its agent's name, whether its agent still waits. When the object and those are the
+ * same, the item is the same object as last time and nothing is built. Weakly held: a question answered, an item done, a
+ * message read drops out with its source. Callers hand fresh records every time (deck-assembly.ts), so the four values an
+ * item was built from are compared as VALUES, never the records' identity. A reused item allocates NOTHING: the values
+ * are compared as arguments, never gathered into an array or a builder closure first — those alone, for 240 questions
+ * 20 times a second, were still about 900 MB per 5 minutes in the soak.
+ */
+interface Kept { readonly a: unknown; readonly b: unknown; readonly c: unknown; readonly d: unknown; readonly item: DeckItem }
+const built = new WeakMap<object, Kept>();
+
+function keptItem(source: object, a: unknown, b: unknown, c: unknown, d: unknown): DeckItem | undefined {
+    const kept = built.get(source);
+    return kept !== undefined && kept.a === a && kept.b === b && kept.c === c && kept.d === d ? kept.item : undefined;
+}
+
+function keep(source: object, a: unknown, b: unknown, c: unknown, d: unknown, item: DeckItem): DeckItem {
+    built.set(source, { a, b, c, d, item });
+    return item;
+}
+
 export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
-    const who = (agentId: string) => {
-        const a = input.agents[agentId];
-        return { agentId, agentName: a?.name ?? UNNAMED_AGENT, workspaceId: a?.workspaceId ?? null };
-    };
+    const nameOfAgent = (agentId: string): string => input.agents[agentId]?.name ?? UNNAMED_AGENT;
+    const workspaceOfAgent = (agentId: string): string | null => input.agents[agentId]?.workspaceId ?? null;
+    const nameOf = (workspaceId: string | null) => (workspaceId === null ? undefined : input.workspaceNames?.[workspaceId]);
+    const colorOf = (workspaceId: string | null) => (workspaceId === null ? undefined : input.workspaceColors?.[workspaceId]);
     const named = (workspaceId: string | null): { workspaceName?: string; workspaceColor?: string } => {
-        const name = workspaceId === null ? undefined : input.workspaceNames?.[workspaceId];
-        const color = workspaceId === null ? undefined : input.workspaceColors?.[workspaceId];
+        const name = nameOf(workspaceId);
+        const color = colorOf(workspaceId);
         return { ...(name === undefined ? {} : { workspaceName: name }), ...(color === undefined ? {} : { workspaceColor: color }) };
     };
     const items: DeckItem[] = [];
 
     for (const q of input.questions) {
-        const at = Date.parse(q.askedAt);
         const live = input.asker?.(q.agentId);
         // Judged from the LATEST ask: an agent that asked again (a rejoin) is waiting now, even if its first ask came
         // from an earlier run. Its age on the Deck stays the first ask's — it has been waiting that long.
-        const lastAsked = q.reaskedAt === undefined ? at : Date.parse(q.reaskedAt);
+        const lastAsked = Date.parse(q.reaskedAt ?? q.askedAt);
         const stale = live === undefined ? null : questionStale(lastAsked, input.agents[q.agentId] !== undefined, live);
-        items.push({
+        const workspaceName = nameOf(q.workspaceId);
+        const workspaceColor = colorOf(q.workspaceId);
+        const kept = keptItem(q, workspaceName, workspaceColor, stale, undefined);
+        if (kept) {
+            items.push(kept);
+            continue;
+        }
+        items.push(keep(q, workspaceName, workspaceColor, stale, undefined, {
             id: q.id,
             source: 'agent-question',
             agentId: q.agentId,
@@ -110,7 +141,7 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             title: questionTitle(q.questions),
             blocking: true,
             priority: q.priority,
-            at,
+            at: Date.parse(q.askedAt),
             // EVERY agent question is a form (the owner, 2026-10-14): ForceTheQuestion opens its window on top, and every
             // question carries its own note. A one-click inline answer had no note and never reached the window.
             answer: { kind: 'form', fields: q.questions.length, questions: q.questions },
@@ -121,17 +152,24 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             ...(q.asks ? { asks: q.asks } : {}),
             // Its agent no longer waits: kept, and marked (the Deck greys it and offers Dismiss / Dismiss all stale).
             ...(stale ? { stale } : {}),
-        });
+        }));
     }
 
     for (const { workspaceId, item } of input.userList) {
         if (item.done) continue;
-        const asked = who(item.askedBy);
-        items.push({
+        const agentName = nameOfAgent(item.askedBy);
+        const workspaceName = nameOf(workspaceId);
+        const workspaceColor = colorOf(workspaceId);
+        const kept = keptItem(item, workspaceId, agentName, workspaceName, workspaceColor);
+        if (kept) {
+            items.push(kept);
+            continue;
+        }
+        items.push(keep(item, workspaceId, agentName, workspaceName, workspaceColor, {
             id: item.id,
             source: 'user-list',
             agentId: item.askedBy,
-            agentName: asked.agentName,
+            agentName,
             workspaceId,
             ...named(workspaceId),
             title: item.text,
@@ -140,25 +178,35 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             at: Date.parse(item.createdAt),
             answer: { kind: 'inline', options: [option('done', 'Done')] },
             forwardedFrom: null,
-        });
+        }));
     }
 
     for (const m of input.unreadDms) {
         if (m.to !== HUMAN || m.from === HUMAN || m.readAt !== null) continue;
-        const sender = who(m.from);
+        const agentName = nameOfAgent(m.from);
+        const workspaceId = workspaceOfAgent(m.from);
+        const workspaceName = nameOf(workspaceId);
+        const workspaceColor = colorOf(workspaceId);
+        const kept = keptItem(m, agentName, workspaceId, workspaceName, workspaceColor);
+        if (kept) {
+            items.push(kept);
+            continue;
+        }
         const firstLine = m.text.split(/\r?\n/)[0] ?? '';
-        items.push({
+        items.push(keep(m, agentName, workspaceId, workspaceName, workspaceColor, {
             id: m.id,
             source: 'unread-dm',
-            ...sender,
-            ...named(sender.workspaceId),
-            title: `${sender.agentName}: ${firstLine}`,
+            agentId: m.from,
+            agentName,
+            workspaceId,
+            ...named(workspaceId),
+            title: `${agentName}: ${firstLine}`,
             blocking: false,
             priority: 'low',
             at: Date.parse(m.sentAt),
             answer: { kind: 'inline', options: [option('read', 'Mark read')] },
             forwardedFrom: null,
-        });
+        }));
     }
 
     return items;

@@ -13,6 +13,8 @@
  * ledger to every new watcher, so nothing is lost — the receiver simply waits for it.
  */
 
+import { measureAgentRead } from './agent-read-timing.js';
+
 export interface RowsPatch<R> {
     /** The push this patch applies to; `null` = a full ledger (`keep` is 0). */
     readonly base: number | null;
@@ -118,7 +120,7 @@ export class AgentDetailViews<D extends object, R> {
             const receiver = new AgentDetailReceiver<D, R>();
             const views = new Set<{ onChange: (detail: (D & { rows: readonly R[] }) | null) => void }>();
             const off = this.#wire(agentId, (payload) => {
-                const detail = receiver.apply(payload);
+                const detail = measureAgentRead(agentId, 'rebuild', () => receiver.apply(payload));
                 // A patch for rows this page does not hold: the whole ledger main sends a new watcher is on its way.
                 if (detail === undefined) return;
                 for (const view of views) view.onChange(detail);

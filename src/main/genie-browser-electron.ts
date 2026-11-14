@@ -1,4 +1,5 @@
 import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { loadWindowPage } from './window-pages.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { browserStorePath, storeRefusal, type BrowserStoreSide } from '../core/browser-store.js';
@@ -330,7 +331,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             if (windows.get(key)?.win === window) windows.delete(key);
             if (key.startsWith(SINGLE)) options.onSingleClosed?.(key.slice(SINGLE.length));
         });
-        void window.loadFile(join(options.here, '../renderer/browser.html'), key.startsWith(SINGLE) ? { search: 'single=1' } : undefined);
+        void loadWindowPage(window.webContents, 'browser', key.startsWith(SINGLE) ? { search: 'single=1' } : undefined).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
         return { window, brain: b };
     };
 

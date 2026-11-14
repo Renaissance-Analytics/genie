@@ -63,7 +63,16 @@ export function AppInboxCard(p: AppInboxCardProps) {
     const s = p.state;
     const anyBusy = p.busy !== null;
     const isBusy = (action: AppInboxAction, target: string) => p.busy?.action === action && p.busy.target === target;
+    const outcome = p.outcome ? (
+        <p data-app-outcome={p.outcome.ok ? 'ok' : 'failed'} role={p.outcome.ok ? 'status' : 'alert'} className={`flex items-center gap-2 text-xs ${p.outcome.ok ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
+            <Icon name={p.outcome.ok ? 'circle-check' : 'circle-x'} size="xs" />
+            <span>{p.outcome.text}</span>
+            {!p.outcome.ok && p.outcome.retry ? <Button size="xs" labelClassName="contents" type="button" data-action="app-retry" onClick={p.outcome.retry} className={BTN}><Icon name="rotate-cw" size="xs" /><span>Retry</span></Button> : null}
+        </p>
+    ) : null;
     if (s === null) {
+        // A failed initial read is unknown state, with a visible way to read it again (#636).
+        if (p.outcome && !p.outcome.ok) return outcome;
         return (
             <div data-app-inbox-skeleton="" className="mt-2 flex flex-col gap-1">
                 <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
@@ -78,13 +87,7 @@ export function AppInboxCard(p: AppInboxCardProps) {
                 <span className="font-mono text-[var(--fg-2)]">{s.url ?? 'not listening'}</span>
                 <span>· each posts with its own GENIE_INBOX_TOKEN</span>
             </p>
-            {p.outcome ? (
-                <p data-app-outcome={p.outcome.ok ? 'ok' : 'failed'} role={p.outcome.ok ? 'status' : 'alert'} className={`flex items-center gap-2 text-xs ${p.outcome.ok ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
-                    <Icon name={p.outcome.ok ? 'circle-check' : 'circle-x'} size="xs" />
-                    <span>{p.outcome.text}</span>
-                    {!p.outcome.ok && p.outcome.retry ? <Button size="xs" labelClassName="contents" type="button" data-action="app-retry" onClick={p.outcome.retry} className={BTN}><Icon name="rotate-cw" size="xs" /><span>Retry</span></Button> : null}
-                </p>
-            ) : null}
+            {outcome}
             {!s.enabled ? (
                 <p data-app-inbox-off="" className="flex items-center gap-2 text-xs text-[var(--fg-3)]">
                     <Icon name="ban" size="xs" />

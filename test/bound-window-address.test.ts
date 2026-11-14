@@ -82,7 +82,8 @@ describe('a Take Over window bound to another host', () => {
         const strip = (t: string) => t.split(/\r?\n/).map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1')).join('\n');
         const app = strip(readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8'));
         expect(app).toMatch(/const resolvedBridge = windowBridge\(\{ bound: remote\.bound, connected: remote\.state\?\.connected === true,/);
-        expect(app).toMatch(/const route = routeFor\(address, addressContext\);/);
+        expect(app).toMatch(/const askedRoute = routeFor\(address, addressContext\);/);
+        expect(app).toMatch(/const route = routeInScope\(askedRoute, windowScope, snapshot\.agents\);/);
         expect(app).toMatch(/const next = rewrittenAddress\(address, addressContext, readBefore\.current\);/);
     });
 });

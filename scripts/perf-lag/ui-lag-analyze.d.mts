@@ -45,7 +45,9 @@ export function sliceVerdict(input: { on: Slice[]; off: Slice[] }, options?: { p
     ok: boolean; p95SlackMs: number; maxFrameGapMs: number; pairs: number; diffP95: number | null; diffs: Array<number | null>; onP95: number | null; offP95: number | null; onWorstGapMs: number | null; reasons: string[];
 };
 export function retryOnTimeout<T>(run: (attempt: number) => T, options?: { attempts?: number; reset?: (attempt: number) => void }): { value: T; tries: Array<{ attempt: number; ms: number; ok: boolean; timedOut?: boolean }> };
-export function heldVerdict(input: { floodBytes: number; growthBytes: number }, options?: { capChars?: number; slackBytes?: number }): {
+/** True when the rows (one line per row) hold `UI_LAG_FLOOD_DONE <run> END`, wrapped or not. */
+export function floodEnded(rowsText: string | null | undefined, run: string): boolean;
+export function heldVerdict(input: { floodBytes: number; growthBytes: number; /** false: the flood's end was not seen, so the heap after it is not judged. */ done?: boolean }, options?: { capChars?: number; slackBytes?: number }): {
     ok: boolean; floodBytes: number; growthBytes: number; boundBytes: number; reasons: string[];
 };
 export function capVerdict(input: { below: Array<Slice & { scriptMsPerS?: number }>; past: Array<Slice & { scriptMsPerS?: number }> }, options?: { minRatio?: number; maxFrameGapMs?: number; maxScriptOverMsPerS?: number; minSlices?: number; /** Read past[k] against below[k], its control taken beside it (Tynn #692). */ paired?: boolean; /** The control's name in the reasons, when paired. */ control?: string }): {

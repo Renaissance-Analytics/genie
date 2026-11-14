@@ -2,6 +2,7 @@ import { app, BrowserWindow, ClipboardItem, clipboard, ipcMain } from 'electron'
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { agentRecord, mintAgentId } from '../core/identity.js';
 import { osaHomeFiles, writeOsaHome, type OsaFacts } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
@@ -106,6 +107,8 @@ export async function runDoctor(): Promise<void> {
 
     // THE WINDOW: its own page and preload (`genieDoctor`), never Genie's renderer bridge.
     const here = dirname(fileURLToPath(import.meta.url));
+    // Its page loads from http://genie.localhost:<port> of the doctor's own userData (Tynn #683, main/window-pages.ts).
+    configureWindowPages({ root: join(here, '../renderer'), portFile: join(app.getPath('userData'), 'window-origin.json'), log: (line) => console.log(line) });
     // The doctor's chat draws copy buttons: they write through main, as in Genie's own windows (main/clipboard-ipc.ts).
     registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
     ipcMain.handle('doctor:facts', () => facts);
@@ -134,7 +137,7 @@ export async function runDoctor(): Promise<void> {
     onceShowable(win, process.platform, () => win.show());
     // The renderer's composer-focus log (genie#1235) and render errors (parity audit #7): written to main's log, as Genie's window does.
     win.webContents.on('console-message', (details) => forwardRendererConsole(details.message, { out: (l) => console.log(l), err: (l) => console.error(l), log: () => {} }));
-    void win.loadFile(join(here, '../renderer/doctor.html'));
+    void loadWindowPage(win.webContents, 'doctor').catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
     // Pushed, never polled: every change to genie's session tells the window to read again.
     host.subscribe(() => { if (!win.isDestroyed()) win.webContents.send('doctor:changed'); });
     app.on('window-all-closed', () => app.quit());

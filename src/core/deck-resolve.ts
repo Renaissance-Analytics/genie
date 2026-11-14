@@ -28,10 +28,12 @@ export type DeckCommand =
     | { kind: 'sync-hosts' }
     /** Genie's own record of an error the main process caught and survived (core/main-errors.ts): the person has read it. */
     | { kind: 'dismiss-main-error'; id: string }
+    /** Open an editable issue draft for an internal error; the diagnostic log stays local (#636). */
+    | { kind: 'report-main-error'; id: string }
     /** Try again on the item for a host copy that could not be made (Tynn #693): the copy is made now. */
     | { kind: 'retry-host-copy'; id: string }
-    /** Open the log an item points at: `~/.genie/runtime/lifecycle.log`. */
-    | { kind: 'open-lifecycle-log' }
+    /** Open the item's log: an internal error ID selects the window log; other items use lifecycle.log. */
+    | { kind: 'open-lifecycle-log'; id?: string }
     | { kind: 'refused'; reason: string };
 
 const refuse = (reason: string): DeckCommand => ({ kind: 'refused', reason });
@@ -158,7 +160,8 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
             if (item.id.startsWith(MAIN_ERROR_DECK_PREFIX)) {
                 // An action that does something (Tynn #693), beside Dismiss.
                 if (optionId === 'retry') return { kind: 'retry-host-copy', id: item.id };
-                if (optionId === 'open-log') return { kind: 'open-lifecycle-log' };
+                if (optionId === 'report') return { kind: 'report-main-error', id: item.id };
+                if (optionId === 'open-log') return { kind: 'open-lifecycle-log', ...(item.answer.kind === 'inline' && item.answer.options.some((o) => o.id === 'report') ? { id: item.id } : {}) };
                 return { kind: 'dismiss-main-error', id: item.id };
             }
             return refuse(`${item.id} is not an item Genie knows how to answer`);

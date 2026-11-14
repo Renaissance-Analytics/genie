@@ -34,6 +34,17 @@ const HELPER_GPU = 901;
 const BROWSER = 600;
 const ORPHAN = 501;
 const tick = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 1)); };
+/** The helper advances a simulated clock. Wait for its outcome, not hundreds of real Windows timer ticks (#673). */
+async function until(label: string, ready: () => boolean): Promise<void> {
+    const deadline = performance.now() + 1_000;
+    while (!ready()) {
+        if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+}
+// Fake quitAndInstall returns without a helper-done event. Give queued follow-ups a short bounded settle
+// before success-path absence/count assertions; a single timer avoids the measured Windows tick-count cost.
+const settleSuccessfulInstall = () => new Promise<void>((resolve) => setTimeout(resolve, 25));
 const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 const exe = `${INSTALL}/genie`;
@@ -232,7 +243,8 @@ describe('the install order', () => {
         // The window and its renderer end 2 s into the helper's wait.
         r.machine.onSleep = () => { if (r.machine.t >= 2_000) { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); } };
         const result = await w.replica.install();
-        await tick(200);
+        await until('the helper to install after the simulated processes end', () => r.calls.includes('quitAndInstall'));
+        await settleSuccessfulInstall();
         // The teardown leaves the host's, the window's and the helper's trees; the browser and the orphan are ended.
         expect(r.order).toEqual(['drain agents', 'stop hosted', `kill ${BROWSER}`, `kill ${ORPHAN}`, 'host exit', 'quitAndInstall']);
         expect(result?.report).toMatch(/Ada/);
@@ -246,7 +258,7 @@ describe('the install order', () => {
         await w.replica.check();
         await w.replica.download();
         await w.replica.install();
-        await tick(400);
+        await until('the helper to record the live window and quit', () => r.order.includes('helper quit'));
         expect(r.order).toContain('host exit');
         expect(r.calls).not.toContain('quitAndInstall');
         expect(r.logs.join('\n')).toMatch(new RegExp(`not installed[\\s\\S]*${WINDOW}|${WINDOW}[\\s\\S]*not installed`, 'i'));
@@ -263,7 +275,8 @@ describe('the install order', () => {
         await w.replica.download();
         r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
         await w.replica.install();
-        await tick(200);
+        await until('the successful helper install', () => r.calls.includes('quitAndInstall'));
+        await settleSuccessfulInstall();
         expect(r.calls).toContain('quitAndInstall');
         expect(r.failures).toEqual([]);
         expect(r.order.filter((o) => /relaunch|failure/.test(o))).toEqual([]);
@@ -276,7 +289,7 @@ describe('the install order', () => {
         await w.replica.check();
         await w.replica.download();
         await w.replica.install();
-        await tick(200);
+        await until('the host to finish its failed handover and exit', () => r.order.includes('host exit'));
         expect(r.calls).not.toContain('quitAndInstall');
         const at = (step: string) => r.order.indexOf(step);
         expect(at('host records failure')).toBeGreaterThan(at('drain agents'));
@@ -293,7 +306,7 @@ describe('the install order', () => {
         await w.replica.download();
         r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
         await w.replica.install();
-        await tick(400);
+        await until('the helper to record the live browser and quit', () => r.order.includes('helper quit'));
         expect(r.calls).not.toContain('quitAndInstall');
         expect(r.logs.join('\n')).toMatch(new RegExp(`${BROWSER}`));
     });
@@ -452,6 +465,11 @@ function importsOf(file: string): { readonly static: string[]; readonly dynamic:
     return { static: stat, dynamic: dyn };
 }
 
+/** Normalize package subpaths exactly as the import graph does. */
+function packageOf(spec: string): string {
+    return spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!;
+}
+
 /** Every file and bare package reachable from `entry` (dynamic imports followed only when asked). */
 function graph(entry: string, followDynamic: boolean): { files: Set<string>; packages: Set<string> } {
     const files = new Set<string>();
@@ -467,7 +485,7 @@ function graph(entry: string, followDynamic: boolean): { files: Set<string>; pac
                 const hit = ['.ts', '.tsx'].map((x) => base + x).find((p) => existsSync(p));
                 if (hit) visit(hit);
             } else {
-                packages.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!);
+                packages.add(packageOf(spec));
             }
         }
     };
@@ -501,10 +519,10 @@ describe('electron-updater: the helper mode imports it; main statically and geni
         expect(main.files.has(port)).toBe(false);
     });
 
-    it('only electron-updater-port.ts names the package', () => {
+    it('only the real port and published provider name the package, including subpaths', () => {
         const helper = graph('src/main/updater-process.ts', false);
-        const naming = [...helper.files].filter((f) => importsOf(f).static.includes('electron-updater'));
-        expect(naming).toEqual([port]);
+        const naming = [...helper.files].filter((f) => importsOf(f).static.some((spec) => packageOf(spec) === 'electron-updater'));
+        expect(naming.sort()).toEqual([port, resolve('src/main/published-github-provider.ts')].sort());
     });
 });
 

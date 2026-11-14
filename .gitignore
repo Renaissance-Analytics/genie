@@ -36,6 +36,8 @@ ci-out/
 
 # What scripts/ci/windows.ps1 reads for its rows when In-Session cannot pass them (Tynn #692)
 ci-rows.txt
+# Opt-in measurement settings read inside the logged-on test session (Tynn #671).
+ci-measure671.json
 # The changed paths the CI caller writes before a run, read by scripts/ci/linux.sh (Tynn #692)
 ci-changed.txt
 # What scripts/smoke-seed.mjs records of the project.json it writes, to know it again on the next run (Tynn #692)

@@ -11,18 +11,17 @@ import type { StreamEvent } from '../src/core/stream-event.js';
  * NO TUI LIST (Tynn story #380). The owner: "why the hell is the agent.md file for agents listing a TUI? We dropped tui as a
  * t1 model, it's just the acp over cli". The provider is Genie's record of the agent, switchable at any time; AGENT.md is the
  * person's persona and Genie never writes a provider into it:
- *  - a new agent's AGENT.md has no `tuis:` line;
- *  - adoption takes the provider from Genie's default; an existing `tuis:` line is only a hint, and never a refusal;
+ *  - a new agent's AGENT.md has no `tuis:` line (since Tynn #694 it is only the persona: the purpose, once);
+ *  - adoption takes the provider from project.json, else Genie's default; a `tuis` list is only a hint, never a refusal;
  *  - the switch is never refused for `tuis:` (test/provider-switch-carry-over.test.ts), and Take Over has no such gate;
  *  - the chat shows a carried context as a marker, never as the person's words.
  */
 const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
 describe('nothing writes a tuis: line', () => {
-    it('a new agent’s AGENT.md has its name and purpose and no provider list (control: the name and purpose are there)', () => {
-        const text = agentFileText({ name: 'atlas', purpose: 'Keeps the docs true.', provider: 'codex' });
-        expect(text).toContain('name: atlas');
-        expect(text).toContain('purpose: Keeps the docs true.');
+    it('a new agent’s AGENT.md is its purpose and no provider list (control: the purpose is there)', () => {
+        const text = agentFileText({ name: 'atlas', purpose: 'Keeps the docs true.' });
+        expect(text).toBe('Keeps the docs true.\n');
         expect(text).not.toMatch(/tuis/);
         expect(text).not.toMatch(/codex/);
     });
@@ -37,13 +36,10 @@ describe('nothing writes a tuis: line', () => {
 });
 
 describe('adoption without tuis', () => {
-    it('no tuis: Genie’s default provider; a tuis line naming one Genie runs is a hint; one naming none is NOT a refusal', () => {
+    it('no tuis: Genie’s default provider; a project.json tuis naming one Genie runs is a hint; one naming none is NOT a refusal', () => {
         const [plain, hinted, foreign] = importedAgents({
-            files: [
-                { folder: 'atlas', text: '---\nname: atlas\n---\nYou are atlas.' },
-                { folder: 'nova', text: '---\nname: nova\ntuis: [aider, codex]\n---\n' },
-                { folder: 'zed', text: '---\nname: zed\ntuis: [aider]\n---\n' },
-            ],
+            files: [{ folder: 'atlas' }, { folder: 'nova' }, { folder: 'zed' }],
+            configs: { atlas: { purpose: 'a' }, nova: { purpose: 'n', tuis: ['aider', 'codex'] }, zed: { purpose: 'z', tuis: ['aider'] } },
             registered: [],
         });
         expect(plain).toMatchObject({ name: 'atlas', provider: 'claude', refusal: null });

@@ -24,7 +24,7 @@ export interface DeckAnswerPorts {
     readonly deferTrustCertificate?: () => void;
     readonly syncHosts?: () => Promise<HostsSyncResult>;
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
-    readonly mainErrors?: { dismiss(id: string): boolean; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(): Promise<string | null> };
+    readonly mainErrors?: { dismiss(id: string): boolean; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
 }
 
 const NEEDS_WINDOW = (what: string): string => `${what} needs Genie’s window on this machine: open Genie there`;
@@ -100,8 +100,14 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
         }
         case 'open-lifecycle-log': {
             if (!ports.mainErrors?.openLog) throw new Error(NEEDS_WINDOW('opening the log'));
-            const failed = await ports.mainErrors.openLog();
+            const failed = await (command.id ? ports.mainErrors.openLog(command.id) : ports.mainErrors.openLog());
             if (failed !== null) throw new Error(`Genie could not open the log: ${failed}`);
+            break;
+        }
+        case 'report-main-error': {
+            if (!ports.mainErrors?.report) throw new Error(NEEDS_WINDOW('opening an issue draft'));
+            const failed = await ports.mainErrors.report(command.id);
+            if (failed !== null) throw new Error(`Genie could not open the issue draft: ${failed}`);
             break;
         }
         case 'answer-provider-approval':

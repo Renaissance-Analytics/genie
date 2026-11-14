@@ -46,6 +46,7 @@ import { SafeMode } from './safe-mode-host.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
+import { terminalWorkspaceOf, workspaceFolders } from './host-share-scope.js';
 import { TakeOverHost } from './take-over-host.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
@@ -846,6 +847,8 @@ async function main(): Promise<void> {
         gappBook = await GAppBook.open({
             dir: join(home, 'gapps'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true,
             catalog: () => hostCatalog(pluginsService.plugins(), gappBook ?? undefined),
+            // V9: the marketplace's keys verify an app, and one it withdraws is refused at the app's next check.
+            registry: marketplacePlugins.registry,
         });
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
@@ -973,6 +976,9 @@ async function main(): Promise<void> {
             // The phone's methods and events with every window closed (host-alone-api.ts).
             alone: () => phoneApi,
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
+            // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
+            workspaceOfTerminal: terminalWorkspaceOf(terminalHost),
+            workspacePaths: workspaceFolders(() => hostRegistry.listWorkspaces()),
         }),
     });
     // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.
@@ -1374,6 +1380,8 @@ async function main(): Promise<void> {
                         return (await startForWork({ probe: (x) => host.probe(x), start: (r, cwd) => host.start(r, cwd), cwdFor: cwdOf, startRefusal: refusal }, record)).ok;
                     },
                     prompt: (id, text, by) => host.prompt(id as AgentId, text, by),
+                    queue: (id, text, by, replacing) => host.queueFlowPrompt(id as AgentId, text, by, replacing),
+                    isQueued: (id, promptId) => host.isPromptQueued(id as AgentId, promptId),
                     subscribe: (listener) => host.subscribe(listener),
                 },
                 resolve: (text) => resolveOnRoster(text, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),

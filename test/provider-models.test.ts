@@ -91,6 +91,35 @@ describe('the cache: one CLI per provider, until refreshed', () => {
     });
 });
 
+describe('a new model appears with no Genie update (Tynn #608)', () => {
+    it('a kept list is asked for again once it is old, so what the provider adds since shows', async () => {
+        let now = 0;
+        let offered = ['opus'];
+        const cache = new ProviderModelCache(async () => state(offered), { now: () => now, maxAgeMs: 10 * 60_000 });
+        expect(await cache.get('claude')).toMatchObject({ models: [{ modelId: 'opus' }] });
+        offered = ['opus', 'fable-6'];
+        now = 9 * 60_000;
+        expect(await cache.get('claude')).toMatchObject({ models: [{ modelId: 'opus' }] }); // CONTROL: still fresh.
+        now = 11 * 60_000;
+        expect(await cache.get('claude')).toMatchObject({ models: [{ modelId: 'opus' }, { modelId: 'fable-6' }] });
+    });
+});
+
+describe('nothing in Genie names a model (Tynn #608)', () => {
+    it('no model id or alias is written into the source: every list is the provider\'s', async () => {
+        const { readdirSync, readFileSync, statSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const files: string[] = [];
+        const walk = (dir: string): void => { for (const name of readdirSync(dir)) { const p = join(dir, name); if (statSync(p).isDirectory()) walk(p); else if (/[.]tsx?$/.test(name)) files.push(p); } };
+        walk('src');
+        // A model's own id or alias, in quotes, as a list or a fallback would hold it.
+        const MODEL = /['"`](?:claude-(?:opus|sonnet|haiku|fable)[\w.-]*|opus|sonnet|haiku|fable|gpt-\d[\w.-]*|o[1-9](?:-mini)?|codex-mini[\w.-]*)['"`]/;
+        expect(MODEL.test("['sonnet', 'opus']")).toBe(true); // CONTROL: the pattern finds a list like the old one.
+        const named = files.filter((f) => MODEL.test(readFileSync(f, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join('\n')));
+        expect(named.map((f) => f.split(/[\\/]/).join('/'))).toEqual([]);
+    });
+});
+
 describe('the label: the provider’s name, and what an alias resolves to when it differs', () => {
     it('Fable → claude-fable-5-1; no arrow when there is nothing to resolve (CONTROL)', () => {
         expect(modelLabel({ modelId: 'fable', name: 'Fable', resolvedModel: 'claude-fable-5-1' })).toBe('Fable → claude-fable-5-1');
@@ -229,14 +258,36 @@ describe('the operations', () => {
         return { ports, calls, record: () => current };
     };
 
-    it('the list: a running agent’s own session, with no CLI started; not running → the provider cache (CONTROL pair, COUNTED)', async () => {
-        const running = harness(rec('claude'), { modelState: async () => state(['default', 'fable'], 'fable', 'default') });
-        expect(await listModels(running.ports, 'agent_a')).toMatchObject({ ok: true, source: 'session', current: 'fable', models: [{ modelId: 'default', isDefault: true }, { modelId: 'fable' }] });
-        expect(running.calls.cacheAsks).toEqual([]);
+    it('the list: the provider\'s, running or not; a running agent\'s session says which is in use (CONTROL pair, COUNTED; Tynn #608)', async () => {
+        // The session's own state is fixed at its start: a model the provider added since is not in it.
+        const running = harness(rec('claude'), { modelState: async () => state(['default', 'opus'], 'opus', 'default') });
+        expect(await listModels(running.ports, 'agent_a')).toEqual({ ok: true, provider: 'claude', source: 'provider', models: [{ modelId: 'fable', name: 'Fable' }], current: null, inUse: 'opus' });
+        expect(running.calls.cacheAsks).toEqual([{ provider: 'claude', refresh: false }]);
 
         const idle = harness(rec('claude'), null);
         expect(await listModels(idle.ports, 'agent_a', true)).toMatchObject({ ok: true, source: 'provider' });
         expect(idle.calls.cacheAsks).toEqual([{ provider: 'claude', refresh: true }]);
+    });
+
+    it('running, Refresh asks the provider again: a model it added mid-turn shows (Tynn #608)', async () => {
+        const running = harness(rec('claude'), { modelState: async () => state(['default', 'opus'], 'opus', 'default') });
+        expect(await listModels(running.ports, 'agent_a', true)).toMatchObject({ ok: true, source: 'provider', models: [{ modelId: 'fable' }], inUse: 'opus' });
+        expect(running.calls.cacheAsks).toEqual([{ provider: 'claude', refresh: true }]);
+    });
+
+    it('running, and the provider cannot be asked: the session\'s own list, saying why it is not the provider\'s now (Tynn #608)', async () => {
+        const running = harness(rec('claude'), { modelState: async () => state(['default', 'opus'], 'opus', 'default') });
+        (running.ports as unknown as { models: { get: () => Promise<unknown> } }).models.get = async () => ({ ok: false, provider: 'claude', reason: 'could not start claude: spawn claude ENOENT' });
+        expect(await listModels(running.ports, 'agent_a', true)).toEqual({
+            ok: true, provider: 'claude', source: 'session', models: state(['default', 'opus'], 'opus', 'default').availableModels, current: 'opus',
+            note: 'Couldn’t ask claude for its models now (could not start claude: spawn claude ENOENT): this is the list the running session started with.',
+        });
+    });
+
+    it('not running, and the provider cannot be asked: its reason, nothing else (CONTROL)', async () => {
+        const idle = harness(rec('claude'), null);
+        (idle.ports as unknown as { models: { get: () => Promise<unknown> } }).models.get = async () => ({ ok: false, provider: 'claude', reason: 'signed out' });
+        expect(await listModels(idle.ports, 'agent_a')).toEqual({ ok: false, provider: 'claude', reason: 'signed out' });
     });
 
     it('a session that cannot say (its modelState rejects) falls back to the provider’s list; unknown agent refused', async () => {

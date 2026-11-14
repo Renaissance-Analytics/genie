@@ -31,7 +31,11 @@ let tools: Registration[];
 const book = new CallerBook();
 const REFUSAL = /is not reachable from .*: the target's workspace setting or agent scope does not allow it \(permission, not liveness\)/;
 
-beforeEach(async () => {
+/** This test's setup, so afterEach removes the folder only once nothing is still writing into it. */
+let setup: Promise<void> = Promise.resolve();
+
+beforeEach(async () => { setup = prepare(); await setup; });
+async function prepare(): Promise<void> {
     dir = await mkdtemp(join(tmpdir(), 'genie2-access-chosen-'));
     registry = new Registry(new Store(dir));
     await registry.load({ name: 'alphar', healthy: true });
@@ -48,8 +52,17 @@ beforeEach(async () => {
         resolveCaller: (key) => sessionCallerOf(book, key, registry, join(dir, 'osa')),
         userActive: () => true, glow: () => true, thumbsUp: () => {},
     });
+}
+/*
+ * The setup can outlive its hook (Tynn #660): it makes some eleven durable writes (three workspaces, four agents, the stores),
+ * and on a Windows test VM in one of the suite's disk bursts each took 0.7-3 s (measured, 2026-11-13). Vitest then ran this
+ * hook while the setup was still writing, and the removal failed with ENOTEMPTY under a file just written. So it waits for this
+ * test's setup to end, then removes the folder, retrying while Windows still holds a handle that was just closed.
+ */
+afterEach(async () => {
+    await setup.catch(() => undefined);
+    await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const all = (): readonly AgentRecord[] => [...registry.listAgents()];
 const agent = (name: string): AgentRecord => all().find((a) => a.name === name)!;

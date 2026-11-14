@@ -3,7 +3,7 @@ import { getNodeKind, runFlow, type NodeExecutor } from '@particle-academy/fancy
 import { canonicalKind, type NodeOutcome } from '../core/flow-canvas.js';
 import { stepLabel } from '../core/flow-reach.js';
 import type { Resolution } from '../core/inbox.js';
-import { genieExecutors, type FlowPorts } from './flow-executors.js';
+import { genieExecutors, type FlowPorts, type PromptHooks } from './flow-executors.js';
 import { importFlowDocument } from './flow-kinds.js';
 import type { RunResult } from './flow-scheduler.js';
 import type { FileFired, FlowRecord, FlowRunStep, Schedule } from './flow-store.js';
@@ -23,7 +23,8 @@ import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
  * Each run answers an OUTCOME the store records: it RAN, it FAILED with the reason (the engine's words,
  * an executor's abort, a non-zero exit), or it was HELD back — with why — because:
  * - the flow's workspace is hibernated (nothing runs there until it is woken, Genie 1's genie#672);
- * - the target agent is mid-turn (a scheduled prompt never lands inside someone else's turn);
+ * - the target agent is mid-turn and cannot take the prompt into its queue (Tynn #704: it is QUEUED for the turn's end
+ *   otherwise, and the run shows queued, then ran — a prompt never lands inside someone else's turn);
  * - the flow's previous command is still running.
  * A held-back step is not retried: the next scheduled run is the next chance, as Genie 1's skipped runs were.
  */
@@ -72,6 +73,8 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         if (graph.nodes.length === 0) return { outcome: 'failed', reason: 'the flow has no steps to run' };
         // A port that holds a step back says so; the engine sees an ordinary failure and stops the run there.
         const step: { held: string | null } = { held: null };
+        // Prompts of this run queued behind an agent's turn and not yet begun.
+        let waiting = 0;
         const watch = <T>(p: Promise<T>): Promise<T> =>
             p.catch((error: unknown) => {
                 if (error instanceof HeldBack) step.held ??= error.message;
@@ -79,7 +82,11 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             });
         const base = deps.ports(flow);
         const ports: FlowPorts = {
-            promptAgent: (address, text) => watch(base.promptAgent(address, text)),
+            // A prompt queued behind an agent's turn (Tynn #704): its step reads queued, and its note is the run's log, until its turn begins.
+            promptAgent: (address, text, hooks) => watch(base.promptAgent(address, text, {
+                queued: (note) => { waiting += 1; observer?.log?.('', note); observer?.nodes?.(outcomes(false)); hooks?.queued?.(note); },
+                started: () => { waiting -= 1; observer?.nodes?.(outcomes(false)); hooks?.started?.(); },
+            })),
             runCommand: (workspaceId, command, cwd) => watch(base.runCommand(workspaceId, command, cwd)),
             addKnowledge: (input) => watch(base.addKnowledge(input)),
             ...(base.moveFile ? { moveFile: (workspaceId: string, from: string, to: string) => watch(base.moveFile!(workspaceId, from, to)) } : {}),
@@ -125,7 +132,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                 const o: NodeOutcome = status === 'done' ? 'ran'
                     : skipped.has(n.id) ? 'skipped'
                     : status === 'error' ? (step.held !== null ? 'held' : 'failed')
-                    : status === 'running' ? (final ? (step.held !== null ? 'held' : 'failed') : 'running')
+                    : status === 'running' ? (final ? (step.held !== null ? 'held' : 'failed') : waiting > 0 ? 'queued' : 'running')
                     : 'not reached';
                 return [n.id, o];
             }));
@@ -228,6 +235,14 @@ export interface AgentSessionsPort {
     /** This run's ledger rows; their `event` is a stream event. */
     rows(agentId: string): readonly { readonly event: unknown }[];
     prompt(agentId: string, text: string, by: string): boolean | Promise<boolean>;
+    /**
+     * QUEUE a prompt in the agent's own queue (the one typed messages and mail wait in), to go as its own turn when the
+     * current one ends (Tynn #704). `replacing`: a prompt this flow queued earlier that is still waiting — discarded, so
+     * one waits, never two. Absent = this port cannot queue, and a busy agent holds the prompt back as before.
+     */
+    queue?(agentId: string, text: string, by: string, replacing: string | null): { readonly id: string } | null;
+    /** Whether a prompt `queue` returned is still waiting for its turn. */
+    isQueued?(agentId: string, promptId: string): boolean;
     subscribe(listener: (agentId: string) => void): () => void;
 }
 
@@ -239,15 +254,42 @@ export interface AgentPrompterDeps {
     readonly asleep: (workspaceId: string) => boolean;
     /** Who the turn is from, as the agent's ledger shows it — the flow, by name (Genie 1's genie#543: name the task). */
     readonly by: string;
+    /** The wait's timer (`FLOW_TURN_QUIET_MS`): fire after `ms`, answering its cancel. Absent = `setTimeout`. */
+    readonly after?: (ms: number, fire: () => void) => () => void;
 }
 
 /**
- * `genie/agent_prompt` on a live session: resolve the address, refuse what cannot be prompted, HOLD BACK
- * what must not be prompted now (a hibernated workspace, an agent mid-turn or waiting on an approval), then
- * prompt and wait for the turn to end. The reply is what the agent said in that turn.
+ * HOW LONG A FLOW WAITS FOR AN AGENT'S TURN (Tynn #684, genie#721). The wait used to have no bound: a turn whose end never
+ * reached Genie held the run open, and the scheduler held every later run back ("the previous run is still going") for
+ * 11 hours. The end not arriving is fixed where it was lost (core/session.ts `#endHeldTurn`); this is the safety net for
+ * anything else that ever loses one.
+ *
+ * QUIET: nothing new in the agent's ledger — no reply, thought, tool call or notice, and no line added to one — for half
+ * an hour. A turn that is working shows itself well inside that, and the turns flows start are rounds of minutes (the
+ * one in genie#721 took under a minute). MAX: two hours, whatever it shows, so a turn
+ * that keeps talking but never ends cannot hold a flow — or every 15-minute run after it — for a day. Either way the
+ * run fails in words, the agent's turn is left alone, and the next scheduled run is the next chance (it is held back as
+ * busy while that turn really is running).
  */
+export const FLOW_TURN_QUIET_MS = 30 * 60_000;
+export const FLOW_TURN_MAX_MS = 2 * 60 * 60_000;
+
+/**
+ * `genie/agent_prompt` on a live session: resolve the address, refuse what cannot be prompted, HOLD BACK
+ * what must not be prompted now (a hibernated workspace), QUEUE what cannot go now (an agent mid-turn or waiting on an
+ * approval: Tynn #704), then
+ * prompt and wait for the turn to end. The reply is what the agent said in that turn.
+ *
+ * WHY IT WAITS AT ALL, even for a flow whose only step this is (Tynn #684 asked): the reply is the step's output
+ * (`{ reply, agent }`, flow-executors.ts), kept with the run in flight so a resume hands it on, and any later step reads
+ * it through its template; a later step also runs AFTER the agent's work, not beside it. The run's `ran` means the agent
+ * did the round. So it waits — bounded (`FLOW_TURN_QUIET_MS`, `FLOW_TURN_MAX_MS`).
+ */
+/** The prompts flows have queued behind an agent's turn that have not gone yet, by agent and flow: a flow firing again replaces its own. */
+const QUEUED_FLOW_PROMPTS = new Map<string, { promptId: string; supersede: () => void }>();
+
 export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent'] {
-    return async (address, text) => {
+    return async (address, text, hooks?: PromptHooks) => {
         const found = deps.resolve(address);
         if (found.kind === 'none') throw new Error(`no agent answers to ${address}`);
         if (found.kind === 'human') throw new Error(`${address} is the person, not an agent; a flow prompts an agent`);
@@ -260,19 +302,94 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
         // NOT RUNNING: started for this prompt when the port can (q_04ce323c); its prompt then waits for the start.
         if ((!session || !session.running) && (await deps.sessions.start?.(id))) session = deps.sessions.session(id);
         if (!session || !session.running) throw new Error(`${name} is not running; a scheduled prompt has nowhere to go until it is started`);
-        if (session.turnState === 'working' || (session.pendingApproval !== null && session.pendingApproval !== undefined)) {
-            throw new HeldBack(`${name} is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn`);
+        const busy = session.turnState === 'working' || (session.pendingApproval !== null && session.pendingApproval !== undefined);
+        // A turn's quiet bound (FLOW_TURN_QUIET_MS / FLOW_TURN_MAX_MS), shared by the wait in the queue and the wait for the turn.
+        const after = deps.after ?? ((ms: number, fire: () => void) => { const t = setTimeout(fire, ms); return () => clearTimeout(t); });
+        const mark = (): { n: number; last: unknown } => { const r = deps.sessions.rows(id); return { n: r.length, last: r[r.length - 1] }; };
+        const bound = (what: string, giveUp: (error: Error) => void, off: () => void): (() => void) => {
+            let seen = mark();
+            let waited = 0;
+            let cancel: () => void = () => {};
+            const watch = (): void => {
+                cancel = after(FLOW_TURN_QUIET_MS, () => {
+                    waited += FLOW_TURN_QUIET_MS;
+                    const now = mark();
+                    const quiet = now.n === seen.n && now.last === seen.last;
+                    seen = now;
+                    if (!quiet && waited < FLOW_TURN_MAX_MS) { watch(); return; }
+                    off();
+                    giveUp(new Error(quiet
+                        ? `${name}'s ${what} did not end: nothing new came from it for ${FLOW_TURN_QUIET_MS / 60_000} minutes. The flow stopped waiting for it; the next run will try again.`
+                        : `${name}'s ${what} did not end within ${FLOW_TURN_MAX_MS / 3_600_000} hours. The flow stopped waiting for it; the next run will try again.`));
+                });
+            };
+            watch();
+            return () => cancel();
+        };
+        /*
+         * A BUSY AGENT (Tynn #704): the prompt is QUEUED in the agent's own queue (the one typed messages and mail wait in),
+         * not dropped, and goes as its own turn the moment the current one ends — never inside it. The run is told it is
+         * queued, and waits here until the prompt leaves the queue. The same flow firing again for this agent while its
+         * prompt still waits REPLACES it (one waits, never two), and the earlier run says so. A port that cannot queue holds
+         * the prompt back, as it always did.
+         */
+        let queuedFirst = false;
+        // Where this prompt's own turn starts in the ledger: its marker when it is already there, else wherever the ledger ends.
+        let ownTurnAt = -1;
+        if (busy) {
+            if (!deps.sessions.queue || !deps.sessions.isQueued) throw new HeldBack(`${name} is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn`);
+            const queuedAt = deps.sessions.rows(id).length;
+            const key = `${id}|${deps.by}`;
+            const earlier = QUEUED_FLOW_PROMPTS.get(key);
+            const replacing = earlier !== undefined && deps.sessions.isQueued(id, earlier.promptId) ? earlier : null;
+            const q = deps.sessions.queue(id, text, deps.by, replacing?.promptId ?? null);
+            if (q === null) throw new HeldBack(`${name} is busy (mid-turn) and could not take the prompt into its queue; it was not delivered`);
+            let superseded = false;
+            let wake: () => void = () => {};
+            const mine = { promptId: q.id, supersede: () => { superseded = true; wake(); } };
+            QUEUED_FLOW_PROMPTS.set(key, mine);
+            replacing?.supersede();
+            hooks?.queued?.(replacing !== null
+                ? `queued behind ${name}'s current turn; it replaced the prompt this flow queued earlier, which had not gone yet`
+                : `queued behind ${name}'s current turn; it goes as its own turn when that one ends`);
+            let off: () => void = () => {};
+            let cancelBound: () => void = () => {};
+            try {
+                await new Promise<void>((done, fail) => {
+                    const check = (): void => {
+                        if (superseded) { off(); fail(new HeldBack(`${name}: this prompt was replaced by a later fire of ${deps.by} while it was still queued, so it never went; the later one goes in its place`)); return; }
+                        const s = deps.sessions.session(id);
+                        if (s === null || !s.running) { off(); fail(new Error(`${name} stopped before the queued prompt was delivered`)); return; }
+                        if (!deps.sessions.isQueued!(id, q.id)) { off(); done(); }
+                    };
+                    wake = check;
+                    off = deps.sessions.subscribe((agentId) => { if (agentId === id) check(); });
+                    cancelBound = bound('turn', fail, off);
+                    check();
+                });
+            } finally {
+                off();
+                cancelBound();
+                if (QUEUED_FLOW_PROMPTS.get(key) === mine) QUEUED_FLOW_PROMPTS.delete(key);
+            }
+            queuedFirst = true;
+            const ledger = deps.sessions.rows(id);
+            ownTurnAt = ledger.findIndex((r, i) => i >= queuedAt && (r.event as { kind?: unknown; by?: unknown }).kind === 'turn' && (r.event as { by?: unknown }).by === deps.by);
+            if (ownTurnAt < 0) ownTurnAt = ledger.length;
+            hooks?.started?.();
         }
-        const from = deps.sessions.rows(id).length;
+        const from = queuedFirst ? ownTurnAt : deps.sessions.rows(id).length;
         /*
          * WATCHED FROM BEFORE THE PROMPT GOES. The prompt may answer later (the agent engine in genie-host), and by then
          * its turn can have begun AND ended: watched only after the answer, "began" was never seen and the flow waited
          * for ever. So the watch starts first, and only the end is judged once the prompt is in.
          */
-        let sent = false;
+        let sent = queuedFirst;
         let off: () => void = () => {};
         let recheck: () => void = () => {};
+        let giveUp: (error: Error) => void = () => {};
         const finished = new Promise<void>((done, fail) => {
+            giveUp = fail;
             // THIS PROMPT'S TURN, not the state at the moment it was taken: a prompt sent while the session is still
             // starting waits for its `ready` (a session only started reads idle, not working), so idle before its turn
             // began is not its end. Begun = seen working, or its turn marker is in the ledger.
@@ -292,19 +409,28 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
             });
             recheck = () => { if (check()) off(); };
         });
-        let delivered = false;
-        try {
-            const answer = deps.sessions.prompt(id, text, deps.by);
-            // An engine that answers at once has already begun the turn: seen now, before anything can end it.
-            recheck();
-            delivered = await answer;
-        } finally {
-            if (!delivered) off();
+        let delivered = queuedFirst;
+        if (!queuedFirst) {
+            try {
+                const answer = deps.sessions.prompt(id, text, deps.by);
+                // An engine that answers at once has already begun the turn: seen now, before anything can end it.
+                recheck();
+                delivered = await answer;
+            } finally {
+                if (!delivered) off();
+            }
+            if (!delivered) throw new Error(`${name} stopped before the prompt could be delivered`);
         }
-        if (!delivered) throw new Error(`${name} stopped before the prompt could be delivered`);
         sent = true;
         recheck();
-        await finished;
+        // THE BOUND (FLOW_TURN_QUIET_MS): checked once per quiet window — a window with a new ledger row is a turn still
+        // working, one without is not, and the windows add up to FLOW_TURN_MAX_MS at most.
+        const cancelTimer = bound('turn', giveUp, off);
+        try {
+            await finished;
+        } finally {
+            cancelTimer();
+        }
         return deps.sessions
             .rows(id)
             .slice(from)

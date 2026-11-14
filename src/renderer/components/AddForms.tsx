@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Button, Input } from '@particle-academy/react-fancy';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
+import type { FeatureAction } from '../features.js';
+import { PROCESS_SCHEDULE_PRESETS } from '../../core/scheduled-task.js';
 import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
 
 /**
@@ -319,6 +321,83 @@ export function AddKnowledgeForm({ defaults, problems, workspaces, onSubmit, onC
             <div className="flex gap-2">
                 <Button size="xs" type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add memory</Button>
                 <Button size="xs" type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</Button>
+            </div>
+        </form>
+    );
+}
+
+type CreateProcess = Extract<FeatureAction, { kind: 'hosting.createProcess' }>;
+
+/**
+ * "Add process" — a process Genie keeps running, or runs on a schedule (Tynn #708). A form of labelled fields, opened from
+ * the Processes tab's Add process button in a modal. It reads its values from the DOM on submit, like the other forms here.
+ */
+export function AddProcessForm({ workspaces, onSubmit, onCancel }: {
+    readonly workspaces: readonly { id: string; path: string; name?: string | undefined }[];
+    readonly onSubmit: (action: CreateProcess) => void;
+    readonly onCancel: () => void;
+}) {
+    const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
+    return (
+        <form
+            data-form="add-process"
+            className="flex flex-col gap-4"
+            onSubmit={(e) => {
+                e.preventDefault();
+                const f = new FormData(e.currentTarget);
+                const w = workspaces.find((x) => x.id === String(f.get('workspace') ?? '')) ?? workspaces[0];
+                if (!w) return;
+                const folder = String(f.get('folder') ?? '').trim();
+                // A schedule makes it a SCHEDULED TASK (genie#1204, Genie 1's form): a preset, or a typed expression.
+                const preset = String(f.get('schedule') ?? '');
+                const schedule = (preset === 'custom' ? String(f.get('scheduleCustom') ?? '') : preset).trim();
+                onSubmit({
+                    kind: 'hosting.createProcess',
+                    workspaceId: w.id,
+                    workspacePath: w.path,
+                    name: String(f.get('name') ?? ''),
+                    command: String(f.get('command') ?? ''),
+                    ...(folder ? { folder } : {}),
+                    restart: String(f.get('restart') ?? 'on-failure') as 'never' | 'on-failure' | 'always',
+                    ...(schedule ? { schedule } : {}),
+                });
+            }}
+        >
+            {workspaces.length === 0 ? (
+                <p className="text-sm text-[var(--fg-3)]">Add a workspace first.</p>
+            ) : workspaces.length === 1 ? (
+                <input type="hidden" name="workspace" value={workspaces[0]!.id} />
+            ) : (
+                <Row label="Workspace">
+                    <select name="workspace" defaultValue={workspaces[0]!.id} className={field}>
+                        {workspaces.map((w) => <option key={w.id} value={w.id}>{workspaceLabel(workspaces, w.id)}</option>)}
+                    </select>
+                </Row>
+            )}
+            <Row label="Name"><Input name="name" required placeholder="queue worker" /></Row>
+            <Row label="Command"><Input name="command" required placeholder="php artisan queue:work" /></Row>
+            <Row label="Folder (optional)">
+                <span className="flex items-center gap-2">
+                    <Input name="folder" placeholder="a folder in the workspace" />
+                    <PathBrowse name="folder" root={() => { const chosen = (document.querySelector('[data-form="add-process"] [name="workspace"]') as HTMLInputElement | HTMLSelectElement | null)?.value ?? workspaces[0]?.id; return workspaces.find((w) => w.id === chosen)?.path ?? null; }} />
+                </span>
+            </Row>
+            <Row label="Restart">
+                <select name="restart" defaultValue="on-failure" className={field}>
+                    <option value="on-failure">Restart on failure</option>
+                    <option value="always">Always restart</option>
+                    <option value="never">Never restart</option>
+                </select>
+            </Row>
+            <Row label="Schedule">
+                <select name="schedule" defaultValue="" className={field}>
+                    {PROCESS_SCHEDULE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+            </Row>
+            <Row label="Custom schedule (cron, when Schedule is custom)"><Input name="scheduleCustom" placeholder="0 3 * * *" /></Row>
+            <div className="flex justify-end gap-2">
+                <Button type="button" onClick={onCancel}>Cancel</Button>
+                <Button type="submit" color="blue" disabled={workspaces.length === 0}>Add process</Button>
             </div>
         </form>
     );

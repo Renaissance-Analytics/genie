@@ -306,7 +306,7 @@ describe('the wiring — every turn Stop reaches cancel; "Stop agent" still stop
         const flyout = shell.match(/<ChatFlyout[^]*?\/>/)?.[0] ?? '';
         expect(flyout).toMatch(/onStopTurn=\{[^\n]*onCancelTurn\?\.\(chatThread\.agentId, 'stop'\)[^\n]*\}/);
         expect(flyout).not.toContain('onStopAgent');
-        expect(shell).toMatch(/onCancelTurn=\{onCancelTurn\}/);
+        expect(shell).toMatch(/onCancelTurn=\{readOnly \? undefined : onCancelTurn\}/);
 
         const app = source('../src/renderer/App.tsx');
         expect(app).toMatch(/onCancelTurn=\{\(agentId, intent\) => \{ void resolvedBridge\?\.cancelTurn\(agentId, intent\); \}\}/);

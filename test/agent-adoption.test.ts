@@ -9,7 +9,8 @@ import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from '../src/
  * `.agents/<name>/AGENT.md` travels with the repo; the registry that names agents lives on each machine. So a workspace
  * added here arrives with its agents ON DISK and none registered. Genie 1 said so after the add and offered to ADOPT each
  * one — never automatically: a `git pull` must not be a way to gain agents. Adopting registers the agent with its
- * AGENT.md as its instructions and never rewrites the file.
+ * AGENT.md as its instructions, on the provider its project.json `agents.<name>` names (Tynn #694); listing first moves
+ * any old front matter there (test/agent-config-694.test.ts).
  *
  * Never a name Genie refuses: Genie 1's reserved terms (`general`, `genie`, `tynn`) unless the workspace's Tynn project
  * grants exactly that one (`sacred_agent_name`, MeApiController::projectRow); a folder that is not an agent name Genie 2
@@ -22,21 +23,24 @@ const persona = (front: string) => `---\n${front}\n---\n\n# Persona\n\nDoes the 
 describe('which agents a workspace brought (pure)', () => {
     it('lists each unregistered .agents/<name>/AGENT.md; a registered name (any case) is not offered again', () => {
         const list = importedAgents({
-            files: [{ folder: 'atlas', text: persona('name: atlas') }, { folder: 'bolt', text: '# Bolt' }, { folder: 'cass', text: persona('name: cass') }],
+            files: [{ folder: 'atlas' }, { folder: 'bolt' }, { folder: 'cass' }],
             registered: [{ name: 'Cass' }],
         });
         expect(list.map((a) => a.name)).toEqual(['atlas', 'bolt']);
         expect(list[0]).toEqual({ name: 'atlas', provider: 'claude', instructions: '.agents/atlas/AGENT.md', refusal: null });
     });
 
-    it('the provider is Genie’s default; an old `tuis:` line is a hint only (its first provider Genie runs), never a refusal (Tynn story #380)', () => {
-        const [codex, inline, aider] = importedAgents({
-            files: [{ folder: 'coder', text: persona('tuis:\n  - codex\n  - claude') }, { folder: 'inline', text: persona('tuis: [aider, claude]') }, { folder: 'old', text: persona('tuis: [aider]') }],
+    it('the provider is project.json’s; else its tuis is a hint only (its first provider Genie runs), never a refusal; else Genie’s default (Tynn #380, #694)', () => {
+        const [codex, inline, old, picked, none] = importedAgents({
+            files: [{ folder: 'coder' }, { folder: 'inline' }, { folder: 'old' }, { folder: 'picked' }, { folder: 'zz' }],
+            configs: { coder: { purpose: 'c', tuis: ['codex', 'claude'] }, inline: { purpose: 'i', tuis: ['aider', 'claude'] }, old: { purpose: 'o', tuis: ['aider'] }, picked: { purpose: 'p', provider: 'codex', tuis: ['claude'] } },
             registered: [],
         });
         expect(codex).toMatchObject({ name: 'coder', provider: 'codex', refusal: null });
         expect(inline).toMatchObject({ provider: 'claude', refusal: null });
-        expect(aider).toMatchObject({ provider: 'claude', refusal: null });
+        expect(old).toMatchObject({ provider: 'claude', refusal: null });
+        expect(picked).toMatchObject({ name: 'picked', provider: 'codex', refusal: null });
+        expect(none).toMatchObject({ name: 'zz', provider: 'claude', refusal: null });
     });
 
     it('Genie 1’s reserved names are refused — unless the workspace is granted THAT one term', () => {
@@ -57,15 +61,15 @@ describe('which agents a workspace brought (pure)', () => {
     });
 
     it('a refused file is still LISTED, with its reason (an Adopt that always fails is worse than none, a silent gap worse still)', () => {
-        const list = importedAgents({ files: [{ folder: 'tynn', text: '# Tynn' }, { folder: 'atlas', text: '# Atlas' }], registered: [] });
+        const list = importedAgents({ files: [{ folder: 'tynn' }, { folder: 'atlas' }], registered: [] });
         expect(list.map((a) => [a.name, a.refusal === null])).toEqual([['atlas', true], ['tynn', false]]);
     });
 
     it('the offer: only when something is unregistered; Genie 1’s headline counts them', () => {
         expect(importedAgentsOffer([])).toEqual({ offer: false, headline: '' });
-        const one = importedAgents({ files: [{ folder: 'atlas', text: '' }], registered: [] });
+        const one = importedAgents({ files: [{ folder: 'atlas' }], registered: [] });
         expect(importedAgentsOffer(one).headline).toBe('1 agent already belongs to this project and is not registered on this machine.');
-        const two = importedAgents({ files: [{ folder: 'atlas', text: '' }, { folder: 'bolt', text: '' }], registered: [] });
+        const two = importedAgents({ files: [{ folder: 'atlas' }, { folder: 'bolt' }], registered: [] });
         expect(importedAgentsOffer(two)).toEqual({ offer: true, headline: '2 agents already belong to this project and are not registered on this machine.' });
     });
 
@@ -83,6 +87,7 @@ function fakes(over: { files?: Record<string, string>; dirs?: string[]; register
     const root = '/w/acme.agi';
     const dirs = over.dirs ?? ['_genie', 'skills', 'atlas', 'bolt', 'tynn'];
     const files: Record<string, string> = over.files ?? {
+        [`${root}/project.json`]: `${JSON.stringify({ $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.3.0/schemas/workspace/project.schema.json', name: 'acme' }, null, 2)}\n`,
         [`${root}/.agents/atlas/AGENT.md`]: persona('name: atlas\ntuis: [claude]'),
         [`${root}/.agents/bolt/AGENT.md`]: persona('tuis: [codex]'),
         [`${root}/.agents/tynn/AGENT.md`]: '# Tynn',
@@ -95,6 +100,7 @@ function fakes(over: { files?: Record<string, string>; dirs?: string[]; register
         agentsOf: (id) => agents.filter((a) => a.workspaceId === id),
         listDirs: async (p) => { if (key(p) !== `${root}/.agents`) throw new Error('ENOENT'); return dirs; },
         readText: async (p) => files[key(p)] ?? null,
+        writeTextAtomic: async (p, text) => { files[key(p)] = text; },
         register: async (input) => {
             // A tick between the check and the write, as the real store's disk write has.
             await new Promise((r) => setTimeout(r, 1));
@@ -104,7 +110,7 @@ function fakes(over: { files?: Record<string, string>; dirs?: string[]; register
         },
         sacredName: async () => over.sacred ?? null,
     };
-    return { ports, registered };
+    return { ports, registered, files };
 }
 
 describe('reading and adopting on the host', () => {
@@ -123,11 +129,13 @@ describe('reading and adopting on the host', () => {
         expect(await readImportedAgents(fakes().ports, 'nope')).toEqual({ ok: false, reason: 'no workspace nope' });
     });
 
-    it('adopt registers it ONCE, its AGENT.md as its instructions, on the provider its file names — the file untouched', async () => {
-        // The ports have no write to the workspace at all: adoption can only READ the file (the type is the guarantee).
+    it('adopt registers it ONCE, its AGENT.md as its instructions, on the provider its moved front matter names (Tynn #694)', async () => {
+        // Listing moved bolt's old `tuis: [codex]` into project.json, and stripped it from the persona.
         const f = fakes();
         expect(await adoptAgent(f.ports, 'acme', 'bolt')).toEqual({ ok: true, id: 'agent_new_1', name: 'bolt' });
         expect(f.registered).toEqual([{ workspaceId: 'acme', provider: 'codex', name: 'bolt', instructions: '.agents/bolt/AGENT.md' }]);
+        expect(JSON.parse(f.files['/w/acme.agi/project.json']!).agents.bolt).toEqual({ purpose: 'Does the work.', tuis: ['codex'] });
+        expect(f.files['/w/acme.agi/.agents/bolt/AGENT.md']).toBe('# Persona\n\nDoes the work.\n');
         // Now registered: not offered again, and a second adopt registers nothing.
         const after = await readImportedAgents(f.ports, 'acme');
         expect(after.ok ? after.agents.map((a) => a.name) : after).toEqual(['atlas', 'tynn']);
@@ -151,14 +159,16 @@ describe('reading and adopting on the host', () => {
         expect(sacred.registered.map((r) => r.name)).toEqual(['tynn']);
     });
 
-    it('a name with no AGENT.md here, or a path-shaped name, is refused and nothing is read outside .agents/', async () => {
+    it('a name with no AGENT.md here, or a path-shaped name, is refused and nothing is read outside .agents/ (but its project.json)', async () => {
         const f = fakes();
         const read: string[] = [];
         const real = f.ports.readText;
         f.ports.readText = async (p) => { read.push(p.replace(/\\/g, '/')); return real(p); };
         expect(await adoptAgent(f.ports, 'acme', 'ghost')).toEqual({ ok: false, reason: 'acme has no unregistered agent ghost in .agents/' });
         expect(await adoptAgent(f.ports, 'acme', '../../etc')).toMatchObject({ ok: false });
-        expect(read.every((p) => p.startsWith('/w/acme.agi/.agents/'))).toBe(true);
+        // The workspace's own project.json is where its agents' config is (Tynn #694); nothing else outside .agents/.
+        expect(read.filter((p) => !p.startsWith('/w/acme.agi/.agents/'))).toEqual(read.filter((p) => p === '/w/acme.agi/project.json'));
+        expect(read.some((p) => p.startsWith('/w/acme.agi/.agents/'))).toBe(true);
         expect(read.some((p) => p.includes('..'))).toBe(false);
         expect(f.registered).toEqual([]);
     });

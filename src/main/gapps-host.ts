@@ -7,6 +7,7 @@ import type { GAppReview } from '../core/gapps.js';
 import { UNVERIFIED_LABEL } from '../core/plugins.js';
 import type { PackageDeclaration } from './genie-catalog.js';
 import { PACKAGE_MANIFEST_FILE } from '../core/plugin-integrity.js';
+import type { PublisherKeyRegistry } from './marketplace-client.js';
 import { checkPackage, currentDigest } from './plugin-package.js';
 
 /**
@@ -42,6 +43,11 @@ export interface GAppBookPorts {
     readonly dir: string;
     /** Publisher keys Genie holds, by their C1 id. */
     readonly keys: Readonly<Record<string, string>>;
+    /**
+     * The marketplace's publisher keys (V9): a key it trusts now verifies a package, and an app whose key it has since
+     * withdrawn is refused at its next check. Absent = Genie's own keys only.
+     */
+    readonly registry?: Pick<PublisherKeyRegistry, 'publisherKeys' | 'keyState'>;
     readonly publisherChecksOff: () => boolean;
     /** The host's catalog as it is now: the review names elements from it, and a new package must not collide in it. */
     readonly catalog: () => Catalog;
@@ -124,6 +130,9 @@ export class GAppBook {
     async verifyInstalled(packageId: string): Promise<string | null> {
         const entry = this.#book.apps.find((e) => e.packageId === packageId);
         if (!entry) return `${packageId} is not installed`;
+        if (entry.grant.publisher !== 'unverified' && this.#ports.registry?.keyState(entry.grant.publisher) === 'withdrawn') {
+            return `${entry.name} is refused: its publisher's key was withdrawn from the marketplace, so it does not run. Reinstall it once its publisher has signed it again.`;
+        }
         const now = await currentDigest(join(this.#ports.dir, entry.packageId, entry.version));
         if (now.ok && now.digest === entry.digest) return null;
         return `${entry.name} is refused as tampered: ${now.ok ? 'a file changed, was added or was removed after it was installed' : now.reason}; reinstall it from its publisher.`;
@@ -232,7 +241,8 @@ export class GAppBook {
         const parsed = declarationOf(raw);
         if (!parsed.ok) return parsed;
         const { declaration } = parsed;
-        const check = await checkPackage(dir, { keyId: parsed.keyId ?? '', keys: this.#ports.keys, publisherChecksOff: this.#ports.publisherChecksOff() });
+        const keys = this.#ports.registry ? this.#ports.registry.publisherKeys(this.#ports.keys) : this.#ports.keys;
+        const check = await checkPackage(dir, { keyId: parsed.keyId ?? '', keys, publisherChecksOff: this.#ports.publisherChecksOff() });
         if (!check.decision.install) return { ok: false, reason: check.decision.reason };
         const unverified = check.decision.label === UNVERIFIED_LABEL;
         // A signed package's digest comes with its check; an unsigned one's is taken here (B4 holds none for it).

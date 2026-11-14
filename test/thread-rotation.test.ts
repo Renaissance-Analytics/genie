@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mintAgentId, type AgentId } from '../src/core/identity.js';
-import { openAgentThread, readHistory, readPromptRows, readWholeHistory, threadLogFile, ThreadStore, RUN_FIELD } from '../src/core/thread-store.js';
+import { openAgentThread, readHistory, readPromptRows, readWholeHistory, threadLogFile, ThreadStore, THREAD_ROTATE_BYTES, RUN_FIELD } from '../src/core/thread-store.js';
 
 /*
  * Tynn #557. The owner's machine, 2026-11-08: a 1.03 GB thread log (and others in the hundreds of MB). deliverOwed
@@ -105,10 +105,18 @@ async function bigOldLog(id: AgentId, mb: number): Promise<number> {
 describe('a big old thread costs a page, not the file, once it has rotated', () => {
     it('deliverOwed, restart and history on a 512 MB thread each take under 100 ms after the next append', async () => {
         const id = mintAgentId();
+        // Tynn #671: retain 512 MiB: this is a large-history latency regression test, not only a rotation-bound test.
+        // The public-SDK string-size test proves functionality at that size, not these four <100 ms guarantees.
         const rows = await bigOldLog(id, 512);
+        const oldBytes = (await stat(threadLogFile(dir, id))).size;
+        expect(oldBytes).toBeGreaterThanOrEqual(512 * 1024 * 1024);
+        expect(oldBytes).toBeGreaterThan(THREAD_ROTATE_BYTES);
+        expect(oldBytes).toBeLessThan(512 * 1024 * 1024 + 8 * 1024);
         const store = make(dir);
         await openAgentThread(store, id).record([{ kind: 'notice', level: 'info', message: 'new run', [RUN_FIELD]: 'new-run' }] as never);
         await store.indexing?.(keyOf(id));
+        expect(await segmentsOf(id)).toHaveLength(1);
+        expect((await stat(threadLogFile(dir, id))).size).toBeLessThan(THREAD_ROTATE_BYTES);
         const timed = async <T>(fn: () => Promise<T>): Promise<{ value: T; ms: number }> => { const t0 = performance.now(); const value = await fn(); return { value, ms: performance.now() - t0 }; };
         const restart = make(dir);
         const length = await timed(() => restart.logLength(keyOf(id)));

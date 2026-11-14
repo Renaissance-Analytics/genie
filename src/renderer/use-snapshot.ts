@@ -84,7 +84,10 @@ export function useSnapshot(bridge: Pick<GenieBridge, 'snapshot' | 'subscribe'> 
         // Each push arrives as a new object graph (a structured clone): what did not change keeps its identity
         // (core/share.ts), so a view keyed on an agent's row or a workspace draws only when that changed. A push is the whole
         // estate, so a first read that answers after one is older than it, and dropped.
-        void bridge.snapshot().then((s) => { if (live && !pushedYet) store.offer(share(store.latest, s), true); });
+        // A closed link keeps the last estate (or honest loading); the next push can still recover it (#636).
+        try {
+            void bridge.snapshot().then((s) => { if (live && !pushedYet) store.offer(share(store.latest, s), true); }).catch(() => {});
+        } catch { /* The bridge can refuse before returning a promise; keep the push subscription below. */ }
         const off = bridge.subscribe((s) => { if (!live) return; pushedYet = true; store.offer(share(store.latest, s)); });
 
         return () => { live = false; off(); if (state.current === store) state.current = null; };

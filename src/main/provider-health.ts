@@ -38,7 +38,21 @@ const VERSION_TIMEOUT_MS = 20_000;
 const STATUS_TIMEOUT_MS = 30_000;
 /** npm's batch shim names its target relative to itself, in both of its shapes (with a `%_prog%` interpreter, or none). */
 const SHIM_TARGET = /"%dp0%\\([^"%\r\n]+)"/;
-const RUNS_DIRECTLY = /\.(exe|com)$/i;
+/**
+ * The file an npm shim runs, read the way cmd runs it. The shim's `IF EXIST "%dp0%\node.exe" (SET "_prog=%dp0%\node.exe")
+ * ELSE (SET "_prog=node")` is a PROBE for an optional interpreter, not the target: without that node.exe beside it cmd
+ * runs `node` from PATH (Tynn #712). So conditionals and assignments are skipped, and the target is the first
+ * `"%dp0%\..."` on a line that runs something.
+ */
+export function npmShimTarget(shimText: string): string | undefined {
+    for (const line of shimText.split(/\r?\n/)) {
+        if (/^\s*(?:IF\s|SET\s|\))/i.test(line)) continue;
+        const target = SHIM_TARGET.exec(line)?.[1];
+        if (target) return target;
+    }
+    return undefined;
+}
+const RUNS_DIRECTLY =/\.(exe|com)$/i;
 const CLAUDE_NPM_PROGRAM = /[\\/]node_modules[\\/]@anthropic-ai[\\/]claude-code[\\/]bin[\\/]claude(\.exe)?$/i;
 
 type Located = (ProgramFile & { readonly configured?: boolean }) | null;
@@ -75,7 +89,7 @@ export function locateProviderProgram(provider: string, ports: ProviderHealthPor
         if (program.kind === 'wrapper') return file(program.file, ports);
         if (first === null) return null;
         if (!/\.(cmd|bat)$/i.test(first)) return file(first, ports);
-        const target = SHIM_TARGET.exec(ports.readText(first))?.[1];
+        const target = npmShimTarget(ports.readText(first));
         return target ? file(win32.join(win32.dirname(first), target), ports, first) : file(first, ports);
     }
     for (const dir of (variable(ports.env, 'PATH') ?? '').split(':')) {

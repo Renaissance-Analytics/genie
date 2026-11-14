@@ -174,14 +174,14 @@ describe('ActivationLedger — the focus diagnostic', () => {
 
 describe('windowLabelOf — which Genie window, from its URL', () => {
     it('names each kind', () => {
-        expect(windowLabelOf('file:///C:/Genie/resources/app.asar/dist/renderer/index.html')).toBe('main');
-        expect(windowLabelOf('file:///C:/Genie/renderer/index.html?remote=wss%3A%2F%2Fx')).toBe('remote');
-        expect(windowLabelOf('file:///C:/Genie/renderer/index.html#genie://takeover/t1')).toBe('takeover');
-        expect(windowLabelOf('file:///C:/Genie/renderer/index.html#genie://takeover/t1?login=claude')).toBe('login');
-        expect(windowLabelOf('file:///C:/Genie/renderer/index.html#genie://files/w1')).toBe('files');
-        expect(windowLabelOf('file:///C:/Genie/renderer/question.html')).toBe('question');
-        expect(windowLabelOf('file:///C:/Genie/renderer/browser.html')).toBe('browser');
-        expect(windowLabelOf('file:///C:/Genie/renderer/doctor.html')).toBe('doctor');
+        expect(windowLabelOf('http://genie.localhost:24567/index.html')).toBe('main');
+        expect(windowLabelOf('http://genie.localhost:24567/index.html?remote=wss%3A%2F%2Fx')).toBe('remote');
+        expect(windowLabelOf('http://genie.localhost:24567/index.html#genie://takeover/t1')).toBe('takeover');
+        expect(windowLabelOf('http://genie.localhost:24567/index.html#genie://takeover/t1?login=claude')).toBe('login');
+        expect(windowLabelOf('http://genie.localhost:24567/index.html#genie://files/w1')).toBe('files');
+        expect(windowLabelOf('http://genie.localhost:24567/question.html')).toBe('question');
+        expect(windowLabelOf('http://genie.localhost:24567/browser.html')).toBe('browser');
+        expect(windowLabelOf('http://genie.localhost:24567/doctor.html')).toBe('doctor');
         expect(windowLabelOf('')).toBe('unknown');
     });
 });

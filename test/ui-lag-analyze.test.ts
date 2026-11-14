@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { budgetVerdict, capVerdict, createGapGauge, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -258,6 +258,31 @@ describe('what a terminal view holds after a flood (Tynn #544)', () => {
         expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 3_100_000 }).ok).toBe(true);
         expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 12_400_000 }).reasons).toEqual(['the view held 12.4 MB more after a 12 MB flood (bound 6 MB: the 2 MB cap and 4 MB besides)']);
         expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: Number.NaN }).reasons).toEqual(['the heap was not read before and after the flood']);
+    });
+
+    it('says the flood\'s end was not seen when that is what happened, not that the heap was not read', () => {
+        // Run 1113-081447 on Linux: both readings taken (9964936 and 14741820), the end marker not matched.
+        expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: Number.NaN, done: false }).reasons).toEqual(['the flood\'s end was not seen in the window, so the heap after it was not judged']);
+        expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 4_776_884, done: true }).ok).toBe(true);
+    });
+});
+
+describe('the flood\'s end marker in a terminal\'s rows', () => {
+    it('finds it when a narrow terminal wraps it across rows (Hyprland\'s 29-column Take Over window, run 1113-081447)', () => {
+        // The rows' innerText from that run, with the marker as ui-lag-flood.mjs now prints it: split after "takeover138".
+        const rows = '[flood takeover13810] [ 462] \nstreaming past the cap ......\n.............................\n....\nUI_LAG_FLOOD_DONE takeover138\n10 END\n[genie@gt-11130814-3025537e w\norkspace]$  ';
+        expect(floodEnded(rows, 'takeover13810')).toBe(true);
+        // Wrapped at a space, with the row's trailing space dropped.
+        expect(floodEnded('UI_LAG_FLOOD_DONE\ntakeover13810\nEND\n$ ', 'takeover13810')).toBe(true);
+        expect(floodEnded('x\nUI_LAG_FLOOD_DONE takeover13810 END\n$ ', 'takeover13810')).toBe(true);
+    });
+
+    it('does not find it before the end, for another run, or in the command line that started the flood', () => {
+        expect(floodEnded('$ node flood.mjs 12000000 23200 takeover13810\n[flood takeover13810] [ 462] streaming', 'takeover13810')).toBe(false);
+        expect(floodEnded('UI_LAG_FLOOD_DONE takeover1381 END\n$ ', 'takeover13810')).toBe(false);
+        // A run whose id is a prefix of another's (`takeover${Date.now() % 100000}` has no fixed width).
+        expect(floodEnded('UI_LAG_FLOOD_DONE takeover13810 END\n$ ', 'takeover1381')).toBe(false);
+        expect(floodEnded('', 'takeover13810')).toBe(false);
     });
 });
 

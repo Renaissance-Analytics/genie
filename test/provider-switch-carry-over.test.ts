@@ -56,7 +56,6 @@ function opsPorts(history: () => readonly TimedEvent[], manifestReads: string[])
             setProvider: (id: never, provider: never, options: never) => registry.setProvider(id, provider, options),
         },
         host: { stop: () => true, ended: async () => null, probe: () => null, start: () => ({ ok: true }) },
-        readManifest: async (record: AgentRecord) => { manifestReads.push(record.name); return '---\nname: atlas\ntuis: [claude]\n---\nYou are atlas.\n'; },
         history: async () => history(),
         // #1571 (merged from main): a switch asks first whether the provider is installed and signed in; here both are.
         providerInstalled: () => true,
@@ -86,12 +85,11 @@ describe('each provider keeps its own native session', () => {
 });
 
 describe('the switch', () => {
-    it('reads AGENT.md (positive control) but is never refused for its tuis, and writes nothing to it', async () => {
+    it('is never refused for a tuis line, and neither reads nor writes AGENT.md (its config is project.json’s, Tynn #694)', async () => {
         const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
         await registry.recordThread(a.id, 'claude-sess-1');
         const reads: string[] = [];
         const decision = await switchDriver(opsPorts(conversation, reads), a.id, 'codex');
-        expect(reads).toEqual(['atlas']);
         expect(decision).toMatchObject({ ok: true, from: 'claude', to: 'codex' });
         expect(loose(decision)['carried']).toMatchObject({ turns: 1, of: 1, plan: false });
         expect(loose(decision)['left']).toBe('claude-sess-1');

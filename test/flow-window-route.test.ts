@@ -147,7 +147,8 @@ describe('the wiring these steps stand for', () => {
 
     // The expression moved, unchanged, into window-address.ts `routeFor` (Tynn #529 part A, pair run check 3): App calls it.
     it('App.tsx resolves its hash with exactly the expression windowRoute() mirrors, and renders FlowEditorWindow for `flow`', () => {
-        expect(app).toMatch(/const route = routeFor\(address, addressContext\);/);
+        expect(app).toMatch(/const askedRoute = routeFor\(address, addressContext\);/);
+        expect(app).toMatch(/const route = routeInScope\(askedRoute, windowScope, snapshot\.agents\);/);
         const helper = readFileSync(new URL('../src/renderer/window-address.ts', import.meta.url), 'utf8');
         expect(helper).toMatch(/return ctx \? routeOfAddress\(address, ctx\) \?\? DEFAULT_ROUTE : isInternalRoute\(address\) \? address : DEFAULT_ROUTE;/);
         expect(app).toMatch(/if \(parsed\.surface === 'flow'\) \{\s*return \(\s*<FlowEditorWindow/);
@@ -155,6 +156,6 @@ describe('the wiring these steps stand for', () => {
 
     it('main loads the flow editor window on the renderer’s index.html with the route as its hash', () => {
         const fn = main.slice(main.indexOf('function openFlowEditorWindow('), main.indexOf('function closeWindowAt('));
-        expect(fn).toMatch(/win\.loadFile\(join\(here, '\.\.\/renderer\/index\.html'\), \{ hash: route \}\)/);
+        expect(fn).toMatch(/loadWindowPage\(win\.webContents, 'index', \{ hash: route \}\)/);
     });
 });

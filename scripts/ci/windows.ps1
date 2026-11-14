@@ -291,7 +291,9 @@ function Row-electron-binary { Need-Electron }
 function Row-unit-build { Need-Install; Need-Electron; Run 'npm run build:main' { npm run build:main } }
 
 # The Windows suite, with its sampler beside it and the 30 s per-test budget ci.yml gives it (the Windows runner is
-# slower to start processes); the slow-test table after it, observe only.
+# slower to start processes); the slow-test table after it, observe only. The hooks get the same 30 s (Tynn #660): in the
+# Windows VMs' disk bursts one durable write took 0.7-3 s, and a beforeEach of a dozen of them ran past vitest's 10 s hook
+# default while its test body had 30 s (test/ci-windows-test-budget.test.ts).
 function Row-unit {
     Need-Install; Need-Electron
     $samples = Join-Path $Out 'proc-samples.log'
@@ -299,7 +301,7 @@ function Row-unit {
     $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
     $sampler = Start-Process $shell -ArgumentList '-NoProfile', '-File', 'scripts/ci/proc-sampler.ps1', '-Out', $samples -PassThru -WindowStyle Hidden
     try {
-        npm test -- --testTimeout=30000 --reporter=default --reporter=json "--outputFile.json=$results"
+        npm test -- --testTimeout=30000 --hookTimeout=30000 --reporter=default --reporter=json "--outputFile.json=$results"
         $code = $LASTEXITCODE
     } finally {
         Stop-Process -Id $sampler.Id -Force -ErrorAction SilentlyContinue

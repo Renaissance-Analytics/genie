@@ -11,7 +11,7 @@ import type { LegacyIdentity } from './workstation-identity.js';
 export class RelayHostReplica {
     readonly #call: (method: string, args: readonly unknown[]) => Promise<unknown>;
     readonly #listeners = new Set<() => void>();
-    #view: RelayHostView = { workstation: null, role: 'drone', relay: { state: 'off' } };
+    #view: RelayHostView = { workstation: null, role: 'drone', relay: { state: 'off' }, epoch: '', rev: -1 };
 
     constructor(call: (method: string, args: readonly unknown[]) => Promise<unknown>) { this.#call = call; }
 
@@ -27,7 +27,13 @@ export class RelayHostReplica {
     async readRole(): Promise<void> { await this.#call('readRole', []); }
     async revalidate(): Promise<void> { await this.#call('revalidate', []); }
 
+    /**
+     * The newest view wins, not the last to arrive (Tynn #656): a call's reply is applied a turn after an event that came in
+     * the same read, so an older reply would replace a newer event. A view from another run of genie-host (it restarted)
+     * starts over.
+     */
     deliver(view: RelayHostView): void {
+        if (view.epoch === this.#view.epoch && view.rev < this.#view.rev) return;
         this.#view = view;
         for (const l of [...this.#listeners]) l();
     }
