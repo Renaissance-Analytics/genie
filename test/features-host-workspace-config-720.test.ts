@@ -120,6 +120,8 @@ describe('host workspace/config and explicit release notes use their owned servi
         expect(f.docs).not.toHaveBeenCalled(); expect(f.config).not.toHaveBeenCalled();
     });
     it('CONTROL: the canonical writers themselves refuse to write into the untrusted folder', async () => {
+        const record = f.hosting.envelopeSites.trustRecord();
+        expect(record.carried).not.toContain('work'); expect(record.workspaces).not.toHaveProperty('work');
         expect((await f.hosting.trust.refresh('work'))?.trusted).toBe(false);
         const before = await f.read('.mcp.json'); await f.docs(f.workspace, 'you'); expect(await f.config(f.workspace, 'you')).toEqual([]);
         expect(await f.read('.mcp.json')).toBe(before); expect(await f.fs.read(f.workspace + '/.agents/_genie/shared.md')).toBeNull();

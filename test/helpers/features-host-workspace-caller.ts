@@ -39,6 +39,9 @@ export async function workspaceCallerFixture() {
     // An empty runnable list is trusted without approval. Declare a fixture-only command (never launched), so the
     // real trust service must wait for the person's Trust before the no-write control permits either writer.
     await writeFile(join(f.workspace, '.mcp.json'), JSON.stringify({ mcpServers: { other: { command: 'fixture-mcp-server', args: [] } } }));
+    // Hosting first saw this workspace on a fresh book, so it carried its approval (#618). Only Untrust removes
+    // that durable approval; use the real operation before the action spies or writers are installed.
+    await f.hosting.trust.untrust('work');
     // These are the same owned ports used by the host and historical shared action path. The host's wrappers keep
     // their receiver; the underlying trust service and disk writers are real. Only errors are injected below.
     const docs = vi.fn(async (path: string, source?: string) => {
