@@ -1,3 +1,4 @@
+import { LANG_LABEL } from '../core/toolchain-defaults.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import { updateRisk } from '../core/toolchain-risk.js';
 import type { FeatureAction, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
@@ -156,7 +157,7 @@ function describeUpdate(tool: string, outcome: RepairOutcome): string {
     }
 }
 
-/** Shared check, install, update and repair rules. Version/default/PATH actions move in their own measured group. */
+/** Shared check, install, update, repair, default and PATH rules. Version actions move in their own measured group. */
 export async function applyToolchainCoreFeatureAction(services: ToolchainFeatureServices, action: FeatureAction,
     state: FeatureState, next: FeatureState, ports: Pick<FeaturePorts, 'toolchain'>): Promise<boolean> {
     switch (action.kind) {
@@ -266,6 +267,38 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
                     ? "Nothing to repair: each tool runs its newest copy, PHP has a CA bundle, and nothing PHP needs is missing."
                     : `${report.findings.length} problem${report.findings.length === 1 ? '' : 's'} found, ${repaired} repaired.`;
             await rescanToolchain(next, tc, sitePins(services));
+            break;
+        }
+        case 'toolchain.machinePath': {
+            const tc = ports.toolchain;
+            clearRefusal(next, 'machine-path');
+            if (!tc?.machinePath) {
+                refuse(next, 'machine-path', 'no machine-PATH switch is wired into this Genie; nothing was changed');
+                break;
+            }
+            const outcome = action.apply ? await tc.machinePath.apply(action.consent === true) : await tc.machinePath.remove();
+            if (outcome.kind === 'refused' || outcome.kind === 'not-applied') refuse(next, 'machine-path', outcome.reason);
+            else next.toolchainResult = outcome.kind === 'applied'
+                ? `Genie's defaults are on your PATH (${outcome.where.join(', ')}): terminals outside Genie use them once they are opened again.`
+                : `Genie's defaults are off your PATH again (${outcome.where.join(', ') || 'nothing to remove'}); it is as it was.`;
+            next.toolchainMachinePath = await tc.machinePath.status();
+            break;
+        }
+        case 'toolchain.setDefault': {
+            const tc = ports.toolchain;
+            const lang = action.lang;
+            const label = LANG_LABEL[lang];
+            clearRefusal(next, `${lang}-default`);
+            if (!tc?.defaults) {
+                refuse(next, `${lang}-default`, `no default switch is wired into this Genie; ${label}'s default was not changed`);
+                break;
+            }
+            const outcome = tc.defaults.set(lang, action.version);
+            if (outcome.kind === 'refused') refuse(next, `${lang}-default`, outcome.reason);
+            else next.toolchainResult = outcome.kind === 'set'
+                ? `${label} ${outcome.version} is now the default — what \`${lang}\` means for Genie's terminals, processes and agents.`
+                : `${label}'s default is the one on your PATH again.`;
+            next.toolchainDefaults = tc.defaults.list();
             break;
         }
         default: return false;

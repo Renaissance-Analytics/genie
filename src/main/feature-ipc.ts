@@ -732,38 +732,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.toolchainJava = await tc.java.list();
             break;
         }
-        case 'toolchain.machinePath': {
-            const tc = ports.toolchain;
-            clearRefusal(next, 'machine-path');
-            if (!tc?.machinePath) {
-                refuse(next, 'machine-path', 'no machine-PATH switch is wired into this Genie; nothing was changed');
-                break;
-            }
-            const outcome = action.apply ? await tc.machinePath.apply(action.consent === true) : await tc.machinePath.remove();
-            if (outcome.kind === 'refused' || outcome.kind === 'not-applied') refuse(next, 'machine-path', outcome.reason);
-            else next.toolchainResult = outcome.kind === 'applied'
-                ? `Genie's defaults are on your PATH (${outcome.where.join(', ')}): terminals outside Genie use them once they are opened again.`
-                : `Genie's defaults are off your PATH again (${outcome.where.join(', ') || 'nothing to remove'}); it is as it was.`;
-            next.toolchainMachinePath = await tc.machinePath.status();
-            break;
-        }
-        case 'toolchain.setDefault': {
-            const tc = ports.toolchain;
-            const lang = action.lang;
-            const label = LANG_LABEL[lang];
-            clearRefusal(next, `${lang}-default`);
-            if (!tc?.defaults) {
-                refuse(next, `${lang}-default`, `no default switch is wired into this Genie; ${label}'s default was not changed`);
-                break;
-            }
-            const outcome = tc.defaults.set(lang, action.version);
-            if (outcome.kind === 'refused') refuse(next, `${lang}-default`, outcome.reason);
-            else next.toolchainResult = outcome.kind === 'set'
-                ? `${label} ${outcome.version} is now the default — what \`${lang}\` means for Genie's terminals, processes and agents.`
-                : `${label}'s default is the one on your PATH again.`;
-            next.toolchainDefaults = tc.defaults.list();
-            break;
-        }
         case 'deck.answer':
         case 'deck.answerForm': {
             // One answer for the window and genie-host (deck-answer.ts, Tynn #551).
