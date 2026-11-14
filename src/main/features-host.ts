@@ -10,7 +10,9 @@ import type { InboxStore } from './inbox-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import type { SettingsStore } from './settings-store.js';
 import { applyPersonalFeatureAction, customSoundData, personalFeatureSnapshot, type PersonalFeatureServices } from './feature-personal.js';
-import type { FeatureState } from './feature-ipc.js';
+import type { FeaturePorts, FeatureState } from './feature-ipc.js';
+import type { DeckItem } from '../core/deck.js';
+import type { DeckAnswerPorts } from './deck-answer.js';
 import { featureOriginOf, HostPicks } from './host-picks.js';
 import type { HostingApi } from './hosting-host.js';
 import type { ProcessBookApi } from './processes-host.js';
@@ -40,6 +42,27 @@ export interface HostFeatureHostingPorts {
     readonly engineStatusWaitMs?: number;
 }
 
+/** Only effects in the admitted caller's own window. Resolution never chooses another window. */
+export interface HostFeaturePresentation extends Pick<FeaturePorts, 'rendererNotice' | 'mainErrors' | 'openInBrowser'> {
+    readonly openFlowEditor?: (route: string) => void | Promise<void>;
+    readonly browser?: {
+        snapshot(): { url: string | null; canGoBack: boolean; canGoForward: boolean };
+        navigate(url: string): Promise<void>;
+        back(): void | Promise<void>;
+        forward(): void | Promise<void>;
+        reload(): void | Promise<void>;
+    };
+    readonly login?: (provider: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    readonly githubOpen?: NonNullable<FeaturePorts['githubAccount']>['openPage'];
+    readonly tailscaleInstall?: NonNullable<FeaturePorts['tailscale']>['install'];
+}
+
+/** Canonical Deck owners, supplied once; UI-only error effects are resolved separately for the caller. */
+export interface HostFeatureDeckPorts extends Omit<DeckAnswerPorts, 'mainErrors'> {
+    readonly attention: DeckAnswerPorts['attention'] & Pick<AttentionStore, 'dismiss' | 'dismissMany' | 'dismissOlderThan'>;
+    deckItems(): readonly DeckItem[];
+}
+
 /** Owned contributor ports; existing services are supplied, never composed again by the aggregator. */
 export interface HostFeaturesPorts {
     readonly settings: Pick<SettingsStore, 'snapshot' | 'get' | 'set' | 'reset' | 'onChange'>;
@@ -56,6 +79,10 @@ export interface HostFeaturesPorts {
     readonly applyRemote: () => Promise<void>;
     readonly hosting?: HostFeatureHostingPorts;
     readonly machine?: HostFeatureMachinePorts;
+    /** Typed extraction seams: the incremental service does not consume these until the measured checkpoint. */
+    readonly presentation?: (context: CallContext) => HostFeaturePresentation | null;
+    readonly system?: Pick<FeaturePorts, 'safeMode' | 'hangNotice'>;
+    readonly deck?: HostFeatureDeckPorts;
 }
 
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
