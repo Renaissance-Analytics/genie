@@ -1,6 +1,19 @@
 import './process-start.js';
 import './close-inherited-fds.js';
-// ^ FIRST but for the line above, which opens nothing (bug A, VM job 76): the window's sockets — its DevTools port among them — never live on in this host or below it.
+// ^ FIRST but for process-start, which opens nothing: close inherited handles before a contributor opens its own.
+import { featureDownload } from './feature-download.js';
+import { HostFeatures } from './features-host.js';
+import { FeatureCallers } from './feature-callers.js';
+import { nativeFeatureToolchain, adoptFeatureEnvironment } from './feature-native-toolchain.js';
+import { featureWorkspaceFiles } from './feature-workspace-files.js';
+import { AgentFilesHealth } from '../core/agent-files-health.js';
+import { IssueWatchReplica } from './issue-watch-replica.js';
+import { whatsNewFor } from '../core/whats-new.js';
+import { RELEASE_NOTES } from './release-notes.js';
+import { signedOutGithubView } from '../core/github.js';
+import type { MachineFeaturePorts } from './feature-machine.js';
+import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
+import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
@@ -111,6 +124,7 @@ import { Registry } from './registry.js';
 import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { gitFileStatus, gitShowHead } from './git-ports.js';
+import { askerLiveFrom } from './asker-live.js';
 import { assembleDeckItems } from './deck-assembly.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -211,6 +225,7 @@ const home = genieRoot();
 const osaHome = osaHomeDir(home);
 const runtime = runtimeDir(home);
 const build = process.env.GENIE_HOST_BUILD ?? 'dev';
+const hostAppVersion = build.includes('+') ? build.slice(0, build.lastIndexOf('+')) : build;
 const IDLE_MS = hostIdleMs(process.env.GENIE_HOST_IDLE_MS);
 /** What this host can have — a window, the Genie browser, an elevation — from ONE helper: all three in the app, none on plain Node (genie-cloud). */
 const capabilities = hostCapabilities();
@@ -358,6 +373,10 @@ async function main(): Promise<void> {
     own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
     own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
     let engineRef: SessionEngineServer | null = null;
+    let hostFeatures: HostFeatures | null = null;
+    const featureCallers = new FeatureCallers(() => hostFeatures);
+    const featureChanges = new Set<() => void>();
+    const featureChanged = () => { for (const listener of featureChanges) listener(); };
     const approvals = new ApprovalQueue({
         autoApproved: (caller) => hostRegistry.listAgents().some((a) => a.id === caller.agentId && a.autoApprove === true),
         granted: (caller, action) => {
@@ -948,7 +967,7 @@ async function main(): Promise<void> {
             log: (message) => say(`tynn relay: ${message}`),
             ...(hostingStack ? { site: { dial: (name: string) => dialFrontDoor(hostingStack.frontDoorPort, name), ca: () => hostingStack.browserTrust().caPem } } : {}),
         }),
-        onChange: () => engineRef?.relayHostEvent(relayHostService.status()),
+        onChange: () => { engineRef?.relayHostEvent(relayHostService.status()); featureChanged(); },
     });
     void tynnOpening.then((account) => {
         account.onChange(() => { void relayHostService.register(); });
@@ -957,6 +976,7 @@ async function main(): Promise<void> {
     setInterval(() => { void relayHostService.readRole(); }, 5 * 60_000).unref();
     /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
     let phoneApi: HostApi | null = null;
+    const phoneReady = new Set<() => void>();
     bootStep('marketplace and gapps', stepAt);
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
@@ -975,6 +995,7 @@ async function main(): Promise<void> {
             onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
             // The phone's methods and events with every window closed (host-alone-api.ts).
             alone: () => phoneApi,
+            onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
             // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
             workspaceOfTerminal: terminalWorkspaceOf(terminalHost),
@@ -1005,7 +1026,18 @@ async function main(): Promise<void> {
     void providerHealth.refreshAll().then((all) => {
         for (const health of all) if (health?.fault) console.warn(`[provider-health] ${health.provider}: ${health.fault}: ${health.words}`);
     });
+    const featureTynn = new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async asked => { await tynnRecovery?.recover(asked); return []; } });
+    const featureGithub = new GithubAccountService(githubOpening);
+    const featureKeyring = ((service: KeyringService) => { keyringNotices.push((text) => service.setNotice(text)); return service; })(new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
+            onReady: () => {
+                void tynnOpening.then((account) => account.reload()).catch(() => {});
+                void githubOpening.then((account) => account.reload()).catch(() => {});
+                void tynnRecovery?.recover({ secretsMoved: true });
+            },
+        }));
     const engine = new SessionEngineServer({
+        features: featureCallers,
+        adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
         token,
         build,
@@ -1044,8 +1076,8 @@ async function main(): Promise<void> {
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
-        tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
-        github: new GithubAccountService(githubOpening),
+        tynn: featureTynn,
+        github: featureGithub,
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
         // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
         configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
@@ -1080,13 +1112,7 @@ async function main(): Promise<void> {
         relayHost: relayHostService,
         takeOver: takeOverService,
         // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
-        keyring: ((service: KeyringService) => { keyringNotices.push((text) => service.setNotice(text)); return service; })(new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
-            onReady: () => {
-                void tynnOpening.then((account) => account.reload()).catch(() => {});
-                void githubOpening.then((account) => account.reload()).catch(() => {});
-                void tynnRecovery?.recover({ secretsMoved: true });
-            },
-        })),
+        keyring: featureKeyring,
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
         proxy: {
             remember: async (answers) => {
@@ -1244,15 +1270,17 @@ async function main(): Promise<void> {
     const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
     phoneRegistry.setWorkspaceColorer((path) => workspaceColors.colorOf(path));
     const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
-    phoneRegistry.setDeckSource(() => assembleDeckItems({
+    const featureDeckItems = () => assembleDeckItems({
         workspaces: hostRegistry.listWorkspaces(),
         workspaceName: workspaceNameFor,
         approvals: approvals.deckItems(),
         trust: hostingStack?.trustDeckItems() ?? [],
         attention: own.attention,
         inbox: own.inbox,
-        agents: phoneAgents(),
-    }));
+        agents: phoneAgents(), workspaceColor: path => workspaceColors.colorOf(path),
+        asker: askerLiveFrom({ known: () => true, engine: () => host, takeOvers: () => takeOverHost }),
+    });
+    phoneRegistry.setDeckSource(featureDeckItems);
     // What this host can measure itself: mail agents have not collected, the OS agent working. Flows in flight and GitHub's
     // block are the window's to say (Tynn #551 notes it); with no window they read none.
     phoneRegistry.setSignals(() => ({
@@ -1281,8 +1309,117 @@ async function main(): Promise<void> {
         },
     });
     const phoneCwd = (record: AgentRecord): string => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome;
+    const featureFilesHealth = new AgentFilesHealth();
+    const featureFiles = featureWorkspaceFiles({ mayWriteInto: hostMayWriteInto, settings, health: featureFilesHealth,
+        tools: () => mcp?.status().tools ?? [], tracking: () => tynnAccountNow?.status().signedIn ? 'tynn' : 'files' });
+    const featureConfig = async (workspacePath: string, source: import('../core/agent-files-health.js').SyncSource = 'start') => {
+        if (!await hostMayWriteInto(workspacePath)) return [];
+        const endpoint = mcp?.endpoint();
+        if (!endpoint) {
+            const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
+            featureFilesHealth.config(workspacePath, [{ label: 'Genie MCP', ok: false, error: reason }], Date.now(), source);
+            throw new Error(reason);
+        }
+        const values = settings.snapshot();
+        const results = await withConfig(workspacePath, () => writeWorkspaceConfig({ workspacePath, endpoint, flags: {
+            mcp_sync_claude: values.mcp_sync_claude !== false, mcp_sync_cursor: values.mcp_sync_cursor !== false,
+            mcp_sync_codex: values.mcp_sync_codex !== false, mcp_sync_hooks: values.mcp_sync_hooks !== false,
+        } }));
+        featureFilesHealth.config(workspacePath, [...results], Date.now(), source);
+        return results;
+    };
+    const featureIssueWatch = new IssueWatchReplica((method, args) => issueWatch.call(method, args));
+    featureIssueWatch.apply({ kind: 'dump', dump: issueWatch.dump() });
+    issueWatch.onEvent(event => { featureIssueWatch.apply(event); featureChanged(); });
+    let featureTailscale: TailscaleStatus | null = null;
+    const refreshFeatureTailscale = async () => { featureTailscale = await getTailscaleStatus().catch(() => featureTailscale); featureChanged(); };
+    void refreshFeatureTailscale();
+    const featureFirewallReader = firewallReader(() => readFirewallRule(REMOTE_PORT), { minIntervalMs: 5000 });
+    const proxyMemoryNow = await proxyMemory;
+    const downloadFeature = featureDownload({ proxyRoutes: url => (proxyMemoryNow?.routesFor(url) ?? [{ kind: 'direct' }]) });
+    const featureNative = nativeFeatureToolchain({ home, providerHealth, download: downloadFeature, busy: step => hostFeatures?.busy(step),
+        activity: async () => ({
+            sessions: hostRegistry.listAgents().filter(a => host.probe(a.id)?.running === true).map(a => ({ label: a.name, provider: a.provider })),
+            processes: processSupervisor.list().filter(p => p.state === 'running' || p.state === 'restarting').map(p => ({ id: p.id, label: p.name, command: processSupervisor.command(p.id) ?? '' })),
+            engines: (await hostingStack?.engineStatuses() ?? []).filter(e => e.status === 'running').map(e => e.instance.containerName ?? `${e.instance.engine} ${e.instance.version}`),
+        }),
+    });
+    const featureEffects: MachineFeaturePorts = {
+        tynnAccount: {
+            status: () => featureTynn.dump().status, host: () => featureTynn.dump().host,
+            unreachableThrough: () => featureTynn.dump().unreachableThrough, onChange: listener => featureTynn.onEvent(listener),
+            startSignIn: async () => (await tynnOpening).startSignIn(),
+            signIn: async code => (await tynnOpening).signIn(code), signOut: async () => (await tynnOpening).signOut(),
+        },
+        githubAccount: {
+            view: () => featureGithub.dump().view ?? signedOutGithubView(null),
+            startSignIn: async () => (await githubOpening).startSignIn(null),
+            cancelSignIn: () => { void githubOpening.then(account => account.cancelSignIn()).catch(say); },
+            signOut: async () => (await githubOpening).signOut(), refresh: async () => (await githubOpening).refresh(),
+            openPage: async () => { throw new Error('this action needs its caller’s own admitted local window'); },
+            onChange: listener => featureGithub.onEvent(listener),
+        },
+        keyring: { view: () => featureKeyring.dump().view, notice: () => featureKeyring.dump().notice ?? null,
+            fix: async () => { await featureKeyring.call('fix', []); }, cancel: async () => { await featureKeyring.call('cancel', []); } },
+        issueWatch: () => featureIssueWatch.panels(hostRegistry.listWorkspaces(), workspaceTynnProject, Date.now()),
+        issueWatchRefresh: id => issueWatch.call('refresh', [id]), issueWatchSetRepo: (id, owner, repo, change) => issueWatch.call('setRepo', [id, owner, repo, change]),
+        toolchain: featureNative,
+        tailscale: { status: () => featureTailscale, up: async () => { const result = await tailscaleUp(); await refreshFeatureTailscale();
+            if (result.ok) await remoteSwitch.apply();
+            void result.online?.then(async online => { await refreshFeatureTailscale(); if (online) await remoteSwitch.apply(); }).catch(error => say(String(error)));
+            return result;
+        }, install: async () => { const result = await installTailscale({ download: url => downloadFeature(url) }); await refreshFeatureTailscale(); return result; } },
+        ...(process.platform === 'win32' ? { firewall: { rule: () => featureFirewallReader.rule(), refresh: () => featureFirewallReader.refresh(),
+            reread: () => featureFirewallReader.reread(), allow: () => ensureFirewallRule(REMOTE_PORT), remove: () => removeFirewallRule() } } : {}),
+        remoteAccess: { apply: () => remoteSwitch.apply(), restart: () => remoteSwitch.restart() },
+        tynnWorkstation: () => { const view = relayHostService.status(); return view.workstation?.registered ? { ...view.workstation, relay: view.relay } : view.workstation; },
+        appVersion: () => hostAppVersion,
+        whatsNew: shown => whatsNewFor(hostAppVersion, String(settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown),
+    };
+    const machineEvents = (listener: () => void) => {
+        featureChanges.add(listener);
+        const offs = [featureTynn.onEvent(listener), featureGithub.onEvent(listener), featureKeyring.onEvent(listener),
+            pluginsService.onEvent(listener), catalogService.onEvent(listener), remoteAccessHost.onChange(listener),
+            own.attention.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
+        return () => { featureChanges.delete(listener); for (const off of offs) off(); };
+    };
+    hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
+        roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
+        mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
+        runFlow: id => hostFlows.runNow(id), refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
+        ...(hostingStack ? { hosting: { api: hostingStack, supervisor: processSupervisor, processes: hostBook,
+            processScheduler: { runNow: id => hostBook.runNow(id) }, workspaceVisible: id => !hiddenWorkspaces().includes(id) } } : {}),
+        machine: {
+            services: { remote: remoteAccessHost.remote, pairing: remoteAccessHost.pairing, pluginsDir: join(home, 'plugins'),
+                catalogDefinitions: () => catalogService.snapshot().definitions,
+                plugins: { list: () => pluginsService.dump().entries, setEnabled: async (id, enabled) => await pluginsService.call('setEnabled', [id, enabled]) as boolean,
+                    setNetworkAllowed: async (id, enabled) => await pluginsService.call('setNetworkAllowed', [id, enabled]) as boolean },
+                workspaceTrust: { trust: async id => { if (!hostingStack) throw new Error('workspace trust is not ready'); return hostingStack.trust.trust(id); },
+                    untrust: async id => { if (!hostingStack) throw new Error('workspace trust is not ready'); return hostingStack.trust.untrust(id); } },
+                integrations: () => { const status = mcp?.status(); return { mcp: { url: status?.endpoint?.url ?? null, verified: status?.verified ?? null, tools: status?.tools ?? [] }, agentFiles: featureFilesHealth.list() }; },
+                syncAgentDocs: featureFiles.syncAgentDocs, syncConfig: featureConfig,
+            }, effects: featureEffects, onChange: machineEvents,
+            effectsFor: context => { const ui = featureCallers.presentation(context); return { ...featureEffects,
+                tynnAccount: { ...featureEffects.tynnAccount!, startSignIn: async () => { const answer = await (await tynnOpening).startSignIn(); if (ui?.openExternal) await ui.openExternal(answer.url); return answer; } },
+                githubAccount: { ...featureEffects.githubAccount!, startSignIn: async () => (await githubOpening).startSignIn(ui?.openExternal ?? null) },
+                tailscale: { ...featureEffects.tailscale!, up: async () => { const answer = await featureEffects.tailscale!.up(); if (answer.authUrl) { if (!ui?.openExternal) throw new Error('Tailscale needs a sign-in; open Genie on this machine and Connect there'); await ui.openExternal(answer.authUrl); } return answer; } },
+            }; },
+        },
+        presentation: context => { const ui = featureCallers.presentation(context); return ui ? { ...ui,
+            githubOpen: async target => (await githubOpening).openPage(target, async url => { if (!ui.openExternal) throw new Error('this window cannot open GitHub'); await ui.openExternal(url); }),
+            tailscaleInstall: async () => { const answer = await featureEffects.tailscale!.install(); if (answer.url) { if (!ui.openExternal) throw new Error('this window cannot open the installer page'); await ui.openExternal(answer.url); } return answer; },
+        } : null; },
+        system: { safeMode: { leave: async () => { safeMode.leave(); return { ok: true }; } }, hangNotice: {
+            dismiss: async () => { crashState.dismiss(); return { ok: true }; }, stopAll: async () => { await host.stopAll(); return { ok: true }; } } },
+        deck: { attention: own.attention, approvals, inbox: own.inbox, deckItems: featureDeckItems,
+            deliverToAgent: (id, text) => host.deliver(id as AgentId, text, 'you'),
+            ...(hostingStack ? { trustCertificate: () => hostingStack.trustCertificate(), deferTrustCertificate: () => hostingStack.deferTrustCertificate(), syncHosts: () => hostingStack.syncHosts() } : {}),
+        },
+    });
+    hostFeatures.onChange(() => engine.featuresChanged());
     phoneApi = hostAloneApi({
         hostName: hostname(),
+        features: hostFeatures,
         registry: phoneRegistry,
         engine: () => host,
         cwdFor: phoneCwd,
@@ -1325,6 +1462,7 @@ async function main(): Promise<void> {
         },
         updates: { state: () => updatesService.dump(), onChange: (listener) => updatesService.onEvent(listener), check: async () => { throw new Error('check for updates from Genie’s window'); }, download: async () => false, install: () => null },
     });
+    for (const listener of phoneReady) listener();
     // The tailnet listener starts only now (remote_access on): a phone that connects finds the host's own answers ready.
     void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`));
     tynnRecovery = hostTynnRecovery({
@@ -1615,6 +1753,7 @@ async function main(): Promise<void> {
             issueWatch.stop();
             await mcp?.stop();
             approvals.cancelAll('Genie is shutting down');
+            hostFeatures?.close();
             own.knowledge.close();
             // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
             // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases

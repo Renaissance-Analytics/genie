@@ -1,3 +1,4 @@
+import { LatestPush } from '../core/latest-push.js';
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
@@ -73,6 +74,10 @@ const REMOTE_ATTACHMENT_MAX_BYTES = 512 * 1024;
 export type LocalAgentDetail = { readonly rows: readonly unknown[] };
 
 export interface HostApi {
+    /** The owned aggregator is supplied; its reads and events must not be answered by a window replica (Tynn #720). */
+    readonly ownsFeatures?: boolean;
+    /** Release transient view state for this admitted connection; never an invocation from the wire. */
+    releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
     readonly gapps?: () => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
@@ -225,6 +230,7 @@ function withoutPairRequests(value: unknown): unknown {
 const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' && args[0] !== null && (args[0] as { kind?: unknown }).kind === 'remote.answerPair';
 
 export class RemoteHost {
+    readonly #featurePushes = new Map<string, LatestPush<unknown>>();
     readonly #api: HostApi;
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
@@ -316,6 +322,7 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        this.#featurePushes.delete(connection.id);
         connection.agentPush?.stop();
         connection.agentPush = null;
         const marketplace = this.#marketplaces.get(connection);
@@ -336,6 +343,10 @@ export class RemoteHost {
             connection.pendingPair = null;
         }
         const was = this.#connections.delete(connection.id);
+        if (was && connection.auth !== null) {
+            try { this.#api.releaseCaller?.(this.#callContext(connection)); }
+            catch { console.warn('[genie] feature caller cleanup failed'); }
+        }
         if (was && connection.auth !== null && !connection.local) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();
@@ -1085,6 +1096,26 @@ export class RemoteHost {
             if (channel === LOCAL_EVENT_CHANNELS.tynn) {
                 const e = payload as TynnWatchEvent;
                 if (![...c.tynnWatches.values()].some((w) => w.kind === e.kind && w.workspaceId === e.workspaceId)) continue;
+            }
+            if (channel === 'features' && this.#api.ownsFeatures && !c.local) {
+                // Each admitted reader gets its own retained view, coalesced; no other caller's form/query is broadcast.
+                if (!c.auth.isOwner && c.auth.workspaceId !== null) continue;
+                let push = this.#featurePushes.get(c.id);
+                if (!push) {
+                    push = new LatestPush({ build: () => this.#api.invoke('features.snapshot', [], this.#callContext(c)), deliver: value => {
+                        if (this.#connections.get(c.id) !== c || c.auth === null) return;
+                        let answer = withoutPairRequests(value);
+                        if (!c.auth.isOwner) answer = this.#forNonOwner('features', answer, c.auth.workspaceId);
+                        if (answer !== NOT_SENT && c.profile === 'mobile') answer = this.#forPhone(c, 'features', answer);
+                        if (answer !== NOT_SENT) {
+                            const payload = Buffer.byteLength(JSON.stringify(answer)) > REMOTE_FRAME_MAX_BYTES - 4 * 1024
+                                ? { revision: ++this.#featuresRevision } : answer;
+                            this.#send(c, { kind: 'event', channel: 'features', payload });
+                        }
+                    } });
+                    this.#featurePushes.set(c.id, push);
+                }
+                push.request(); continue;
             }
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).

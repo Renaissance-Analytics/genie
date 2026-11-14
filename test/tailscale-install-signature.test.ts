@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installTailscale, readAuthenticode, refusalOf, trustWords, type InstallPorts } from '../src/main/tailscale-cli.js';
 
@@ -49,20 +49,24 @@ describe("WinVerifyTrust's answers", () => {
 describe('the install', () => {
     let launched: string[];
     let seen: string[];
+    let scratch: string;
     const bytes = () => new Response('the-installer');
     const ports = (over: Partial<InstallPorts>): Partial<InstallPorts> & Pick<InstallPorts, 'download'> => ({
         platform: 'win32',
         installed: () => null,
         download: async () => bytes(),
         launch: (file) => { launched.push(file); },
+        scratch: () => scratch,
         ...over,
     });
-    beforeEach(() => { launched = []; seen = []; });
+    beforeEach(() => { launched = []; seen = []; scratch = mkdtempSync(join(tmpdir(), 'tailscale-owned-scratch-')); });
+    afterEach(() => { rmSync(scratch, { recursive: true, force: true }); });
 
     it('a good signature runs what was checked', async () => {
         const result = await installTailscale(ports({ verify: async (file) => { seen.push(file); expect(readFileSync(file, 'utf8')).toBe('the-installer'); return { status: 'Valid', subject: GOOD }; } }));
         expect(result).toEqual({ started: true });
         expect(launched).toEqual(seen);
+        expect(dirname(dirname(seen[0]!))).toBe(scratch);
     });
 
     it('a bad one does not run, the file does not stay, and the person is sent to the page with the reason', async () => {

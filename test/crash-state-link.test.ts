@@ -89,7 +89,9 @@ describe('the wiring', () => {
         expect(main).toMatch(/agentEngineLink\?\.client\.onCrashState\(\(\) => registry\?\.touch\(\)\);/);
         expect(main).toMatch(/record: \(\) => agentEngineLink\?\.client\.crashStateView\(\)\?\.record \?\? null,/);
         expect(main).toMatch(/notice: \(\) => agentEngineLink\?\.client\.crashStateView\(\)\?\.notice \?\? null,/);
-        expect(main).toMatch(/hangNotice: \{/);
+        const host = src('src/main/genie-host.ts');
+        expect(host).toMatch(/hangNotice: \{\s*dismiss: async \(\) => \{ crashState\.dismiss\(\); return \{ ok: true \}; \}, stopAll: async \(\) => \{ await host\.stopAll\(\); return \{ ok: true \}; \}/);
+        expect(src('src/main/features-host.ts')).toContain('...effects, ...this.ports.system,');
         const shell = src('src/renderer/Shell.tsx');
         expect(shell).toMatch(/<HangNoticeBar\s+notice=\{snapshot\.hangNotice\}/);
     });

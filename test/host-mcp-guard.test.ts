@@ -24,7 +24,8 @@ describe('the window', () => {
     });
 
     it('composes against genie-host\'s stores (replicas) when it runs', () => {
-        expect(main).toMatch(/composeWindowServices\(\{ \.\.\.input, agentStores: engineForStores\.client\.stores\(\) \}\)/);
+        expect(main).toMatch(/composeWindowServices\(\{ \.\.\.input, agentStores: engineForStores\.client\.stores\(\),\s*hostFeatureFiles: \(\) => \{/);
+        expect(main).toContain("agentEngineLink.client.call('engine.features', [method, [path, source]])");
     });
 });
 

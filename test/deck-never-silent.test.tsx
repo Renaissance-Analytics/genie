@@ -61,9 +61,10 @@ describe('the lifecycle line', () => {
             .toBe('deck action refused kind=deck.dismissStale item=q_a,q_b reason=none');
     });
 
-    it('main writes it for every refused Deck action, and still refuses', () => {
-        const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/catch \(error\) \{\s*if \(action\.kind\.startsWith\('deck\.'\)\) lifecycleLog\(deckRefusalLine\(action, error\)\);\s*throw error;/);
+    it('the host owner writes it for every refused Deck action, and still refuses', () => {
+        const owner = readFileSync('src/main/features-host.ts', 'utf8');
+        expect(owner).toMatch(/catch \(error\) \{\s*if \(action\.kind\.startsWith\('deck\.'\)\) this\.ports\.lifecycleLog\?\.\(deckRefusalLine\(action, error\)\);\s*throw error;/);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toContain('hostFeatures = new HostFeatures({ lifecycleLog,');
     });
 });
 
