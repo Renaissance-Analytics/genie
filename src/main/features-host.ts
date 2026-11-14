@@ -12,6 +12,22 @@ import type { SettingsStore } from './settings-store.js';
 import { applyPersonalFeatureAction, customSoundData, personalFeatureSnapshot, type PersonalFeatureServices } from './feature-personal.js';
 import type { FeatureState } from './feature-ipc.js';
 import { REMOTE_ORIGIN } from './host-picks.js';
+import type { HostingApi } from './hosting-host.js';
+import type { ProcessBookApi } from './processes-host.js';
+import type { ProcessScheduler } from './process-scheduler.js';
+import type { SupervisorApi } from './process-supervisor.js';
+
+/** Canonical host dependencies for group two. Typed RED seam; not consumed until its tests are measured. */
+export interface HostFeatureHostingPorts {
+    readonly api: Pick<HostingApi, 'sites' | 'envelopeSites' | 'engines' | 'routes' | 'trust' | 'engineStatuses'
+        | 'startEngine' | 'stopEngine' | 'removeEngine' | 'engineDependents' | 'updateEngine' | 'hostingProblems'
+        | 'externalFrontDoor' | 'onFrontDoorChange' | 'syncHosts' | 'retryFrontDoor' | 'trustCertificate'>;
+    readonly supervisor: SupervisorApi;
+    readonly processes: ProcessBookApi;
+    readonly processScheduler: Pick<ProcessScheduler, 'runNow'>;
+    readonly workspaceVisible: (workspaceId: string) => boolean;
+    readonly engineStatusWaitMs?: number;
+}
 
 /** Owned business ports for the first feature group; no window composition or OS adapter. */
 export interface HostFeaturesPorts {
@@ -27,6 +43,7 @@ export interface HostFeaturesPorts {
     readonly runFlow: (id: string) => Promise<unknown>;
     readonly refreshPlugins: () => Promise<void>;
     readonly applyRemote: () => Promise<void>;
+    readonly hosting?: HostFeatureHostingPorts;
 }
 
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
