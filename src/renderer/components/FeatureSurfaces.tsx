@@ -1,12 +1,12 @@
 import { deviceExpiryText, isExpiringSoon } from '../../core/device-expiry.js';
 import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
-import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
+import { useHostPathPicker } from './HostPathPicker.js';
 import { PluginsPage } from './PluginsPage.js';
 import { MarketplacePane } from './MarketplacePane.js';
 import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, Kbd, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, QrCode, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
 import { HotkeyCapture } from './HotkeyCapture.js';
@@ -33,11 +33,13 @@ import type { Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { mailpitInboxUrl } from '../../core/mailpit-name.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
-import { AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
+import { AddKnowledgeForm, AddProcessForm, AddServiceForm, AddSiteForm } from './AddForms.js';
+import { RowIconButton, RowMenu } from './RowMenu.js';
+import { engineChoiceActions, engineName, processActions, scheduledActions, serviceActions, siteActions as siteRowActions, type RowAction } from './hosting-rows.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
 import { flowSummary } from '../../core/flow-canvas.js';
-import { PROCESS_SCHEDULE_PRESETS, describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
+import { describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
@@ -354,12 +356,12 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
  * once, is never sent twice, and ends in success or the reason with Retry. The Hosting tab and a workspace's Sites modal
  * both draw this, so the rule cannot differ between them. The one place the rows hold state; SiteRow stays hook-free.
  */
-export function SiteList({ sites, editing, onAction }: { sites: readonly HostedSite[]; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
+export function SiteList({ sites, editing, onAction, workspaces = [] }: { sites: readonly HostedSite[]; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; workspaces?: readonly { id: string; path: string; name?: string | undefined }[] }) {
     const siteActions = useSiteActions(onAction);
     return (
         <ul className="divide-y divide-[var(--border-1)]">
             {sites.map((s) => (
-                <SiteRow key={s.id} site={s} editing={editing?.siteId === s.id ? editing : null} pending={siteActions.pending(s.id)} refusal={siteActions.refusal(s.id)} onAction={(a) => { siteActions.click(a); }} />
+                <SiteRow key={s.id} site={s} editing={editing?.siteId === s.id ? editing : null} pending={siteActions.pending(s.id)} refusal={siteActions.refusal(s.id)} onAction={(a) => { siteActions.click(a); }} {...(workspaces.length > 0 ? { workspace: workspaceLabel(workspaces, s.workspaceId) } : {})} />
             ))}
         </ul>
     );
@@ -413,13 +415,16 @@ function siteStep(s: HostedSite, pending: SitePending | null): SiteRowStep | nul
  * starting (slow) past the first window, with Retry. It ends green (running) or red (failed or exited: the reason, and
  * Retry). A refused click says why on the row, with Retry. Icons, not words: each control is an icon named by its label.
  */
-export function SiteRow({ site: s, editing, onAction, pending = null, refusal = null }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; pending?: SitePending | null; refusal?: SiteRefusal | null }) {
+export function SiteRow({ site: s, editing, onAction, pending = null, refusal = null, workspace }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; pending?: SitePending | null; refusal?: SiteRefusal | null; workspace?: string }) {
     const step = siteStep(s, pending);
     const busy = pending !== null;
     const up = s.state === 'running' || s.state === 'restarting' || s.state === 'external';
-    const starting = s.state === 'starting';
     // Failed (no answer past the ceiling, or the supervisor gave up) or exited: Retry starts it again on fresh ports.
     const down = (s.state === 'failed' || s.state === 'exited') && s.processIds.length > 0;
+    const rowActions = siteRowActions(s, { editing: editing !== null });
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
+    // A click whose control waits in the menu (Restart) spins the menu's button: progress is never invisible.
+    const menuInFlight = busy && !rowActions.primary.some((a) => a.acts.some((x) => x.kind === PENDING_ACTION[pending!])) && rowActions.menu.some((a) => a.acts.some((x) => x.kind === PENDING_ACTION[pending!]));
     const status = step !== null ? 'progress' : up ? 'running' : down ? 'failed' : s.state === 'unservable' ? 'unservable' : 'stopped';
     // Every control is react-fancy's Button (the owner, 2026-11-01): an icon-only circle named by its label. The one whose
     // action is in flight spins (`loading`); every other lifecycle control is disabled until main answers.
@@ -457,7 +462,8 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
                     <span className="text-[var(--fg-4)]"><Icon name="circle" size="sm" /></span>
                 )}
             </span>
-            <span className="font-mono">{s.host}</span>
+            <span className="text-sm font-medium">{s.host}</span>
+            {workspace ? <Badge variant="soft" size="sm">{workspace}</Badge> : null}
             {/* The step in words: only while something is happening, and only the words needed. */}
             {step !== null ? <span className={`text-xs ${step === 'slow' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{STEP_WORDS[step]}</span> : null}
             {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
@@ -469,15 +475,10 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
                     {control('retry-refused', 'Retry', 'rotate-ccw', refusal.action, 'red')}
                 </span>
             ) : null}
-            {s.state === 'unservable' ? null : (
+            {rowActions.primary.length + rowActions.menu.length === 0 ? null : (
                 <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {up ? control('open', 'Open', 'external-link', { kind: 'hosting.openSite', siteId: s.id }) : null}
-                    {up && s.state !== 'external' ? control('restart', 'Restart', 'rotate-cw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
-                    {down || (starting && s.step === 'slow') ? control('retry', 'Retry', 'rotate-ccw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
-                    {up || starting || (s.state === 'failed' && s.processIds.length > 0)
-                        ? control('stop', 'Stop', 'square', { kind: 'hosting.stopSite', siteId: s.id })
-                        : down ? null : control('start', 'Start', 'play', { kind: 'hosting.startSite', siteId: s.id })}
-                    {editing ? null : control('edit', 'Edit', 'pencil', { kind: 'hosting.editSite', siteId: s.id })}
+                    {rowActions.primary.map((a) => control(a.id, a.label, a.icon, a.acts[0]!))}
+                    <RowMenu items={rowActions.menu} onRun={run} disabled={busy} loading={menuInFlight} />
                 </span>
             )}
             {/* It has not run on this machine: exactly what Start runs, whole, before anyone presses it. */}
@@ -526,15 +527,6 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
                     <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{log.text}</pre>
                 </details>
             ))}
-            {s.state === 'unservable' ? null : (
-                <details data-site-remove={s.id} className="basis-full text-xs">
-                    <summary className="cursor-pointer text-[var(--fg-3)]">Remove…</summary>
-                    <div className="mt-1 flex items-center gap-3">
-                        <span>Remove {s.host}? It is stopped and taken out of this workspace’s project.json. Its folder and files are not touched.</span>
-                        <Button type="button" size="sm" color="red" data-site-action="remove" onClick={() => onAction({ kind: 'hosting.removeSite', siteId: s.id })}>Remove site</Button>
-                    </div>
-                </details>
-            )}
         </li>
     );
 }
@@ -600,7 +592,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             {hosting.sites.length === 0 ? (
                                 <Empty>No sites yet. Add a site to serve a repo at its own .gen name.</Empty>
                             ) : (
-                                <SiteList sites={hosting.sites} editing={hosting.editing ?? null} onAction={onAction} />
+                                <SiteList sites={hosting.sites} editing={hosting.editing ?? null} onAction={onAction} workspaces={workspaces} />
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
@@ -680,54 +672,15 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
 export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
-    const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
-    const button = 'text-[13px]';
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
+    const wsName = (id: string) => (workspaces.length > 0 ? workspaceLabel(workspaces, id) : null);
     return (
         <div className="flex flex-col">
-            <form
-                data-form="add-process"
-                className="flex flex-wrap items-center gap-2 px-5 py-2"
-                onSubmit={(e) => {
-                    e.preventDefault();
-                    const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace');
-                    if (!w) return;
-                    const f = new FormData(e.currentTarget);
-                    const folder = String(f.get('folder') ?? '').trim();
-                    // A schedule makes it a SCHEDULED TASK (genie#1204, Genie 1's form): a preset, or a typed expression.
-                    const preset = String(f.get('schedule') ?? '');
-                    const schedule = (preset === 'custom' ? String(f.get('scheduleCustom') ?? '') : preset).trim();
-                    onAction({
-                        kind: 'hosting.createProcess',
-                        workspaceId: w.id,
-                        workspacePath: w.path,
-                        name: String(f.get('name') ?? ''),
-                        command: String(f.get('command') ?? ''),
-                        ...(folder ? { folder } : {}),
-                        restart: String(f.get('restart') ?? 'on-failure') as 'never' | 'on-failure' | 'always',
-                        ...(schedule ? { schedule } : {}),
-                    });
-                }}
-            >
-                <WorkspacePick workspaces={workspaces} name="workspace" />
-                <Input name="name" required placeholder="Name (queue worker)" aria-label="Name" />
-                <Input name="command" required placeholder="Command (php artisan queue:work)" aria-label="Command" />
-                <Input name="folder" placeholder="Folder in the workspace (optional)" aria-label="Folder" />
-                <PathBrowse name="folder" root={() => { const chosen = (document.querySelector('[data-form="add-process"] [name="workspace"]') as HTMLInputElement | HTMLSelectElement | null)?.value ?? workspaces[0]?.id; return workspaces.find((w) => w.id === chosen)?.path ?? null; }} />
-                <select name="restart" defaultValue="on-failure" aria-label="Restart" className={field}>
-                    <option value="on-failure">Restart on failure</option>
-                    <option value="always">Always restart</option>
-                    <option value="never">Never restart</option>
-                </select>
-                <select name="schedule" defaultValue="" aria-label="Schedule" className={field}>
-                    {PROCESS_SCHEDULE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
-                <Input name="scheduleCustom" placeholder="Custom schedule (0 3 * * *)" aria-label="Custom schedule" />
-                <Button size="xs" type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
-                    Add a process
-                </Button>
-            </form>
+            <div className="flex items-center justify-end px-5 py-2">
+                <AddProcessButton workspaces={workspaces} onAction={onAction} />
+            </div>
             {commandRun && !processes.some((p) => p.commandRun && p.id === commandRun.processId && p.workspaceId === commandRun.workspaceId) ? (
-                <p role="status" className="px-5 py-2 text-sm text-[var(--fg-3)]">This command is not in the current process history.</p>
+                <p role="status" className="px-5 py-1 text-xs text-[var(--fg-3)]">This command is not in the current process history.</p>
             ) : null}
             {processes.length === 0 ? (
                 <Empty>No background processes yet. Add one — a queue worker, a watcher, a dev server — and Genie keeps it running and brings it back after a restart.</Empty>
@@ -736,19 +689,19 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                     {processes.map((p) => {
                         const up = p.state === 'running' || p.state === 'restarting';
                         // Drawn in place (no hooks): the row's own buttons stay in this list's element tree.
-                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now: now ?? Date.now(), onAction })}</Fragment>;
+                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now: now ?? Date.now(), onAction, workspace: wsName(p.workspaceId) })}</Fragment>;
+                        const acts = processActions(p);
                         return (
                             <ProcessRow key={p.id} id={p.id} selected={Boolean(p.commandRun && commandRun?.processId === p.id && commandRun.workspaceId === p.workspaceId)}>
-                                <span className="font-medium">{p.name}</span>
+                                <span className="text-sm font-medium">{p.name}</span>
+                                {wsName(p.workspaceId) ? <Badge variant="soft" size="sm">{wsName(p.workspaceId)}</Badge> : null}
                                 <Badge variant="soft" size="sm">{p.state}</Badge>
-                                {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+                                {p.command ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
                                 {p.commandRun ? <CommandRunFacts process={p} now={now} /> : null}
-                                {p.reason ? <span className="text-sm text-[var(--danger)]">{p.reason}</span> : null}
-                                <span className="ml-auto flex shrink-0 items-center gap-3">
-                                    {up ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.stopProcess', processId: p.id })}>Stop</Button> : null}
-                                    {!p.commandRun && (up || !p.durable) ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</Button> : null}
-                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</Button> : null}
-                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
+                                {p.reason ? <span className="text-xs text-[var(--danger)]">{p.reason}</span> : null}
+                                <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                    {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
+                                    <RowMenu items={acts.menu} onRun={run} />
                                 </span>
                                 {p.commandRun || (p.log && p.log.lines > 0) ? (
                                     <details data-process-log={p.id} className="basis-full">
@@ -764,6 +717,22 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                 </ul>
             )}
         </div>
+    );
+}
+
+/** "Add process": a button that opens the labelled form in a modal. The only hook in the Processes tab, kept out of the panel. */
+function AddProcessButton({ workspaces, onAction }: { workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
+    const [open, setOpen] = useState(false);
+    return (
+        <>
+            <Button type="button" size="sm" icon="plus" data-action="add-process" disabled={workspaces.length === 0} onClick={() => setOpen(true)}>Add process</Button>
+            <Modal open={open} onClose={() => setOpen(false)} size="md">
+                <Modal.Header>Add process</Modal.Header>
+                <Modal.Body>
+                    <AddProcessForm workspaces={workspaces} onCancel={() => setOpen(false)} onSubmit={(a) => { onAction(a); setOpen(false); }} />
+                </Modal.Body>
+            </Modal>
+        </>
     );
 }
 
@@ -810,22 +779,22 @@ function CommandRunFacts({ process: p, now }: { process: NonNullable<FeatureData
  * v0.7.0-beta.342): the "scheduled" badge; "Running now", "Scheduled" or "Paused — not firing"; the schedule in words, the
  * next and the last run; for a nudge, whom it prompts and with what. Run now, Pause schedule / Enable schedule, Remove.
  */
-function scheduledRow({ p, up, now, onAction }: { p: NonNullable<FeatureData['hosting']>['processes'][number]; up: boolean; now: number; onAction: SurfaceProps['onAction'] }) {
+function scheduledRow({ p, up, now, onAction, workspace = null }: { p: NonNullable<FeatureData['hosting']>['processes'][number]; up: boolean; now: number; onAction: SurfaceProps['onAction']; workspace?: string | null }) {
     const s = p.schedule!;
     const nudge = s.kind === 'agent-nudge';
     const status = up ? 'Running now' : s.enabled ? 'Scheduled' : 'Paused — not firing';
+    const acts = scheduledActions(p);
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     return (
         <li data-process={p.id} data-process-scheduled={s.enabled ? 'enabled' : 'paused'} className="flex flex-wrap items-center gap-3 px-5 py-2">
-            <span className="font-medium">{p.name}</span>
+            <span className="text-sm font-medium">{p.name}</span>
+            {workspace ? <Badge variant="soft" size="sm">{workspace}</Badge> : null}
             <Badge variant="soft" size="sm">scheduled</Badge>
-            <span className="text-sm text-[var(--fg-2)]">{status}</span>
-            {!nudge && p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
-            <span className="ml-auto flex shrink-0 items-center gap-3">
-                <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.runScheduledNow', processId: p.id })}>Run now</Button>
-                {s.enabled
-                    ? <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.pauseSchedule', processId: p.id })}>Pause schedule</Button>
-                    : <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.enableSchedule', processId: p.id })}>Enable schedule</Button>}
-                {!up ? <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
+            <span className="text-xs text-[var(--fg-2)]">{status}</span>
+            {!nudge && p.command ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
+                <RowMenu items={acts.menu} onRun={run} />
             </span>
             <span className="basis-full text-xs text-[var(--fg-3)]">
                 {describeSchedule(s.cron)} · Next run: {formatNextRun(s.nextRunAt, now)} · Last run: {formatLastRun(s.lastRunAt, s.lastRunStatus, now)}
@@ -914,32 +883,25 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                         const scope = i.scope;
                         const inbox = inboxUrlOf(i);
                         const myLog = logs?.serviceId === i.id ? logs : null;
+                        const acts = serviceActions(i, status, { warning: warning !== null, logsOpen: myLog !== null });
+                        // Navigate first (Open inbox shows Genie's browser), then send; "delete data" opens ITS OWN confirmation on the row.
+                        const run = (a: RowAction) => {
+                            if (a.confirm === 'inline') { setConfirming(confirming === i.id ? null : i.id); return; }
+                            if (a.navigate) onNavigate(a.navigate);
+                            for (const act of a.acts) onAction(act);
+                        };
                         return (
                             <li key={i.id} data-service={i.id} data-service-status={status} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
                                 <div className="flex items-center gap-3">
-                                    <span className="font-mono">{i.engine}{i.variant ? ` (${i.variant})` : ''} {i.version}{i.kind ? ` · a ${i.kind}` : ''}</span>
+                                    <span className="text-sm font-medium">{engineName(i)}</span>
                                     <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : workspaceLabel(workspaces, scope.workspaceId)}</Badge>
                                     <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
                                     <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
-                                    {i.engine === 'custom' && i.image ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
-                                    <span className="ml-auto flex gap-3 text-[13px]">
-                                        {warning !== null && scope.kind === 'dedicated' ? (
-                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.use', workspaceId: scope.workspaceId, serviceId: i.id })}>Make active</Button>
-                                        ) : null}
-                                        {inbox ? (
-                                            // In Genie's own browser: the surface first (it reports the box the page is placed in), then the page.
-                                            <Button size="xs" type="button" data-open-inbox={inbox} onClick={() => { onNavigate('genie://browser'); onAction({ kind: 'browser.navigate', url: inbox }); }}>Open inbox</Button>
-                                        ) : null}
-                                        {status === 'running' ? (
-                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.stop', serviceId: i.id })}>Stop</Button>
-                                        ) : (
-                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</Button>
-                                        )}
-                                        <Button size="xs" type="button" data-service-logs-button={i.id} onClick={() => onAction({ kind: 'services.logs', serviceId: i.id })}>{myLog ? 'Refresh logs' : 'Logs'}</Button>
-                                        <Button size="xs" type="button" data-service-update={i.id} disabled={status === 'docker-not-running' || status === 'absent'} onClick={() => onAction({ kind: 'services.update', serviceId: i.id })}>Update image…</Button>
-                                        <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</Button>
-                                        <Button size="xs" type="button" data-delete-data={i.id} className="text-[var(--danger)]" onClick={() => setConfirming(confirming === i.id ? null : i.id)}>Remove and delete data…</Button>
+                                    {i.engine === 'custom' && i.image ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
+                                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                        {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} {...(a.id === 'open-inbox' ? { 'data-open-inbox': inbox ?? '' } : {})} />)}
+                                        <RowMenu items={acts.menu} onRun={run} />
                                     </span>
                                 </div>
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
@@ -989,25 +951,35 @@ export function EngineChoices({ instances, workspaces, onAction }: { instances: 
             .map((c) => ({ workspace: w, choice: c }));
     });
     if (rows.length === 0) return null;
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     return (
-        <div data-engine-choices className="flex flex-col gap-1 border-t border-[var(--border-1)] px-5 py-2 text-sm">
-            <span className="font-medium">In use</span>
-            {rows.map(({ workspace: w, choice: c }) => (
-                <div key={`${w.id}:${c.kind}`} data-engine-choice={`${w.id}:${c.kind}`} data-chosen={c.chosen?.id ?? ''} className="flex flex-wrap items-center gap-3">
-                    <span>{workspaceLabel(workspaces, w.id)} · {c.kind}:</span>
-                    <span className="font-mono">{c.chosen ? label(c.chosen) : 'none'}</span>
-                    <span className="ml-auto flex flex-wrap gap-3 text-[13px]">
-                        {c.candidates.filter((x) => x.instance.id !== c.chosen?.id).map((x) => (
-                            <Button size="xs" key={x.instance.id} type="button" data-use={x.instance.id} onClick={() => onAction({ kind: 'services.use', workspaceId: w.id, serviceId: x.instance.id })}>
-                                {x.detached ? `Attach ${label(x.instance)}` : `Use ${label(x.instance)}`}
-                            </Button>
-                        ))}
-                        {c.chosen && c.chosen.scope.kind === 'shared' ? (
-                            <Button size="xs" type="button" data-detach={c.chosen.id} onClick={() => onAction({ kind: 'services.detach', workspaceId: w.id, serviceId: c.chosen!.id })}>Detach {label(c.chosen)} (keeps its data)</Button>
-                        ) : null}
-                    </span>
-                </div>
-            ))}
+        <div data-engine-choices className="flex flex-col gap-1 border-t border-[var(--border-1)] px-5 py-3">
+            <span className="text-sm font-medium">In use</span>
+            <Table>
+                <Table.Head>
+                    <Table.Row>
+                        <Table.Column label="Workspace" className="px-2 py-1.5 text-xs" />
+                        <Table.Column label="Service" className="px-2 py-1.5 text-xs" />
+                        <Table.Column label="Version" className="px-2 py-1.5 text-xs" />
+                        <Table.Column label="" aria-label="Actions" className="w-10 px-2 py-1.5" />
+                    </Table.Row>
+                </Table.Head>
+                <Table.Body>
+                    {rows.map(({ workspace: w, choice: c }) => (
+                        <Table.Row key={`${w.id}:${c.kind}`} data-engine-choice={`${w.id}:${c.kind}`} data-chosen={c.chosen?.id ?? ''}>
+                            <Table.Cell className="px-2 py-1.5 text-sm">{workspaceLabel(workspaces, w.id)}</Table.Cell>
+                            <Table.Cell className="px-2 py-1.5 text-sm">{c.kind}</Table.Cell>
+                            <Table.Cell className="px-2 py-1.5 text-sm">
+                                <span className="inline-flex items-center gap-2">
+                                    {c.chosen ? `${c.chosen.variant ? `${c.chosen.variant} ` : ''}${c.chosen.version}` : 'none'}
+                                    {c.chosen && c.chosen.scope.kind === 'shared' ? <Badge variant="soft" size="sm">shared</Badge> : null}
+                                </span>
+                            </Table.Cell>
+                            <Table.Cell className="px-2 py-1.5 text-right"><RowMenu items={engineChoiceActions(w.id, c, label)} onRun={run} /></Table.Cell>
+                        </Table.Row>
+                    ))}
+                </Table.Body>
+            </Table>
         </div>
     );
 }
