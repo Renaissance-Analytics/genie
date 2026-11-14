@@ -16,8 +16,10 @@ import type { HostingApi } from './hosting-host.js';
 import type { ProcessBookApi } from './processes-host.js';
 import type { ProcessScheduler } from './process-scheduler.js';
 import type { SupervisorApi } from './process-supervisor.js';
+import { applyHostingFeatureAction, hostingFeatureSnapshot, type HostingFeaturePorts, type HostingFeatureServices } from './feature-hosting.js';
+import { trustSteps } from './hosting-trust.js';
 
-/** Canonical host dependencies for group two. Typed RED seam; not consumed until its tests are measured. */
+/** The canonical host dependencies for service/site/process reads and actions. */
 export interface HostFeatureHostingPorts {
     readonly api: Pick<HostingApi, 'sites' | 'envelopeSites' | 'engines' | 'routes' | 'trust' | 'engineStatuses'
         | 'startEngine' | 'stopEngine' | 'removeEngine' | 'engineDependents' | 'updateEngine' | 'hostingProblems'
@@ -29,7 +31,7 @@ export interface HostFeatureHostingPorts {
     readonly engineStatusWaitMs?: number;
 }
 
-/** Owned business ports for the first feature group; no window composition or OS adapter. */
+/** Owned contributor ports; existing services are supplied, never composed again by the aggregator. */
 export interface HostFeaturesPorts {
     readonly settings: Pick<SettingsStore, 'snapshot' | 'get' | 'set' | 'reset' | 'onChange'>;
     readonly knowledge: Pick<KnowledgeStore, 'summaries' | 'search' | 'add' | 'get'>;
@@ -49,11 +51,13 @@ export interface HostFeaturesPorts {
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 
 /**
- * Incremental host aggregator (Tynn #720). Group one uses the owned stores and the window's shared business rules.
+ * Incremental host aggregator (Tynn #720). The first two groups use owned services and shared business rules.
  * Production composition follows the remaining measured groups; this does not open another store or scheduler.
  */
 export class HostFeatures {
     readonly #services: PersonalFeatureServices;
+    readonly #hosting: HostingFeatureServices | undefined;
+    readonly #hostingPorts: HostingFeaturePorts;
     readonly #callers = new Map<string, FeatureState>();
     readonly #listeners = new Set<(data: FeatureData) => void>();
     readonly #offs: Array<() => void>;
@@ -69,12 +73,27 @@ export class HostFeatures {
             workspaceIds: () => ports.workspaceIds(), flowScheduler: { runNow: id => ports.runFlow(id) },
             pluginsRefresh: () => ports.refreshPlugins(),
         };
+        const h = ports.hosting;
+        this.#hosting = h ? {
+            sites: h.api.sites, engines: h.api.engines, envelopeSites: h.api.envelopeSites, supervisor: h.supervisor,
+            routes: () => h.api.routes(), engineStatuses: () => h.api.engineStatuses(),
+            startEngine: id => h.api.startEngine(id), stopEngine: id => h.api.stopEngine(id),
+            removeEngine: (id, options) => h.api.removeEngine(id, options),
+            engineDependents: id => h.api.engineDependents(id), updateEngine: (id, options) => h.api.updateEngine(id, options),
+            trustSteps: () => trustSteps(h.api.trust.entries()), workspaceVisible: id => h.workspaceVisible(id),
+            get externalFrontDoor() { return h.api.externalFrontDoor; }, hostingProblems: () => h.api.hostingProblems(),
+            trustCertificate: () => h.api.trustCertificate(), syncHosts: () => h.api.syncHosts(), retryFrontDoor: () => h.api.retryFrontDoor(),
+        } : undefined;
+        this.#hostingPorts = h ? { processes: h.processes, processScheduler: h.processScheduler,
+            engineStatusWaitMs: h.engineStatusWaitMs, onEngineStatusesLate: () => this.#changed() } : {};
         // Invalidations carry facts, never a caller's query, form or action-only answer.
         this.#push = new LatestPush({ build: () => this.#snapshot(emptyState()), deliver: data => {
             if (!this.#closed) for (const listener of this.#listeners) listener(data);
         } });
         const changed = () => this.#changed();
         this.#offs = [ports.settings.onChange(changed), ports.flows.onChange(changed), ports.inbox.onSend(changed), ports.inbox.onRead(changed)];
+        if (h) this.#offs.push(h.api.engines.onChange(changed), h.api.sites.onChange(changed), h.processes.onChange(changed),
+            h.supervisor.onChange(changed), h.supervisor.onOutput(changed), h.api.onFrontDoorChange(changed), h.api.trust.onVerdict(changed));
     }
 
     async snapshot(context: CallContext): Promise<FeatureData> {
@@ -86,8 +105,10 @@ export class HostFeatures {
         this.#check(context);
         const state = this.#callers.get(context.connectionId) ?? emptyState();
         const next = { ...state };
-        if (!await applyPersonalFeatureAction(this.#services, action, state, next,
-            { remoteAccess: { apply: () => this.ports.applyRemote() } }, REMOTE_ORIGIN)) {
+        const handled = await applyPersonalFeatureAction(this.#services, action, state, next,
+            { remoteAccess: { apply: () => this.ports.applyRemote() } }, REMOTE_ORIGIN)
+            || (this.#hosting ? await applyHostingFeatureAction(this.#hosting, action, state, next, this.#hostingPorts) : false);
+        if (!handled) {
             throw new Error(`the host feature service does not answer ${action.kind} yet`);
         }
         const answer = await this.#snapshot(next);
@@ -123,8 +144,10 @@ export class HostFeatures {
 
     async #snapshot(state: FeatureState): Promise<FeatureData> {
         const seq = ++this.#seq;
-        return { seq, ...await personalFeatureSnapshot(this.#services, state), hosting: null, services: null, toolchain: null,
-            browser: { url: null, routes: [], canGoBack: false, canGoForward: false },
+        const personal = await personalFeatureSnapshot(this.#services, state);
+        const hosting = this.#hosting ? await hostingFeatureSnapshot(this.#hosting, state, this.#hostingPorts)
+            : { hosting: null, services: null, browser: { url: null, routes: [], canGoBack: false, canGoForward: false } };
+        return { seq, ...personal, ...hosting, toolchain: null,
             remote: null, integrations: null, plugins: null, issueWatch: null };
     }
 }
