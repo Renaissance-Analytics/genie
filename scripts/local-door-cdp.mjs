@@ -176,24 +176,48 @@ async function observeDoor(refs) {
         functionDeclaration: `function(admitted, receiver) {
             const s = globalThis.__doorNative = { admitted, receiver, records: [], released: [], total: 0 };
             const observer = (socket) => {
-                const record = { socket, closed: false, connectionId: null, frames: 0 };
+                const record = { socket, closed: false, connectionId: null, frames: 0, results: [] };
+                // Diagnostic IDs/methods only: never retain call arguments or response values.
+                const pending = new Map();
+                const offMessage = socket.onMessage((text) => {
+                    try {
+                        const f = JSON.parse(text);
+                        if (f.kind === 'call' && Number.isSafeInteger(f.id) && typeof f.method === 'string' && f.method.length <= 128) {
+                            pending.set(f.id, f.method);
+                            if (pending.size > 128) pending.delete(pending.keys().next().value);
+                        }
+                    } catch {} // Malformed traffic is still counted/refused by the real door.
+                });
                 s.records.push(record);
                 const send = socket.send;
                 socket.send = (text) => {
                     record.frames++; s.total++;
-                    try { const f = JSON.parse(text); if (f.kind === 'welcome') { record.connectionId = f.connectionId; record.owner = f.isOwner; record.hasToken = Object.hasOwn(f, 'token'); } } catch {}
+                    try {
+                        const f = JSON.parse(text);
+                        if (f.kind === 'welcome') { record.connectionId = f.connectionId; record.owner = f.isOwner; record.hasToken = Object.hasOwn(f, 'token'); }
+                        if (f.kind === 'result') {
+                            record.results.push({ id: f.id, method: pending.get(f.id) ?? null });
+                            pending.delete(f.id);
+                            if (record.results.length > 128) record.results.shift();
+                        }
+                    } catch {}
                     return send(text);
                 };
-                socket.onClose(() => { record.closed = true; s.released.push({ connectionId: record.connectionId, count: s.records.filter((r) => !r.closed).length }); });
+                socket.onClose(() => { offMessage(); pending.clear(); record.closed = true; s.released.push({ connectionId: record.connectionId, count: s.records.filter((r) => !r.closed).length }); });
             };
             this.add(observer); s.detach = () => this.delete(observer);
-            s.summary = () => ({ total: s.total, live: s.records.filter((r) => !r.closed).length, records: s.records.map(({ connectionId, closed, frames, owner, hasToken }) => ({ connectionId, closed, frames, owner, hasToken })), released: s.released });
+            s.summary = () => ({ total: s.total, live: s.records.filter((r) => !r.closed).length, records: s.records.map(({ connectionId, closed, frames, owner, hasToken, results }) => ({ connectionId, closed, frames, owner, hasToken, results })), released: s.released });
             return true;
         }` });
     demand(r.result?.value === true, 'actual socket observer installed');
 }
 const nativeSummary = () => inspector.evaluate('globalThis.__doorNative.summary()');
-const frameMetadata = (from, to) => main.evaluate(`window.__doorCdp.frames.filter(r=>r.seq>${from}&&r.seq<=${to}).map(r=>({seq:r.seq,action:r.action,kind:r.frame?.kind??null,channel:r.frame?.channel??null}))`);
+const frameMetadata = async (from, to) => {
+    const { connectionId, frames } = await main.evaluate(`({connectionId:window.__doorCdp.welcome?.connectionId??null,frames:window.__doorCdp.frames.filter(r=>r.seq>${from}&&r.seq<=${to}).map(r=>({seq:r.seq,action:r.action,kind:r.frame?.kind??null,channel:r.frame?.channel??null,id:r.frame?.kind==='result'?(r.frame.id??null):null}))})`);
+    const results = (await nativeSummary()).records.find(record => record.connectionId === connectionId)?.results ?? [];
+    const methods = new Map(results.map(result => [result.id, result.method]));
+    return frames.map(frame => ({ ...frame, method: frame.kind === 'result' ? methods.get(frame.id) ?? null : null }));
+};
 async function quietFrames(label, from, to, nativeDelta) {
     const frames = await frameMetadata(from, to);
     demand(frames.length===to-from,`${label}: metadata retained every observed frame`);
