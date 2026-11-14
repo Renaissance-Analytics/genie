@@ -7,7 +7,7 @@ interface Report { identity?: RunIdentity; samplerPid?: number; finished?: boole
 // Import the actual executable with OS/CDP ports mocked. No real home, Electron, socket, process or provider is used.
 const io = vi.hoisted(() => ({
     identity: vi.fn(), write: vi.fn(), exec: vi.fn(), launch: vi.fn(), attach: vi.fn(), makeHome: vi.fn(),
-    alive: vi.fn(), gone: vi.fn(), killHard: vi.fn(), hostPid: vi.fn(), finish: vi.fn(), check: vi.fn(), stages: vi.fn(), until: vi.fn(), sleep: vi.fn(),
+    alive: vi.fn(), gone: vi.fn(), killHard: vi.fn(), hostPid: vi.fn(), finish: vi.fn(), check: vi.fn(), stages: vi.fn(), until: vi.fn(), sleep: vi.fn(), baseline: vi.fn(),
     failures: [] as string[], order: [] as string[], reports: [] as { value: Report; goneCalls: number }[], windows: process.platform === 'win32',
 }));
 vi.mock('node:fs', () => ({ writeFileSync: io.write }));
@@ -33,7 +33,7 @@ let throws: number | undefined;
 
 beforeEach(() => {
     vi.resetModules();
-    for (const mock of [io.identity, io.write, io.exec, io.launch, io.attach, io.makeHome, io.alive, io.gone, io.killHard, io.hostPid, io.finish, io.check, io.stages, io.until, io.sleep]) mock.mockReset();
+    for (const mock of [io.identity, io.write, io.exec, io.launch, io.attach, io.makeHome, io.alive, io.gone, io.killHard, io.hostPid, io.finish, io.check, io.stages, io.until, io.sleep, io.baseline]) mock.mockReset();
     io.sleep.mockResolvedValue(undefined);
     io.failures.length = 0; io.order.length = 0; io.reports.length = 0;
     live = new Set([101, 202]); stuck = undefined; throws = undefined; io.windows = process.platform === 'win32';
@@ -46,7 +46,8 @@ beforeEach(() => {
     io.makeHome.mockReturnValue({ root, genie: join(root, 'home/.genie'), lifecycle: join(root, 'lifecycle.log'), env: {} });
     io.hostPid.mockReturnValue(202);
     io.launch.mockReturnValue({ child: { pid: 101 } });
-    io.attach.mockResolvedValue({ windowPid: 101, cdp: { evaluate: vi.fn(async (expression: string) => expression.includes('Promise.all(') ? { workspaces: ['fixture-workspace'] } : true), closed: vi.fn(async () => true) }, inspector: { closed: vi.fn(async () => true) } });
+    io.baseline.mockResolvedValue({ snapshot: true, detail: true, watch: true });
+    io.attach.mockResolvedValue({ windowPid: 101, cdp: { evaluate: vi.fn(async (expression: string) => expression.includes('Promise.all(') ? { workspaces: ['fixture-workspace'] } : true), closed: vi.fn(async () => true) }, inspector: { evaluate: io.baseline, closed: vi.fn(async () => true) } });
     io.alive.mockImplementation((pid: number) => live.has(pid));
     io.gone.mockImplementation(async (pid: number) => { io.order.push(`gone:${pid}`); return !live.has(pid); });
     io.killHard.mockImplementation(stop);
@@ -87,7 +88,7 @@ describe('actual sampler adopts M4-only scope (Tynn #564)', () => {
             if (expression.includes('120; while')) return 120;
             return true;
         }) };
-        const inspector = { closed: vi.fn(async () => true) };
+        const inspector = { evaluate: io.baseline, closed: vi.fn(async () => true) };
         io.attach.mockResolvedValue({ windowPid: 101, cdp, inspector }); io.until.mockResolvedValue(true);
         io.stages.mockImplementation(async () => {
             io.order.push(`stages after ${opens} opens`);
@@ -168,6 +169,53 @@ async function runSampler() {
     const code = await completed;
     return { code, report: io.reports.at(-1)?.value };
 }
+
+describe('historical comparisons refuse a retired or unreadable native baseline (Tynn #564)', () => {
+    async function refusal(label = 'historical IPC baseline is available') {
+        const result = await runSampler();
+        expect(result.code).toBe(1);
+        expect(result.report?.finished).toBe(false);
+        expect(result.report?.failures).toContain(label);
+        expect(result.report?.cleanup?.complete).toBe(true);
+        expect(result.report?.m4_5000).toBeUndefined(); expect(result.report?.m4_20000).toBeUndefined();
+        expect(result.report?.m5).toBeUndefined(); expect(result.report?.m6).toBeUndefined();
+        expect(io.stages).not.toHaveBeenCalled();
+        const session = await io.attach.mock.results[0]!.value as { cdp: { evaluate: ReturnType<typeof vi.fn> } };
+        const expressions = session.cdp.evaluate.mock.calls.map(([expression]) => String(expression));
+        expect(expressions.some(expression => /Promise\.all\(|subscribeAgent|120; while|genieTest\.addAgent/.test(expression))).toBe(false);
+        expect(io.gone).toHaveBeenCalledWith(101, expect.any(Number));
+        expect(io.gone).toHaveBeenCalledWith(202, expect.any(Number));
+    }
+
+    it.each(['ipc', 'door', 'door-revision'])('%s cannot become a comparison after the baseline is gone', async mode => {
+        vi.stubEnv('AGENT_READS_REQUEST', JSON.stringify({ ...request, mode }));
+        process.argv[2] = `--mode=${mode}`;
+        io.baseline.mockResolvedValue({ snapshot: false, detail: false, watch: false });
+        await refusal();
+    });
+
+    it.each(['snapshot', 'detail', 'watch'])('a partial baseline missing %s is refused before any timed work', async field => {
+        io.baseline.mockResolvedValue({ snapshot: true, detail: true, watch: true, [field]: false });
+        await refusal();
+    });
+
+    it('an inspection failure is an explicit refusal with owned cleanup, never permission to measure', async () => {
+        io.baseline.mockRejectedValue(new Error('fixture inspector closed'));
+        await refusal();
+    });
+
+    it('a malformed inspection answer is refused rather than treated as baseline support', async () => {
+        io.baseline.mockResolvedValue({ snapshot: 'true', detail: true, watch: true });
+        await refusal();
+    });
+
+    it('available handlers do not suffice when the page did not select the requested historical path', async () => {
+        // Replace the default session before the sampler attaches; no actual CDP or Electron process is used.
+        io.attach.mockResolvedValue({ windowPid: 101, inspector: { evaluate: io.baseline, closed: vi.fn(async () => true) },
+            cdp: { evaluate: vi.fn(async (expression: string) => expression.includes('Promise.all(') ? { workspaces: ['fixture-workspace'] } : !expression.includes('genieAgentReadsIpc')), closed: vi.fn(async () => true) } });
+        await refusal('requested historical read path is selected');
+    });
+});
 
 describe('actual sampler identity and owned cleanup (Tynn #564)', () => {
     it('uses independently read identity, with only the run nonce supplied by its request', async () => {
