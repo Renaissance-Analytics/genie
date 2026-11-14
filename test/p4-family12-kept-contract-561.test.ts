@@ -112,10 +112,20 @@ describe('the Tynn tab keeps caller answers', () => {
         expect(source.invoke).toHaveBeenCalledWith(`workspaces.${row.name}`, [...row.args], expect.anything());
     });
 
-    it.each(rows)('$name exposes an API failure in its existing refusal shape', async row => {
+    // Before d4e69a16, preload returned ipcRenderer.invoke directly: an unexpected handler
+    // rejection rejected that promise. Ordinary Tynn refusals were returned values instead.
+    it.each(rows)('$name rejects an unexpected operation failure, as the old IPC caller did', async row => {
         const source = fixture(), client = await source.connect(), reason = `${row.name} cannot answer now`;
         source.operation.mockRejectedValue(new Error(reason));
-        expect(await call(client.bridge.workspaces, row)).toEqual({ ok: false, reason });
+        await expect(call(client.bridge.workspaces, row)).rejects.toThrow(reason);
+        expect(source.operation).toHaveBeenCalledExactlyOnceWith(...row.args);
+    });
+
+    it.each(rows)('$name preserves a returned Tynn refusal unchanged', async row => {
+        const source = fixture(), client = await source.connect();
+        const refusal = { ok: false, state: 'error', reason: `${row.name} was refused by Tynn` };
+        source.operation.mockResolvedValue(refusal);
+        expect(await call(client.bridge.workspaces, row)).toEqual(refusal);
         expect(source.operation).toHaveBeenCalledExactlyOnceWith(...row.args);
     });
 });
