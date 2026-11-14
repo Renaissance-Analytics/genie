@@ -13,6 +13,9 @@ import { applyPersonalFeatureAction, customSoundData, personalFeatureSnapshot, t
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import type { DeckItem } from '../core/deck.js';
 import type { DeckAnswerPorts } from './deck-answer.js';
+import { MAIN_ERROR_DECK_PREFIX } from '../core/main-errors.js';
+import { applyDeckFeatureAction } from './feature-deck.js';
+import { applyFeatureControlAction } from './feature-controls.js';
 import { featureOriginOf, HostPicks } from './host-picks.js';
 import type { HostingApi } from './hosting-host.js';
 import type { ProcessBookApi } from './processes-host.js';
@@ -79,7 +82,7 @@ export interface HostFeaturesPorts {
     readonly applyRemote: () => Promise<void>;
     readonly hosting?: HostFeatureHostingPorts;
     readonly machine?: HostFeatureMachinePorts;
-    /** Typed extraction seams: the incremental service does not consume these until the measured checkpoint. */
+    /** Resolved by trusted composition for this admitted connection only; no newest-window fallback. */
     readonly presentation?: (context: CallContext) => HostFeaturePresentation | null;
     readonly system?: Pick<FeaturePorts, 'safeMode' | 'hangNotice'>;
     readonly deck?: HostFeatureDeckPorts;
@@ -112,6 +115,10 @@ export class HostFeatures {
     readonly #listeners = new Set<(data: FeatureData) => void>();
     readonly #offs: Array<() => void>;
     readonly #push: LatestPush<FeatureData>;
+    readonly #repairingCli = new Set<string>();
+    readonly #work = new Map<symbol, NonNullable<FeatureState['toolchainUpdating']>>();
+    #toolFacts: Pick<FeatureState, 'toolStatuses' | 'toolchainCheckedAt'> = { toolStatuses: null };
+    #progressProbe: Promise<void> | null = null;
     #seq = 0;
     #closed = false;
 
@@ -157,7 +164,7 @@ export class HostFeatures {
     async snapshot(context: CallContext): Promise<FeatureData> {
         this.#check(context);
         const caller = this.#touch(context.connectionId);
-        const answer = await this.#snapshot(caller?.state ?? emptyState());
+        const answer = await this.#snapshot(caller?.state ?? emptyState(), context);
         this.#check(context);
         return answer;
     }
@@ -180,18 +187,54 @@ export class HostFeatures {
     }
 
     async #act(action: FeatureAction, context: CallContext, caller: FeatureCaller): Promise<FeatureData> {
-        const state = caller.state;
+        const state = this.#toolFacts.toolStatuses === null ? caller.state : { ...caller.state, ...this.#toolFacts };
         const next = { ...state };
-        const handled = await applyPersonalFeatureAction(this.#services, action, state, next,
-            { remoteAccess: { apply: () => this.ports.applyRemote() } }, featureOriginOf(context, caller.picks))
-            || (this.#hosting ? await applyHostingFeatureAction(this.#hosting, action, state, next, this.#hostingPorts) : false)
-            || (this.#machine ? await applyMachineFeatureAction(this.#machine, action, state, next, this.ports.machine!.effects) : false)
-            || (this.#hosting && this.ports.machine ? await applyToolchainCoreFeatureAction(this.#hosting, action, state, next, this.ports.machine.effects) : false);
-        if (!handled) {
-            throw new Error(`the host feature service does not answer ${action.kind} yet`);
+        const ui = this.#presentation(context, needsPresentation(action));
+        if (action.kind.startsWith('browser.') && !ui?.browser) throw new Error(OWN_WINDOW);
+        if (action.kind === 'remote.answerPair' && context.origin !== 'local-window') {
+            throw new Error('a device is allowed on this machine’s own screen, never from another device');
+        }
+        const token = Symbol('feature work');
+        const machine = this.ports.machine?.effects;
+        const tc = machine?.toolchain;
+        const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,
+            login: async provider => ui?.login ? ui.login(provider) : { ok: false, reason: 'no login is wired into this Genie' },
+            updating: row => {
+                if (!this.#closed) {
+                    if (row) this.#work.set(token, row); else this.#work.delete(token);
+                    this.#changed();
+                    tc.updating?.(row);
+                }
+            },
+        } } : {}) };
+        const deck = this.ports.deck;
+        try {
+            const handled = await applyPersonalFeatureAction(this.#services, action, state, next,
+                { remoteAccess: { apply: () => this.ports.applyRemote() }, ...(ui?.openFlowEditor ? { openFlowEditor: route => ui.openFlowEditor!(route) } : {}) },
+                featureOriginOf(context, caller.picks))
+                || (this.#hosting ? await applyHostingFeatureAction(this.#hosting, action, state, next,
+                    { ...this.#hostingPorts, ...(ui?.openInBrowser ? { openInBrowser: url => ui.openInBrowser!(url) } : {}) }) : false)
+                || (this.#machine ? await applyMachineFeatureAction(this.#machine, action, state, next, effects) : false)
+                || (this.#hosting ? await applyToolchainCoreFeatureAction(this.#hosting, action, state, next, effects, this.#repairingCli) : false)
+                || (deck ? await applyDeckFeatureAction({ ...deck, ...(ui?.mainErrors ? { mainErrors: ui.mainErrors } : {}) }, action) : false)
+                || await applyFeatureControlAction({ ...(this.#machine ? { pairing: this.#machine.pairing } : {}), routes: () => this.#hosting?.routes() ?? [] }, action, next,
+                    { ...effects, ...this.ports.system, ...(ui?.rendererNotice ? { rendererNotice: ui.rendererNotice } : {}),
+                        ...(ui?.browser ? { browser: ui.browser } : {}),
+                        githubOpen: async target => { if (!ui?.githubOpen) throw new Error(OWN_WINDOW); await ui.githubOpen(target); },
+                        ...(action.kind === 'tailscale.install' ? { tailscale: {
+                            install: async () => { if (!ui?.tailscaleInstall) throw new Error(OWN_WINDOW); return ui.tailscaleInstall(); },
+                        } } : {}),
+                    });
+            if (!handled) throw new Error(`the host feature service does not answer ${action.kind} yet`);
+        } finally {
+            if (this.#work.delete(token)) this.#changed();
         }
         this.#check(context);
-        const answer = await this.#snapshot(next);
+        if (action.kind.startsWith('toolchain.') && next.toolStatuses !== null) {
+            this.#toolFacts = { toolStatuses: next.toolStatuses, toolchainCheckedAt: next.toolchainCheckedAt ?? null };
+            this.#changed();
+        }
+        const answer = await this.#snapshot(next, context);
         this.#check(context);
         // These are replies to the action that requested them, never the next read or a broadcast.
         const { inboxThread: _thread, inboxSearch: _search, servedAttachment: _attachment,
@@ -233,6 +276,7 @@ export class HostFeatures {
         for (const off of this.#offs.splice(0)) off();
         for (const connectionId of this.#callers.keys()) this.#release(connectionId);
         this.#listeners.clear(); this.#callers.clear();
+        this.#work.clear(); this.#repairingCli.clear();
     }
 
     #check(context: CallContext): void {
@@ -261,13 +305,39 @@ export class HostFeatures {
 
     #changed(): void { if (!this.#closed && this.#listeners.size > 0) this.#push.request(); }
 
-    async #snapshot(state: FeatureState): Promise<FeatureData> {
+    #presentation(context: CallContext, required = false): HostFeaturePresentation | undefined {
+        const ui = context.origin === 'local-window' ? this.ports.presentation?.(context) ?? undefined : undefined;
+        if (required && !ui) throw new Error(OWN_WINDOW);
+        return ui;
+    }
+
+    async #snapshot(state: FeatureState, context?: CallContext): Promise<FeatureData> {
         const seq = ++this.#seq;
         const personal = await personalFeatureSnapshot(this.#services, state);
         const hosting = this.#hosting ? await hostingFeatureSnapshot(this.#hosting, state, this.#hostingPorts)
             : { hosting: null, services: null, browser: { url: null, routes: [], canGoBack: false, canGoForward: false } };
         const machine = this.#machine ? machineFeatureSnapshot(this.#machine, state, this.ports.machine!.effects)
             : { remote: null, integrations: null, plugins: null, issueWatch: null };
-        return { seq, ...personal, ...hosting, ...machine, toolchain: toolchainSection(state) };
+        // A first repair can start before a scan. Read the owner's actual tools for its live row, never invent an empty scan.
+        if (this.#work.size > 0 && this.#toolFacts.toolStatuses === null && this.ports.machine?.effects.toolchain) {
+            const tc = this.ports.machine.effects.toolchain;
+            this.#progressProbe ??= tc.probe().then(tools => {
+                if (!this.#closed && this.#toolFacts.toolStatuses === null) this.#toolFacts = { toolStatuses: tools, toolchainCheckedAt: tc.now() };
+            }).finally(() => { this.#progressProbe = null; });
+            await this.#progressProbe;
+        }
+        const toolchain = toolchainSection({ ...state, toolStatuses: this.#toolFacts.toolStatuses ?? state.toolStatuses,
+            toolchainCheckedAt: this.#toolFacts.toolchainCheckedAt ?? state.toolchainCheckedAt ?? null,
+            toolchainUpdating: [...this.#work.values()].at(-1) ?? null });
+        const browser = context ? this.#presentation(context)?.browser?.snapshot() : undefined;
+        return { seq, ...personal, ...hosting, ...machine, ...(browser ? { browser: { ...hosting.browser, ...browser } } : {}), toolchain };
     }
+}
+
+const OWN_WINDOW = 'this feature action needs its caller’s own admitted local window; open Genie there and try again';
+function needsPresentation(action: FeatureAction): boolean {
+    return action.kind === 'flows.openEditor' || action.kind === 'flows.newFlow' || action.kind === 'hosting.openSite'
+        || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss' || action.kind === 'toolchain.login'
+        || action.kind === 'integrations.githubOpen' || action.kind === 'tailscale.install'
+        || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && action.item.source === 'genie' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));
 }

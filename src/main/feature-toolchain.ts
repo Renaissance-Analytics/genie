@@ -157,10 +157,52 @@ function describeUpdate(tool: string, outcome: RepairOutcome): string {
     }
 }
 
-/** Shared check, install, update, repair, default and PATH rules. Version actions move in their own measured group. */
+/** The historical dispatcher shares one guard; the host service passes its own process-owned guard. */
+const legacyRepairingCli = new Set<string>();
+
+/** Shared check, install, update, repair, default, PATH and CLI rules. */
 export async function applyToolchainCoreFeatureAction(services: ToolchainFeatureServices, action: FeatureAction,
-    state: FeatureState, next: FeatureState, ports: Pick<FeaturePorts, 'toolchain'>): Promise<boolean> {
+    state: FeatureState, next: FeatureState, ports: Pick<FeaturePorts, 'toolchain'>, repairingCli = legacyRepairingCli): Promise<boolean> {
     switch (action.kind) {
+        case 'toolchain.login': {
+            clearRefusal(next, action.tool);
+            // The row's tool is the provider's CLI: claude-code is Claude's, codex is Codex's (Tynn #698).
+            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
+            const login = ports.toolchain?.login;
+            const opened = login ? await login(provider) : { ok: false as const, reason: 'no login is wired into this Genie' };
+            if (!opened.ok) refuse(next, action.tool, opened.reason);
+            break;
+        }
+        case 'toolchain.repairCli': {
+            // ONE REPAIR AT A TIME per CLI (PR #1881 review): a second click while one runs does nothing. Two installers
+            // writing the same folder race, and the second's end would clear the first's progress off the row.
+            if (repairingCli.has(action.tool)) break;
+            clearRefusal(next, action.tool);
+            const tc = ports.toolchain;
+            if (!tc?.repairCli) {
+                refuse(next, action.tool, 'no repair is wired into this Genie; nothing was changed');
+                break;
+            }
+            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
+            const row = (step: string) => tc.updating?.({ tool: action.tool, step });
+            // Taken in the same synchronous run as the check above, so no second click can slip between them.
+            repairingCli.add(action.tool);
+            try {
+                row('Starting');
+                const outcome = await tc.repairCli(provider, (step) => { if (step) row(step); });
+                if (outcome.kind === 'repaired') next.toolchainResult = outcome.words;
+                else refuse(next, action.tool, outcome.reason);
+            } catch (error) {
+                refuse(next, action.tool, `The repair stopped: ${error instanceof Error ? error.message : String(error)}`);
+            } finally {
+                tc.updating?.(null);
+                repairingCli.delete(action.tool);
+            }
+            // The row shows what the check finds now, never the repair's word for it.
+            await rescanToolchain(next, tc, sitePins(services));
+            break;
+        }
+
         case 'toolchain.check': {
             const tc = ports.toolchain;
             if (!tc) throw new Error('no toolchain runner is wired into this Genie; the scan cannot run');

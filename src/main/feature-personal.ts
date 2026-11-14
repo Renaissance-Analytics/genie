@@ -37,7 +37,7 @@ export interface PersonalFeatureServices {
 
 export interface PersonalFeatureEffects {
     readonly remoteAccess?: { apply(): Promise<void> };
-    readonly openFlowEditor?: (route: string) => void;
+    readonly openFlowEditor?: (route: string) => void | Promise<void>;
 }
 
 const INBOX_THREAD_MAX = 2_000;
@@ -191,11 +191,11 @@ export async function applyPersonalFeatureAction(services: PersonalFeatureServic
         }
         case 'flows.openEditor':
             if (!ports.openFlowEditor) throw new Error('this Genie has no flow editor window');
-            ports.openFlowEditor(`genie://flow/${encodeURIComponent(action.flowId)}`);
+            await ports.openFlowEditor(`genie://flow/${encodeURIComponent(action.flowId)}`);
             break;
         case 'flows.newFlow':
             if (!ports.openFlowEditor) throw new Error('this Genie has no flow editor window');
-            ports.openFlowEditor(`genie://flow/new?workspace=${encodeURIComponent(action.workspaceId)}`);
+            await ports.openFlowEditor(`genie://flow/new?workspace=${encodeURIComponent(action.workspaceId)}`);
             break;
         case 'flows.saveGraph':
             next.flowSaved = await saveGraph(services, action);

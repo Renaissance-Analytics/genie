@@ -30,7 +30,7 @@ function tynnAccountOf(ports: MachineFeaturePorts): TynnAccountPort {
 const NO_GITHUB = 'this Genie cannot sign in to GitHub here: it has no GitHub account (doctor mode)';
 
 /** The GitHub sign-in, or a refusal in words: without one nothing pretends to sign in. */
-export function githubAccountOf(ports: MachineFeaturePorts): GithubAccountPort {
+export function githubAccountOf(ports: Pick<MachineFeaturePorts, 'githubAccount'>): GithubAccountPort {
     if (!ports.githubAccount) throw new Error(NO_GITHUB);
     return ports.githubAccount;
 }

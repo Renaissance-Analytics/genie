@@ -1,19 +1,18 @@
-import { applyMachineFeatureAction, githubAccountOf, machineFeatureSnapshot } from './feature-machine.js';
-import { applyToolchainCoreFeatureAction, clearRefusal, refuse, rescanToolchain, toolchainSection } from './feature-toolchain.js';
+import { applyMachineFeatureAction, machineFeatureSnapshot } from './feature-machine.js';
+import { applyToolchainCoreFeatureAction, toolchainSection } from './feature-toolchain.js';
 export { toolchainSection, toolchainStateFrom } from './feature-toolchain.js';
-import { applyHostingFeatureAction, hostingFeatureSnapshot, sitePins } from './feature-hosting.js';
+import { applyHostingFeatureAction, hostingFeatureSnapshot } from './feature-hosting.js';
 export { ENGINE_STATUS_WAIT_MS, ROW_LOG_LINES, sitePins } from './feature-hosting.js';
 import { applyPersonalFeatureAction, personalFeatureSnapshot } from './feature-personal.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
 import { REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
-import { classifyNavigation } from '../core/browser-policy.js';
+import { applyFeatureControlAction } from './feature-controls.js';
+import { applyDeckFeatureAction } from './feature-deck.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { TynnAccountPort } from './tynn-account.js';
 import type { GithubAccountPort } from './github-account.js';
-import { dismissableStale, isDismissable } from '../core/deck.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import type { FlowAdding, FlowSaved, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
-import { answerDeck } from './deck-answer.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import type { ToolchainActivity } from '../core/toolchain-risk.js';
@@ -106,7 +105,7 @@ export interface FeaturePorts {
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
     readonly processScheduler?: Pick<import('./process-scheduler.js').ProcessScheduler, 'runNow'>;
     /** Open the flow editor window on a route (`genie://flow/<id>`, `genie://flow/new?workspace=<id>`, genie#1204). Absent = no windows (doctor mode). */
-    readonly openFlowEditor?: (route: string) => void;
+    readonly openFlowEditor?: (route: string) => void | Promise<void>;
     /** IssueWatch's view per workspace id (Tynn #806). Absent = none (doctor mode). */
     readonly issueWatch?: () => Readonly<Record<string, IssueWatchPanelView>>;
     /** Have Tynn read a workspace's repos now — the GitHub panel's Refresh. Absent = none (doctor mode). */
@@ -129,7 +128,7 @@ export interface FeaturePorts {
         /** T2: Check and repair. */
         repair?(): Promise<RepairReport>;
         /** Open a provider's own login (LoginHost, the Agent view's Log in), for a row that says Not signed in (Tynn #698). */
-        login?(provider: string): { ok: true } | { ok: false; reason: string };
+        login?(provider: string): { ok: true } | { ok: false; reason: string } | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Repair a provider's CLI (Tynn #698, main/cli-repair.ts): each step pushed while it runs; never throws by contract, guarded anyway. */
         repairCli?(provider: string, progress: (step: string | null) => void): Promise<{ readonly kind: 'repaired'; readonly words: string } | { readonly kind: 'failed' | 'refused'; readonly reason: string }>;
         /** T4: Genie-managed PHP versions. `pins` are the sites' PHP pins, which a removal is refused against. */
@@ -272,9 +271,6 @@ export interface MachinePathStatus {
     readonly targets: readonly string[];
 }
 
-/** The Toolchain rows whose CLI repair is running now (`toolchain.repairCli`): one repair per CLI at a time. */
-const repairingCli = new Set<string>();
-
 /**
  * Every snapshot's number, taken when it STARTS (genie#1393). Snapshots race: a click's answer built while a site was
  * `starting` could land after the push built when it answered, and the window kept whichever came last. The window keeps
@@ -309,135 +305,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
     if (!await applyPersonalFeatureAction(services, action, state, next, ports, origin)
         && !await applyHostingFeatureAction(services, action, state, next, ports)
         && !await applyMachineFeatureAction(services, action, state, next, ports)
-        && !await applyToolchainCoreFeatureAction(services, action, state, next, ports)) switch (action.kind) {
-        case 'rendererNotice.dismiss': {
-            if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
-            const done = await ports.rendererNotice.dismiss();
-            if (!done.ok) throw new Error(done.reason);
-            break;
-        }
-        case 'hangNotice.dismiss':
-        case 'hangNotice.stopAll': {
-            if (!ports.hangNotice) throw new Error('Genie’s host is not connected.');
-            const done = action.kind === 'hangNotice.dismiss' ? await ports.hangNotice.dismiss() : await ports.hangNotice.stopAll();
-            if (!done.ok) throw new Error(done.reason);
-            break;
-        }
-        case 'safeMode.leave': {
-            if (!ports.safeMode) throw new Error('Genie’s host is not connected, so safe mode cannot be left from here.');
-            const left = await ports.safeMode.leave();
-            if (!left.ok) throw new Error(left.reason);
-            break;
-        }
-        case 'toolchain.login': {
-            clearRefusal(next, action.tool);
-            // The row's tool is the provider's CLI: claude-code is Claude's, codex is Codex's (Tynn #698).
-            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
-            const login = ports.toolchain?.login;
-            const opened = login ? login(provider) : { ok: false as const, reason: 'no login is wired into this Genie' };
-            if (!opened.ok) refuse(next, action.tool, opened.reason);
-            break;
-        }
-        case 'toolchain.repairCli': {
-            // ONE REPAIR AT A TIME per CLI (PR #1881 review): a second click while one runs does nothing. Two installers
-            // writing the same folder race, and the second's end would clear the first's progress off the row.
-            if (repairingCli.has(action.tool)) break;
-            clearRefusal(next, action.tool);
-            const tc = ports.toolchain;
-            if (!tc?.repairCli) {
-                refuse(next, action.tool, 'no repair is wired into this Genie; nothing was changed');
-                break;
-            }
-            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
-            const row = (step: string) => tc.updating?.({ tool: action.tool, step });
-            // Taken in the same synchronous run as the check above, so no second click can slip between them.
-            repairingCli.add(action.tool);
-            try {
-                row('Starting');
-                const outcome = await tc.repairCli(provider, (step) => { if (step) row(step); });
-                if (outcome.kind === 'repaired') next.toolchainResult = outcome.words;
-                else refuse(next, action.tool, outcome.reason);
-            } catch (error) {
-                refuse(next, action.tool, `The repair stopped: ${error instanceof Error ? error.message : String(error)}`);
-            } finally {
-                tc.updating?.(null);
-                repairingCli.delete(action.tool);
-            }
-            // The row shows what the check finds now, never the repair's word for it.
-            await rescanToolchain(next, tc, sitePins(services));
-            break;
-        }
-        case 'deck.answer':
-        case 'deck.answerForm': {
-            // One answer for the window and genie-host (deck-answer.ts, Tynn #551).
-            await answerDeck(action, {
-                attention: services.attention,
-                approvals: services.approvals,
-                inbox: services.inbox,
-                deliverToAgent: ports.deliverToAgent,
-                trustCertificate: () => services.trustCertificate(),
-                deferTrustCertificate: () => services.deferTrustCertificate(),
-                syncHosts: () => services.syncHosts(),
-                ...(ports.mainErrors ? { mainErrors: ports.mainErrors } : {}),
-            });
-            break;
-        }
-        case 'deck.dismiss':
-            // An agent's question, put aside WITHOUT an answer: it leaves the Deck and the question window, and the asker is
-            // mailed that it was dismissed (attention-store.ts). An approval or a forwarded question is not dismissable.
-            if (!isDismissable(action.item)) throw new Error('only an agent’s question can be dismissed; an approval is answered with its own options');
-            // The person's notes travel with it (one per question; anything that is not a string is no note).
-            await services.attention.dismiss(action.item.id, Array.isArray(action.notes) ? action.notes.map((n) => (typeof n === 'string' ? n : '')) : []);
-            break;
-        case 'deck.dismissStale': {
-            // "Dismiss all stale": the ids the person SAW marked stale, re-checked against the Deck now — a question that is
-            // no longer pending, or no longer stale, stays. Each asker is mailed once (attention-store.ts).
-            const seen = new Set(Array.isArray(action.ids) ? action.ids.filter((id): id is string => typeof id === 'string') : []);
-            const still = dismissableStale(services.deckItems()).filter((i) => seen.has(i.id));
-            // Never a silent no-op (Tynn #600): when none of them is still a stale question here, the person is told.
-            if (still.length === 0) throw new Error('None of these questions is still waiting as a stale one here, so nothing was dismissed. Look at the Deck again.');
-            await services.attention.dismissMany(still.map((i) => i.id));
-            break;
-        }
-        case 'deck.dismissOlder':
-            // "Dismiss all older than 1 day" — the store's clock decides what is old, each asker mailed once.
-            await services.attention.dismissOlderThan(action.olderThanMs);
-            break;
-        case 'remote.answerPair': {
-            // Allow or Deny on "Pair this device?", from this machine's own window (a remote connection is refused upstream).
-            const r = await services.pairing.answer(action.id, action.allow);
-            if (!r.ok) throw new Error(r.reason);
-            break;
-        }
-        case 'tailscale.install': {
-            if (!ports.tailscale) throw new Error('Tailscale is not available here');
-            const r = await ports.tailscale.install();
-            next.tailscaleOutcome = r.started ? 'Tailscale’s installer is open: finish it, then Connect.' : r.url ? 'Tailscale’s download page opened in your browser.' : (r.message ?? 'Tailscale could not be installed from here.');
-            break;
-        }
-        // The page opened, or its window regained focus: read Windows again, debounced.
-        case 'remote.readFirewall': {
-            if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
-            await ports.firewall.reread();
-            break;
-        }
-        case 'integrations.githubOpen':
-            await githubAccountOf(ports).openPage(action.target);
-            break;
-        case 'browser.navigate': {
-            const nav = classifyNavigation(action.url, services.routes());
-            if (nav.kind === 'refused') throw new Error(nav.reason);
-            // A site is its own https origin, path kept (core/browser-policy.ts); a name nobody serves is shown at its root.
-            next.browserUrl = nav.kind === 'no-site' ? `https://${nav.host}/` : nav.url;
-            break;
-        }
-        // Back, forward and reload act on the pane's own history in main (main.ts); the URL they land on comes back from
-        // the view's navigation report, never guessed here.
-        case 'browser.back':
-        case 'browser.forward':
-        case 'browser.reload':
-            break;
-    }
+        && !await applyToolchainCoreFeatureAction(services, action, state, next, ports)
+        && !await applyDeckFeatureAction({ attention: services.attention, approvals: services.approvals, inbox: services.inbox,
+            deckItems: () => services.deckItems(), deliverToAgent: ports.deliverToAgent,
+            trustCertificate: () => services.trustCertificate(), deferTrustCertificate: () => services.deferTrustCertificate(),
+            syncHosts: () => services.syncHosts(), ...(ports.mainErrors ? { mainErrors: ports.mainErrors } : {}),
+        }, action)) await applyFeatureControlAction(services, action, next, ports);
     slow(`act:${action.kind}`, actStarted);
     const snapshotStarted = Date.now();
     try {

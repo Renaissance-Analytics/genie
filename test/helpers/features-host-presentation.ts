@@ -75,14 +75,16 @@ export async function presentationFixture() {
         version: installed ? '2.1.0' : null, program: null, fault: installed ? null : 'missing' as const, words: 'fixture health', checkedAt: 1 });
     const cli = { calls: 0, steps: [] as string[], fail: false, throw: false, hold: false, entered: deferred(), finish: deferred() };
     holds.push(() => cli.finish.resolve());
-    let checked = 0;
+    let installed = false;
     Object.assign(f.toolchain, { repairCli: (provider: string, progress: (step: string | null) => void) => runCliRepair(provider, {
         platform: 'linux', env: { get: name => name === 'HOME' ? '/home/someone' : '/fixture', set: () => {} },
-        isFile: () => true, refreshPath: async () => {}, check: async () => health(++checked > 1), progress,
+        isFile: () => true, refreshPath: async () => {}, check: async () => health(installed), progress,
         run: async (_binary, _args, options) => {
             cli.calls++; cli.steps.push(String(options.timeoutMs)); cli.entered.resolve();
-            if (cli.hold) await cli.finish.promise;
+            // Only the first run is held. A duplicate run must be observable as an assertion failure, not a deadlock.
+            if (cli.hold && cli.calls === 1) await cli.finish.promise;
             if (cli.throw) throw new Error('fixture runner disconnected');
+            if (!cli.fail) installed = true;
             return { exitCode: cli.fail ? 3 : 0, stdout: cli.fail ? 'fixture repair refused' : '' };
         },
     }) });
