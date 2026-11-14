@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
-import { AgentSession, type SessionDriverFactory } from '../src/core/session.js';
+import { AgentSession, type SessionDriverFactory, type TurnOutcomeLike } from '../src/core/session.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import { driverEvents } from '../src/main/session-host.js';
 
@@ -39,7 +39,7 @@ const say = (text) => {
     send({ type: 'stream_event', session_id: sessionId, parent_tool_use_id: null, event: { type: 'message_start', message: { id: 'msg_' + call, usage: { input_tokens: 100, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } } });
     send({ type: 'stream_event', session_id: sessionId, parent_tool_use_id: null, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
 };
-const result = (uuid) => send({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', result: 'done', session_id: sessionId, user_message_uuid: uuid, duration_ms: 1, num_turns: 1, total_cost_usd: 0.01, usage: { input_tokens: 100, output_tokens: 5 }, modelUsage: { 'claude-test': { contextWindow: 200000 } } });
+const result = (uuid, covered = [uuid]) => send({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', result: 'done', session_id: sessionId, user_message_uuid: uuid, user_message_uuids: covered, duration_ms: 1, num_turns: 1, total_cost_usd: 0.01, usage: { input_tokens: 100, output_tokens: 5 }, modelUsage: { 'claude-test': { contextWindow: 200000 } } });
 let holding = null;
 let buffer = '';
 process.stdin.setEncoding('utf8');
@@ -60,7 +60,7 @@ process.stdin.on('data', (d) => {
         if (holding !== null) {
             // FOLDED: read inside the running turn, no result of its own; the running turn ends now.
             say('answered both');
-            result(holding);
+            result(holding, [holding, frame.uuid]);
             holding = null;
             continue;
         }
@@ -78,7 +78,13 @@ function open() {
     dirs.push(dir);
     const script = join(dir, 'claude.cjs');
     writeFileSync(script, FOLDING_CLI);
-    const factory: SessionDriverFactory = (options) => new ClaudeDriver({ cwd: dir, binary: process.execPath, binaryArgs: [script] }, driverEvents(options.events));
+    const outcomes: Array<TurnOutcomeLike & { turnId?: string; foldedInto?: string }> = [];
+    const factory: SessionDriverFactory = (options) => {
+        const events = driverEvents(options.events);
+        return new ClaudeDriver({ cwd: dir, binary: process.execPath, binaryArgs: [script] }, {
+            ...events, onTurnEnd: (outcome) => { outcomes.push(outcome); events.onTurnEnd(outcome); },
+        });
+    };
     const store = openDurableStore(dir);
     const id = mintAgentId();
     // Live rows: a reply still streaming is not in the ledger until its turn ends.
@@ -90,12 +96,12 @@ function open() {
         await session.settled();
         return (await openAgentThread(store, id).messages()).map((r) => r.message as { kind: string; n?: number; by?: string | null; speaker?: string; text?: string });
     };
-    return { session, ledger, live };
+    return { session, ledger, live, outcomes };
 }
 
 describe('the real ClaudeDriver, after a prompt Claude folded into a turn', () => {
     it('the next prompt\'s turn ends: `finished`, idle, and the turn after it is a turn of its own', async () => {
-        const { session, ledger, live } = open();
+        const { session, ledger, live, outcomes } = open();
         session.deliver('HOLD AgentInbox delivery: 1 message', 'genie');
         await vi.waitFor(() => expect(live.some((e) => e.kind === 'message' && e.speaker === 'agent')).toBe(true), { timeout: 15_000 });
         expect(session.turnState).toBe('working');
@@ -103,6 +109,10 @@ describe('the real ClaudeDriver, after a prompt Claude folded into a turn', () =
         session.deliver('AgentInbox delivery: 1 more message', 'genie');
         await vi.waitFor(() => expect(session.turnState).toBe('idle'), { timeout: 15_000 });
         expect((await ledger()).filter((e) => e.kind === 'finished').map((e) => e.n)).toEqual([1]);
+        expect(outcomes).toHaveLength(2);
+        expect(typeof outcomes[0]!.turnId).toBe('string');
+        expect(outcomes[1]).toMatchObject({ foldedInto: outcomes[0]!.turnId, stopReason: 'end_turn', isError: false });
+        expect(outcomes[1]!.turnId).not.toBe(outcomes[0]!.turnId);
 
         // The flow's prompt: the driver holds its end behind the folded one.
         session.deliver('Hourly round', 'flow "hourly round"');
