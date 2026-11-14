@@ -77,10 +77,12 @@ describe('the last host feature ports retain their human action contracts (Tynn 
         expect(f.attention.asked(seen.id)?.outcome).toBe('dismissed');
     });
     it('Dismiss stale with no still-stale item says why and does not mail anyone', async () => {
+        const lifecycleLog = vi.fn(); Object.assign(f.service.ports, { lifecycleLog });
         const question = await ask('fixture', true); expect(isDismissable(question)).toBe(true); f.deckItems.push(question);
         expect(await f.invoke({ kind: 'deck.dismissStale', ids: [question.id] }))
             .toMatchObject({ ok: false, reason: expect.stringContaining('None of these questions is still waiting as a stale one here') });
         expect(f.attention.pending()).toHaveLength(1); expect(f.inbox.unread(RECIPIENT)).toHaveLength(0);
+        expect(lifecycleLog).toHaveBeenCalledExactlyOnceWith(`deck action refused kind=deck.dismissStale item=${question.id} reason=None of these questions is still waiting as a stale one here, so nothing was dismissed. Look at the Deck again.`);
     });
     it('Dismiss older delegates the cutoff to the real store clock', async () => {
         const older = vi.spyOn(f.attention, 'dismissOlderThan');

@@ -15,7 +15,8 @@ import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, r
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
-import { availableParallelism, homedir } from 'node:os';
+import { availableParallelism } from 'node:os';
+import { userHome } from './paths.js';
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
 import type { FeaturePorts } from './feature-ipc.js';
@@ -220,8 +221,8 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             },
             // The machine's own PATH (the owner's decision 3): the fixed `current` entries, once, with consent.
             machinePath: (() => {
-                const mpPorts = (): MachinePathPorts => ({ platform: process.platform as Platform, home: homedir(), entries: defaultPathEntries(toolchainDataDir(), process.platform as Platform), fs: nodeMachinePathFs(), run: longRunner });
-                const targets = (): string[] => process.platform === 'win32' ? ['the user PATH (HKCU\\Environment)'] : ['.profile', '.bash_profile', '.bashrc', '.zprofile', '.zshrc'].filter((f, i) => i === 0 || nodeMachinePathFs().exists(join(homedir(), f))).map((f) => join(homedir(), f));
+                const mpPorts = (): MachinePathPorts => ({ platform: process.platform as Platform, home: userHome(), entries: defaultPathEntries(toolchainDataDir(), process.platform as Platform), fs: nodeMachinePathFs(), run: longRunner });
+                const targets = (): string[] => process.platform === 'win32' ? ['the user PATH (HKCU\\Environment)'] : ['.profile', '.bash_profile', '.bashrc', '.zprofile', '.zshrc'].filter((f, i) => i === 0 || nodeMachinePathFs().exists(join(userHome(), f))).map((f) => join(userHome(), f));
                 return {
                     status: async () => ({ ...(await machinePathStatus(mpPorts())), entries: mpPorts().entries, targets: targets() }),
                     apply: (consent: boolean) => applyMachinePath(consent, mpPorts()),

@@ -207,15 +207,17 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
-        features: ports.features ?? windowOnly<HostApiDeps['features']>('features', {
+        features: ports.features ?? {
+            // Optional subscription hooks must really be absent, not synthesized as throwing window methods.
+            // Production supplies HostFeatures; this legacy Deck-only fallback owns no feature change source.
+            snapshot: async () => { throw new Error(needsWindow('features.snapshot')); },
             // The Deck's answer only (the phone's Deck, deck-answer.ts); the phone reads nothing back from it.
             act: async (action: FeatureAction) => {
                 if (action.kind !== 'deck.answer' && action.kind !== 'deck.answerForm') throw new Error(needsWindow(`features.act ${action.kind}`));
                 await answerDeck(action, { attention: ports.attention, approvals: ports.approvals, inbox: ports.inbox, deliverToAgent: ports.deliverToAgent });
                 return {} as FeatureData;
             },
-            onChange: () => () => {},
-        }),
+        },
         activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry.listAgents(), workspaceId), subscribe: (listener) => activityFeeds.subscribe(listener) },
         headroom: ports.headroom,
         updates: ports.updates ?? null,

@@ -202,6 +202,8 @@ describe('main wires it', () => {
         expect(main.indexOf('askerLivenessKnown = host !== null;')).toBeGreaterThan(main.indexOf('await registry.load('));
     });
     it('the question window’s Dismiss sends the notes on to deck.dismiss', () => {
-        expect(main.match(/dismiss:\s*async\s*\(item,\s*notes\)\s*=>\s*\{\s*await handleFeatureAction\(composed,\s*\{\s*kind:\s*'deck\.dismiss',\s*item,\s*notes\s*\}/g) ?? []).toHaveLength(1);
+        expect(main.match(/dismiss:\s*async\s*\(item,\s*notes\)\s*=>\s*\{\s*await questionAction\(\{\s*kind:\s*'deck\.dismiss',\s*item,\s*notes\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
+        expect(main).toContain("const reply = await client.call('engine.featureQuestion', [action]);");
+        expect(main).toContain('if (!reply.ok) throw new Error(reply.reason);');
     });
 });

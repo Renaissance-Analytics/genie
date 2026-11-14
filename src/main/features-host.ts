@@ -13,6 +13,7 @@ import type { SettingsStore } from './settings-store.js';
 import { applyPersonalFeatureAction, customSoundData, personalFeatureSnapshot, type PersonalFeatureServices } from './feature-personal.js';
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import type { DeckItem } from '../core/deck.js';
+import { deckRefusalLine } from '../core/deck-refusal.js';
 import type { DeckAnswerPorts } from './deck-answer.js';
 import { MAIN_ERROR_DECK_PREFIX } from '../core/main-errors.js';
 import { applyDeckFeatureAction } from './feature-deck.js';
@@ -79,6 +80,7 @@ export interface HostFeaturesPorts {
     readonly roster: () => readonly AgentRecord[];
     readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
     readonly slowPart?: FeaturePorts['slowPart'];
+    readonly lifecycleLog?: (line: string) => void;
     readonly resolveAddress: (address: string) => Resolution;
     readonly mailRefusal: (address: string) => string | null;
     readonly workspaceIds: () => readonly string[];
@@ -178,20 +180,25 @@ export class HostFeatures {
     }
 
     async act(action: FeatureAction, context: CallContext): Promise<FeatureData> {
-        this.#check(context);
-        const caller = this.#caller(context.connectionId);
-        if (caller.pending >= CALLER_PENDING_LIMIT) throw new Error('this feature caller has too many pending actions; wait for them to finish');
-        caller.pending++;
-        // Same-caller actions see the last committed view, including after a refusal. Other callers never wait here.
-        const work = caller.tail.then(async () => {
-            try {
-                this.#check(context);
-                if (!caller.live) throw new Error('this feature caller disconnected before its action began');
-                return await this.#act(action, context, caller);
-            } finally { caller.pending--; }
-        });
-        caller.tail = work.then(() => {}, () => {});
-        return work;
+        try {
+            this.#check(context);
+            const caller = this.#caller(context.connectionId);
+            if (caller.pending >= CALLER_PENDING_LIMIT) throw new Error('this feature caller has too many pending actions; wait for them to finish');
+            caller.pending++;
+            // Same-caller actions see the last committed view, including after a refusal. Other callers never wait here.
+            const work = caller.tail.then(async () => {
+                try {
+                    this.#check(context);
+                    if (!caller.live) throw new Error('this feature caller disconnected before its action began');
+                    return await this.#act(action, context, caller);
+                } finally { caller.pending--; }
+            });
+            caller.tail = work.then(() => {}, () => {});
+            return await work;
+        } catch (error) {
+            if (action.kind.startsWith('deck.')) this.ports.lifecycleLog?.(deckRefusalLine(action, error));
+            throw error;
+        }
     }
 
     #act(action: FeatureAction, context: CallContext, caller: FeatureCaller): Promise<FeatureData> {
