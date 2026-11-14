@@ -8,7 +8,7 @@ describe('the production features owner (Tynn #720)', () => {
         const host = source('genie-host');
         expect(host.match(/new HostFeatures\(/g)).toHaveLength(1);
         expect(host).toContain('features: hostFeatures');
-        expect(host).toContain('hostFeatures.close()');
+        expect(host).toContain('hostFeatures?.close()');
         expect(host).toContain('nativeFeatureToolchain(');
     });
     it('the window delegates every feature operation and owns no duplicate builder or state', () => {
@@ -20,7 +20,7 @@ describe('the production features owner (Tynn #720)', () => {
     });
     it('the engine admits the owning local connection and sends its effects back to that connection', () => {
         const server = source('session-engine-server');
-        expect(server).toContain("case 'engine.features':");
+        expect(server).toContain("if (method === 'engine.features')");
         expect(server).toContain('this.#options.features?.dropOwner(conn.id)');
         expect(server).toContain("this.#reverseTo(conn, 'client.featureEffect'");
         const effects = source('feature-window');

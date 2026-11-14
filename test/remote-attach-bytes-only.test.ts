@@ -154,7 +154,9 @@ describe('main.ts wiring', () => {
         .join('\n');
 
     it('an action’s origin is the host’s context, never the action, and a pick is recorded by the host', () => {
-        expect(source).toMatch(/handleFeatureAction\(composed, action, featureState, featurePorts, featureOriginOf\(context, hostPicks\)\)/);
+        expect(source).toContain('features: featureReplica(() => agentEngineLink!.client, context => {');
+        expect(readFileSync('src/main/features-host.ts', 'utf8')).toContain('featureOriginOf(context, caller.picks)');
+        expect(readFileSync('src/main/feature-replica.ts', 'utf8')).toContain("picked: (paths, context) => call<void>('picked', [paths], context)");
         expect(source).toMatch(/picked: \(paths\) => hostPicks\.record\(paths\)/);
     });
 });

@@ -39,7 +39,8 @@ describe('main.ts wires the error policy', () => {
         const src = main();
         expect(src).toMatch(/registry\.setDeckSource\(\(\) => \[\.\.\.mainErrors\.deckItems\(\), \.\.\.composed\.deckItems\(\)\]\);/);
         expect(src).toMatch(/mainErrors\.onChange\(\(\) => registry\?\.touch\(\)\);/);
-        const ports = src.slice(src.indexOf('const featurePorts: FeaturePorts = {'), src.indexOf('\n    };', src.indexOf('const featurePorts: FeaturePorts = {')));
+        const ports = src.slice(src.indexOf('const ownFeatureUi = featureWindow(localDoor, {'), src.indexOf('featureEffectNow = ownFeatureUi;'));
+        expect(src).toContain('featureEffectNow = ownFeatureUi;');
         // Tynn #693: the Deck's actions on a recorded error, each reaching the book: Dismiss, the host copy made now, the log.
         expect(ports).toMatch(/^\s*mainErrors: \{$/m);
         expect(ports).toMatch(/^\s*dismiss: \(id\) => mainErrors\.dismiss\(id\),$/m);

@@ -96,6 +96,7 @@ export type Awaitable<T> = T | Promise<T>;
 
 /** What main.ts handed its in-process SessionHost, minus what runs on the host. Same names, same meanings. */
 export interface EngineClientOptions {
+    readonly onFeatureEffect?: (connectionId: string, method: string, args: unknown[]) => Promise<unknown>;
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
     readonly onCarryOverSent?: (agentId: AgentId) => void;
     readonly onRedockSent?: (agentId: AgentId, at: string) => void;
@@ -163,6 +164,8 @@ const EMPTY_GLOBAL: EngineGlobalView = { startedIds: [], heldLogins: [], signedO
 const NO_ROWS: readonly TimedEvent[] = [];
 
 export class SessionEngineClient {
+    readonly #featureInvalidations = new Set<() => void>();
+    onFeatureInvalidated(listener: () => void): () => void { this.#featureInvalidations.add(listener); return () => { this.#featureInvalidations.delete(listener); }; }
     readonly #options: EngineClientOptions;
     #transport: ClientTransport | null = null;
     #welcome: EngineWelcome | null = null;
@@ -412,6 +415,9 @@ export class SessionEngineClient {
                 this.hosting().rebase(payload as HostingDump);
                 return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
+            case 'features.invalidated':
+                for (const listener of this.#featureInvalidations) listener();
+                break;
             case 'safeMode.event':
                 this.#setSafeMode(payload as SafeModeView);
                 return;
@@ -531,6 +537,12 @@ export class SessionEngineClient {
     async #answer(id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: Record<string, unknown>;
         try {
+            if (method === 'client.featureEffect') {
+                if (!this.#options.onFeatureEffect) throw new Error('this window answers no feature effects');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onFeatureEffect(String(args[0]), String(args[1]), Array.isArray(args[2]) ? args[2] : []) };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
             if (method === 'client.elevate') {
                 if (!this.#options.elevate) throw new Error('this window runs no elevation');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };

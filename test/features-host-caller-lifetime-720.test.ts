@@ -48,6 +48,15 @@ async function door() {
 }
 
 describe('host feature caller state has an owned lifetime and bounded retention (Tynn #720)', () => {
+    it('a business invalidation pushes each remote caller its own retained query and form', async () => {
+        const d = await door(), a = await d.connect('private A'), b = await d.connect('private B');
+        const aSeen: string[] = [], bSeen: string[] = [];
+        closers.push(a.client.bridge.features.subscribe(data => { aSeen.push(data.knowledge.query); }));
+        closers.push(b.client.bridge.features.subscribe(data => { bSeen.push(data.knowledge.query); }));
+        await f.settings.set('publisher_checks_off', f.settings.get('publisher_checks_off') !== true);
+        await vi.waitFor(() => { expect(aSeen.at(-1)).toBe('private A'); expect(bSeen.at(-1)).toBe('private B'); });
+        expect(aSeen).not.toContain('private B'); expect(bSeen).not.toContain('private A');
+    });
     it('release clears only that caller query and form, leaving the other caller intact', async () => {
         await search('A'); await f.act({ kind: 'knowledge.openAdd', workspaceId: 'work' }); await search('B', CALLER_B);
         f.service.releaseCaller(CALLER_A);

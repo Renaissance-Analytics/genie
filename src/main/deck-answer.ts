@@ -24,7 +24,7 @@ export interface DeckAnswerPorts {
     readonly deferTrustCertificate?: () => void;
     readonly syncHosts?: () => Promise<HostsSyncResult>;
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
-    readonly mainErrors?: { dismiss(id: string): boolean; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
+    readonly mainErrors?: { dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
 }
 
 const NEEDS_WINDOW = (what: string): string => `${what} needs Genie’s window on this machine: open Genie there`;
@@ -89,7 +89,7 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
         case 'dismiss-main-error':
             // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
             if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
-            if (!ports.mainErrors.dismiss(command.id)) throw new Error(`no recorded error ${command.id}`);
+            if (!await ports.mainErrors.dismiss(command.id)) throw new Error(`no recorded error ${command.id}`);
             break;
         case 'retry-host-copy': {
             // The copy is made by the window that starts the host; its failure comes back in words (Tynn #693).

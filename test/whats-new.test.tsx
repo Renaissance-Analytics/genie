@@ -84,7 +84,7 @@ describe('the setting and the wiring', () => {
 
     it('main answers what is new for ITS version; closing records that version as seen', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/whatsNew: \(shown\) => whatsNewFor\(app\.getVersion\(\), String\(composed\.settings\.get\('whats_new_seen_version'\) \?\? ''\), RELEASE_NOTES, shown\)/);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toContain("whatsNew: shown => whatsNewFor(hostAppVersion, String(settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown)");
         const app = readFileSync('src/renderer/App.tsx', 'utf8');
         expect(app).toMatch(/<WhatsNewWindow\s+whatsNew=\{features\.whatsNew\}/);
         expect(app).toMatch(/featureAct\(\{ kind: 'whatsNew\.close', version: features\.whatsNew!?\.version \}/);

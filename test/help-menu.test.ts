@@ -80,7 +80,7 @@ describe('the wiring', () => {
     it('main: the docs open in the browser; What’s new opens over the page; the port honours an asked-for show', () => {
         expect(main).toMatch(/onDocs: \(\) => \{ void shell\.openExternal\(genieDocsUrl\(tynnHost\(\)\)\); \},/);
         expect(main).toMatch(/onWhatsNew: \(\) => \{ revealMainWindow\('menu: What is new'\); showToPerson\(\{ activation: 'user-gesture', route: WHATS_NEW_ROUTE, reason: 'menu: What is new' \}\); \},/);
-        expect(main).toMatch(/whatsNew: \(shown\) => whatsNewFor\(app\.getVersion\(\), String\(composed\.settings\.get\('whats_new_seen_version'\) \?\? ''\), RELEASE_NOTES, shown\)/);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toContain("whatsNew: shown => whatsNewFor(hostAppVersion, String(settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown)");
     });
     it('App: What’s new asked for over the page; closing goes through whatsNew.close', () => {
         const app = readFileSync('src/renderer/App.tsx', 'utf8');

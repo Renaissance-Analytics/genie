@@ -33,6 +33,7 @@ export interface HostRemoteApiPorts {
      * A getter: genie-host builds it once its session host is up.
      */
     readonly alone?: HostApi | (() => HostApi | null);
+    readonly onAloneReady?: (listener: () => void) => () => void;
     /** A Pilot's Take Over window closed: the TUI it started goes with it, whoever else is connected. */
     readonly takeOverEnded?: (terminalId: string) => void;
     /** The workspace an agent is in (a guest is held to its own), from the host's roster. */
@@ -44,6 +45,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
     const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
     return {
+        get ownsFeatures() { return alone()?.ownsFeatures === true; },
         releaseCaller: context => alone()?.releaseCaller?.(context),
         invoke: async (method, args, context) => {
             const own = ports.own[method];
@@ -65,8 +67,12 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             // A window's replica can echo this change. Only the owned store's signal counts (Tynn #666).
             const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed' && !(alone()?.ownsFeatures && featureEvent(channel))) listener(channel, payload); }) ?? (() => {});
             // Other families keep their existing window/no-window event source.
-            const offAlone = alone()?.onEvent((channel, payload) => { if (channel === 'workspace-settings-changed' || (alone()?.ownsFeatures && featureEvent(channel)) || !ports.window.connected()) listener(channel, payload); }, options) ?? (() => {});
-            return () => { offWindow(); offAlone(); };
+            let offAlone: (() => void) | null = null;
+            const bind = () => { if (!offAlone) offAlone = alone()?.onEvent((channel, payload) => {
+                if (channel === 'workspace-settings-changed' || (alone()?.ownsFeatures && featureEvent(channel)) || !ports.window.connected()) listener(channel, payload);
+            }, options) ?? null; };
+            const offReady = ports.onAloneReady?.(bind); bind();
+            return () => { offWindow(); offReady?.(); offAlone?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),

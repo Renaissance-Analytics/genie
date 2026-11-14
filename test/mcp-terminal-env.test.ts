@@ -136,7 +136,8 @@ describe('main wires both paths to the one function', () => {
     it('the agents’ services/sites tools get the composition, and the Services and Hosting tabs redraw when an agent acts', () => {
         const main = code('src/main/main.ts');
         expect(main).toMatch(/hosting: composed,/);
-        expect(main).toMatch(/composed\.engines\.onChange\(pushFeatures\);/);
-        expect(main).toMatch(/composed\.sites\.onChange\(pushFeatures\);/);
+        const owner = code('src/main/features-host.ts');
+        expect(owner).toMatch(/h\.api\.engines\.onChange\(changed\), h\.api\.sites\.onChange\(changed\)/);
+        expect(code('src/main/genie-host.ts')).toContain('hostFeatures.onChange(() => engine.featuresChanged());');
     });
 });

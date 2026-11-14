@@ -1,3 +1,4 @@
+import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
 import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
@@ -95,6 +96,7 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    readonly features?: FeatureCallers;
     /** This machine as a workstation (P3.4): the host holds its key. */
     readonly workstation?: WorkstationService;
     /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
@@ -477,6 +479,7 @@ export class SessionEngineServer {
             if (was) this.#options.browser?.dropped(String(conn.id));
             // Its disposable terminals end with it: nothing re-attaches one (Tynn story #378).
             if (was) this.#options.terminals?.dropped(String(conn.id));
+            if (was) this.#options.features?.dropOwner(conn.id);
             if (was) this.#options.files?.dropOwner(conn.id);
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) this.#options.tynnIssues?.dropOwner(conn.id);
@@ -614,6 +617,20 @@ export class SessionEngineServer {
             return this.#options.crash.dismiss();
         }
         // Remote access is the host's own too (Tynn #409), up before any agent engine: a phone may already be connected.
+        if (method === 'engine.featureQuestion') {
+            if (!conn.local || !conn.window || !this.#options.features) throw new Error('questions need this machine’s own window');
+            const action = args[0] as { kind?: string } | undefined;
+            if (!action || !['deck.answerForm', 'deck.dismiss'].includes(action.kind ?? '')) throw new Error('the question window answers or dismisses a question only');
+            return this.#options.features.call(conn.id, 'act', [action], { connectionId: 'question-window', origin: 'local-window',
+                profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'this Genie question window' },
+                async () => { throw new Error('the question window provides no other UI effects'); }, null);
+        }
+        if (method === 'engine.features') {
+            if (!conn.local || !conn.window) throw new Error('features need this machine’s own window connection');
+            if (!this.#options.features) throw new Error('Genie’s feature services are still starting');
+            return this.#options.features.call(conn.id, String(args[0]), Array.isArray(args[1]) ? args[1] : [], args[2],
+                (connectionId, method, rest) => this.#reverseTo(conn, 'client.featureEffect', [connectionId, method, rest]), (args[3] ?? null) as FeatureBrowser | null);
+        }
         if (method === 'engine.remoteAccess') {
             if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
             if (!conn.local) throw new Error('Remote access is driven from a local window only.');
@@ -925,6 +942,11 @@ export class SessionEngineServer {
     #reverse(method: EngineMethod, args: unknown[], options: { localOnly?: boolean } = {}): Promise<unknown> {
         const conn = [...this.#connections].filter((c) => c.authed && c.window && (options.localOnly !== true || c.local)).at(-1);
         if (!conn) return Promise.reject(new Error('No Genie window is connected to prepare this agent\'s credentials. Open Genie and start it again.'));
+        return this.#reverseTo(conn, method, args);
+    }
+
+    #reverseTo(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
+        if (!this.#connections.has(conn) || !conn.authed || !conn.window) return Promise.reject(new Error('the caller’s own window is no longer connected'));
         const id = conn.nextCall++;
         return new Promise((resolve, reject) => {
             conn.pending.set(id, { resolve, reject });
@@ -951,6 +973,10 @@ export class SessionEngineServer {
     /** Features rings go only to the local connection whose views follow the page. */
     tynnFeaturesEvent(owner: string, event: TynnBoardHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnFeatures.event', event);
+    }
+
+    featuresChanged(): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && conn.window) this.#event(conn, 'features.invalidated', null);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

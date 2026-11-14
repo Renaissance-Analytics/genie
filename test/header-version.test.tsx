@@ -31,7 +31,9 @@ describe('the header’s version', () => {
 describe('where it comes from', () => {
     it('main gives the features its own version; the Shell hands it to the title bar', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/appVersion: \(\) => app\.getVersion\(\)/);
+        const host = readFileSync('src/main/genie-host.ts', 'utf8');
+        expect(host).toContain('appVersion: () => hostAppVersion');
+        expect(host).toContain("const hostAppVersion = build.includes('+') ? build.slice(0, build.lastIndexOf('+')) : build;");
         const ipc = readFileSync('src/main/feature-ipc.ts', 'utf8');
         expect(ipc).toMatch(/\.\.\.machineFeatureSnapshot\(services, state, ports\)/);
         expect(readFileSync('src/main/feature-machine.ts', 'utf8')).toMatch(/version: ports\.appVersion \? ports\.appVersion\(\) : null,/);

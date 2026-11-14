@@ -168,9 +168,10 @@ describe('pushes are one at a time, the latest state always last (core/latest-pu
         expect(delivered).toEqual(['ok']);
     });
 
-    it('main pushes the feature snapshot through LatestPush, and asks again when Docker answers late', () => {
-        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        expect(main).toMatch(/new LatestPush<FeatureData>\(/);
-        expect(main).toMatch(/onEngineStatusesLate: \(\) => pushFeatures\(\)/);
+    it('the host owner pushes through LatestPush, and asks again when Docker answers late', () => {
+        const owner = readFileSync(new URL('../src/main/features-host.ts', import.meta.url), 'utf8');
+        expect(owner).toMatch(/new LatestPush<FeatureData>\(/);
+        expect(owner).toMatch(/onEngineStatusesLate: \(\) => this\.#changed\(\)/);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toContain('hostFeatures.onChange(() => engine.featuresChanged());');
     });
 });

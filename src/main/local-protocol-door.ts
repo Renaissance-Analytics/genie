@@ -15,11 +15,14 @@ export interface LocalDoorOptions {
 }
 export interface LocalProtocolDoor extends ServerTransport {
     admit(contents: LocalDoorContents): void;
+    contentsFor(connectionId: string): LocalDoorContents | null;
+    connectionFor(contents: LocalDoorContents): string | null;
     dispose(): void;
 }
 
 interface WindowConnection {
     readonly handle: string;
+    connectionId: string | null;
     readonly messages: Set<(text: string) => void>;
     end(reason: string, refused?: boolean): void;
 }
@@ -55,7 +58,7 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc, options: LocalDoorOptio
         const closes = new Set<() => void>();
         let closed = false;
         const current: WindowConnection = {
-            handle, messages,
+            handle, messages, connectionId: null,
             end: (reason, refused = false) => {
                 if (closed) return;
                 closed = true;
@@ -77,6 +80,7 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc, options: LocalDoorOptio
             send: (text) => {
                 if (closed) return;
                 if (Buffer.byteLength(text, 'utf8') > LOCAL_FRAME_LIMIT_BYTES) return current.end(capReason, true);
+                try { const sent = JSON.parse(text) as { kind?: string; connectionId?: string }; if (sent.kind === 'welcome' && typeof sent.connectionId === 'string') current.connectionId = sent.connectionId; } catch { /* A malformed outbound frame grants no binding. */ }
                 if (!reply(frame, 'frame', handle, text)) current.end('the local window frame is no longer available');
             },
             onMessage: (listener) => { if (!closed) messages.add(listener); return () => { messages.delete(listener); }; },
@@ -119,6 +123,8 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc, options: LocalDoorOptio
 
     return {
         onConnection: (listener) => { if (!disposed) listeners.add(listener); return () => { listeners.delete(listener); }; },
+        contentsFor: (connectionId) => { for (const entry of admitted.values()) if (!entry.contents.isDestroyed() && entry.connection?.connectionId === connectionId) return entry.contents; return null; },
+        connectionFor: (contents) => admitted.get(contents)?.connection?.connectionId ?? null,
         admit: (contents) => {
             if (disposed || contents.isDestroyed() || admitted.has(contents)) return;
             const entry: AdmittedWindow = { contents, connection: null, navigating: null, detach: () => {} };

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AgentRecord } from '../core/identity.js';
 import { agentAddress } from '../core/inbox.js';
 import { LatestPush } from '../core/latest-push.js';
@@ -30,6 +31,7 @@ import { applyToolchainCoreFeatureAction, toolchainSection } from './feature-too
 export interface HostFeatureMachinePorts {
     readonly services: Omit<MachineFeatureServices, 'settings'>;
     readonly effects: MachineFeaturePorts;
+    readonly effectsFor?: (context: CallContext) => MachineFeaturePorts;
     readonly onChange: (listener: () => void) => () => void;
 }
 
@@ -48,6 +50,7 @@ export interface HostFeatureHostingPorts {
 /** Only effects in the admitted caller's own window. Resolution never chooses another window. */
 export interface HostFeaturePresentation extends Pick<FeaturePorts, 'rendererNotice' | 'mainErrors' | 'openInBrowser'> {
     readonly openFlowEditor?: (route: string) => void | Promise<void>;
+    readonly openExternal?: (url: string) => Promise<void>;
     readonly browser?: {
         snapshot(): { url: string | null; canGoBack: boolean; canGoForward: boolean };
         navigate(url: string): Promise<void>;
@@ -74,6 +77,8 @@ export interface HostFeaturesPorts {
     readonly inbox: Pick<InboxStore, 'all' | 'unread' | 'involving' | 'send' | 'receive' | 'attachmentForPerson' | 'deleteThread' | 'onSend' | 'onRead'>;
     readonly attention: Pick<AttentionStore, 'asked'>;
     readonly roster: () => readonly AgentRecord[];
+    readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
+    readonly slowPart?: FeaturePorts['slowPart'];
     readonly resolveAddress: (address: string) => Resolution;
     readonly mailRefusal: (address: string) => string | null;
     readonly workspaceIds: () => readonly string[];
@@ -103,8 +108,8 @@ interface FeatureCaller {
 }
 
 /**
- * Incremental host aggregator (Tynn #720). Measured groups use owned services and shared business rules.
- * Production composition follows the remaining measured groups; this does not open another store or scheduler.
+ * The host aggregator (Tynn #720), over owned services and shared business rules.
+ * Caller views are transient; this opens no store or scheduler of its own.
  */
 export class HostFeatures {
     readonly #services: PersonalFeatureServices;
@@ -121,11 +126,14 @@ export class HostFeatures {
     #progressProbe: Promise<void> | null = null;
     #seq = 0;
     #closed = false;
+    readonly #busy = new Map<symbol, string>();
+    readonly #activeWork = new Set<symbol>();
+    readonly #progressContext = new AsyncLocalStorage<symbol>();
 
     constructor(readonly ports: HostFeaturesPorts) {
         this.#services = {
             settings: ports.settings, knowledge: ports.knowledge, flows: ports.flows, inbox: ports.inbox, attention: ports.attention,
-            agentAddresses: () => ports.roster().map(record => ({ address: agentAddress(record, new Map()), agentId: record.id, name: record.name })),
+            agentAddresses: () => ports.roster().map(record => ({ address: agentAddress(record, ports.workspaceSlugs?.() ?? new Map()), agentId: record.id, name: record.name })),
             resolveAddress: address => ports.resolveAddress(address), mailRefusal: address => ports.mailRefusal(address),
             workspaceIds: () => ports.workspaceIds(), flowScheduler: { runNow: id => ports.runFlow(id) },
             pluginsRefresh: () => ports.refreshPlugins(),
@@ -186,7 +194,13 @@ export class HostFeatures {
         return work;
     }
 
-    async #act(action: FeatureAction, context: CallContext, caller: FeatureCaller): Promise<FeatureData> {
+    #act(action: FeatureAction, context: CallContext, caller: FeatureCaller): Promise<FeatureData> {
+        const token = Symbol('feature work');
+        this.#activeWork.add(token);
+        return this.#progressContext.run(token, () => this.#actInContext(action, context, caller, token)).finally(() => { this.#activeWork.delete(token); });
+    }
+
+    async #actInContext(action: FeatureAction, context: CallContext, caller: FeatureCaller, token: symbol): Promise<FeatureData> {
         const state = this.#toolFacts.toolStatuses === null ? caller.state : { ...caller.state, ...this.#toolFacts };
         const next = { ...state };
         const ui = this.#presentation(context, needsPresentation(action));
@@ -194,8 +208,7 @@ export class HostFeatures {
         if (action.kind === 'remote.answerPair' && context.origin !== 'local-window') {
             throw new Error('a device is allowed on this machine’s own screen, never from another device');
         }
-        const token = Symbol('feature work');
-        const machine = this.ports.machine?.effects;
+        const machine = this.ports.machine?.effectsFor?.(context) ?? this.ports.machine?.effects;
         const tc = machine?.toolchain;
         const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,
             login: async provider => ui?.login ? ui.login(provider) : { ok: false, reason: 'no login is wired into this Genie' },
@@ -227,7 +240,8 @@ export class HostFeatures {
                     });
             if (!handled) throw new Error(`the host feature service does not answer ${action.kind} yet`);
         } finally {
-            if (this.#work.delete(token)) this.#changed();
+            const changed = this.#work.delete(token);
+            if (this.#busy.delete(token) || changed) this.#changed();
         }
         this.#check(context);
         if (action.kind.startsWith('toolchain.') && next.toolStatuses !== null) {
@@ -241,8 +255,8 @@ export class HostFeatures {
             servedQuestion: _question, flowSaved: _saved, ...retained } = next;
         // A completed business operation may answer, but can never recreate a view released while it waited.
         if (caller.live) caller.state = retained;
-        // Knowledge has no store change signal. The other owned stores already invalidate once per change.
-        if (action.kind === 'knowledge.add' || action.kind === 'knowledge.create') this.#changed();
+        // Knowledge and the file-health report have no store change signal. Other owned stores invalidate themselves.
+        if (action.kind === 'knowledge.add' || action.kind === 'knowledge.create' || action.kind === 'workspace.syncAgentFiles' || action.kind === 'workspace.trust') this.#changed();
         return answer;
     }
 
@@ -276,7 +290,7 @@ export class HostFeatures {
         for (const off of this.#offs.splice(0)) off();
         for (const connectionId of this.#callers.keys()) this.#release(connectionId);
         this.#listeners.clear(); this.#callers.clear();
-        this.#work.clear(); this.#repairingCli.clear();
+        this.#work.clear(); this.#busy.clear(); this.#activeWork.clear(); this.#repairingCli.clear();
     }
 
     #check(context: CallContext): void {
@@ -303,6 +317,10 @@ export class HostFeatures {
         return caller;
     }
 
+    busy(step: string | null): void { const token = this.#progressContext.getStore(); if (this.#closed || !token || !this.#activeWork.has(token)) return; if (step) this.#busy.set(token, step); else this.#busy.delete(token); this.#changed(); }
+
+    invalidate(): void { this.#changed(); }
+
     #changed(): void { if (!this.#closed && this.#listeners.size > 0) this.#push.request(); }
 
     #presentation(context: CallContext, required = false): HostFeaturePresentation | undefined {
@@ -313,20 +331,25 @@ export class HostFeatures {
 
     async #snapshot(state: FeatureState, context?: CallContext): Promise<FeatureData> {
         const seq = ++this.#seq;
-        const personal = await personalFeatureSnapshot(this.#services, state);
-        const hosting = this.#hosting ? await hostingFeatureSnapshot(this.#hosting, state, this.#hostingPorts)
+        const measured = async <T>(part: string, work: () => T | Promise<T>): Promise<T> => {
+            const start = Date.now(); try { return await work(); } finally {
+                const ms = Date.now() - start; if (this.ports.slowPart && ms >= this.ports.slowPart.ms) this.ports.slowPart.log(part, ms);
+            }
+        };
+        const personal = await measured('knowledge/inbox/flows', () => personalFeatureSnapshot(this.#services, state));
+        const hosting = this.#hosting ? await measured('hosting/services', () => hostingFeatureSnapshot(this.#hosting!, state, this.#hostingPorts))
             : { hosting: null, services: null, browser: { url: null, routes: [], canGoBack: false, canGoForward: false } };
         const machine = this.#machine ? machineFeatureSnapshot(this.#machine, state, this.ports.machine!.effects)
             : { remote: null, integrations: null, plugins: null, issueWatch: null };
         // A first repair can start before a scan. Read the owner's actual tools for its live row, never invent an empty scan.
-        if (this.#work.size > 0 && this.#toolFacts.toolStatuses === null && this.ports.machine?.effects.toolchain) {
+        if ((this.#work.size > 0 || this.#busy.size > 0) && this.#toolFacts.toolStatuses === null && this.ports.machine?.effects.toolchain) {
             const tc = this.ports.machine.effects.toolchain;
             this.#progressProbe ??= tc.probe().then(tools => {
                 if (!this.#closed && this.#toolFacts.toolStatuses === null) this.#toolFacts = { toolStatuses: tools, toolchainCheckedAt: tc.now() };
             }).finally(() => { this.#progressProbe = null; });
             await this.#progressProbe;
         }
-        const toolchain = toolchainSection({ ...state, toolStatuses: this.#toolFacts.toolStatuses ?? state.toolStatuses,
+        const toolchain = toolchainSection({ ...state, toolchainBusy: [...this.#busy.values()].at(-1) ?? state.toolchainBusy ?? null, toolStatuses: this.#toolFacts.toolStatuses ?? state.toolStatuses,
             toolchainCheckedAt: this.#toolFacts.toolchainCheckedAt ?? state.toolchainCheckedAt ?? null,
             toolchainUpdating: [...this.#work.values()].at(-1) ?? null });
         const browser = context ? this.#presentation(context)?.browser?.snapshot() : undefined;

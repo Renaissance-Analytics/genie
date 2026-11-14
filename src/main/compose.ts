@@ -1,3 +1,4 @@
+import { featureWorkspaceFiles } from './feature-workspace-files.js';
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
@@ -84,6 +85,8 @@ import type { GenRouterServer } from './gen-router-server.js';
  */
 
 export interface ComposeInput extends HostingOptions {
+    /** The host's canonical file writers and their health record; no duplicate writes in the window. */
+    readonly hostFeatureFiles?: () => Pick<WindowServices, 'syncAgentDocs' | 'syncConfig'> | null;
     /**
      * SAFE MODE (Tynn #386), on the emergency no-host path: this window's own flows, sites and engines start nothing by
      * themselves while it is on (window-safe-mode.ts reads it from the runtime files). `heldSite` names a site it held;
@@ -696,6 +699,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         pluginsDir,
         pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {
+            const owner = input.hostFeatureFiles?.(); if (owner) return owner.syncConfig(workspacePath, source);
             // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
             if (!(await mayWriteInto(workspacePath))) return [];
             const endpoint = input.mcpEndpoint?.() ?? null;
@@ -713,35 +717,10 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             agentFiles.config(workspacePath, results, Date.now(), source);
             return results;
         },
-        syncAgentDocs: async (workspacePath, source = 'start') => {
-            if (!(await mayWriteInto(workspacePath))) return;
-            const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-            const on = settings.snapshot().mcp_sync_agents !== false;
-            // One node fs for every step; each write and removal is reported to the health record Settings reads.
-            const nodeFs = (touched: (path: string) => void) => ({
-                read: async (p: string) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                write: async (p: string, text: string) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); touched(p); },
-                remove: async (p: string) => { try { await unlinkP(p); touched(p); } catch { /* not there: nothing to remove */ } },
-                unlink: async (p: string) => { await unlinkP(p); touched(p); },
-                list: async (d: string) => { try { return await readdirP(d); } catch { return []; } },
-                removeDir: async (d: string) => { try { await rmdir(d); } catch { /* not empty or not there: left as it is */ } },
-                isSymlink: async (p: string) => { try { return (await lstat(p)).isSymbolicLink(); } catch { return false; } },
-                exists: async (p: string) => { try { await lstat(p); return true; } catch { return false; } },
-            });
-            const steps: AgentFilesStep[] = [
-                // First, whatever the switches: the files that carry Genie's MCP token are kept out of a commit.
-                { step: 'gitignore', run: (t) => writeAgentGitignore({ workspacePath, fs: nodeFs(t) }) },
-                // The protocol files (.agents/_genie/), true for Genie 2, listing the tools Genie's MCP actually serves.
-                { step: 'protocol', run: (t) => writeAgentProtocol({ workspacePath, enabled: on, tools: input.mcpTools?.() ?? [], tracking: workTracking(), fs: nodeFs(t) }) },
-            ];
-            if (on) {
-                // The routers and RULES.md after the protocol they import (Genie 1's repaired); then Genie 2's skills.
-                steps.push({ step: 'routers', run: (t) => writeAgentRouters({ workspacePath, stamp, fs: nodeFs(t) }) });
-                steps.push({ step: 'skills', run: (t) => writeAgentSkills({ workspacePath, stamp, fs: nodeFs(t) }) });
-            }
-            // A failing step is recorded and does not stop the steps after it.
-            const report = await agentFiles.run(workspacePath, steps, Date.now(), source);
-            for (const f of report.failed) console.error(`[workspace-files] ${workspacePath} ${f.step}: ${f.error}`);
+        syncAgentDocs: (workspacePath, source = 'start') => {
+            const owner = input.hostFeatureFiles?.();
+            return owner ? owner.syncAgentDocs(workspacePath, source) : featureWorkspaceFiles({ mayWriteInto, settings, health: agentFiles,
+                tools: () => input.mcpTools?.() ?? [], tracking: workTracking }).syncAgentDocs(workspacePath, source);
         },
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
