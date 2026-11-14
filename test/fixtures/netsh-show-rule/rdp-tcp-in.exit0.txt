@@ -1,0 +1,16 @@
+
+Rule Name:                            Remote Desktop - User Mode (TCP-In)
+----------------------------------------------------------------------
+Enabled:                              Yes
+Direction:                            In
+Profiles:                             Domain,Private,Public
+Grouping:                             Remote Desktop
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             TCP
+LocalPort:                            3389
+RemotePort:                           Any
+Edge traversal:                       No
+Action:                               Allow
+Ok.
+

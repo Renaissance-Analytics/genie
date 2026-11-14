@@ -314,8 +314,11 @@ function CardView({ card, scope, onScope, onAction, claim }: CardProps) {
     return (
         <Kanban.Card id={card.id} unstyled className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 text-[12px]">
             <div data-tynn-card={card.id} data-tynn-card-status={card.status} className="flex flex-col gap-1">
-                <div className="flex items-start gap-1.5">
-                    {card.number !== null ? <span className="shrink-0 font-mono text-[11px] text-[var(--fg-3)]">{card.number}</span> : null}
+                {/* THE LABEL ON ITS OWN LINE (Tynn #676; the owner, 2026-11-13): a version's number is as long as
+                    `2.0.0-host-split`, and beside the title it never shrank, so the title wrapped every word or two.
+                    Cut short when it must, its whole text as the tooltip. */}
+                {card.number !== null ? <span data-tynn-card-label="" title={card.number} className="truncate font-mono text-[11px] text-[var(--fg-3)]">{card.number}</span> : null}
+                <div className="flex items-start">
                     {drill ? (
                         <button type="button" data-tynn-open={card.id} onClick={() => onScope(drill)} className="min-w-0 flex-1 text-left text-[var(--fg-1)] hover:underline">{card.title}</button>
                     ) : (

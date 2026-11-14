@@ -47,6 +47,9 @@ describe('mobileEntry', () => {
     it('the desktop stays the desktop: a bridge present, a file:// load, or any other path', () => {
         expect(mobileEntry(at({ hash: '#pin=482913' }), true)).toEqual({ kind: 'desktop' });
         expect(mobileEntry(at({ protocol: 'file:', host: '', pathname: '/C:/app/renderer/index.html' }), false)).toEqual({ kind: 'desktop' });
+        // Genie's own windows, from http://genie.localhost:<port> since Tynn #683: the desktop, bridge or not.
+        expect(mobileEntry(at({ protocol: 'http:', host: 'genie.localhost:24567', pathname: '/index.html' }), true)).toEqual({ kind: 'desktop' });
+        expect(mobileEntry(at({ protocol: 'http:', host: 'genie.localhost:24567', pathname: '/index.html' }), false)).toEqual({ kind: 'desktop' });
         expect(mobileEntry(at({ pathname: '/' }), false)).toEqual({ kind: 'desktop' });
         expect(mobileEntry(at({ pathname: '/mobile-ish' }), false)).toEqual({ kind: 'desktop' });
     });

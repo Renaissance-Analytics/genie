@@ -13,6 +13,7 @@ import type { GithubAccountPort } from './github-account.js';
 import { signedOutGithubView } from '../core/github.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
+import { FIREWALL_RULE_NAME } from './remote-firewall.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import { canonicalKind, problemFromText, saveProblems, type FlowProblem } from '../core/flow-canvas.js';
 import { canonicalFlowDocument, flowNodes, formEditable } from '../core/flow-form.js';
@@ -92,8 +93,18 @@ export interface FeaturePorts {
     readonly remoteAccess?: { apply(): Promise<void>; restart(): Promise<void> };
     /** This machine's Tynn workstation registration, as main last read it (main/workstation-identity.ts, Tynn #836). */
     readonly tynnWorkstation?: () => import('../renderer/features.js').TynnWorkstationState | null;
-    /** Windows: add the firewall rule (main/remote-firewall.ts); absent elsewhere. */
-    readonly allowFirewall?: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
+    /**
+     * Windows: Genie's firewall rule (main/remote-firewall.ts); absent elsewhere. `rule()` is main's last reading from Windows
+     * (`null` = not read yet); `refresh()` reads Windows again; `allow()` / `remove()` each go through one UAC prompt (Tynn #685).
+     */
+    readonly firewall?: {
+        rule(): import('../renderer/features.js').FirewallRuleView | null;
+        refresh(): Promise<void>;
+        /** Read Windows again, debounced: Settings → Remote access opened, or its window focused. */
+        reread(): Promise<void>;
+        allow(): Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
+        remove(): Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
+    };
     /** This Genie's Tynn account (main/tynn-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
     readonly tynnAccount?: TynnAccountPort;
     /** This Genie's GitHub sign-in (main/github-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
@@ -595,7 +606,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             pairRequests: services.pairing.requests(),
             connections: services.remote.connections(),
             enabled: services.settings.snapshot().remote_access === true,
-            firewall: ports.allowFirewall !== undefined,
+            firewall: ports.firewall !== undefined,
+            firewallRule: ports.firewall ? ports.firewall.rule() : null,
             firewallOutcome: state.firewallOutcome ?? null,
             tailscale: ports.tailscale ? ports.tailscale.status() : null,
             tailscaleOutcome: state.tailscaleOutcome ?? null,
@@ -1689,10 +1701,30 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.tailscaleOutcome = r.started ? 'Tailscale’s installer is open: finish it, then Connect.' : r.url ? 'Tailscale’s download page opened in your browser.' : (r.message ?? 'Tailscale could not be installed from here.');
             break;
         }
+        // Each goes through Windows' own prompt, then READS WINDOWS AGAIN, so the row shows what Windows now has (Tynn #685).
         case 'remote.allowFirewall': {
-            if (!ports.allowFirewall) throw new Error('the firewall rule is only needed on Windows');
-            const r = await ports.allowFirewall();
+            if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
+            const r = await ports.firewall.allow();
+            await ports.firewall.refresh();
             next.firewallOutcome = r.ok ? 'Allowed: devices on your tailnet can reach this port.' : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.' : (r.error ?? 'The firewall rule could not be added.');
+            break;
+        }
+        // The page opened, or its window regained focus: what Windows has NOW (a rule changed outside Genie), debounced.
+        case 'remote.readFirewall': {
+            if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
+            await ports.firewall.reread();
+            break;
+        }
+        case 'remote.removeFirewall': {
+            if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
+            const r = await ports.firewall.remove();
+            await ports.firewall.refresh();
+            next.firewallOutcome = r.ok
+                ? 'Removed: Windows Firewall no longer lets devices on your tailnet reach this port.'
+                : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.'
+                // netsh failed, and Windows now has no such rule: someone removed it first; say that, not "failed".
+                : ports.firewall.rule()?.state === 'absent' ? `Windows has no rule named “${FIREWALL_RULE_NAME}” now: there is nothing to remove.`
+                : (r.error ?? 'The firewall rule could not be removed.');
             break;
         }
         // TYNN SIGN-IN, the way Genie 1 did it: open Tynn in the browser, take the code back, Sign out revokes the key.

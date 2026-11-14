@@ -11,3 +11,6 @@
 
 # The workspace-UX contract is pinned by its sha256 (genie#1295): its bytes must not change on checkout.
 contracts/* text eol=lf
+
+# Real netsh output captured on Windows (Tynn #685): the bytes as Windows wrote them, CRLF included. Never normalised.
+test/fixtures/netsh-show-rule/* -text

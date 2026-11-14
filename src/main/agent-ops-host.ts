@@ -1,7 +1,6 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { providerLogin } from '../core/provider-login.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
@@ -83,8 +82,6 @@ export interface AgentOpsPorts {
     models?: { get(provider: string, options?: { refresh?: boolean }): Promise<ModelChoices> };
     cwdFor(record: AgentRecord): string;
     workspacePathFor(record: AgentRecord): string | null;
-    /** The persona file's text, or `null` when there is none. */
-    readManifest(record: AgentRecord): Promise<string | null>;
     /**
      * The agent's recorded conversation (Genie's own ledger, core/thread-store.ts), oldest first: what a switch carries to the
      * new provider (Tynn story #380). Absent = nothing is carried.
@@ -289,8 +286,8 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (!isAcpProvider(to)) return { ok: false, reason: `Genie cannot run a "${to}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
-    // The persona is READ (its name), never written: AGENT.md names no provider, and nothing in it refuses a switch (Tynn story #380).
-    const manifest = parseAgentManifest(await ports.readManifest(record), record.name);
+    // The persona is not read at all: AGENT.md names no provider, and nothing in it refuses a switch (Tynn story #380); its
+    // config is project.json's (Tynn #694), and the name the carry-over uses is the agent's own.
     const decision = switchDriverDecision(record.provider, to);
     if (!decision.ok || decision.noop) return decision;
     // Refused BEFORE anything is stopped: a provider that cannot run here would leave the agent on nothing.
@@ -310,7 +307,7 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     await ports.host.ended(record.id);
     const since = record.leftAt?.[to] !== undefined ? Date.parse(record.leftAt[to]!) : null;
     const rows = ports.history ? await ports.history(record).catch(() => []) : [];
-    const carryOver = buildCarryOver({ from: record.provider, to, agentName: manifest.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
+    const carryOver = buildCarryOver({ from: record.provider, to, agentName: record.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
     const switched = await ports.registry.setProvider(record.id, to, { keepModel, carryOver });
     if (!switched.ok) return switched;
     return {
@@ -422,17 +419,18 @@ async function defaultModelOf(ports: AgentOpsPorts, record: AgentRecord): Promis
 export async function listModels(ports: AgentOpsPorts, agentId: string, refresh = false): Promise<ModelChoices | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
+    // THE PROVIDER'S LIST, RUNNING OR NOT (Tynn #608; the owner: the list would not refresh while the agent ran). A running
+    // session's own state is fixed at its start, so it says only which model is in use, and is the list only when the
+    // provider cannot be asked now, with why.
     const live = ports.host.modelState?.(record.id) ?? null;
-    if (live) {
-        try {
-            const state = await live;
-            if (state.availableModels.length > 0) return { ok: true, provider: record.provider, source: 'session', models: state.availableModels, current: state.currentModelId };
-        } catch {
-            // The session could not say (an older CLI, a refused model/list): the provider's CLI is asked below instead.
-        }
+    const session = live ? await live.then((s) => s, () => null) : null;
+    const asked = ports.models ? await ports.models.get(record.provider, { refresh }) : null;
+    if (asked?.ok) return session ? { ...asked, inUse: session.currentModelId } : asked;
+    if (session && session.availableModels.length > 0) {
+        const why = asked && !asked.ok ? asked.reason : 'this Genie cannot ask a provider for its models';
+        return { ok: true, provider: record.provider, source: 'session', models: session.availableModels, current: session.currentModelId, note: `Couldn’t ask ${record.provider} for its models now (${why}): this is the list the running session started with.` };
     }
-    if (!ports.models) return { ok: false, provider: record.provider, reason: 'this Genie cannot ask a provider for its models' };
-    return ports.models.get(record.provider, { refresh });
+    return asked ?? { ok: false, provider: record.provider, reason: 'this Genie cannot ask a provider for its models' };
 }
 
 /**

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import type { AgentId, AgentRecord } from '../src/core/identity.js';
+import { SCHEMA_REVISION } from '../src/core/workspace-model.js';
 import { createAgent } from '../src/main/agent-create-host.js';
 import { restartAgent, type AgentRestartPorts } from '../src/main/agent-ops-host.js';
 import { HostRegistryStore } from '../src/main/agent-stores-replica.js';
@@ -10,6 +12,9 @@ import { Registry } from '../src/main/registry.js';
 // Only storage transport, persona files and the provider process are replaced; no timers or OS work.
 async function rig() {
     let stored: readonly AgentRecord[] = [];
+    const files = new Map([[join('/fixture/workspace', 'project.json'), JSON.stringify({
+        $schema: `https://raw.githubusercontent.com/Civicognita/shared-schemas/v${SCHEMA_REVISION}/schemas/workspace/project.schema.json`, name: 'fixture',
+    })]]);
     let hold: { entered: () => void; released: Promise<void> } | null = null;
     let holdWrite: { entered: () => void; released: Promise<void> } | null = null;
     const store = new HostRegistryStore({
@@ -46,7 +51,9 @@ async function rig() {
         registerAgent: (workspaceId, input) => createAgent({
             workspace: (id) => registry.workspace(id),
             agentsOf: (id) => registry.agentsOf(id),
-            exists: async () => false, mkdirp: async () => {}, writeText: async () => {},
+            exists: async () => false, mkdirp: async () => {}, listDirs: async () => [],
+            readText: async (path) => files.get(path) ?? null,
+            writeTextAtomic: async (path, text) => { files.set(path, text); },
             register: (input) => registry.register(input),
         }, workspaceId, input),
         agentOps: { restart: (id, kind) => restartAgent(restartPorts, id, kind) },

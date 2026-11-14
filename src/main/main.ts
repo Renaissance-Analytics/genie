@@ -27,6 +27,7 @@ import type { Caller } from './mcp-tools.js';
 import { CommsCache } from '../core/comms.js';
 import { askerLiveFrom } from './asker-live.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
+import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
 import { guardWindowLinks } from './external-links.js';
@@ -99,6 +100,7 @@ import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { mkdir, readdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
+import { moveAgentFrontmatter, nodeAgentConfigFs } from './agent-config-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
@@ -210,7 +212,7 @@ import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycle
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteAccess } from './remote-access.js';
-import { ensureFirewallRule } from './remote-firewall.js';
+import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { uploadSender } from './uploads.js';
 import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
@@ -283,6 +285,8 @@ installMainErrorPolicy(process, mainErrors);
 let remakeHostCopy: () => Promise<string | null> = async () => 'Genie has not finished starting; try again in a moment';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
+// Genie's windows load from http://genie.localhost:<port>, served from the build by this process (Tynn #683, main/window-pages.ts).
+configureWindowPages({ root: join(here, '../renderer'), portFile: join(app.getPath('userData'), 'window-origin.json'), log: (line) => console.log(line) });
 
 /**
  * A single instance, with no exception.
@@ -670,13 +674,30 @@ function tynnProjectFor(workspaceId: string): string | null {
  * THE NEW AGENT FORM ON THIS HOST (main/agent-create-host.ts): the local window's `genie:add-agent` and a remote window's
  * `addAgent` both land here — the AGENT.md written under the workspace, then the agent registered on it.
  */
+/** The workspace folders this run has already moved AGENT.md front matter out of (Tynn #694). */
+const agentConfigsMoved = new Set<string>();
+async function moveAgentConfigs(workspaces: readonly { id: string; path: string }[]): Promise<void> {
+    const fs = nodeAgentConfigFs();
+    for (const w of workspaces) {
+        if (agentConfigsMoved.has(w.path)) continue;
+        agentConfigsMoved.add(w.path);
+        try {
+            const moved = await moveAgentFrontmatter(fs, w.path);
+            if (!moved.ok) console.warn(`[genie] agent config for ${w.id}: ${moved.reason}`);
+            else if (moved.moved.length > 0) console.log(`[genie] agent config for ${w.id}: moved ${moved.moved.join(', ')} from AGENT.md front matter into project.json`);
+        } catch (error) {
+            console.warn(`[genie] agent config for ${w.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+}
 function agentCreatePorts(): AgentCreatePorts {
     return {
         workspace: (id) => registry?.workspace(id) ?? null,
         agentsOf: (id) => registry?.agentsOf(id) ?? [],
         exists: async (path) => existsSync(path),
         mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
-        writeText: async (path, text) => { await writeFileText(path, text, 'utf8'); },
+        // project.json (the agent's config, Tynn #694) and AGENT.md (its persona), each written whole: temp + rename.
+        ...nodeAgentConfigFs(),
         register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
         sacredName: async (workspaceId) => {
             const projectId = tynnProjectFor(workspaceId);
@@ -837,7 +858,7 @@ function takeOverWindow(route: string, request: ActivationRequest, remote: { sea
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    void win.loadFile(join(here, '../renderer/index.html'), remote ? { search: remote.search, hash: route } : { hash: route });
+    void loadWindowPage(win.webContents, 'index', remote ? { search: remote.search, hash: route } : { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
     return win;
 }
 
@@ -889,7 +910,7 @@ function openFilesWindow(route: string, activation: Activation): void {
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
-    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+    void loadWindowPage(win.webContents, 'index', { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
 }
 
 /**
@@ -916,7 +937,7 @@ function openFlowEditorWindow(route: string, activation: Activation): void {
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+    void loadWindowPage(win.webContents, 'index', { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
 }
 
 function closeWindowAt(route: string): void {
@@ -1069,7 +1090,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
     if (show) onceShowable(win, process.platform, () => showWhenReady(win, { activation: 'user-gesture', reason: search ? 'remote window' : 'launch', ledger: activationLedger, label: search ? 'remote' : 'main' }));
 
     // A remote host's window carries the host in its query (core/remote-window.ts); the main window carries none.
-    void win.loadFile(join(here, '../renderer/index.html'), search ? { search } : undefined);
+    void loadWindowPage(win.webContents, 'index', search ? { search } : undefined).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
     return win;
 }
 
@@ -1416,7 +1437,12 @@ async function boot(): Promise<void> {
             // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
             const current = theRegistry.snapshot().workspaces ?? [];
             const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
-            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path }))).catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`));
+            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path })))
+                .catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`))
+                // AGENT CONFIG INTO project.json (Tynn #694): the first time this Genie reads a workspace, any AGENT.md front
+                // matter is moved into its project.json `agents` and stripped from the file. After the colour pass, so the
+                // two never write one project.json at once; once per folder per run (a later move is a no-op anyway).
+                .then(() => moveAgentConfigs(current.filter((w) => theRegistry.workspaceStates().find((s) => s.path === w.path)?.asleep !== true)));
         }, 0);
     });
     // AN AUTOMATED AGENT WITH AN OPEN PLAN DOES NOT JUST STOP (the owner, 2026-10-21; core/plan-keepalive.ts): a turn that
@@ -1562,7 +1588,7 @@ async function boot(): Promise<void> {
                 });
                 guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
                 hostWaitWindow = win;
-                void win.loadFile(join(here, '../renderer/host-wait.html'));
+                void loadWindowPage(win.webContents, 'host-wait').catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
             },
             update: (view) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.webContents.send('host-wait:show', view); },
             close: () => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.destroy(); hostWaitWindow = null; },
@@ -2212,7 +2238,21 @@ async function boot(): Promise<void> {
     void refreshTailscale();
     // Set once the feature push exists (below): Docker answering after a snapshot stopped waiting for it pushes again.
     let requestFeaturePush = (): void => {};
-    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    // GENIE'S FIREWALL RULE (Windows; Tynn #685): read from Windows at start and after every Allow or Remove, so Settings →
+    // Remote access shows whether the rule is there, never a button that assumes it is not.
+    // Opening the page re-reads it (debounced: 5 s), so a rule changed outside Genie shows without a restart.
+    const firewallRule = firewallReader(() => readFirewallRule(REMOTE_PORT), { minIntervalMs: 5000 });
+    const firewallPort: FeaturePorts['firewall'] = process.platform === 'win32'
+        ? {
+            rule: () => firewallRule.rule(),
+            refresh: () => firewallRule.refresh(),
+            reread: () => firewallRule.reread(),
+            allow: () => ensureFirewallRule(REMOTE_PORT),
+            remove: () => removeFirewallRule(),
+        }
+        : undefined;
+    if (firewallPort) void firewallPort.refresh().then(() => requestFeaturePush());
+    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(firewallPort ? { firewall: firewallPort } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     /*
      * REMOTE ACCESS IS GENIE-HOST'S (Tynn #409, host split P5d.1): with genie-host linked, IT listens on the tailnet, pairs,

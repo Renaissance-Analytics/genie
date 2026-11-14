@@ -436,7 +436,7 @@ describe('the preload and main wiring', () => {
         for (const name of ['doctor-preload.ts', 'question-preload.ts', 'browser-preload.ts']) expect(read(name)).not.toContain('genieLocalProtocol');
     });
     it.each(['createWindow', 'openTakeOverWindow', 'openFilesWindow', 'openFlowEditorWindow'])('%s admits its window before loading the renderer', (name) => {
-        const body = read('main.ts').match(new RegExp(`function ${name}\\b[\\s\\S]*?void win.loadFile`))?.[0];
+        const body = read('main.ts').match(new RegExp(`function ${name}\\b[\\s\\S]*?void loadWindowPage\\(win\\.webContents`))?.[0];
         expect(body).toContain('localDoor.admit(win.webContents)');
     });
 });

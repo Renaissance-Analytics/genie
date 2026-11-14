@@ -111,6 +111,11 @@ const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'termi
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
 const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke'];
 
+/** What a guest of ONE workspace may never do, whichever workspace it names: the workstation's roster (Tynn #688). */
+const GUEST_ROSTER_METHODS: readonly string[] = ['workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.setGoverns'];
+/** Methods whose FIRST argument is a terminal id: a guest of one workspace reaches only its own terminals (Tynn #688). */
+const GUEST_TERMINAL_ID_METHODS: readonly string[] = ['terminals.write', 'terminals.resize', 'terminals.close'];
+
 /** `/`-separated, `..` resolved — so `/w/tynn/../fancy` is judged as `/w/fancy`. */
 function normalizedPath(p: string): string {
     const out: string[] = [];
@@ -615,6 +620,8 @@ export class RemoteHost {
             host: this.#hostName,
             isOwner: connection.auth.isOwner,
             workspaceId: connection.auth.workspaceId,
+            // What the window may offer (Tynn #688): read-only is the host's word, from the grant, never the client's.
+            readonly: connection.auth.readonly,
             ...(token ? { token } : {}),
             // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
             protocol: REMOTE_PROTOCOL,
@@ -994,6 +1001,27 @@ export class RemoteHost {
         }
         if (WORKSPACE_SCOPED_METHODS.includes(method) && String(args[0] ?? '') !== workspaceId) return `${String(args[0])} is not the workspace this link shares`;
         if (method === 'features.act' || method.startsWith('updates.')) return `${method} changes ${this.#hostName} itself; a shared workspace cannot`;
+        // THE WORKSTATION'S OWN (Tynn #688): its features (settings, processes, sites, services, flows, hosting, toolchain)
+        // and its update state are the machine's, not the workspace this link shares.
+        if (method === 'features.snapshot') return `${method} is ${this.#hostName}'s own, not part of the workspace this link shares`;
+        // The workstation's roster: hibernating, waking or removing a workspace, or making one govern others.
+        if (GUEST_ROSTER_METHODS.includes(method)) return `${method} changes ${this.#hostName}'s workspaces; the workspace this link shares cannot`;
+        // By terminal id: one the host places in this workspace, never another's or one it cannot place.
+        if (GUEST_TERMINAL_ID_METHODS.includes(method)) {
+            const terminalId = String(args[0] ?? '');
+            if (this.#api.workspaceOfTerminal?.(terminalId) !== workspaceId) return `${terminalId} is not a terminal of the workspace this link shares`;
+        }
+        // A file to one of ITS agents, by id: an address the host would resolve across every workspace is not this link's.
+        if (method === 'inbox.sendFile') {
+            const to = String(args[0] ?? '');
+            if (this.#api.workspaceOfAgent(to) !== workspaceId) return `${to} is not an agent of the workspace this link shares`;
+        }
+        // Naming an agent: only one of this workspace's.
+        if (method === 'workspaces.setDefaultAgent' && typeof args[1] === 'string' && args[1] !== '' && this.#api.workspaceOfAgent(args[1]) !== workspaceId) return `${args[1]} is not in the workspace this link shares`;
+        if (method === 'agents.setAccessAgents' && Array.isArray(args[1])) {
+            const outside = args[1].find((id) => this.#api.workspaceOfAgent(String(id)) !== workspaceId);
+            if (outside !== undefined) return `${String(outside)} is not in the workspace this link shares`;
+        }
         return null;
     }
 

@@ -1,10 +1,11 @@
 import { AGENT_NAME, RESERVED_AGENT_NAMES } from './agent-adoption.js';
+import { agentPersonaText } from './agent-config.js';
 import { ACP_PROVIDERS } from './engine.js';
 
 /**
  * A NEW AGENT, ASKED FOR (the owner, 2026-10-23: "it didn't give me any ux to choose name, purpose or anything that genie
  * 1 could even. it just created an agent with some dumb name and default settings"). Genie 1's NewAgentModal: a name,
- * shown as the folder it becomes; a purpose, required, written into the committed AGENT.md; a starting provider. Its
+ * shown as the folder it becomes; a purpose, required, written into the workspace's project.json and, once, as the committed AGENT.md; a starting provider. Its
  * rules, on Genie 2's: the name pattern and reserved list adoption already applies (core/agent-adoption.ts), claude or
  * codex, and never a name the workspace already has. Model, mode and permissions are set afterwards, in Settings, as in
  * Genie 1. The pure half — the host writes the file and registers (main/agent-create-host.ts).
@@ -36,16 +37,16 @@ export function newAgentRefusal(input: NewAgentInput): string | null {
         if (granted !== name) return `"${name}" is a reserved name and cannot be used for an agent. Reserved: ${RESERVED_AGENT_NAMES.join(', ')}.`;
     }
     if (input.existing.some((n) => n.trim().toLowerCase() === name)) return `This workspace already has an agent named ${name}.`;
-    if (input.purpose.trim() === '') return 'The agent needs a purpose: what it is for. It goes into its AGENT.md.';
+    if (input.purpose.trim() === '') return 'The agent needs a purpose: what it is for. It goes into its AGENT.md and the workspace’s project.json.';
     if (!(ACP_PROVIDERS as readonly string[]).includes(input.provider)) return `An agent here runs on ${ACP_PROVIDERS.join(' or ')}; "${input.provider}" is not one of them.`;
     return null;
 }
 
 /**
- * The AGENT.md a new agent starts with — Genie 1's `renderAgentFile`: its name and purpose, the purpose on one line. No
- * provider (Tynn story #380): the provider is Genie's record of the agent, switchable at any time, never the persona's.
+ * The AGENT.md a new agent starts with: ONLY its persona — the purpose, said once (Tynn #694). Its config (purpose,
+ * provider) is written to the workspace's project.json `agents` (core/agent-config.ts), never into this file: front matter
+ * here was loaded into the agent's context and said the purpose twice.
  */
-export function agentFileText(input: { name: string; purpose: string; provider?: string }): string {
-    const purpose = input.purpose.replace(/\s+/g, ' ').trim();
-    return `---\nname: ${input.name}\npurpose: ${purpose}\n---\nYou are ${input.name}. ${purpose}\n`;
+export function agentFileText(input: { name: string; purpose: string }): string {
+    return agentPersonaText(input.purpose);
 }

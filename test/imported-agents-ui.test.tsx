@@ -21,7 +21,7 @@ function findAll(node: ReactNode, match: (p: Props) => boolean, out: Props[] = [
     return out;
 }
 const noop = () => {};
-const agents = importedAgents({ files: [{ folder: 'atlas', text: '' }, { folder: 'bolt', text: '---\ntuis: [codex]\n---' }, { folder: 'tynn', text: '' }], registered: [] });
+const agents = importedAgents({ files: [{ folder: 'atlas' }, { folder: 'bolt' }, { folder: 'tynn' }], configs: { bolt: { purpose: 'b', provider: 'codex' } }, registered: [] });
 const base = { workspaceName: 'Acme', path: '/w/acme.agi', agents, busy: null, notice: null, error: null, onAdopt: noop, onOpen: noop };
 
 describe('the workspace came with agents', () => {
