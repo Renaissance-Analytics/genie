@@ -33,7 +33,8 @@ describe('where it comes from', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         expect(main).toMatch(/appVersion: \(\) => app\.getVersion\(\)/);
         const ipc = readFileSync('src/main/feature-ipc.ts', 'utf8');
-        expect(ipc).toMatch(/version: ports\.appVersion \? ports\.appVersion\(\) : null,/);
+        expect(ipc).toMatch(/\.\.\.machineFeatureSnapshot\(services, state, ports\)/);
+        expect(readFileSync('src/main/feature-machine.ts', 'utf8')).toMatch(/version: ports\.appVersion \? ports\.appVersion\(\) : null,/);
         const shell = readFileSync('src/renderer/Shell.tsx', 'utf8');
         expect(shell).toMatch(/version=\{features\.version \?\? null\}/);
     });

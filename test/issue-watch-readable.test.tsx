@@ -103,6 +103,7 @@ describe('the wiring', () => {
     });
 
     it('the Refresh is a feature action that has Tynn read the workspace now', () => {
-        expect(src('../src/main/feature-ipc.ts')).toMatch(/case 'issueWatch\.refresh':/);
+        expect(src('../src/main/feature-ipc.ts')).toMatch(/await applyMachineFeatureAction\(services, action, state, next, ports\)/);
+        expect(src('../src/main/feature-machine.ts')).toMatch(/case 'issueWatch\.refresh':/);
     });
 });

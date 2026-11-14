@@ -1,24 +1,22 @@
+import { applyMachineFeatureAction, githubAccountOf, machineFeatureSnapshot } from './feature-machine.js';
+import { applyToolchainCoreFeatureAction, clearRefusal, refuse, rescanToolchain, toolchainSection } from './feature-toolchain.js';
+export { toolchainSection, toolchainStateFrom } from './feature-toolchain.js';
 import { applyHostingFeatureAction, hostingFeatureSnapshot, sitePins } from './feature-hosting.js';
 export { ENGINE_STATUS_WAIT_MS, ROW_LOG_LINES, sitePins } from './feature-hosting.js';
 import { applyPersonalFeatureAction, personalFeatureSnapshot } from './feature-personal.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
-import { catalogEditors, catalogPanels } from '../core/catalog-projections.js';
 import { REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
-import { TYNN_HOST } from '../core/tynn.js';
 import { classifyNavigation } from '../core/browser-policy.js';
-import { tynnGate, type SyncResult } from '../core/integrations.js';
-import { unreachableThroughMessage, type TynnAccountPort } from './tynn-account.js';
+import type { SyncResult } from '../core/integrations.js';
+import type { TynnAccountPort } from './tynn-account.js';
 import type { GithubAccountPort } from './github-account.js';
-import { signedOutGithubView } from '../core/github.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
-import { shouldCheckUpdates } from './toolchain-prober.js';
-import { FIREWALL_RULE_NAME } from './remote-firewall.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import type { FlowAdding, FlowSaved, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { answerDeck } from './deck-answer.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
-import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
+import type { ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
 import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } from './python-versions.js';
@@ -266,60 +264,6 @@ export interface FeatureState {
     servedQuestion?: { id: string; record: AskedRecord | null } | null;
 }
 
-/** The Toolchain section: the scan, plus each further fact only when there is one (never an empty placeholder). */
-export function toolchainSection(state: FeatureState): ToolchainSection | null {
-    if (state.toolStatuses === null) return null;
-    return {
-        tools: state.toolStatuses,
-        checkedAt: state.toolchainCheckedAt ?? null,
-        ...(state.toolchainInstalls ? { installs: state.toolchainInstalls } : {}),
-        ...(state.toolchainBusy ? { busy: state.toolchainBusy } : {}),
-        ...(state.toolchainFindings ? { findings: state.toolchainFindings } : {}),
-        ...(typeof state.toolchainRepairedAt === 'number' ? { repairedAt: state.toolchainRepairedAt } : {}),
-        ...(state.toolchainWarning ? { warning: state.toolchainWarning } : {}),
-        ...(state.toolchainUpdating ? { updating: state.toolchainUpdating } : {}),
-        ...(state.toolchainUpdated ? { updated: state.toolchainUpdated } : {}),
-        ...(state.toolchainResult ? { result: state.toolchainResult } : {}),
-        ...(state.toolchainRefusals && state.toolchainRefusals.length > 0 ? { refusals: state.toolchainRefusals } : {}),
-        ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
-        ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
-        ...(state.toolchainGo ? { go: state.toolchainGo } : {}),
-        ...(state.toolchainPython ? { python: state.toolchainPython } : {}),
-        ...(state.toolchainDotnet ? { dotnet: state.toolchainDotnet } : {}),
-        ...(state.toolchainRust ? { rust: state.toolchainRust } : {}),
-        ...(state.toolchainRuby ? { ruby: state.toolchainRuby } : {}),
-        ...(state.toolchainJava ? { java: state.toolchainJava } : {}),
-        ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
-        ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
-    };
-}
-
-/** What main keeps of a toolchain action's answer for the next snapshot (the inverse of `toolchainSection`). */
-export function toolchainStateFrom(section: ToolchainSection | null): Partial<FeatureState> {
-    return {
-        toolStatuses: section?.tools ?? null,
-        toolchainCheckedAt: section?.checkedAt ?? null,
-        toolchainInstalls: section?.installs ?? null,
-        toolchainFindings: section?.findings ?? null,
-        toolchainRepairedAt: section?.repairedAt ?? null,
-        toolchainWarning: section?.warning ?? null,
-        toolchainUpdating: null,
-        toolchainUpdated: section?.updated ?? null,
-        toolchainResult: section?.result ?? null,
-        toolchainRefusals: section?.refusals ?? null,
-        toolchainPhp: section?.php ?? null,
-        toolchainNode: section?.node ?? null,
-        toolchainGo: section?.go ?? null,
-        toolchainPython: section?.python ?? null,
-        toolchainDotnet: section?.dotnet ?? null,
-        toolchainRust: section?.rust ?? null,
-        toolchainRuby: section?.ruby ?? null,
-        toolchainJava: section?.java ?? null,
-        toolchainDefaults: section?.defaults ?? null,
-        toolchainMachinePath: section?.machinePath ?? null,
-    };
-}
-
 /** What the machine-PATH card shows: whether it is applied, where, and exactly what would change. */
 export interface MachinePathStatus {
     readonly applied: boolean;
@@ -328,128 +272,8 @@ export interface MachinePathStatus {
     readonly targets: readonly string[];
 }
 
-type ToolchainPort = NonNullable<FeaturePorts['toolchain']>;
-
-/** Re-probe every tool (the snapshot shows the MEASURED state, never a command's word) and how each missing one would install. */
-async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: readonly SitePin[] = []): Promise<void> {
-    if (tc.php) next.toolchainPhp = await tc.php.list(pins);
-    if (tc.node) next.toolchainNode = await tc.node.list();
-    if (tc.go) next.toolchainGo = await tc.go.list();
-    if (tc.python) next.toolchainPython = await tc.python.list();
-    if (tc.dotnet) next.toolchainDotnet = await tc.dotnet.list();
-    if (tc.rust) next.toolchainRust = await tc.rust.list();
-    if (tc.ruby) next.toolchainRuby = await tc.ruby.list();
-    if (tc.java) next.toolchainJava = await tc.java.list();
-    if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
-    if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
-    const tools = await tc.probe();
-    next.toolStatuses = tools;
-    next.toolchainCheckedAt = tc.now();
-    if (tc.preview) {
-        const missing = tools.filter((t) => t.tone === 'not-installed');
-        next.toolchainInstalls = Object.fromEntries(await Promise.all(missing.map(async (t) => [t.tool, await tc.preview!(t.tool)] as const)));
-    }
-}
-
-const sameRow = (r: ToolchainRefusal, tool: string, version: string | undefined): boolean => r.tool === tool && r.version === version;
-
 /** The Toolchain rows whose CLI repair is running now (`toolchain.repairCli`): one repair per CLI at a time. */
 const repairingCli = new Set<string>();
-
-/** A row's next action starts clean: its old refusal goes; every other row's stays. */
-function clearRefusal(next: FeatureState, tool: string, version?: string): void {
-    next.toolchainRefusals = (next.toolchainRefusals ?? []).filter((r) => !sameRow(r, tool, version));
-}
-
-/**
- * Say a refused or failed toolchain action ON ITS ROW, verbatim. It used to be thrown, which the renderer could put
- * nowhere but its console: the person clicked Update and nothing happened, with no word of who was busy.
- */
-function refuse(next: FeatureState, tool: string, reason: string, version?: string, retry?: string): void {
-    clearRefusal(next, tool, version);
-    next.toolchainRefusals = [...(next.toolchainRefusals ?? []), { tool, reason, ...(version !== undefined ? { version } : {}), ...(retry !== undefined ? { retry } : {}) }];
-}
-
-const LABELS: Readonly<Record<string, string>> = { php: 'PHP', node: 'Node', python: 'Python', go: 'Go' };
-
-/**
- * AFTER AN UPDATE (genie#1306; Genie 1 told the person what keeps the old version until it restarts — toolchain-page.ts
- * `defaultChangeNotice`, "restart them to pick this up"): restart what ran on the old version — a site through its OWN
- * restart (its php-cgi re-resolved, its dev server started again), any other process by the supervisor — and say what
- * could not be. Agent sessions are never restarted mid-turn: they are named, and take it up when they next start.
- */
-function restartAfterUpdate(services: ComposedServices, ids: readonly string[]): { restarted: string[]; failed: string[] } {
-    const restarted: string[] = [];
-    const failed: string[] = [];
-    const sitesDone = new Set<string>();
-    for (const id of ids) {
-        const site = services.sites.list().find((s) => s.processIds.includes(id));
-        try {
-            if (site) {
-                if (sitesDone.has(site.id)) continue;
-                sitesDone.add(site.id);
-                services.sites.restart(site.id);
-                restarted.push(site.host);
-            } else {
-                const label = services.supervisor.status(id)?.name ?? id;
-                if (services.supervisor.restart(id)) restarted.push(label);
-                else failed.push(`${label} (it is gone)`);
-            }
-        } catch (error) {
-            failed.push(`${site?.host ?? id} (${error instanceof Error ? error.message : String(error)})`);
-        }
-    }
-    return { restarted, failed };
-}
-
-function describeInstall(tool: string, outcome: Exclude<InstallOutcome, { kind: 'refused' }>): string {
-    switch (outcome.kind) {
-        case 'installed':
-            return `${tool}${outcome.version ? ` ${outcome.version}` : ''} is installed.${outcome.note ? ` (${outcome.note})` : ''}`;
-        case 'already-installed':
-            return `${tool} was already installed${outcome.version ? ` (${outcome.version})` : ''}; nothing was run.`;
-        case 'not-installed':
-            return `${tool} was not installed: ${outcome.reason}.`;
-    }
-}
-
-function describeUpdate(tool: string, outcome: RepairOutcome): string {
-    switch (outcome.kind) {
-        case 'repaired':
-            return `${tool} updated${outcome.from ? ` from ${outcome.from}` : ''} to ${outcome.to}.${outcome.note ? ` (${outcome.note})` : ''}`;
-        case 'unchanged':
-        case 'unverified':
-            return `${tool}: ${outcome.reason}.`;
-    }
-}
-
-/** The account, or a refusal in words: without one nothing pretends to sign in. */
-function tynnAccountOf(ports: FeaturePorts): TynnAccountPort {
-    if (!ports.tynnAccount) throw new Error('this Genie cannot sign in to Tynn here: it has no Tynn account (doctor mode)');
-    return ports.tynnAccount;
-}
-
-const NO_GITHUB = 'this Genie cannot sign in to GitHub here: it has no GitHub account (doctor mode)';
-
-/** The GitHub sign-in, or a refusal in words: without one nothing pretends to sign in. */
-function githubAccountOf(ports: FeaturePorts): GithubAccountPort {
-    if (!ports.githubAccount) throw new Error(NO_GITHUB);
-    return ports.githubAccount;
-}
-
-/** Tynn in Settings → Integrations: who is signed in where, the sign-in under way, and the rows Tynn gates. */
-function tynnIntegration(services: ComposedServices, state: FeatureState, account: TynnAccountPort | undefined) {
-    const status = account?.status() ?? { signedIn: false as const };
-
-    const host = account ? account.host() : TYNN_HOST;
-    // Out of reach through a proxy reads as that: the sign-in stands, whatever the status says for now.
-    const through = account?.unreachableThrough?.() ?? null;
-    return {
-        tynnSignedIn: status.signedIn,
-        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? (through ? unreachableThroughMessage(through) : null) },
-        gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: status.signedIn }),
-    };
-}
 
 /**
  * Every snapshot's number, taken when it STARTS (genie#1393). Snapshots race: a click's answer built while a site was
@@ -472,29 +296,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         ...personal,
         ...hosting,
         toolchain: toolchainSection(state),
-        // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
-        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null, ...(ports.keyring?.notice?.() ? { keyringNotice: ports.keyring.notice!() } : {}) },
-        issueWatch: ports.issueWatch ? ports.issueWatch() : null,
-        version: ports.appVersion ? ports.appVersion() : null,
-        whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
-        plugins: { dir: services.pluginsDir, publisherChecksOff: services.settings.snapshot().publisher_checks_off === true, entries: services.plugins.list(), panels: catalogPanels(services.catalogDefinitions()) as never, editors: catalogEditors(services.catalogDefinitions()) },
-        remote: {
-            host: services.remote.hostName,
-            url: services.remote.url(),
-            unavailable: services.remote.unavailable(),
-            locked: services.remote.locked(),
-            pin: services.remote.activePin(),
-            devices: services.remote.devices(),
-            pairRequests: services.pairing.requests(),
-            connections: services.remote.connections(),
-            enabled: services.settings.snapshot().remote_access === true,
-            firewall: ports.firewall !== undefined,
-            firewallRule: ports.firewall ? ports.firewall.rule() : null,
-            firewallOutcome: state.firewallOutcome ?? null,
-            tailscale: ports.tailscale ? ports.tailscale.status() : null,
-            tailscaleOutcome: state.tailscaleOutcome ?? null,
-            tynnWorkstation: ports.tynnWorkstation ? ports.tynnWorkstation() : null,
-        },
+        ...machineFeatureSnapshot(services, state, ports),
     };
 }
 
@@ -505,7 +307,9 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
     const slow = (part: string, started: number): void => { const ms = Date.now() - started; if (ports.slowPart && ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); };
     const next: FeatureState = { ...state };
     if (!await applyPersonalFeatureAction(services, action, state, next, ports, origin)
-        && !await applyHostingFeatureAction(services, action, state, next, ports)) switch (action.kind) {
+        && !await applyHostingFeatureAction(services, action, state, next, ports)
+        && !await applyMachineFeatureAction(services, action, state, next, ports)
+        && !await applyToolchainCoreFeatureAction(services, action, state, next, ports)) switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
         case 'rendererNotice.dismiss': {
             if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
@@ -533,74 +337,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.settings.set('whats_new_seen_version', action.version);
             next.whatsNewShown = false;
             break;
-        case 'toolchain.check': {
-            const tc = ports.toolchain;
-            if (!tc) throw new Error('no toolchain runner is wired into this Genie; the scan cannot run');
-            if (shouldCheckUpdates(state.toolchainCheckedAt ?? null, tc.now(), action.force === true)) {
-                await rescanToolchain(next, tc, sitePins(services));
-            }
-            break;
-        }
-        case 'toolchain.update': {
-            const tc = ports.toolchain;
-            if (!tc) throw new Error('no toolchain runner is wired into this Genie; the update cannot run');
-            clearRefusal(next, action.tool);
-            if (next.toolchainUpdated?.tool === action.tool) next.toolchainUpdated = null;
-            // THE UPDATE-RISK GUARD (core/toolchain-risk.ts), read here in main from what is running NOW — never from the
-            // renderer, and never optional: a guard that can be left unwired is not one.
-            if (!tc.activity) {
-                refuse(next, action.tool, 'the update guard is not wired into this Genie, so nothing is updated');
-                break;
-            }
-            const known = (state.toolStatuses ?? []).find((t) => t.tool === action.tool);
-            const activity = await tc.activity();
-            const risk = updateRisk(action.tool, activity, { installed: known ? known.installed !== null : true });
-            if (risk.risk === 'blocked') {
-                refuse(next, action.tool, risk.reason);
-                break;
-            }
-            if (risk.risk === 'warn' && action.confirmed !== true) {
-                next.toolchainWarning = { tool: action.tool, ...(action.version ? { version: action.version } : {}), reason: risk.reason, affected: risk.affected };
-                break;
-            }
-            next.toolchainWarning = null;
-            // What runs on the old version NOW — the ones a restart would move (sessions are never restarted).
-            const onOld = risk.risk === 'warn' ? activity.processes.filter((p) => p.id !== undefined && risk.affected.includes(p.label)) : [];
-            const row = (step: string) => tc.updating?.({ tool: action.tool, ...(action.version ? { version: action.version } : {}), step });
-            let outcome: Awaited<ReturnType<typeof tc.update>>;
-            try {
-                row('Starting');
-                outcome = await tc.update(action.tool, action.version, (step) => { if (step) row(step); });
-                if (outcome.kind === 'repaired' && onOld.length > 0 && action.restart !== false) row('Restarting');
-            } finally {
-                tc.updating?.(null);
-            }
-            if (outcome.kind === 'refused') {
-                refuse(next, action.tool, outcome.reason);
-                break;
-            }
-            next.toolchainResult = describeUpdate(action.tool, outcome);
-            // It ran and did not take (the re-probe shows the same version, or nothing): said on the row, with a Retry.
-            if (outcome.kind !== 'repaired') refuse(next, action.tool, outcome.reason, undefined, action.version ?? '');
-            if (outcome.kind === 'repaired') {
-                next.toolchainUpdated = { tool: action.tool, version: outcome.to };
-                const label = LABELS[action.tool] ?? action.tool;
-                const sessions = risk.risk === 'warn' ? risk.affected.filter((a) => !onOld.some((p) => p.label === a)) : [];
-                const notes: string[] = [];
-                if (onOld.length > 0 && action.restart !== false) {
-                    const { restarted, failed } = restartAfterUpdate(services, onOld.map((p) => p.id!));
-                    if (restarted.length > 0) notes.push(`Restarted ${restarted.length}.`);
-                    if (failed.length > 0) notes.push(`Not restarted: ${failed.join(', ')}.`);
-                } else if (onOld.length > 0) {
-                    notes.push(`Restart to use it: ${onOld.map((p) => p.label).join(', ')}.`);
-                }
-                if (sessions.length > 0) notes.push(`${sessions.join(', ')} ${sessions.length === 1 ? 'picks' : 'pick'} it up when next started.`);
-                next.toolchainResult = `${label} ${outcome.from ?? ''}${outcome.from ? ' → ' : ''}${outcome.to}.${notes.length > 0 ? ` ${notes.join(' ')}` : ''}${outcome.note ? ` (${outcome.note})` : ''}`;
-            }
-            // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
-            await rescanToolchain(next, tc, sitePins(services));
-            break;
-        }
         case 'toolchain.login': {
             clearRefusal(next, action.tool);
             // The row's tool is the provider's CLI: claude-code is Claude's, codex is Codex's (Tynn #698).
@@ -636,32 +372,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 repairingCli.delete(action.tool);
             }
             // The row shows what the check finds now, never the repair's word for it.
-            await rescanToolchain(next, tc, sitePins(services));
-            break;
-        }
-        case 'toolchain.install': {
-            clearRefusal(next, action.tool);
-            // Consent first, before anything is asked of the machine: no consent, nothing runs.
-            if (action.consent !== true) {
-                refuse(next, action.tool, `Genie installs nothing without your go-ahead; ${action.tool} was not installed`);
-                break;
-            }
-            const tc = ports.toolchain;
-            if (!tc?.install) {
-                refuse(next, action.tool, 'no installer is wired into this Genie; nothing was installed');
-                break;
-            }
-            const outcome = await tc.install(action.tool, true);
-            if (outcome.kind === 'refused') {
-                refuse(next, action.tool, outcome.reason);
-                break;
-            }
-            next.toolchainResult = describeInstall(action.tool, outcome);
-            if (outcome.kind === 'not-installed') refuse(next, action.tool, outcome.reason);
-            // A prerequisite now present is no longer a finding.
-            if (outcome.kind !== 'not-installed' && next.toolchainFindings) {
-                next.toolchainFindings = next.toolchainFindings.filter((f) => !(f.result.kind === 'needs-install' && f.result.tool === action.tool));
-            }
             await rescanToolchain(next, tc, sitePins(services));
             break;
         }
@@ -1054,20 +764,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.toolchainDefaults = tc.defaults.list();
             break;
         }
-        case 'toolchain.repair': {
-            const tc = ports.toolchain;
-            if (!tc?.repair) throw new Error('Check and repair is not wired into this Genie; nothing was checked');
-            const report = await tc.repair();
-            next.toolchainFindings = report.findings;
-            next.toolchainRepairedAt = report.checkedAt;
-            const repaired = report.findings.filter((f) => f.result.kind === 'repaired').length;
-            next.toolchainResult =
-                report.findings.length === 0
-                    ? "Nothing to repair: each tool runs its newest copy, PHP has a CA bundle, and nothing PHP needs is missing."
-                    : `${report.findings.length} problem${report.findings.length === 1 ? '' : 's'} found, ${repaired} repaired.`;
-            await rescanToolchain(next, tc, sitePins(services));
-            break;
-        }
         case 'deck.answer':
         case 'deck.answerForm': {
             // One answer for the window and genie-host (deck-answer.ts, Tynn #551).
@@ -1104,43 +800,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             // "Dismiss all older than 1 day" — the store's clock decides what is old, each asker mailed once.
             await services.attention.dismissOlderThan(action.olderThanMs);
             break;
-        case 'issueWatch.setRepo':
-            // A Watched repos checkbox: Tynn's switch, one field; Tynn pushes the changed feed, main re-reads the switches.
-            await ports.issueWatchSetRepo?.(action.workspaceId, action.owner, action.repo, {
-                ...(typeof action.enabled === 'boolean' ? { enabled: action.enabled } : {}),
-                ...(typeof action.includeUpstream === 'boolean' ? { includeUpstream: action.includeUpstream } : {}),
-            });
-            break;
-        case 'issueWatch.refresh':
-            // The GitHub panel's Refresh: Tynn reads the workspace's repos now and pushes what it finds.
-            await ports.issueWatchRefresh?.(action.workspaceId);
-            break;
-        case 'remote.issuePin':
-            // `replaces`: Re-pair on a device's row — the device that pairs (and is allowed) takes that one's place.
-            await services.remote.issuePin(action.replaces ? { replaces: action.replaces } : {});
-            break;
         case 'remote.answerPair': {
             // Allow or Deny on "Pair this device?", from this machine's own window (a remote connection is refused upstream).
             const r = await services.pairing.answer(action.id, action.allow);
             if (!r.ok) throw new Error(r.reason);
-            break;
-        }
-        case 'remote.revokeDevice':
-            if (!(await services.remote.revokeDevice(action.deviceId))) throw new Error(`no device ${action.deviceId}`);
-            break;
-        case 'remote.lock':
-            await services.remote.lock();
-            break;
-        case 'remote.unlock':
-            await services.remote.unlock();
-            break;
-        case 'remote.restart':
-            await ports.remoteAccess?.restart();
-            break;
-        case 'tailscale.up': {
-            if (!ports.tailscale) throw new Error('Tailscale is not available here');
-            const r = await ports.tailscale.up();
-            next.tailscaleOutcome = r.ok ? 'Connected to your tailnet.' : r.authUrl ? 'Tailscale needs you to sign in: the sign-in page opened in your browser.' : (r.message ?? 'Tailscale could not connect.');
             break;
         }
         case 'tailscale.install': {
@@ -1149,88 +812,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.tailscaleOutcome = r.started ? 'Tailscale’s installer is open: finish it, then Connect.' : r.url ? 'Tailscale’s download page opened in your browser.' : (r.message ?? 'Tailscale could not be installed from here.');
             break;
         }
-        // Each goes through Windows' own prompt, then READS WINDOWS AGAIN, so the row shows what Windows now has (Tynn #685).
-        case 'remote.allowFirewall': {
-            if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
-            const r = await ports.firewall.allow();
-            await ports.firewall.refresh();
-            next.firewallOutcome = r.ok ? 'Allowed: devices on your tailnet can reach this port.' : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.' : (r.error ?? 'The firewall rule could not be added.');
-            break;
-        }
-        // The page opened, or its window regained focus: what Windows has NOW (a rule changed outside Genie), debounced.
+        // The page opened, or its window regained focus: read Windows again, debounced.
         case 'remote.readFirewall': {
             if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
             await ports.firewall.reread();
             break;
         }
-        case 'remote.removeFirewall': {
-            if (!ports.firewall) throw new Error('the firewall rule is only on Windows');
-            const r = await ports.firewall.remove();
-            await ports.firewall.refresh();
-            next.firewallOutcome = r.ok
-                ? 'Removed: Windows Firewall no longer lets devices on your tailnet reach this port.'
-                : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.'
-                // netsh failed, and Windows now has no such rule: someone removed it first; say that, not "failed".
-                : ports.firewall.rule()?.state === 'absent' ? `Windows has no rule named “${FIREWALL_RULE_NAME}” now: there is nothing to remove.`
-                : (r.error ?? 'The firewall rule could not be removed.');
-            break;
-        }
-        // TYNN SIGN-IN, the way Genie 1 did it: open Tynn in the browser, take the code back, Sign out revokes the key.
-        case 'integrations.tynnSignIn': {
-            // NO KEYRING: no trip to Tynn for a sign-in that could not be kept. The keyring card says why, and its button
-            // is the next step (the owner, 2026-11-01).
-            if (ports.keyring?.view()) { next.tynnSignInUrl = null; next.tynnMessage = null; break; }
-            const { url } = await tynnAccountOf(ports).startSignIn();
-            next.tynnSignInUrl = url;
-            next.tynnMessage = null;
-            break;
-        }
-        // THE KEYRING CARD'S ONE BUTTON: install, start, restart or check again, whichever the session needs next.
-        case 'keyring.fix': {
-            if (!ports.keyring) throw new Error('this Genie has no keyring to set up here');
-            // Answered once the step is done, or the keyring's own unlock dialog is up (it waits on the person, not on this).
-            await (ports.keyring.press ? ports.keyring.press() : ports.keyring.fix());
-            break;
-        }
-        // THE CARD'S CANCEL while the keyring's unlock dialog is up (Tynn story #388).
-        case 'keyring.cancel': {
-            await ports.keyring?.cancel?.();
-            break;
-        }
-        case 'integrations.tynnCode': {
-            const r = await tynnAccountOf(ports).signIn(action.code);
-            if (r.ok) { next.tynnSignInUrl = null; next.tynnMessage = null; } else next.tynnMessage = r.reason;
-            break;
-        }
-        case 'integrations.tynnSignOut': {
-            const r = await tynnAccountOf(ports).signOut();
-            next.tynnSignInUrl = null;
-            next.tynnMessage = r.revoked ? null : r.reason;
-            break;
-        }
-        // GITHUB, Genie 1's way (beta.33 item 25): one button starts the device flow (the code comes back in the snapshot and
-        // the account waits for GitHub by itself, pushing when it lands); the pages are the account's own URLs.
-        case 'integrations.githubSignIn':
-            await githubAccountOf(ports).startSignIn();
-            break;
-        case 'integrations.githubCancelSignIn':
-            githubAccountOf(ports).cancelSignIn();
-            break;
-        case 'integrations.githubRefresh':
-            await githubAccountOf(ports).refresh();
-            break;
         case 'integrations.githubOpen':
             await githubAccountOf(ports).openPage(action.target);
-            break;
-        case 'integrations.githubSignOut':
-            await githubAccountOf(ports).signOut();
-            break;
-        case 'plugins.setEnabled':
-            // ADF B8: a change the host refuses is a failure the page shows, with Retry; never dropped.
-            if (!(await services.plugins.setEnabled(action.id, action.enabled))) throw new Error(`${action.id} could not be ${action.enabled ? 'enabled' : 'disabled'}: it is not an installable plugin here`);
-            break;
-        case 'plugins.setNetworkAllowed':
-            if (!(await services.plugins.setNetworkAllowed(action.id, action.allowed))) throw new Error(`${action.id}: its network can only be allowed or blocked while it is an Unverified plugin here`);
             break;
         case 'workspace.untrust': {
             // The person's Untrust: the only thing that ends a workspace's trust (Tynn #618).

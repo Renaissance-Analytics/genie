@@ -26,10 +26,15 @@ describe('no list outside the catalog defines what is offered', () => {
 
     it('the editors and panels a window is given are the catalog’s, not the plugin host’s own lists', () => {
         const ipc = code('src/main/feature-ipc.ts');
-        expect(ipc).not.toMatch(/services\.plugins\.editors\(\)/);
-        expect(ipc).not.toMatch(/services\.plugins\.panels\(\)/);
-        expect(ipc).toMatch(/editors: catalogEditors\(/);
-        expect(ipc).toMatch(/panels: catalogPanels\(/);
+        const machine = code('src/main/feature-machine.ts');
+        expect(ipc).toMatch(/\.\.\.machineFeatureSnapshot\(services, state, ports\)/);
+        expect(code('src/main/features-host.ts')).toMatch(/machineFeatureSnapshot\(this\.#machine, state, this\.ports\.machine!\.effects\)/);
+        for (const source of [ipc, machine]) {
+            expect(source).not.toMatch(/services\.plugins\.editors\(\)/);
+            expect(source).not.toMatch(/services\.plugins\.panels\(\)/);
+        }
+        expect(machine).toMatch(/editors: catalogEditors\(services\.catalogDefinitions\(\)\)/);
+        expect(machine).toMatch(/panels: catalogPanels\(services\.catalogDefinitions\(\)\)/);
     });
 
     it('the flow steps Genie offers are in the catalog, as flow-node elements of their own package (26: 16 steps + 10 tools)', () => {

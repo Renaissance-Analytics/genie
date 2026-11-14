@@ -10,7 +10,7 @@ import type { InboxStore } from './inbox-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import type { SettingsStore } from './settings-store.js';
 import { applyPersonalFeatureAction, customSoundData, personalFeatureSnapshot, type PersonalFeatureServices } from './feature-personal.js';
-import type { FeaturePorts, FeatureState } from './feature-ipc.js';
+import type { FeatureState } from './feature-ipc.js';
 import { REMOTE_ORIGIN } from './host-picks.js';
 import type { HostingApi } from './hosting-host.js';
 import type { ProcessBookApi } from './processes-host.js';
@@ -18,17 +18,13 @@ import type { ProcessScheduler } from './process-scheduler.js';
 import type { SupervisorApi } from './process-supervisor.js';
 import { applyHostingFeatureAction, hostingFeatureSnapshot, type HostingFeaturePorts, type HostingFeatureServices } from './feature-hosting.js';
 import { trustSteps } from './hosting-trust.js';
-import type { WindowServices } from './compose.js';
+import { applyMachineFeatureAction, machineFeatureSnapshot, type MachineFeaturePorts, type MachineFeatureServices } from './feature-machine.js';
+import { applyToolchainCoreFeatureAction, toolchainSection } from './feature-toolchain.js';
 
 /** Owned machine contributors. Supplying these ports never constructs another service graph. */
 export interface HostFeatureMachinePorts {
-    readonly services: Pick<WindowServices, 'remote' | 'pairing' | 'pluginsDir' | 'catalogDefinitions'
-        | 'integrations' | 'syncAgentDocs' | 'syncConfig'> & {
-            readonly plugins: Pick<WindowServices['plugins'], 'list' | 'setEnabled' | 'setNetworkAllowed'>;
-            readonly workspaceTrust: Pick<WindowServices['workspaceTrust'], 'trust' | 'untrust'>;
-        };
-    readonly effects: Pick<FeaturePorts, 'tynnAccount' | 'githubAccount' | 'keyring' | 'issueWatch' | 'issueWatchRefresh'
-        | 'issueWatchSetRepo' | 'tailscale' | 'firewall' | 'toolchain' | 'tynnWorkstation' | 'remoteAccess' | 'appVersion' | 'whatsNew'>;
+    readonly services: Omit<MachineFeatureServices, 'settings'>;
+    readonly effects: MachineFeaturePorts;
     readonly onChange: (listener: () => void) => () => void;
 }
 
@@ -65,13 +61,14 @@ export interface HostFeaturesPorts {
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 
 /**
- * Incremental host aggregator (Tynn #720). The first two groups use owned services and shared business rules.
+ * Incremental host aggregator (Tynn #720). Measured groups use owned services and shared business rules.
  * Production composition follows the remaining measured groups; this does not open another store or scheduler.
  */
 export class HostFeatures {
     readonly #services: PersonalFeatureServices;
     readonly #hosting: HostingFeatureServices | undefined;
     readonly #hostingPorts: HostingFeaturePorts;
+    readonly #machine: MachineFeatureServices | undefined;
     readonly #callers = new Map<string, FeatureState>();
     readonly #listeners = new Set<(data: FeatureData) => void>();
     readonly #offs: Array<() => void>;
@@ -100,6 +97,13 @@ export class HostFeatures {
         } : undefined;
         this.#hostingPorts = h ? { processes: h.processes, processScheduler: h.processScheduler,
             engineStatusWaitMs: h.engineStatusWaitMs, onEngineStatusesLate: () => this.#changed() } : {};
+        const m = ports.machine;
+        this.#machine = m ? {
+            settings: ports.settings, remote: m.services.remote, pairing: m.services.pairing,
+            plugins: m.services.plugins, pluginsDir: m.services.pluginsDir, workspaceTrust: m.services.workspaceTrust,
+            catalogDefinitions: () => m.services.catalogDefinitions(), integrations: () => m.services.integrations(),
+            syncAgentDocs: (...args) => m.services.syncAgentDocs(...args), syncConfig: (...args) => m.services.syncConfig(...args),
+        } : undefined;
         // Invalidations carry facts, never a caller's query, form or action-only answer.
         this.#push = new LatestPush({ build: () => this.#snapshot(emptyState()), deliver: data => {
             if (!this.#closed) for (const listener of this.#listeners) listener(data);
@@ -108,6 +112,7 @@ export class HostFeatures {
         this.#offs = [ports.settings.onChange(changed), ports.flows.onChange(changed), ports.inbox.onSend(changed), ports.inbox.onRead(changed)];
         if (h) this.#offs.push(h.api.engines.onChange(changed), h.api.sites.onChange(changed), h.processes.onChange(changed),
             h.supervisor.onChange(changed), h.supervisor.onOutput(changed), h.api.onFrontDoorChange(changed), h.api.trust.onVerdict(changed));
+        if (m) this.#offs.push(m.onChange(changed));
     }
 
     async snapshot(context: CallContext): Promise<FeatureData> {
@@ -121,7 +126,9 @@ export class HostFeatures {
         const next = { ...state };
         const handled = await applyPersonalFeatureAction(this.#services, action, state, next,
             { remoteAccess: { apply: () => this.ports.applyRemote() } }, REMOTE_ORIGIN)
-            || (this.#hosting ? await applyHostingFeatureAction(this.#hosting, action, state, next, this.#hostingPorts) : false);
+            || (this.#hosting ? await applyHostingFeatureAction(this.#hosting, action, state, next, this.#hostingPorts) : false)
+            || (this.#machine ? await applyMachineFeatureAction(this.#machine, action, state, next, this.ports.machine!.effects) : false)
+            || (this.#hosting && this.ports.machine ? await applyToolchainCoreFeatureAction(this.#hosting, action, state, next, this.ports.machine.effects) : false);
         if (!handled) {
             throw new Error(`the host feature service does not answer ${action.kind} yet`);
         }
@@ -161,7 +168,8 @@ export class HostFeatures {
         const personal = await personalFeatureSnapshot(this.#services, state);
         const hosting = this.#hosting ? await hostingFeatureSnapshot(this.#hosting, state, this.#hostingPorts)
             : { hosting: null, services: null, browser: { url: null, routes: [], canGoBack: false, canGoForward: false } };
-        return { seq, ...personal, ...hosting, toolchain: null,
-            remote: null, integrations: null, plugins: null, issueWatch: null };
+        const machine = this.#machine ? machineFeatureSnapshot(this.#machine, state, this.ports.machine!.effects)
+            : { remote: null, integrations: null, plugins: null, issueWatch: null };
+        return { seq, ...personal, ...hosting, ...machine, toolchain: toolchainSection(state) };
     }
 }

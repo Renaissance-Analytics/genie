@@ -19,7 +19,7 @@ describe('the window reaches the host’s hosting only through the replica', () 
         expect(valueImports('src/main/hosting-compose.ts')).toEqual(expect.arrayContaining(['service-registry', 'site-manager', 'envelope-sites-host', 'gen-ca', 'hosts-file', 'elevate']));
     });
 
-    for (const file of ['src/main/hosting-actions.ts', 'src/main/mcp-tools-hosting.ts', 'src/main/feature-ipc.ts', 'src/main/feature-hosting.ts']) {
+    for (const file of ['src/main/hosting-actions.ts', 'src/main/mcp-tools-hosting.ts', 'src/main/feature-ipc.ts', 'src/main/feature-hosting.ts', 'src/main/feature-machine.ts', 'src/main/feature-toolchain.ts']) {
         it(`${file} builds no piece of the hosting: it imports none at run time`, () => {
             expect(valueImports(file)).toEqual([]);
         });
