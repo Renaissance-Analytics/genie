@@ -310,7 +310,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         && !await applyHostingFeatureAction(services, action, state, next, ports)
         && !await applyMachineFeatureAction(services, action, state, next, ports)
         && !await applyToolchainCoreFeatureAction(services, action, state, next, ports)) switch (action.kind) {
-        // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
         case 'rendererNotice.dismiss': {
             if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
             const done = await ports.rendererNotice.dismiss();
@@ -330,13 +329,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (!left.ok) throw new Error(left.reason);
             break;
         }
-        case 'whatsNew.show':
-            next.whatsNewShown = true;
-            break;
-        case 'whatsNew.close':
-            await services.settings.set('whats_new_seen_version', action.version);
-            next.whatsNewShown = false;
-            break;
         case 'toolchain.login': {
             clearRefusal(next, action.tool);
             // The row's tool is the provider's CLI: claude-code is Claude's, codex is Codex's (Tynn #698).
@@ -432,24 +424,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'integrations.githubOpen':
             await githubAccountOf(ports).openPage(action.target);
             break;
-        case 'workspace.untrust': {
-            // The person's Untrust: the only thing that ends a workspace's trust (Tynn #618).
-            if ((await services.workspaceTrust.untrust(action.workspaceId)) === null) throw new Error(`There is no workspace "${action.workspaceId}" to untrust.`);
-            break;
-        }
-        case 'workspace.syncAgentFiles':
-            // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
-            await services.syncAgentDocs(action.workspacePath, 'you');
-            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
-            break;
-        case 'workspace.trust': {
-            // The person's yes: recorded first, then what it now allows. Genie's files go in, by you, as Sync now does.
-            const trusted = await services.workspaceTrust.trust(action.workspaceId);
-            if (trusted === null) throw new Error(`There is no workspace "${action.workspaceId}" to trust.`);
-            await services.syncAgentDocs(action.workspacePath, 'you');
-            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
-            break;
-        }
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());
             if (nav.kind === 'refused') throw new Error(nav.reason);

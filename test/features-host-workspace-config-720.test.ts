@@ -90,8 +90,9 @@ describe('host workspace/config and explicit release notes use their owned servi
         expect(report(answer)).not.toBeNull(); expect(report(await f.snapshot(CALLER_B))).toBeNull();
     });
     it('generic changes never broadcast a caller sync report or explicit notes flag', async () => {
+        await f.settings.set('whats_new_seen_version', RELEASE);
         const changes = f.changes(); await f.answer(trustAction()); await f.answer({ kind: 'whatsNew.show' });
-        await f.settings.set('whats_new_seen_version', RELEASE); await f.settle();
+        f.changed(); await f.settle();
         expect(changes.snapshots.length).toBeGreaterThan(0);
         expect(changes.snapshots.every(data => report(data) === null && data.whatsNew === null)).toBe(true);
     });

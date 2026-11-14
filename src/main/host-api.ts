@@ -731,6 +731,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             },
         },
         invoke,
+        releaseCaller: context => deps.features.releaseCaller?.(context),
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),

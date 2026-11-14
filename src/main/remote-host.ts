@@ -338,6 +338,10 @@ export class RemoteHost {
             connection.pendingPair = null;
         }
         const was = this.#connections.delete(connection.id);
+        if (was && connection.auth !== null) {
+            try { this.#api.releaseCaller?.(this.#callContext(connection)); }
+            catch { console.warn('[genie] feature caller cleanup failed'); }
+        }
         if (was && connection.auth !== null && !connection.local) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();

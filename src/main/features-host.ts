@@ -11,7 +11,7 @@ import type { KnowledgeStore } from './knowledge-store.js';
 import type { SettingsStore } from './settings-store.js';
 import { applyPersonalFeatureAction, customSoundData, personalFeatureSnapshot, type PersonalFeatureServices } from './feature-personal.js';
 import type { FeatureState } from './feature-ipc.js';
-import { REMOTE_ORIGIN } from './host-picks.js';
+import { featureOriginOf, HostPicks } from './host-picks.js';
 import type { HostingApi } from './hosting-host.js';
 import type { ProcessBookApi } from './processes-host.js';
 import type { ProcessScheduler } from './process-scheduler.js';
@@ -62,6 +62,15 @@ const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: ''
 
 /** Caller view caches are disposable; durable business state stays in its owned service. */
 export const HOST_FEATURE_CALLER_LIMIT = 64;
+const CALLER_PENDING_LIMIT = 32;
+
+interface FeatureCaller {
+    state: FeatureState;
+    picks: HostPicks;
+    tail: Promise<void>;
+    pending: number;
+    live: boolean;
+}
 
 /**
  * Incremental host aggregator (Tynn #720). Measured groups use owned services and shared business rules.
@@ -72,7 +81,7 @@ export class HostFeatures {
     readonly #hosting: HostingFeatureServices | undefined;
     readonly #hostingPorts: HostingFeaturePorts;
     readonly #machine: MachineFeatureServices | undefined;
-    readonly #callers = new Map<string, FeatureState>();
+    readonly #callers = new Map<string, FeatureCaller>();
     readonly #listeners = new Set<(data: FeatureData) => void>();
     readonly #offs: Array<() => void>;
     readonly #push: LatestPush<FeatureData>;
@@ -120,26 +129,48 @@ export class HostFeatures {
 
     async snapshot(context: CallContext): Promise<FeatureData> {
         this.#check(context);
-        return this.#snapshot(this.#callers.get(context.connectionId) ?? emptyState());
+        const caller = this.#touch(context.connectionId);
+        const answer = await this.#snapshot(caller?.state ?? emptyState());
+        this.#check(context);
+        return answer;
     }
 
     async act(action: FeatureAction, context: CallContext): Promise<FeatureData> {
         this.#check(context);
-        const state = this.#callers.get(context.connectionId) ?? emptyState();
+        const caller = this.#caller(context.connectionId);
+        if (caller.pending >= CALLER_PENDING_LIMIT) throw new Error('this feature caller has too many pending actions; wait for them to finish');
+        caller.pending++;
+        // Same-caller actions see the last committed view, including after a refusal. Other callers never wait here.
+        const work = caller.tail.then(async () => {
+            try {
+                this.#check(context);
+                if (!caller.live) throw new Error('this feature caller disconnected before its action began');
+                return await this.#act(action, context, caller);
+            } finally { caller.pending--; }
+        });
+        caller.tail = work.then(() => {}, () => {});
+        return work;
+    }
+
+    async #act(action: FeatureAction, context: CallContext, caller: FeatureCaller): Promise<FeatureData> {
+        const state = caller.state;
         const next = { ...state };
         const handled = await applyPersonalFeatureAction(this.#services, action, state, next,
-            { remoteAccess: { apply: () => this.ports.applyRemote() } }, REMOTE_ORIGIN)
+            { remoteAccess: { apply: () => this.ports.applyRemote() } }, featureOriginOf(context, caller.picks))
             || (this.#hosting ? await applyHostingFeatureAction(this.#hosting, action, state, next, this.#hostingPorts) : false)
             || (this.#machine ? await applyMachineFeatureAction(this.#machine, action, state, next, this.ports.machine!.effects) : false)
             || (this.#hosting && this.ports.machine ? await applyToolchainCoreFeatureAction(this.#hosting, action, state, next, this.ports.machine.effects) : false);
         if (!handled) {
             throw new Error(`the host feature service does not answer ${action.kind} yet`);
         }
+        this.#check(context);
         const answer = await this.#snapshot(next);
+        this.#check(context);
         // These are replies to the action that requested them, never the next read or a broadcast.
         const { inboxThread: _thread, inboxSearch: _search, servedAttachment: _attachment,
             servedQuestion: _question, flowSaved: _saved, ...retained } = next;
-        this.#callers.set(context.connectionId, retained);
+        // A completed business operation may answer, but can never recreate a view released while it waited.
+        if (caller.live) caller.state = retained;
         // Knowledge has no store change signal. The other owned stores already invalidate once per change.
         if (action.kind === 'knowledge.add' || action.kind === 'knowledge.create') this.#changed();
         return answer;
@@ -147,10 +178,22 @@ export class HostFeatures {
 
     soundData(key: string): Promise<string | null> { return customSoundData(this.ports.settings, key); }
 
-    // Typed, deliberately inert RED seams. Admission, picks and disposal are measured before implementation (#720).
-    picked(_paths: readonly unknown[], _context: CallContext): void {}
+    picked(paths: readonly unknown[], context: CallContext): void {
+        this.#check(context);
+        if (context.origin === 'local-window') this.#caller(context.connectionId).picks.record(paths);
+    }
 
-    releaseCaller(_context: CallContext): void {}
+    releaseCaller(context: CallContext): void {
+        this.#release(context.connectionId);
+    }
+
+    #release(connectionId: string): void {
+        const caller = this.#callers.get(connectionId);
+        if (caller) {
+            caller.live = false; caller.state = emptyState(); caller.picks = new HostPicks();
+            this.#callers.delete(connectionId);
+        }
+    }
 
     onChange(listener: (data: FeatureData) => void): () => void {
         if (this.#closed) throw new Error('the host feature service is closed');
@@ -161,12 +204,32 @@ export class HostFeatures {
     close(): void {
         this.#closed = true;
         for (const off of this.#offs.splice(0)) off();
+        for (const connectionId of this.#callers.keys()) this.#release(connectionId);
         this.#listeners.clear(); this.#callers.clear();
     }
 
     #check(context: CallContext): void {
         if (this.#closed) throw new Error('the host feature service is closed');
         if (!context.connectionId) throw new Error('features need an admitted caller');
+    }
+
+    #touch(connectionId: string): FeatureCaller | undefined {
+        const caller = this.#callers.get(connectionId);
+        if (caller) { this.#callers.delete(connectionId); this.#callers.set(connectionId, caller); }
+        return caller;
+    }
+
+    #caller(connectionId: string): FeatureCaller {
+        const previous = this.#touch(connectionId);
+        if (previous) return previous;
+        if (this.#callers.size >= HOST_FEATURE_CALLER_LIMIT) {
+            const oldest = [...this.#callers].find(([, caller]) => caller.pending === 0);
+            if (!oldest) throw new Error('feature callers are busy; try again when an action finishes');
+            this.#release(oldest[0]);
+        }
+        const caller: FeatureCaller = { state: emptyState(), picks: new HostPicks(), tail: Promise.resolve(), pending: 0, live: true };
+        this.#callers.set(connectionId, caller);
+        return caller;
     }
 
     #changed(): void { if (!this.#closed && this.#listeners.size > 0) this.#push.request(); }

@@ -44,6 +44,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
     const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
     return {
+        releaseCaller: context => alone()?.releaseCaller?.(context),
         invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);

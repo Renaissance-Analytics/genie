@@ -13,7 +13,7 @@ import { FIREWALL_RULE_NAME } from './remote-firewall.js';
 /** Machine contributors supplied by their owner; this module never composes services or picks a window. */
 export type MachineFeatureServices = Pick<WindowServices, 'remote' | 'pairing' | 'pluginsDir' | 'catalogDefinitions'
     | 'integrations' | 'syncAgentDocs' | 'syncConfig'> & {
-    readonly settings: Pick<WindowServices['settings'], 'snapshot'>;
+    readonly settings: Pick<WindowServices['settings'], 'snapshot' | 'set'>;
     readonly plugins: Pick<WindowServices['plugins'], 'list' | 'setEnabled' | 'setNetworkAllowed'>;
     readonly workspaceTrust: Pick<WindowServices['workspaceTrust'], 'trust' | 'untrust'>;
 };
@@ -190,6 +190,32 @@ export async function applyMachineFeatureAction(services: MachineFeatureServices
         case 'plugins.setNetworkAllowed':
             if (!(await services.plugins.setNetworkAllowed(action.id, action.allowed))) throw new Error(`${action.id}: its network can only be allowed or blocked while it is an Unverified plugin here`);
             break;
+        // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'whatsNew.show':
+            next.whatsNewShown = true;
+            break;
+        case 'whatsNew.close':
+            await services.settings.set('whats_new_seen_version', action.version);
+            next.whatsNewShown = false;
+            break;
+        case 'workspace.untrust': {
+            // The person's Untrust: the only thing that ends a workspace's trust (Tynn #618).
+            if ((await services.workspaceTrust.untrust(action.workspaceId)) === null) throw new Error(`There is no workspace "${action.workspaceId}" to untrust.`);
+            break;
+        }
+        case 'workspace.syncAgentFiles':
+            // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
+            await services.syncAgentDocs(action.workspacePath, 'you');
+            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
+            break;
+        case 'workspace.trust': {
+            // The person's yes: recorded first, then what it now allows. Genie's files go in, by you, as Sync now does.
+            const trusted = await services.workspaceTrust.trust(action.workspaceId);
+            if (trusted === null) throw new Error(`There is no workspace "${action.workspaceId}" to trust.`);
+            await services.syncAgentDocs(action.workspacePath, 'you');
+            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
+            break;
+        }
         default: return false;
     }
     return true;
