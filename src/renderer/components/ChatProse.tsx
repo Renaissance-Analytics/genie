@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMou
 import { Button, ContentRenderer, Icon, type RenderExtension, type RenderExtensionProps } from '@particle-academy/react-fancy';
 import { NO_REFS, liftChatBlocks, prepareChatMarkdown, type ChatRefs } from '../../core/chat-markup.js';
 import { COPIED_MS, inlineCopyText, resultCopyPayload } from '../../core/chat-copy.js';
+import { personText } from '../../core/person-text.js';
 import { copyToClipboard, genieClipboardWriter } from '../clipboard.js';
 
 /**
@@ -164,7 +165,8 @@ export interface ChatProseProps {
 
 /** Memoised on its text and refs: a busy agent's push re-renders only the reply that grew (ChatFlyout's ChatReply). */
 export const ChatProse = memo(function ChatProse({ text, refs = NO_REFS, streaming = false, className = '' }: ChatProseProps) {
-    const value = useMemo(() => liftChatBlocks(prepareChatMarkdown(text, refs, streaming), streaming), [text, refs, streaming]);
+    // No internal id is drawn (Tynn #696): AFTER Genie's links are made, so a pill's id still reaches its target.
+    const value = useMemo(() => liftChatBlocks(personText(prepareChatMarkdown(text, refs, streaming)), streaming), [text, refs, streaming]);
     const [hover, setHover] = useState<InlineHover | null>(null);
     const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const keep = () => { if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; } };
