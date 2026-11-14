@@ -58,8 +58,9 @@ describe('host feature group two with no window (Tynn #720)', () => {
     it('Docker unavailability is reported with its real reason instead of a healthy status', async () => {
         await f.seedEngine(); f.docker.down = true;
         const instances = (await read()).services?.instances;
-        console.error('Docker availability notes:', instances?.map(({ status, note }) => ({ status, note })));
-        expect(instances).toEqual([expect.objectContaining({ status: 'docker-not-running', note: expect.stringContaining('fixture Docker daemon is unavailable') })]);
+        // Parity with ServiceDriver's existing daemon-down message, also pinned by service-driver.test.ts.
+        expect(instances).toEqual([expect.objectContaining({ status: 'docker-not-running',
+            note: 'Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again' })]);
     });
     it('service Add and Cancel preserve the existing form defaults', async () => {
         const data = await act({ kind: 'services.add', workspaceId: 'work' });
@@ -149,12 +150,25 @@ describe('host feature group two with no window (Tynn #720)', () => {
         expect(updated.hosting?.editing).toBeNull(); expect(f.hosting.sites.get(site.id)?.port).toBe(43124);
     });
     it('site Stop, Start, Restart and Remove use the human lifecycle and durable declaration', async () => {
-        const site = await f.seedSite();
+        const site = await f.seedManagedSite();
+        expect(f.hosting.sites.get(site.id)?.state).toBe('running'); expect(f.opened).toHaveLength(1);
         await act({ kind: 'hosting.stopSite', siteId: site.id }); expect(f.hosting.sites.get(site.id)?.state).toBe('stopped');
-        await act({ kind: 'hosting.startSite', siteId: site.id }); expect(f.hosting.sites.get(site.id)?.state).toBe('external');
-        await act({ kind: 'hosting.restartSite', siteId: site.id }); expect(f.hosting.sites.get(site.id)?.state).toBe('external');
+        await act({ kind: 'hosting.startSite', siteId: site.id }); expect(f.hosting.sites.get(site.id)?.state).toBe('running');
+        expect(f.opened).toHaveLength(2);
+        await act({ kind: 'hosting.restartSite', siteId: site.id }); expect(f.hosting.sites.get(site.id)?.state).toBe('running');
+        expect(f.opened).toHaveLength(3);
         await act({ kind: 'hosting.removeSite', siteId: site.id }); expect(f.hosting.sites.list()).toEqual([]);
         expect(JSON.stringify((await f.envelope()).sites ?? {})).not.toContain('fixture');
+    });
+    it('CONTROL: restarting an external hostPort site stays refused without changing its declaration or starting a process', async () => {
+        const site = await f.seedSite(), before = await f.envelope();
+        // Independent of the aggregator: this is the canonical host lifecycle's refusal.
+        const result = await f.hosting.envelopeSites.restart(site.id, { person: true }).then(
+            () => ({ ok: true }), error => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }));
+        expect(result).toEqual({ ok: false,
+            reason: 'fixture.gen is a server you run yourself on port 43123; Genie has no process of its own to restart for it' });
+        expect(f.hosting.sites.get(site.id)?.state).toBe('external'); expect(f.opened).toEqual([]);
+        expect(await f.envelope()).toEqual(before);
     });
     it('opening a site without the callers own window refuses visibly rather than queuing success', async () => {
         const site = await f.seedSite();

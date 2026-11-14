@@ -48,7 +48,13 @@ export async function groupTwoFixture() {
         onExit: listener => { exited.add(listener); return () => { exited.delete(listener); }; },
     };
     const supervisor = new ProcessSupervisor(pty);
-    const dockerCalls: Array<readonly string[]> = [], images = new Set<string>(), containers = new Map<string, string>();
+    const dockerCalls: Array<readonly string[]> = [], images = new Set<string>();
+    const containers = new Map<string, {
+        Id: string; Config: { Image: string; Env: string[] };
+        HostConfig: { RestartPolicy: { Name: string }; PortBindings: Record<string, Array<{ HostIp: string; HostPort: string }>> };
+        Mounts: Array<{ Type: string; Name: string; Destination: string; RW: boolean }>;
+        State: { Status: string; StartedAt: string };
+    }>();
     const docker = { down: false };
     const runDocker: DockerRunner = async args => {
         dockerCalls.push(args);
@@ -56,11 +62,23 @@ export async function groupTwoFixture() {
         const [command, sub] = args;
         if (command === 'image' && sub === 'inspect') return { stdout: images.has(args[2]!) ? '[{}]' : '', exitCode: images.has(args[2]!) ? 0 : 1 };
         if (command === 'pull') { images.add(args[1]!); return { stdout: '', exitCode: 0 }; }
-        if (command === 'container' && sub === 'inspect') { const status = containers.get(args[2]!);
-            return { stdout: status ? JSON.stringify([{ State: { Status: status, StartedAt: 'fixture' } }]) : '', exitCode: status ? 0 : 1 }; }
-        if (command === 'create') containers.set(args[2]!, 'created');
-        if (command === 'start') containers.set(args[1]!, 'running');
-        if (command === 'stop') containers.set(args[1]!, 'exited');
+        if (command === 'container' && sub === 'inspect') { const container = containers.get(args[2]!);
+            return { stdout: container ? JSON.stringify([container]) : '', exitCode: container ? 0 : 1 }; }
+        if (command === 'create') {
+            const values = (flag: string) => args.flatMap((arg, index) => arg === flag ? [args[index + 1]!] : []);
+            const bindings = values('-p').map(binding => binding.split(':'));
+            // This fixture creates Postgres only: its image is last, with no command after it.
+            containers.set(args[2]!, {
+                Id: `fixture-${args[2]!}`, Config: { Image: args.at(-1)!, Env: values('-e') },
+                HostConfig: { RestartPolicy: { Name: values('--restart')[0]! }, PortBindings: Object.fromEntries(
+                    bindings.map(([host, port, inner]) => [`${inner}/tcp`, [{ HostIp: host!, HostPort: port! }]])) },
+                Mounts: values('-v').map(mount => { const [name, destination] = mount.split(':');
+                    return { Type: 'volume', Name: name!, Destination: destination!, RW: true }; }),
+                State: { Status: 'created', StartedAt: 'fixture' },
+            });
+        }
+        if (command === 'start') containers.get(args[1]!)!.State.Status = 'running';
+        if (command === 'stop') containers.get(args[1]!)!.State.Status = 'exited';
         if (command === 'rm') containers.delete(args[2]!);
         if (command === 'logs') return { stdout: 'fixture engine output\n', exitCode: 0 };
         return { stdout: '', exitCode: 0 };
@@ -111,6 +129,8 @@ export async function groupTwoFixture() {
         return result.instance;
     };
     const seedSite = () => hosting.envelopeSites.create({ name: 'fixture', workspaceId: 'work', repoPath: workspace, serve: { mode: 'proxy' }, hostPort: 43123 });
+    const seedManagedSite = () => hosting.envelopeSites.create({ name: 'fixture', workspaceId: 'work', repoPath: workspace,
+        serve: { mode: 'proxy' }, devServer: { stack: 'node', command: 'fixture-server --port {port}' } });
     const seedProcess = (name = 'fixture queue') => book.create({ workspaceId: 'work', workspacePath: workspace, name, command: 'fixture-worker', restart: 'never' });
     const print = (data: string, id = opened.at(-1)!.id) => { for (const listener of output) listener(id, data); };
     const changes = () => {
@@ -125,7 +145,7 @@ export async function groupTwoFixture() {
         await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     };
     return { dir, workspace, service, api, outcome, settings, hosting, hostingCalls, supervisor, book, scheduler, docker, dockerCalls, opened, print,
-        seedEngine, seedSite, seedProcess, changes, visible, close, invokeWindow, windows: (count: number) => { windows = count; },
+        seedEngine, seedSite, seedManagedSite, seedProcess, changes, visible, close, invokeWindow, windows: (count: number) => { windows = count; },
         frontChanged: () => { linked = !linked; for (const listener of frontChanges) listener(); },
         envelope: async () => JSON.parse(await readFile(join(workspace, 'project.json'), 'utf8')) as Record<string, unknown>,
         bookFile: async () => JSON.parse(await readFile(join(dir, 'runtime', 'processes.json'), 'utf8')) as { processes: Array<{ id: string; wanted: boolean }> },
