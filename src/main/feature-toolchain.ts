@@ -526,6 +526,138 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             next.toolchainDotnet = await tc.dotnet.list();
             break;
         }
+        case 'toolchain.installRust': {
+            clearRefusal(next, 'rust', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'rust', `Genie installs nothing without your go-ahead; Rust ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.rust) {
+                refuse(next, 'rust', 'no Rust version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.rust.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'rust', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Rust ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Rust ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Rust ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainRust = await tc.rust.list();
+            break;
+        }
+        case 'toolchain.removeRust': {
+            {
+                const current = ports.toolchain?.defaults?.list()['rust'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'rust', action.version);
+                    refuse(next, 'rust', `${LANG_LABEL['rust']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'rust', action.version);
+            if (!tc?.rust) {
+                refuse(next, 'rust', 'no Rust version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.rust.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'rust', outcome.reason, action.version);
+            else next.toolchainResult = `Rust ${outcome.version} was removed.`;
+            next.toolchainRust = await tc.rust.list();
+            break;
+        }
+        case 'toolchain.installRuby': {
+            clearRefusal(next, 'ruby', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'ruby', `Genie installs nothing without your go-ahead; Ruby ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.ruby) {
+                refuse(next, 'ruby', 'no Ruby version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.ruby.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'ruby', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Ruby ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Ruby ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Ruby ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainRuby = await tc.ruby.list();
+            break;
+        }
+        case 'toolchain.removeRuby': {
+            {
+                const current = ports.toolchain?.defaults?.list()['ruby'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'ruby', action.version);
+                    refuse(next, 'ruby', `${LANG_LABEL['ruby']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'ruby', action.version);
+            if (!tc?.ruby) {
+                refuse(next, 'ruby', 'no Ruby version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.ruby.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'ruby', outcome.reason, action.version);
+            else next.toolchainResult = `Ruby ${outcome.version} was removed.`;
+            next.toolchainRuby = await tc.ruby.list();
+            break;
+        }
+        case 'toolchain.installJava': {
+            clearRefusal(next, 'java', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'java', `Genie installs nothing without your go-ahead; Java ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.java) {
+                refuse(next, 'java', 'no Java version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.java.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'java', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Java ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Java ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Java ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainJava = await tc.java.list();
+            break;
+        }
+        case 'toolchain.removeJava': {
+            {
+                const current = ports.toolchain?.defaults?.list()['java'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'java', action.version);
+                    refuse(next, 'java', `${LANG_LABEL['java']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'java', action.version);
+            if (!tc?.java) {
+                refuse(next, 'java', 'no Java version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.java.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'java', outcome.reason, action.version);
+            else next.toolchainResult = `Java ${outcome.version} was removed.`;
+            next.toolchainJava = await tc.java.list();
+            break;
+        }
         default: return false;
     }
     return true;
