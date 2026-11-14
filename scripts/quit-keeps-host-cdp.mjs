@@ -381,7 +381,7 @@ function launchSecond() {
 
 // ---------------------------------------------------------------- the ledger's word: which pid streams, up to which tick
 async function ticksOf(cdp, agentId) {
-    const json = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ running: d?.session?.running ?? null, rows: d?.rows ?? [] }))`, 10_000);
+    const json = await cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ running: d?.session?.running ?? null, rows: d?.rows ?? [] }))`, 10_000);
     const detail = JSON.parse(json);
     const text = JSON.stringify(detail.rows);
     const ticks = new Map();
@@ -521,7 +521,7 @@ try {
     // -------------------------------------------------------------------------------- A: three agents streaming
     a = await open('first', 1);
     step('1e', 'reading the seed: its first workspace');
-    const snap = await a.cdp.evaluate('window.genie.snapshot()', 15_000);
+    const snap = await a.cdp.evaluate('window.genieTest.snapshot()', 15_000);
     const workspaceId = snap.workspaces?.[0]?.id ?? null;
     if (typeof workspaceId !== 'string') { cannot = 'no workspace in the seed (run smoke-seed.mjs first)'; throw new Error(cannot); }
     for (let i = 1; i <= AGENTS; i++) {
@@ -534,7 +534,7 @@ try {
         step('2', `starting ${ag.name} (≤ 30 s to running)`);
         await waitForPageProbe(a.cdp);
         await a.cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(ag.id)}, "graceful"); true`, 15_000);
-        const running = await until(() => a.cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(ag.id)}).then((d) => d?.session?.running === true)`, 5_000), 30_000);
+        const running = await until(() => a.cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(ag.id)}).then((d) => d?.session?.running === true)`, 5_000), 30_000);
         check(running === true, `2. ${ag.name}'s session is running`);
         step('3', `prompting ${ag.name}`);
         const sent = await a.cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);

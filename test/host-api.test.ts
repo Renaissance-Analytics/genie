@@ -274,6 +274,7 @@ describe('events', () => {
         for (const l of f.listeners.updates) l({ phase: 'none' } as never);
         expect(got).toEqual([
             ['snapshot', { agents: [] }],
+            ['local-snapshot', { agents: [] }],
             ['agent:agent_a', { agent: { id: 'agent_a' }, rows: [] }],
             ['terminal-data', { id: 'term_1', data: 'hi' }],
             ['terminal-exit', { id: 'term_1', exitCode: 0 }],
@@ -285,7 +286,7 @@ describe('events', () => {
         ]);
         off();
         for (const l of f.listeners.snapshot) l({ agents: [] } as never);
-        expect(got).toHaveLength(8);
+        expect(got).toHaveLength(9);
         expect(f.listeners.snapshot.size).toBe(0);
     });
 

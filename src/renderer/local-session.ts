@@ -45,7 +45,7 @@ const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a 
 const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     let wasReady = false;
     const everReady = () => wasReady;
@@ -181,6 +181,13 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         addAgent: (workspaceId, input) => answered((b) => b.addAgent(workspaceId, input)),
     };
     return {
+        // P4 family 9a (Tynn #564). Re-watched on every connection: a new one starts with a whole ledger.
+        reads: {
+            snapshot: () => read((b) => b.snapshot()),
+            subscribe: (listener) => subscribe((b) => b.subscribe(listener)),
+            agentDetail: (agentId) => read((b) => b.agentDetail(agentId)),
+        },
+        agentWire: (agentId, onPayload) => subscribe(() => client!.agentWire!(agentId, onPayload)),
         agentCommands,
         terminals,
         gapps: {

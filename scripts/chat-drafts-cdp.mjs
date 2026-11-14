@@ -83,8 +83,8 @@ try {
         s.timer=setInterval(()=>{const now=performance.now();s.gap=Math.max(s.gap,now-s.last);s.last=now;s.ticks++;s.rss=Math.max(s.rss,process.memoryUsage().rss);},16);
         s.listener=(_event,action,_handle,text)=>{if(action==='frame'){const m=JSON.parse(text);if(m.method)s.methods[m.method]=(s.methods[m.method]??0)+1;}};
         ipc.on('genie:local-frame',s.listener);s.stop=()=>{clearInterval(s.timer);ipc.removeListener('genie:local-frame',s.listener);};
-        return {drafts:['load','save','put-file','read-file','release'].map(op=>ipc._invokeHandlers.has('genie:chat-drafts-'+op)),snapshot:ipc._invokeHandlers.has('genie:snapshot')}; })()`);
-    demand(handlers.snapshot && handlers.drafts.every(present => present === BASELINE), 'native draft-handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
+        return {drafts:['load','save','put-file','read-file','release'].map(op=>ipc._invokeHandlers.has('genie:chat-drafts-'+op)),windowRead:ipc._invokeHandlers.has('genie:window-overlay-colors-current')}; })()`);
+    demand(handlers.windowRead && handlers.drafts.every(present => present === BASELINE), 'native draft-handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
     await page.evaluate(`(() => { window.__draftWire={maxBytes:0,forbidden:0,pages:0,invalidPages:0}; window.genieLocalProtocol.onFrame((action,_handle,text)=>{if(action!=='frame')return;const m=JSON.parse(text),s=window.__draftWire;s.maxBytes=Math.max(s.maxBytes,new TextEncoder().encode(text).length);
         if(m.kind==='result'&&Array.isArray(m.value?.items)){s.pages++;if(m.value.items.length>128||new TextEncoder().encode(JSON.stringify(m.value)).length>524288)s.invalidPages++;}
         if(m.kind==='event'&&(m.channel==='snapshot'||m.channel==='activity'||m.channel==='local-activity'||m.channel?.startsWith('agent:')||m.channel?.startsWith('terminal-')))s.forbidden++;}); return true; })()`);

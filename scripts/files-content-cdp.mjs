@@ -150,9 +150,9 @@ try {
         s.listen=(_event,action,_handle,text)=>{if(action!=='frame')return;s.count++;s.maxBytes=Math.max(s.maxBytes,Buffer.byteLength(text));const m=JSON.parse(text);if(m.method)s.methods[m.method]=(s.methods[m.method]??0)+1;};
         ipc.on('genie:local-frame',s.listen);s.timer=setInterval(()=>{s.rssPeak=Math.max(s.rssPeak,process.memoryUsage().rss);},100);
         s.stop=()=>{clearInterval(s.timer);ipc.removeListener('genie:local-frame',s.listen);};
-        return {nativeFilesOpen:ipc._invokeHandlers.has('genie:files-open'),nativeWatch:ipc._invokeHandlers.has('genie:files-watch'),snapshotControl:ipc._invokeHandlers.has('genie:snapshot')};
+        return {nativeFilesOpen:ipc._invokeHandlers.has('genie:files-open'),nativeWatch:ipc._invokeHandlers.has('genie:files-watch'),windowReadControl:ipc._invokeHandlers.has('genie:window-overlay-colors-current')};
     })()`);
-    demand(handlerState.snapshotControl && handlerState.nativeWatch === process.argv.includes('--baseline'), 'snapshot retained; watch moved after7D (baseline flag for earlier native path)');
+    demand(handlerState.windowReadControl && handlerState.nativeWatch === process.argv.includes('--baseline'), 'native window read retained; watch moved after7D (baseline flag for earlier native path)');
     reports.push({ label: 'path-control', ...handlerState, fixtureRoot: root, actualFixtureFiles: readdirSync(workspace).filter(n => n.startsWith('entry-')).length });
     // Same hash gauge must reject a corrupted expected result before normal rows may count.
     let rejected = false; try { await measure('intentional-hash-break', { method: 'open', args: ['tynn', 'text.txt'], expect: { sha256: '0'.repeat(64) } }); } catch (e) { rejected = /hash differs/.test(e.message); }

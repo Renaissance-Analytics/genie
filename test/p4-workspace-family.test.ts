@@ -131,9 +131,7 @@ describe('all twelve workspace bridge calls reach the real API with the old prel
         const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWorkspacePreload(oldInvoke) }, takeOver: hibernate } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(pageBridge(preload)).toBe(bridge);
-        expect(await bridge.snapshot()).toEqual({ workspaces: null });
         expect(await bridge.takeOver('work')).toEqual({ ok: false, reason: 'agent still working' });
-        expect(snapshot).toHaveBeenCalledTimes(1);
         expect(hibernate).toHaveBeenCalledExactlyOnceWith('work');
         expect(await row.call(bridge.workspaces)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());

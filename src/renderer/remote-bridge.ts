@@ -4,6 +4,7 @@ import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
 import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
+import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
@@ -17,6 +18,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
 import { heldLimiter, localPageClient, localUploadClient } from './local-content-client.js';
+import { measureAgentRead, measureAgentReadAsync } from '../core/agent-read-timing.js';
 import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
@@ -63,6 +65,8 @@ export interface RemoteClient {
     readonly pages?: PageClient;
     /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
     readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
+    /** Only a local-auth client: an agent's patches, for the agents this window's views show (Tynn #564). */
+    readonly agentWire?: (agentId: string, onPayload: (payload: AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>) => void) => () => void;
     /** Share links on the host this client is connected to (Tynn #587): that host makes them, for itself. */
     readonly shares: NonNullable<import('./relay-transport.js').TynnNetworkBridge['shares']>;
     readonly bridge: GenieBridge;
@@ -607,6 +611,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         next: cursor => blobRead<MetadataPage>('page.next', cursor),
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
+    let agentWire: RemoteClient['agentWire'];
     if (local) {
         bridge.gapps = {
             list: () => read('gapps.list'),
@@ -631,16 +636,81 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
          * THE FEATURE SNAPSHOT (P4 family 11, Tynn #560): it has no bound of its own, so it crosses inline when small and
          * as one blob when not; a change is pushed as a revision, and the window re-reads: one read at a time, the latest last.
          */
-        const decodeJson = <T>(read0: () => Promise<unknown>): Promise<T> => limit(async () => {
+        const decodeJson = <T>(read0: () => Promise<unknown>, agentId?: string): Promise<T> => limit(async () => {
             const result = await read0();
             if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as T;
             const content = (result as { jsonContent: { ref: string; blob: string } }).jsonContent;
-            try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await blobs!.readAll('features-json', content.blob))) as T; }
+            try {
+                const readBytes = () => blobs!.readAll('features-json', content.blob);
+                const bytes = agentId === undefined ? await readBytes() : await measureAgentReadAsync(agentId, 'blob', readBytes);
+                const decode = () => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as T;
+                return agentId === undefined ? decode() : measureAgentRead(agentId, 'decode', decode);
+            }
             finally { await blobRead('content.release', content.ref); }
         });
         const snapshotNow = (): Promise<FeatureData> => decodeJson<FeatureData>(() => read('features.snapshot'));
         // A frame over the door's cap would end this window's connection, so a call that large is refused here, with a reason.
         const tooLargeForFrame = (args: readonly unknown[]): boolean => new TextEncoder().encode(JSON.stringify(args)).length > LOCAL_FRAME_LIMIT_BYTES - 4 * 1024;
+        /*
+         * P4 FAMILY 9A (Tynn #564): the snapshot and an agent's detail cross inline when small and as one blob when not. The
+         * snapshot's push is inline when it fits a frame, else a revision the window re-reads; a subscribe reads at once.
+         */
+        const snapshotNow2 = (): Promise<GenieSnapshot> => decodeJson<GenieSnapshot>(() => read('snapshot'));
+        const snapshotListeners = new Set<(snapshot: GenieSnapshot) => void>();
+        let snapshotInline = 0, snapshotBusy = false, snapshotAgain = false;
+        const rereadSnapshot = async (): Promise<void> => {
+            if (snapshotBusy) { snapshotAgain = true; return; }
+            snapshotBusy = true;
+            try {
+                do {
+                    snapshotAgain = false;
+                    const started = snapshotInline;
+                    const snapshot = await snapshotNow2();
+                    // A newer one came inline while this was read: that one stands.
+                    if (started === snapshotInline) for (const listener of [...snapshotListeners]) listener(snapshot);
+                } while (snapshotAgain);
+            } catch (error) {
+                console.warn(`[genie] the snapshot could not be read: ${error instanceof Error ? error.message : String(error)}`);
+            } finally { snapshotBusy = false; }
+        };
+        on(LOCAL_EVENTS.snapshot, (raw) => {
+            const event = raw as { snapshot?: GenieSnapshot };
+            if (event.snapshot === undefined) { if (snapshotListeners.size > 0) void rereadSnapshot(); return; }
+            snapshotInline += 1;
+            for (const listener of [...snapshotListeners]) listener(event.snapshot);
+        });
+        Object.assign(bridge, {
+            snapshot: snapshotNow2,
+            subscribe: (listener: (snapshot: GenieSnapshot) => void) => { snapshotListeners.add(listener); void rereadSnapshot(); return () => { snapshotListeners.delete(listener); }; },
+            agentDetail: (agentId: string) => decodeJson<AgentDetail | null>(() => read('agentDetail', agentId)),
+        });
+        // One order per agent: a blob read at the front never lets a later patch overtake it.
+        type LocalAgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
+        const wires = new Map<string, Set<(payload: LocalAgentPayload) => void>>();
+        const orders = new Map<string, Promise<void>>();
+        on(LOCAL_EVENTS.agent, (raw) => {
+            const { agentId, payload } = raw as { agentId: string; payload: unknown };
+            orders.set(agentId, (orders.get(agentId) ?? Promise.resolve()).then(async () => {
+                const value = await decodeJson<LocalAgentPayload>(async () => payload, agentId);
+                for (const listener of [...(wires.get(agentId) ?? [])]) listener(value);
+            }).catch((error: unknown) => { console.warn(`[genie] an agent's detail could not be read: ${error instanceof Error ? error.message : String(error)}`); }));
+        });
+        agentWire = (agentId, onPayload) => {
+            let set = wires.get(agentId);
+            if (set === undefined) { set = new Set(); wires.set(agentId, set); }
+            set.add(onPayload);
+            // Watching (again) starts with the whole ledger, to every subscriber: one joining late holds no rows to patch.
+            void call('agent.watch', agentId);
+            return () => {
+                const held = wires.get(agentId);
+                if (!held) return;
+                held.delete(onPayload);
+                if (held.size > 0) return;
+                wires.delete(agentId);
+                orders.delete(agentId);
+                if (state.connected) void call('agent.unwatch', agentId);
+            };
+        };
         // P4 family 9b (Tynn #563): the composer keeps a host's reason (a slash command the agent does not offer, Tynn #440).
         Object.assign(bridge, {
             prompt: (agentId: string, text: string, attachments?: readonly { name: string; type: string; bytes: Uint8Array }[]) => (attachments && attachments.length > 0
@@ -742,6 +812,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         ...(uploads ? { uploads } : {}),
         ...(pages ? { pages } : {}),
         ...(localOwner ? { localOwner } : {}),
+        ...(agentWire ? { agentWire } : {}),
         shares: {
             list: (workspaceId) => answer('tynnNetwork.shares.list', workspaceId),
             mint: (input) => answer('tynnNetwork.shares.mint', input),

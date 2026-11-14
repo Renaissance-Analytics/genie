@@ -1,0 +1,313 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RunIdentity, SampleRequest } from '../scripts/agent-reads-acquire.mjs';
+
+interface Report { identity?: RunIdentity; samplerPid?: number; finished?: boolean; scope?: string; m4_5000?: { ms: number; runs: unknown[] }; m4_20000?: { runs: unknown[] }; m4Stages?: Record<string, unknown>; m5?: unknown; m6?: unknown; cleanup?: { complete?: boolean; processes?: { role: string; diagnostics?: string[] }[] }; failures?: string[] }
+// Import the actual executable with OS/CDP ports mocked. No real home, Electron, socket, process or provider is used.
+const io = vi.hoisted(() => ({
+    identity: vi.fn(), write: vi.fn(), exec: vi.fn(), launch: vi.fn(), attach: vi.fn(), makeHome: vi.fn(),
+    alive: vi.fn(), gone: vi.fn(), killHard: vi.fn(), hostPid: vi.fn(), finish: vi.fn(), check: vi.fn(), stages: vi.fn(), until: vi.fn(), sleep: vi.fn(), baseline: vi.fn(),
+    failures: [] as string[], order: [] as string[], reports: [] as { value: Report; goneCalls: number }[], windows: process.platform === 'win32',
+}));
+vi.mock('node:fs', () => ({ writeFileSync: io.write }));
+vi.mock('node:child_process', () => ({ execFileSync: io.exec }));
+vi.mock('../scripts/agent-reads-process.mjs', () => ({ readMeasurementIdentity: io.identity }));
+vi.mock('../scripts/agent-reads-m4-stages.mjs', () => ({ measureM4Stages: io.stages }));
+vi.mock('../scripts/crash-cdp-lib.mjs', () => ({
+    get WIN() { return io.windows; }, alive: io.alive, attach: io.attach, check: io.check,
+    cleanQuit: vi.fn(async () => 'ok'), failures: io.failures, finish: io.finish, gone: io.gone,
+    hostPid: io.hostPid, killHard: io.killHard, launch: io.launch, makeHome: io.makeHome,
+    readOr: vi.fn(() => ''), refuseOffTestMachines: vi.fn(), sleep: io.sleep,
+    step: vi.fn(), until: io.until,
+}));
+
+const root = join(tmpdir(), 'agent-reads-sampler-fixture');
+const output = join(root, 'report.json');
+const identity: RunIdentity = { build: 'a'.repeat(40), vmId: 'fixture-vm', platform: process.platform, runId: 'fixture-run' };
+const request: SampleRequest = { identity, mode: 'door', pairIndex: 0 };
+const originalArgv = [...process.argv];
+let live: Set<number>;
+let stuck: number | undefined;
+let throws: number | undefined;
+
+beforeEach(() => {
+    vi.resetModules();
+    for (const mock of [io.identity, io.write, io.exec, io.launch, io.attach, io.makeHome, io.alive, io.gone, io.killHard, io.hostPid, io.finish, io.check, io.stages, io.until, io.sleep, io.baseline]) mock.mockReset();
+    io.sleep.mockResolvedValue(undefined);
+    io.failures.length = 0; io.order.length = 0; io.reports.length = 0;
+    live = new Set([101, 202]); stuck = undefined; throws = undefined; io.windows = process.platform === 'win32';
+    const stop = (pid: number) => {
+        io.order.push(`stop:${pid}`);
+        if (pid === throws) throw new Error('owned process termination failed');
+        if (pid !== stuck) live.delete(pid);
+    };
+    io.identity.mockReturnValue({ ...identity });
+    io.makeHome.mockReturnValue({ root, genie: join(root, 'home/.genie'), lifecycle: join(root, 'lifecycle.log'), env: {} });
+    io.hostPid.mockReturnValue(202);
+    io.launch.mockReturnValue({ child: { pid: 101 } });
+    io.baseline.mockResolvedValue({ snapshot: true, detail: true, watch: true });
+    io.attach.mockResolvedValue({ windowPid: 101, cdp: { evaluate: vi.fn(async (expression: string) => expression.includes('Promise.all(') ? { workspaces: ['fixture-workspace'] } : true), closed: vi.fn(async () => true) }, inspector: { evaluate: io.baseline, closed: vi.fn(async () => true) } });
+    io.alive.mockImplementation((pid: number) => live.has(pid));
+    io.gone.mockImplementation(async (pid: number) => { io.order.push(`gone:${pid}`); return !live.has(pid); });
+    io.killHard.mockImplementation(stop);
+    io.exec.mockImplementation((file: string, args: string[]) => {
+        if (file !== 'taskkill') throw new Error(`unexpected fixture command: ${file}`);
+        stop(Number(args[args.indexOf('/PID') + 1])); return '';
+    });
+    vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (signal === 0) {
+            if (!live.has(Math.abs(pid))) throw Object.assign(new Error('fixture process gone'), { code: 'ESRCH' });
+            return true;
+        }
+        stop(Math.abs(pid)); return true;
+    });
+    io.write.mockImplementation((file: string, content: string) => {
+        if (file === output) { io.order.push('report'); io.reports.push({ value: JSON.parse(content) as Report, goneCalls: io.gone.mock.calls.length }); }
+    });
+    io.check.mockImplementation((ok: boolean, label: string) => { if (!ok) io.failures.push(label); return ok; });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no listener in fixture')));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubEnv('AGENT_READS_REQUEST', JSON.stringify(request));
+    vi.stubEnv('AGENT_READS_PROBE_ONLY', '1'); // Stop after startup reads; the test concerns ownership, not timed workloads.
+    process.argv = [process.execPath, 'agent-reads-measure.mjs', '--mode=door', `--out=${output}`];
+});
+
+describe('actual sampler adopts M4-only scope (Tynn #564)', () => {
+    function diagnostic(scope = 'm4-diagnostic') {
+        vi.stubEnv('AGENT_READS_PROBE_ONLY', '0'); process.argv.push(`--scope=${scope}`);
+        let nextAgent = 0, opens = 0;
+        const expressions: string[] = [];
+        const cdp = { closed: vi.fn(async () => true), evaluate: vi.fn(async (expression: string) => {
+            expressions.push(expression);
+            if (expression.includes('Promise.all(')) return { workspaces: ['fixture-workspace'] };
+            if (expression.includes('agent with') || expression.includes('streaming')) throw new Error('unexpected workload');
+            if (expression.includes('genieTest.addAgent')) return { ok: true, id: `fixture-agent-${++nextAgent}` };
+            if (expression.includes('genieTest.agents.restart')) return { ok: true };
+            if (expression.includes('subscribeAgent')) { opens += 1; return { ms: 10 + opens, maxGapMs: 12 }; }
+            if (expression.includes('120; while')) return 120;
+            return true;
+        }) };
+        const inspector = { evaluate: io.baseline, closed: vi.fn(async () => true) };
+        io.attach.mockResolvedValue({ windowPid: 101, cdp, inspector }); io.until.mockResolvedValue(true);
+        io.stages.mockImplementation(async () => {
+            io.order.push(`stages after ${opens} opens`);
+            return { producerMs: 1, decodeMs: 2, rebuildMs: 3, totalMs: 999 };
+        });
+        return { expressions, cdp, inspector };
+    }
+
+    it('runs both ledger sizes with five ordinary opens, then controls/stages, and no M5/M6 work', async () => {
+        const r = diagnostic(); const result = await runSampler();
+        expect(result.code).toBe(0); expect(result.report?.scope).toBe('m4-diagnostic'); expect(result.report?.finished).toBe(true);
+        expect(result.report?.m4_5000?.runs).toHaveLength(5); expect(result.report?.m4_5000?.ms).toBe(13);
+        expect(result.report?.m4_20000?.runs).toHaveLength(5);
+        expect(result.report?.m4Stages).toEqual({ m4_5000: { producerMs: 1, decodeMs: 2, rebuildMs: 3, totalMs: 999 }, m4_20000: { producerMs: 1, decodeMs: 2, rebuildMs: 3, totalMs: 999 } });
+        expect(io.order.filter((value) => value.startsWith('stages'))).toEqual(['stages after 6 opens', 'stages after 12 opens']);
+        expect(io.sleep.mock.calls.filter(([ms]) => ms === 500)).toHaveLength(10);
+        expect(io.stages.mock.calls.map(([ports]) => ports)).toEqual([
+            expect.objectContaining({ agentId: 'fixture-agent-1', mode: 'door', cdp: r.cdp, inspector: r.inspector, openExtra: expect.any(Function) }),
+            expect.objectContaining({ agentId: 'fixture-agent-2', mode: 'door', cdp: r.cdp, inspector: r.inspector, openExtra: expect.any(Function) }),
+        ]);
+        expect(r.expressions.filter((text) => text.includes('genieTest.addAgent'))).toHaveLength(2);
+        expect(r.expressions.some((text) => text.includes('m5') || text.includes('m6-'))).toBe(false);
+        expect(result.report?.m5).toBeUndefined(); expect(result.report?.m6).toBeUndefined();
+        expect(result.report?.cleanup?.complete).toBe(true);
+    });
+
+    it('fails unfinished with owned cleanup when actual extra-stage acquisition fails', async () => {
+        diagnostic(); io.stages.mockRejectedValueOnce(new Error('stage acquisition failed'));
+        const result = await runSampler();
+        expect(result.code).toBe(1); expect(result.report?.finished).toBe(false);
+        expect(result.report?.cleanup?.complete).toBe(true); expect(io.stages).toHaveBeenCalledTimes(1);
+        expect(result.report?.failures).toContain('the run finished');
+    });
+
+    it('M4 acceptance runs five ordinary opens per size and controls, without stage extras or M5/M6', async () => {
+        const r = diagnostic('m4'); const pending = runSampler();
+        await expect(pending).resolves.toMatchObject({ code: 0, report: { scope: 'm4', finished: true } });
+        const { report } = await pending;
+        expect(report?.m4_5000?.runs).toHaveLength(5); expect(report?.m4_20000?.runs).toHaveLength(5);
+        expect(io.sleep.mock.calls.filter(([ms]) => ms === 500)).toHaveLength(10);
+        expect(r.expressions.filter(text => text.includes('subscribeAgent'))).toHaveLength(12);
+        expect(r.expressions.filter(text => text.includes('genieTest.addAgent'))).toHaveLength(2);
+        expect(io.stages).not.toHaveBeenCalled(); expect(report?.m4Stages).toBeUndefined();
+        expect(report?.m5).toBeUndefined(); expect(report?.m6).toBeUndefined();
+        expect(report?.cleanup?.complete).toBe(true);
+    });
+
+    it('the separate M5/M6 scope starts at M5 without opening either M4 ledger', async () => {
+        const r = diagnostic('m5-m6');
+        const evaluate = r.cdp.evaluate.getMockImplementation()!;
+        r.cdp.evaluate.mockImplementation(async expression => {
+            if (expression.includes('genieTest.addAgent')) {
+                r.expressions.push(expression);
+                return { ok: false, reason: 'fixture stops at the first requested agent' };
+            }
+            return evaluate(expression);
+        });
+        const pending = runSampler();
+        await expect(pending).resolves.toMatchObject({ code: 1, report: { scope: 'm5-m6', finished: false } });
+        const adds = r.expressions.filter(text => text.includes('genieTest.addAgent'));
+        expect(adds).toHaveLength(1); expect(adds[0]).toContain('"m5"');
+        expect(r.expressions.some(text => text.includes('m4-') || text.includes('subscribeAgent'))).toBe(false);
+        expect(io.stages).not.toHaveBeenCalled();
+        expect((await pending).report?.cleanup?.complete).toBe(true);
+    });
+});
+afterEach(() => { process.argv = [...originalArgv]; vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+async function runSampler() {
+    const completed = new Promise<number>((resolve) => {
+        // Match the shared finish's best-effort cleanup behavior, without deleting files or calling process.exit.
+        io.finish.mockImplementation((_name: string, _home: unknown, cleanups: (() => Promise<void>)[]) => async (code: number) => {
+            for (const cleanup of cleanups) { try { await cleanup(); } catch { /* matches the shared helper */ } }
+            resolve(code);
+        });
+    });
+    await import('../scripts/agent-reads-measure.mjs');
+    const code = await completed;
+    return { code, report: io.reports.at(-1)?.value };
+}
+
+describe('historical comparisons refuse a retired or unreadable native baseline (Tynn #564)', () => {
+    async function refusal(label = 'historical IPC baseline is available') {
+        const result = await runSampler();
+        expect(result.code).toBe(1);
+        expect(result.report?.finished).toBe(false);
+        expect(result.report?.failures).toContain(label);
+        expect(result.report?.cleanup?.complete).toBe(true);
+        expect(result.report?.m4_5000).toBeUndefined(); expect(result.report?.m4_20000).toBeUndefined();
+        expect(result.report?.m5).toBeUndefined(); expect(result.report?.m6).toBeUndefined();
+        expect(io.stages).not.toHaveBeenCalled();
+        const session = await io.attach.mock.results[0]!.value as { cdp: { evaluate: ReturnType<typeof vi.fn> } };
+        const expressions = session.cdp.evaluate.mock.calls.map(([expression]) => String(expression));
+        expect(expressions.some(expression => /Promise\.all\(|subscribeAgent|120; while|genieTest\.addAgent/.test(expression))).toBe(false);
+        expect(io.gone).toHaveBeenCalledWith(101, expect.any(Number));
+        expect(io.gone).toHaveBeenCalledWith(202, expect.any(Number));
+    }
+
+    it.each(['ipc', 'door', 'door-revision'])('%s cannot become a comparison after the baseline is gone', async mode => {
+        vi.stubEnv('AGENT_READS_REQUEST', JSON.stringify({ ...request, mode }));
+        process.argv[2] = `--mode=${mode}`;
+        io.baseline.mockResolvedValue({ snapshot: false, detail: false, watch: false });
+        await refusal();
+    });
+
+    it.each(['snapshot', 'detail', 'watch'])('a partial baseline missing %s is refused before any timed work', async field => {
+        io.baseline.mockResolvedValue({ snapshot: true, detail: true, watch: true, [field]: false });
+        await refusal();
+    });
+
+    it('an inspection failure is an explicit refusal with owned cleanup, never permission to measure', async () => {
+        io.baseline.mockRejectedValue(new Error('fixture inspector closed'));
+        await refusal();
+    });
+
+    it('a malformed inspection answer is refused rather than treated as baseline support', async () => {
+        io.baseline.mockResolvedValue({ snapshot: 'true', detail: true, watch: true });
+        await refusal();
+    });
+
+    it('available handlers do not suffice when the page did not select the requested historical path', async () => {
+        // Replace the default session before the sampler attaches; no actual CDP or Electron process is used.
+        io.attach.mockResolvedValue({ windowPid: 101, inspector: { evaluate: io.baseline, closed: vi.fn(async () => true) },
+            cdp: { evaluate: vi.fn(async (expression: string) => expression.includes('Promise.all(') ? { workspaces: ['fixture-workspace'] } : !expression.includes('genieAgentReadsIpc')), closed: vi.fn(async () => true) } });
+        await refusal('requested historical read path is selected');
+    });
+});
+
+describe('actual sampler identity and owned cleanup (Tynn #564)', () => {
+    it('uses independently read identity, with only the run nonce supplied by its request', async () => {
+        const result = await runSampler();
+        expect(io.identity).toHaveBeenCalledWith(identity.runId);
+        expect(result.report?.identity).toEqual(identity);
+    });
+
+    it.each(['build', 'vmId', 'platform', 'runId'] as const)('refuses a mismatched actual %s before creating a home or launching', async (field) => {
+        io.identity.mockReturnValue({ ...identity, [field]: 'different' });
+        await expect(runSampler()).rejects.toThrow(/identity|build|vm|platform|run/i);
+        expect(io.makeHome).not.toHaveBeenCalled(); expect(io.launch).not.toHaveBeenCalled();
+    });
+
+    it('records its actual sampler PID', async () => {
+        const result = await runSampler();
+        expect(result.report?.samplerPid).toBe(process.pid);
+    });
+
+    it('writes a successful receipt only after confirming both owned process exits', async () => {
+        const result = await runSampler();
+        expect(result.report?.cleanup?.complete).toBe(true);
+        expect(io.gone).toHaveBeenCalledWith(101, expect.any(Number));
+        expect(io.gone).toHaveBeenCalledWith(202, expect.any(Number));
+        expect(io.reports.at(-1)?.goneCalls).toBeGreaterThanOrEqual(2);
+        expect(result.code).toBe(0);
+    });
+
+    it('reports incomplete cleanup and fails if an owned host stays alive', async () => {
+        stuck = 202;
+        const result = await runSampler();
+        expect(result.report?.cleanup?.complete).toBe(false);
+        expect(result.code).not.toBe(0);
+    });
+
+    it('accepts a nonzero Windows tree-stop only after verified exit and retains command diagnostics', async () => {
+        io.windows = true; // Exercise the Windows judgement on the Linux focused-test VM, without invoking an OS command.
+        io.exec.mockImplementation((file: string, args: string[]) => {
+            expect(file).toBe('taskkill');
+            const pid = Number(args[args.indexOf('/PID') + 1]);
+            live.delete(pid);
+            if (pid === 202) throw Object.assign(new Error('taskkill exited 128'), {
+                stdout: 'SUCCESS: owned root 202 terminated',
+                stderr: 'ERROR: a descendant had already exited',
+            });
+            return '';
+        });
+        const result = await runSampler();
+        expect(io.gone).toHaveBeenCalledWith(202, expect.any(Number));
+        expect(result.report?.cleanup?.complete).toBe(true);
+        expect(result.code).toBe(0);
+        const host = result.report?.cleanup?.processes?.find((entry) => entry.role === 'host');
+        expect(host?.diagnostics?.join('\n')).toContain('taskkill exited 128');
+        expect(host?.diagnostics?.join('\n')).toContain('owned root 202 terminated');
+        expect(host?.diagnostics?.join('\n')).toContain('a descendant had already exited');
+    });
+
+    it('still cleans the window if stopping the host throws, and fails honestly', async () => {
+        throws = 202;
+        const result = await runSampler();
+        expect(io.order).toContain('stop:101');
+        expect(result.report?.cleanup?.complete).toBe(false);
+        expect(result.code).not.toBe(0);
+    });
+
+    it('does not claim complete cleanup when the launched app has no identifiable host', async () => {
+        io.hostPid.mockReturnValue(null);
+        const result = await runSampler();
+        expect(result.report?.cleanup?.complete).toBe(false);
+        expect(result.code).not.toBe(0);
+    });
+
+    it('never treats its own sampler PID as an owned host to terminate', async () => {
+        io.hostPid.mockReturnValue(process.pid); live.add(process.pid);
+        const result = await runSampler();
+        expect(io.order).not.toContain(`stop:${process.pid}`);
+        expect(result.report?.cleanup?.complete).toBe(false);
+        expect(result.code).not.toBe(0);
+    });
+
+    it('confirms already stopped owned processes without killing them again', async () => {
+        live.clear();
+        const result = await runSampler();
+        expect(result.report?.cleanup?.complete).toBe(true);
+        expect(io.order.filter((event) => event.startsWith('stop:'))).toEqual([]);
+    });
+
+    it('cleans its launched app and host after an attach failure, keeping the sample unfinished', async () => {
+        io.attach.mockRejectedValue(new Error('fixture attach failed'));
+        const result = await runSampler();
+        expect(result.report?.cleanup?.complete).toBe(true);
+        expect(result.report?.finished).toBe(false);
+        expect(result.code).not.toBe(0);
+    });
+});
