@@ -113,7 +113,8 @@ describe('every control is react-fancy\'s Button (owner rule, 2026-11-01)', () =
         expect(all.length).toBeGreaterThan(0);
         for (const attrs of all) expect(attrs).toMatch(/data-react-fancy-button/);
         const busy = render(running, { pending: 'restart' });
-        const restart = /<button[^>]*data-site-action="restart"[^>]*>([\s\S]*?)<\/button>/.exec(busy)![1]!;
+        // Restart waits in the "⋯" menu now: its button is the one that spins.
+        const restart = /<button[^>]*data-row-menu[^>]*>([\s\S]*?)<\/button>/.exec(busy)![1]!;
         expect(restart).toMatch(/animate-spin/);
         const stop = /<button[^>]*data-site-action="stop"[^>]*>([\s\S]*?)<\/button>/.exec(busy)![1]!;
         expect(stop).not.toMatch(/animate-spin/);
@@ -123,9 +124,9 @@ describe('every control is react-fancy\'s Button (owner rule, 2026-11-01)', () =
 describe('icons over words', () => {
     it('every site control is an icon with its name as its label, and no visible words', () => {
         const html = render(running);
-        // Remove stays a worded button inside its confirm: what it does must be read before it is pressed.
+        // The rest (Restart, Edit, Remove) is in the menu, and its confirm says what Remove does before it is pressed.
         const cs = controls(html).filter((c) => c.action !== 'remove');
-        expect(cs.map((c) => c.label)).toEqual(['Open', 'Restart', 'Stop', 'Edit']);
+        expect(cs.map((c) => c.label)).toEqual(['Open', 'Stop']);
         for (const m of html.matchAll(/<button[^>]*data-site-action="(?!remove")[^"]+"[^>]*>([\s\S]*?)<\/button>/g)) {
             // No text between any two tags: an icon, nothing to read.
             expect(m[1]).not.toMatch(/(^|>)\s*[^<\s][^<]*(<|$)/);

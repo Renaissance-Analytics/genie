@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { AddSiteForm } from '../src/renderer/components/AddForms.js';
 import { HostingSurface, SiteRow } from '../src/renderer/components/FeatureSurfaces.js';
+import { RowMenu } from '../src/renderer/components/RowMenu.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData, type HostedSite, type SiteEditing } from '../src/renderer/features.js';
 import type { SiteInfo } from '../src/main/site-manager.js';
 
@@ -35,16 +36,16 @@ describe('the Sites tab', () => {
         site({ id: 'site_acme_aaaa000000000005', host: 'wallet.gen', state: 'unservable', serve: null, problem: 'it runs inside the workspace container (runMode "explicit"); Genie 2 serves sites host-native only, so it is not started here' }),
     ]);
 
-    it('a running site shows its port and offers Open, Restart, Stop and Edit — and Remove behind a confirm', () => {
+    it('a running site shows its port and offers Open and Stop as icons — Restart, Edit and Remove (behind a confirm) wait in its menu', () => {
         const r = row(html, 'site_shop');
         expect(r).toContain('127.0.0.1:4101');
-        expect(buttons(r)).toEqual(['Open', 'Restart', 'Stop', 'Edit', 'Remove site']);
+        expect(buttons(r)).toEqual(['Open', 'Stop', 'More actions']);
         expect(buttons(r)).not.toContain('Start');
     });
 
-    it('a listed site that is not running offers Start and Edit (nothing to Open or Restart), and no port it does not have', () => {
+    it('a listed site that is not running offers Start (nothing to Open or Stop), and no port it does not have', () => {
         const r = row(html, 'site_docs');
-        expect(buttons(r)).toEqual(['Start', 'Edit', 'Remove site']);
+        expect(buttons(r)).toEqual(['Start', 'More actions']);
         expect(buttons(r)).not.toContain('Stop');
         expect(r).not.toContain('127.0.0.1:');
     });
@@ -65,13 +66,16 @@ function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
     return [el, ...elements(el.props.children as ReactNode)];
 }
 
-/** Press the row's control named `action`: what the row asked main to do. */
+/** Press the row's control named `action` (an icon button, or an entry in its "⋯" menu): what the row asked main to do. */
 function press(s: HostedSite, action: string, editing: SiteEditing | null = null): FeatureAction[] {
     const sent: FeatureAction[] = [];
-    const tree = SiteRow({ site: s, editing, onAction: (a) => sent.push(a) });
-    const control = elements(tree).find((e) => e.props['data-site-action'] === action);
-    expect(control, `a ${action} control`).toBeDefined();
-    (control!.props.onClick as () => void)();
+    const tree = elements(SiteRow({ site: s, editing, onAction: (a) => sent.push(a) }));
+    const control = tree.find((e) => e.props['data-site-action'] === action);
+    if (control) { (control.props.onClick as () => void)(); return sent; }
+    const menu = tree.find((e) => e.type === RowMenu);
+    const item = (menu?.props.items as { id: string }[] | undefined)?.find((i) => i.id === action);
+    expect(item, `a ${action} control or menu entry`).toBeDefined();
+    (menu!.props.onRun as (i: unknown) => void)(item);
     return sent;
 }
 
@@ -93,18 +97,22 @@ describe('S6: the site row’s controls are WIRED — each sends the action host
 
     it('a server you run yourself (external) can be opened and stopped but has no Restart — Genie runs no process for it', () => {
         const r = row(render([site({ id: 'site_ext', host: 'ext.gen', state: 'external', port: 5173 })]), 'site_ext');
-        expect(buttons(r)).toEqual(['Open', 'Stop', 'Edit', 'Remove site']);
+        expect(buttons(r)).toEqual(['Open', 'Stop', 'More actions']);
+        const items = (elements(SiteRow({ site: site({ id: 'site_ext', host: 'ext.gen', state: 'external', port: 5173 }), editing: null, onAction: () => {} })).find((e) => e.type === RowMenu)!.props.items as { id: string }[]).map((i) => i.id);
+        expect(items).toEqual(['edit', 'remove']);
     });
 
-    it('Remove is behind a confirm that says what it does: closed by default, naming project.json and that the folder is untouched', () => {
+    it('Remove is the menu\'s last entry, red, behind a confirm that says what it does: naming project.json and that the folder is untouched', () => {
         const r = row(render([running]), 'site_web.example');
-        const confirm = /<details data-site-remove="site_web\.example"[^>]*>([\s\S]*?)<\/details>/.exec(r);
-        expect(confirm).not.toBeNull();
-        expect(confirm![0]).not.toMatch(/<details[^>]*\sopen/);
-        expect(confirm![1]).toMatch(/Remove web\.example\.gen\? It is stopped and taken out of this workspace’s project\.json\. Its folder and files are not touched\./);
-        // The ONLY Remove button is inside the confirm.
-        expect((r.match(/>Remove site</g) ?? []).length).toBe(1);
-        expect(confirm![1]).toContain('>Remove site<');
+        // Nothing to press on the line itself.
+        expect(r).not.toContain('data-site-remove');
+        expect(r).not.toMatch(/Remove/);
+        const items = elements(SiteRow({ site: running, editing: null, onAction: () => {} })).find((e) => e.type === RowMenu)!.props.items as { id: string; danger?: boolean; confirm?: { body: string; confirmLabel: string } }[];
+        const last = items[items.length - 1]!;
+        expect(last.id).toBe('remove');
+        expect(last.danger).toBe(true);
+        expect(last.confirm!.body).toMatch(/Remove web\.example\.gen\? It is stopped and taken out of this workspace’s project\.json\. Its folder and files are not touched\./);
+        expect(last.confirm!.confirmLabel).toBe('Remove site');
     });
 
     it('Logs: each of the site’s processes’ output under the row, expandable, its line count and cut said — the Processes row’s pattern', () => {
