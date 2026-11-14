@@ -113,6 +113,8 @@ export interface HostAlonePorts {
     readonly tynnTab: { board: Parameters<typeof workspaceTynnApi>[0]; readPage: Parameters<typeof workspaceTynnApi>[1] };
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
+    /** The owned feature aggregator (Tynn #720); its RED seam is not wired until the measured move. */
+    readonly features?: HostApiDeps['features'];
 }
 
 export function hostAloneApi(ports: HostAlonePorts): HostApi {
