@@ -102,16 +102,16 @@ describe('the Deck’s inline answers reach the stores', () => {
         expect(services.inbox.unread(a as never)[0]!.text).toContain('y');
     });
 
-    it('a user-list Done marks it done; an unread-dm Mark read commits the cursor; a finish mark read marks it seen', async () => {
+    it('a user-list Done marks it done; an unread-dm Mark read commits the cursor; a finish asks nothing of the person (Tynn #658)', async () => {
         const a = 'agent_' + 'b'.repeat(32);
         onRoster(a, 'atlas', 'tynn');
         const added = await services.attention.lists.add({ list: 'user', workspaceId: 'tynn', agentId: a as never, text: 'rotate the token' });
         await services.inbox.send({ from: a as never, to: 'human', text: 'hi' });
         await services.attention.imDone({ agentId: a as never, agentName: 'atlas', workspacePath: dir, handoff: 'done' });
         const items = services.deckItems();
-        expect(items.map((i) => i.source).sort()).toEqual(['finished-handoff', 'unread-dm', 'user-list']);
+        expect(items.map((i) => i.source).sort()).toEqual(['unread-dm', 'user-list']);
         for (const item of items) {
-            const option = item.source === 'user-list' ? 'done' : item.source === 'unread-dm' ? 'read' : 'seen';
+            const option = item.source === 'user-list' ? 'done' : 'read';
             await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: option }, state());
         }
         expect(services.deckItems()).toEqual([]);

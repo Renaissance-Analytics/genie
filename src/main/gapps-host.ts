@@ -7,6 +7,7 @@ import type { GAppReview } from '../core/gapps.js';
 import { UNVERIFIED_LABEL } from '../core/plugins.js';
 import type { PackageDeclaration } from './genie-catalog.js';
 import { PACKAGE_MANIFEST_FILE } from '../core/plugin-integrity.js';
+import type { PublisherKeyRegistry } from './marketplace-client.js';
 import { checkPackage, currentDigest } from './plugin-package.js';
 
 /**
@@ -24,7 +25,7 @@ import { checkPackage, currentDigest } from './plugin-package.js';
  * and keeps grant and storage; uninstall leaves nothing of the app. No workspace is ever made for an app (decision 2).
  *
  * The book's own record is `<dir>/book.json`; each app's files are `<dir>/<packageId>/<version>/`, its isolated store
- * `<dir>/<packageId>/storage/`, a preview's `<dir>/<packageId>/preview-storage/` (the bridge's, V5).
+ * `<dir>/<packageId>/storage/`, a preview's `<dir>/previews/<packageId>/storage/` (the bridge's, V5).
  */
 export interface GAppEntry {
     readonly packageId: string;
@@ -42,6 +43,11 @@ export interface GAppBookPorts {
     readonly dir: string;
     /** Publisher keys Genie holds, by their C1 id. */
     readonly keys: Readonly<Record<string, string>>;
+    /**
+     * The marketplace's publisher keys (V9): a key it trusts now verifies a package, and an app whose key it has since
+     * withdrawn is refused at its next check. Absent = Genie's own keys only.
+     */
+    readonly registry?: Pick<PublisherKeyRegistry, 'publisherKeys' | 'keyState'>;
     readonly publisherChecksOff: () => boolean;
     /** The host's catalog as it is now: the review names elements from it, and a new package must not collide in it. */
     readonly catalog: () => Catalog;
@@ -58,7 +64,7 @@ const sameItems = (a: readonly ReviewItem[], b: readonly ReviewItem[]) => {
 };
 
 /** `genie-package.json` read as a package declaration: its contributions in the catalog's envelope, filled with the package's id, version and source. */
-function declarationOf(raw: unknown): { ok: true; declaration: PackageDeclaration; name: string; keyId: string | null } | { ok: false; reason: string } {
+export function declarationOf(raw: unknown): { ok: true; declaration: PackageDeclaration; name: string; keyId: string | null } | { ok: false; reason: string } {
     if (!isRecord(raw)) return { ok: false, reason: `${PACKAGE_MANIFEST_FILE} must be a JSON object` };
     if (typeof raw.id !== 'string' || typeof raw.version !== 'string' || typeof raw.name !== 'string' || raw.name.trim() === '') return { ok: false, reason: `${PACKAGE_MANIFEST_FILE} must name its id, name and version` };
     if (!isRecord(raw.publisher) || typeof raw.publisher.name !== 'string') return { ok: false, reason: `${PACKAGE_MANIFEST_FILE} must name its publisher: publisher.name` };
@@ -124,6 +130,9 @@ export class GAppBook {
     async verifyInstalled(packageId: string): Promise<string | null> {
         const entry = this.#book.apps.find((e) => e.packageId === packageId);
         if (!entry) return `${packageId} is not installed`;
+        if (entry.grant.publisher !== 'unverified' && this.#ports.registry?.keyState(entry.grant.publisher) === 'withdrawn') {
+            return `${entry.name} is refused: its publisher's key was withdrawn from the marketplace, so it does not run. Reinstall it once its publisher has signed it again.`;
+        }
         const now = await currentDigest(join(this.#ports.dir, entry.packageId, entry.version));
         if (now.ok && now.digest === entry.digest) return null;
         return `${entry.name} is refused as tampered: ${now.ok ? 'a file changed, was added or was removed after it was installed' : now.reason}; reinstall it from its publisher.`;
@@ -131,7 +140,8 @@ export class GAppBook {
 
     /** An app's isolated store (V5's bridge reads and writes it); a preview has its own, which can never read the installed app's. */
     storageDir(packageId: string, preview = false): string {
-        return join(this.#ports.dir, packageId, preview ? 'preview-storage' : 'storage');
+        // A preview's is apart from the app's own folder, so uninstalling the app leaves the workspace's preview its data.
+        return preview ? join(this.#ports.dir, 'previews', packageId, 'storage') : join(this.#ports.dir, packageId, 'storage');
     }
 
     /** Take back one element or one network host from an app's grant; it counts from the next call. `false` for an unknown app. */
@@ -231,7 +241,8 @@ export class GAppBook {
         const parsed = declarationOf(raw);
         if (!parsed.ok) return parsed;
         const { declaration } = parsed;
-        const check = await checkPackage(dir, { keyId: parsed.keyId ?? '', keys: this.#ports.keys, publisherChecksOff: this.#ports.publisherChecksOff() });
+        const keys = this.#ports.registry ? this.#ports.registry.publisherKeys(this.#ports.keys) : this.#ports.keys;
+        const check = await checkPackage(dir, { keyId: parsed.keyId ?? '', keys, publisherChecksOff: this.#ports.publisherChecksOff() });
         if (!check.decision.install) return { ok: false, reason: check.decision.reason };
         const unverified = check.decision.label === UNVERIFIED_LABEL;
         // A signed package's digest comes with its check; an unsigned one's is taken here (B4 holds none for it).

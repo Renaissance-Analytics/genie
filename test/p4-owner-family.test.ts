@@ -232,7 +232,7 @@ describe('native paths retired and P5/window boundaries pinned', () => {
     });
     it('leaves all five retained native bodies byte-identical apart from line endings', () => {
         const main = readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
-        const hashes = { 'connect-link': '0b9ae3b3eda218ec458bcd0d9b770a714b31301cf031296696221ca672511252', 'relay-open': '98cdfeb54514ae882c367a9d2c5d0d3f23a280828c264029589ec4f226c23976', 'device-open': '2751229ddfd8bb2a12b227926d5b620bb794a1416290745538fa5c543045d753', 'relay-send': 'f34a50135a124bcd30285701daadb10cc19c56739987bd628b95d85975645409', 'relay-close': 'cb283050ceec2132cef13da9b7bf9037ca55dded976d38189145ed4fb1c21143' };
+        const hashes = { 'connect-link': '0b9ae3b3eda218ec458bcd0d9b770a714b31301cf031296696221ca672511252', 'relay-open': '98cdfeb54514ae882c367a9d2c5d0d3f23a280828c264029589ec4f226c23976', 'device-open': '4f2bd080e28c2d9e97eeca4a949dbbadc5bbc9a76cef9ef7f1d3ffae9cf40478', 'relay-send': 'f34a50135a124bcd30285701daadb10cc19c56739987bd628b95d85975645409', 'relay-close': 'cb283050ceec2132cef13da9b7bf9037ca55dded976d38189145ed4fb1c21143' };
         for (const [channel, hash] of Object.entries(hashes)) {
             const body = new RegExp(`^    ipcMain\\.(?:handle|on)\\('genie:${channel}'.*?^    \\}\\);`, 'ms').exec(main)?.[0];
             expect(body, channel).toBeDefined(); expect(createHash('sha256').update(body!).digest('hex'), channel).toBe(hash);

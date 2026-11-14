@@ -60,12 +60,11 @@ describe('the Tynn list is the main way; host and PIN is the other one', () => {
         expect(html).toMatch(/<details[^>]*data-connect-tailnet=""[^>]*\sopen=""/);
     });
 
-    it('in Settings → Remote access, "Drive another machine" comes before this machine’s pairing and devices', () => {
+    it('Settings → Remote access is this machine’s own: no "Drive another machine" (Tynn #640; it is the title bar’s host picker)', () => {
         const remote: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: false };
         const html = renderToStaticMarkup(<RemoteAccess remote={remote} workspaces={[]} onAction={() => {}} connect={{ ...base, tynnWorkstations: { ok: true, workstations: [] } }} />);
-        expect(html.indexOf('Drive another machine')).toBeGreaterThanOrEqual(0);
-        expect(html.indexOf('Drive another machine')).toBeLessThan(html.indexOf('data-remote-enabled'));
-        expect(html.indexOf('Drive another machine')).toBeLessThan(html.indexOf('Paired devices'));
+        expect(html).not.toContain('Drive another machine');
+        expect(html).toContain('data-remote-enabled');
     });
 });
 

@@ -136,6 +136,15 @@ export interface AgentRecord {
      */
     readonly drivePages?: boolean;
     /**
+     * MCP SERVERS SWITCHED OFF FOR THIS AGENT (Tynn #628), by name: handed to its provider as disabled at its next session
+     * start. Genie's own are never in it. Absent = none.
+     */
+    readonly mcpOff?: readonly string[];
+    /** Switched ON for this agent although its workspace has them off (the workspace's default, Tynn #628). Absent = none. */
+    readonly mcpOn?: readonly string[];
+    /** Every MCP server one of its sessions reported, by name: what its Settings can list while it is not running. */
+    readonly mcpSeen?: readonly string[];
+    /**
      * What this agent hears from IssueWatch (Tynn #806): how and which kinds. Absent = never set, and the default applies
      * (`issueWatchPrefsFor`: the workspace's first agent hears new issues, PRs, security and feedback; the rest nothing).
      */

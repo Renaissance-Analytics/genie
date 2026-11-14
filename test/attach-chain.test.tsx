@@ -51,8 +51,10 @@ describe('the session', () => {
         session.prompt('plain', 'you');
         expect(prompted).toEqual([content, 'plain']);
         await vi.waitFor(() => expect(rows.filter((r) => r.kind === 'message')).toHaveLength(2));
+        // The image is kept with the thread (Tynn #642): the row names it by a 32-hex id the session mints, with its type
+        // and size (the three bytes sent), so the pill can ask for it later. The plain message keeps nothing.
         expect(rows.filter((r) => r.kind === 'message')).toEqual([
-            { kind: 'message', speaker: 'you', peerName: null, text: 'see this', attachments: ['shot.png'] },
+            { kind: 'message', speaker: 'you', peerName: null, text: 'see this', attachments: ['shot.png'], attachmentRefs: [{ id: expect.stringMatching(/^[0-9a-f]{32}$/), name: 'shot.png', mimeType: 'image/png', bytes: 3 }] },
             { kind: 'message', speaker: 'you', peerName: null, text: 'plain' },
         ]);
     });
@@ -68,7 +70,7 @@ describe('the thread', () => {
         expect(t.messages[0]).toMatchObject({ delivered: false, attachments: ['data.bin'], reason: draft.reason });
     });
 
-    it('the flyout shows the files, and a refused draft says why — with no Restart, which would not change it', () => {
+    it('the flyout shows the files, and a refused draft says why — Send all now sends only what it can', () => {
         const thread: ChatThread = {
             agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: null,
             messages: [
@@ -81,8 +83,8 @@ describe('the thread', () => {
         expect(html).toMatch(/data-chat-attachments="m1"[\s\S]*?shot\.png/);
         expect(html).toMatch(/data-chat-attachments="d1"[\s\S]*?data\.bin/);
         expect(html).toContain('Not delivered. data.bin is neither an image nor a text file');
-        // Restart: only on the draft the agent being stopped explains (positive control: d2 has it).
-        expect(html.match(/data-action="restart"/g)).toHaveLength(1);
-        expect(html).toMatch(/data-draft="d2"/);
+        // One Send all now (Tynn #702), for d2: a refused draft is not sendable, so it does not keep the button away (positive control: d2).
+        expect(html.match(/data-action="send-all"/g)).toHaveLength(1);
+        expect(html).toContain('2 not delivered');
     });
 });

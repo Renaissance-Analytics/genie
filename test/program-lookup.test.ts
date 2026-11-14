@@ -1,8 +1,8 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { platformArgv } from '../src/core/toolchain.js';
 import { execInProcess } from '../src/main/spawn-exec.js';
 import { findBatchFile, hardenProcess, notFoundWords, resolveProgram, systemProgram } from '../src/core/program-lookup.js';
@@ -244,18 +244,29 @@ describe('no bare name is spawned', () => {
 
 /** Real Windows. A program from the folder says so through the hook, which a real git never reads; a bare --version would not reach it. */
 describe.skipIf(process.platform !== 'win32')('on Windows, through the real functions', () => {
+    let binaryDirectory: string;
+    let nodeImage: string;
     let folder: string;
     let mark: string;
     let hook: string;
     const before = process.env.NODE_OPTIONS;
     const ran = () => existsSync(mark);
     const quiet = (work: Promise<unknown>) => work.catch(() => null);
+    beforeAll(() => {
+        // Tynn #671: 84 copies of the 87 MB Node image wrote 7.31 GB. Keep one owned copy and hard-link each
+        // planted name to it. The real PE bytes, NODE_OPTIONS hook and independent case folders stay intact;
+        // an inert .exe would make the refusal cases pass even when lookup incorrectly ran the planted file.
+        binaryDirectory = mkdtempSync(join(tmpdir(), 'lookup-binary-'));
+        nodeImage = join(binaryDirectory, 'node.exe');
+        copyFileSync(process.execPath, nodeImage);
+    });
+    afterAll(() => { rmSync(binaryDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); });
     beforeEach(() => {
         folder = mkdtempSync(join(tmpdir(), 'lookup-'));
         mark = join(folder, 'mark.txt');
         hook = join(folder, 'hook.cjs');
         writeFileSync(hook, `require('node:fs').writeFileSync(${JSON.stringify(mark)}, process.execPath);\nprocess.exit(0);\n`);
-        for (const name of ['git.exe', 'reg.exe', 'taskkill.exe']) copyFileSync(process.execPath, join(folder, name));
+        for (const name of ['git.exe', 'reg.exe', 'taskkill.exe']) linkSync(nodeImage, join(folder, name));
         process.env.NODE_OPTIONS = `--require ${JSON.stringify(hook)}`;
         // Set on a machine, it would hide what these look for: resolving must hold with it gone.
         delete process.env[VARIABLE];
@@ -367,7 +378,7 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
     }, 30_000);
 
     it('the engine: a bare name found only in the working folder does not run', async () => {
-        copyFileSync(process.execPath, join(folder, 'onlyhere.exe'));
+        linkSync(nodeImage, join(folder, 'onlyhere.exe'));
         await throughTheEngine(['onlyhere', 'status']);
         expect(ran()).toBe(false);
     }, 30_000);
@@ -448,7 +459,7 @@ pty.onExit(end);`;
 
     it('a batch file and a program of that name in the working folder: not run, and not mentioned as if they were found', async () => {
         writeFileSync(join(folder, 'plantedtool.cmd'), `@echo ran> "${mark}"\r\n`);
-        copyFileSync(process.execPath, join(folder, 'plantedtool.exe'));
+        linkSync(nodeImage, join(folder, 'plantedtool.exe'));
         const words = openedThroughThePort('plantedtool status', folder);
         await new Promise((r) => setTimeout(r, 1_500));
         expect(words).toMatch(/"plantedtool" was not found/);
@@ -470,7 +481,7 @@ pty.onExit(end);`;
     it('resolving finds the real one with a PATH of its own', () => {
         const dir = join(folder, 'on path');
         mkdirSync(dir);
-        copyFileSync(process.execPath, join(dir, 'tool.exe'));
+        linkSync(nodeImage, join(dir, 'tool.exe'));
         expect(resolveProgram('tool', { platform: 'win32', env: { PATH: dir, SystemRoot: process.env.SystemRoot } })).toBe(join(dir, 'tool.exe'));
     });
 });

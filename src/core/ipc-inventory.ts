@@ -41,9 +41,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:window-overlay-colors', 'window-port'],
     ['genie:window-overlay-colors-current', 'window-port'],
     ['genie:renderer-stall', 'window-port'],
-    ['genie:snapshot', 'protocol:snapshot'],
-    ['genie:agent-detail', 'protocol:agentDetail'],
-    ['genie:agent-watch', 'protocol:agent.watch'],
     ['genie:design-login', 'window-port'],
     ['genie:provider-login', 'window-port'],
     ['genie:take-over', 'window-port'],
@@ -72,6 +69,9 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:add-workspace', 'window-port'],
     ['genie:provider-choose-program', 'window-port'],
     ['genie:features-browser-bounds', 'window-port'],
+
+    ['host-wait:current', 'later:host-wait window'],
+    ['host-wait:act', 'later:host-wait window'],
 
     ['question:current', 'later:question window'],
     ['question:answer', 'later:question window'],

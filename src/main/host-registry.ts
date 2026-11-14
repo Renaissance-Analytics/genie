@@ -68,6 +68,11 @@ export class HostRegistry {
         return this.#workspaces.find((w) => w.id === id) ?? null;
     }
 
+    /** The MCP servers off by default for this workspace's agents (Tynn #628): read at each launch. */
+    workspaceMcpOff(workspaceId: string): string[] {
+        return [...(this.workspace(workspaceId)?.mcpOff ?? [])];
+    }
+
     defaultAgentOf(workspaceId: string): string | null {
         if (this.workspace(workspaceId)?.asleep === true) return null;
         return this.workspace(workspaceId)?.defaultAgentId ?? null;

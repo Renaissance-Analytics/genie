@@ -82,8 +82,8 @@ describe('the verdict', () => {
 
     it('nothing said yet: untrusted', () => { expect(trustVerdict(book(), 'acme', hash)).toEqual({ trusted: false, changed: false }); });
     it('the person said yes to this list: trusted', () => { expect(trustVerdict(book({ workspaces: { acme: hash } }), 'acme', hash)).toEqual({ trusted: true, changed: false }); });
-    it('the list has changed since: untrusted, and it says so', () => { expect(trustVerdict(book({ workspaces: { acme: 'older' } }), 'acme', hash)).toEqual({ trusted: false, changed: true }); });
+    it('the list has changed since the yes: still trusted (Tynn #618: trust is given once and stays)', () => { expect(trustVerdict(book({ workspaces: { acme: 'older' } }), 'acme', hash)).toEqual({ trusted: true, changed: false }); });
     it('carried over at the upgrade, with no list recorded yet: trusted', () => { expect(trustVerdict(book({ carried: ['acme'] }), 'acme', hash)).toEqual({ trusted: true, changed: false }); });
-    it('carried over, then the list recorded, then changed: it asks again', () => { expect(trustVerdict(book({ carried: ['acme'], workspaces: { acme: 'older' } }), 'acme', hash)).toEqual({ trusted: false, changed: true }); });
+    it('carried over, then the list recorded, then changed: still trusted', () => { expect(trustVerdict(book({ carried: ['acme'], workspaces: { acme: 'older' } }), 'acme', hash)).toEqual({ trusted: true, changed: false }); });
     it('a workspace with nothing that would run is trusted without asking', () => { expect(trustVerdict(book(), 'acme', trustHash(empty))).toEqual({ trusted: true, changed: false }); });
 });

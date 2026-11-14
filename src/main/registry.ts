@@ -13,6 +13,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
  */
 export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
+import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
@@ -56,6 +57,7 @@ export class Registry {
     #store: RegistryStore;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
+    #registrations: Promise<void> = Promise.resolve();
     readonly #mailVisibility = new WorkspaceMailVisibility();
     #probe: SessionProbe = () => null;
     #observed: (id: AgentId) => TakeOverProbe | null = () => null;
@@ -92,8 +94,17 @@ export class Registry {
      */
     async refresh(): Promise<void> {
         if (!this.#loaded) return;
-        const workspaces = await this.#store.readWorkspaces();
-        const agents = await this.#store.readAgents();
+        let workspaces: readonly WorkspaceRecord[], agents: readonly AgentRecord[];
+        for (;;) {
+            const registrations = this.#registrations;
+            await registrations;
+            const beforeWorkspaces = this.#workspaces, beforeAgents = this.#agents;
+            workspaces = await this.#store.readWorkspaces();
+            agents = await this.#store.readAgents();
+            // A read started before a local change cannot replace that change. Read the store again;
+            // keeping just the local rows would hide legitimate changes and deletions from another window.
+            if (registrations === this.#registrations && beforeWorkspaces === this.#workspaces && beforeAgents === this.#agents) break;
+        }
         const changedAgents = agents.filter((a) => JSON.stringify(a) !== JSON.stringify(this.#agents.find((x) => x.id === a.id) ?? null)).map((a) => a.id);
         const gone = this.#agents.filter((a) => !agents.some((x) => x.id === a.id)).map((a) => a.id);
         const workspacesChanged = JSON.stringify(workspaces) !== JSON.stringify(this.#workspaces);
@@ -311,7 +322,7 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...this.#colorOf(w.path) }))
+                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...(w.mcpOff && w.mcpOff.length > 0 ? { mcpOff: w.mcpOff } : {}), ...(this.#workspaceMcpSeen(w.id).length > 0 ? { mcpSeen: this.#workspaceMcpSeen(w.id) } : {}), ...this.#colorOf(w.path) }))
                 : null,
             ...(this.#loaded && this.#workspaces.some((workspace) => workspace.asleep) ? {
                 hibernatedWorkspaces: this.#workspaces.filter((workspace) => workspace.asleep).map((workspace) => ({ id: workspace.id, path: workspace.path, name: workspace.hibernatedName ?? folderName(workspace.path), asleep: true as const })),
@@ -429,7 +440,11 @@ export class Registry {
         if (input.workspaceId === OS_WORKSPACE) throw new Error('The built-in Genie identity is reserved; agents belong to a regular workspace');
         const record = agentRecord({ id: mintAgentId(), ...input });
         this.#agents = [...this.#agents, record];
-        await this.#store.writeAgents(this.#agents);
+        const writing = this.#store.writeAgents(this.#agents);
+        // Refresh also waits for an already-started creation: its in-memory row precedes durable storage.
+        // A failed write still rejects register(), while refresh must remain able to read the actual store.
+        this.#registrations = Promise.allSettled([this.#registrations, writing]).then(() => {});
+        await writing;
         this.#emit();
         return record;
     }
@@ -525,6 +540,32 @@ export class Registry {
         await this.#store.writeWorkspaces(this.#workspaces);
         this.#emit();
         return { ok: true };
+    }
+
+    /** The MCP servers off by default for every agent of this workspace (Tynn #628); an agent's own switch wins. */
+    workspaceMcpOff(workspaceId: string): string[] {
+        return [...(this.#workspaces.find((w) => w.id === workspaceId)?.mcpOff ?? [])];
+    }
+
+    /** One server on or off as the workspace's default. Read when each of its agents next starts a session. */
+    async setWorkspaceMcpServer(workspaceId: string, name: unknown, on: unknown): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const workspace = this.#workspaces.find((w) => w.id === workspaceId);
+        if (!workspace) return { ok: false, reason: `no workspace ${workspaceId}` };
+        const changed = withWorkspaceMcpServer(workspace.mcpOff, name, on);
+        if (!changed.ok) return changed;
+        this.#workspaces = this.#workspaces.map((w) => {
+            if (w.id !== workspaceId) return w;
+            const { mcpOff: _previous, ...rest } = w;
+            return changed.mcpOff.length > 0 ? { ...rest, mcpOff: changed.mcpOff } : rest;
+        });
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return { ok: true };
+    }
+
+    /** Every MCP server a session of one of this workspace's agents reported: what its Settings can list. */
+    #workspaceMcpSeen(workspaceId: string): string[] {
+        return [...new Set(this.#agents.filter((a) => a.workspaceId === workspaceId).flatMap((a) => a.mcpSeen ?? []))].sort((a, b) => a.localeCompare(b));
     }
 
     /** Hibernate / wake (§6.1). On disk, so it survives restarts and upgrades. */
@@ -682,6 +723,18 @@ export class Registry {
     /** May drive pages (browser rebuild step 7): the page tool appears in its next tools/list. */
     async setDrivePages(agentId: AgentId, drivePages: boolean): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, drivePages }));
+    }
+
+    /** The MCP servers switched off for this agent (Tynn #628); read when its next session starts. */
+    async setMcpOff(agentId: AgentId, mcpOff: readonly string[], mcpOn: readonly string[] = []): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, mcpOff: [...mcpOff], mcpOn: [...mcpOn] }));
+    }
+
+    /** What one of its sessions reported, added to what its Settings can list. Writes only when it adds a name. */
+    async noteMcpSeen(agentId: AgentId, names: readonly string[]): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing || withMcpSeen(existing, names) === null) return existing ?? null;
+        return this.#update(agentId, (a) => withMcpSeen(a, names) ?? a);
     }
 
     /** What it hears from IssueWatch (Tynn #806); kept on the record like every other setting of the agent. */

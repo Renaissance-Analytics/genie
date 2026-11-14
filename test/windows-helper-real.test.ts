@@ -26,6 +26,7 @@ afterEach(async () => {
     for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
+// CI: WINDOWS ONLY (the Windows helper's own executable)
 describe.skipIf(process.platform !== 'win32')('the helper on Windows', () => {
     function counted() {
         let launches = 0;

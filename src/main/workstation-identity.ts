@@ -206,23 +206,36 @@ export function workstationKeyStore(file: string, secrets: WorkstationSecrets): 
     };
     return {
         canWrite: async () => (await secrets.probe()).ok,
+        /*
+         * A MACHINE ON RECORD NEVER READS AS "NO IDENTITY" (beta.61.1). `null` makes the caller register with no proof, and
+         * Tynn treats the same machine registering unproven as untrusted: a drone, its grants revoked (the owner's Pilot).
+         * So `null` is only for a machine with nothing on record. A file that is there and cannot be read, or a workstation
+         * on record whose key is missing or is not a key, REJECTS, saying which; nothing is sent to Tynn.
+         */
         async read(host) {
-            const row = (await load())[host];
+            let all: IdentityFile;
+            try {
+                const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown;
+                all = parsed && typeof parsed === 'object' ? (parsed as IdentityFile) : {};
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return null;
+                throw new Error(`This machine's workstation record (workstation.json) could not be read, so it was not registered again: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            const row = all[host];
             if (!row?.workstationId) return null;
             const key = await secrets.get(entryFor(host));
             if (key.kind === 'unavailable') throw new Error(`The keychain did not answer, so this machine's workstation key could not be read: ${key.reason}`);
             if (key.kind === 'missing') {
                 // Sealed by an older Genie and not moved yet: this machine HAS an identity. Enrolling now would make it a second workstation.
                 if (row.keyEnc) throw new Error('This machine\'s workstation key has not yet moved to the keychain.');
-                return null;
+                throw new Error(`This machine is workstation ${row.workstationId}, and its key is not in the keychain, so it could not prove itself to Tynn and was not registered again.`);
             }
             try {
                 createPrivateKey(key.value);
-                return { workstationId: row.workstationId, privateKeyPem: key.value };
             } catch {
-                // Not a key: not registered, so the next ensure enrolls afresh.
-                return null;
+                throw new Error(`This machine is workstation ${row.workstationId}, and what the keychain holds for it is not a key, so it could not prove itself to Tynn and was not registered again.`);
             }
+            return { workstationId: row.workstationId, privateKeyPem: key.value };
         },
         async write(host, identity) {
             const held = await secrets.set(entryFor(host), identity.privateKeyPem);

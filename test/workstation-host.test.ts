@@ -112,8 +112,32 @@ describe('A KEY THAT CANNOT BE READ IS NOT A MACHINE WITH NO IDENTITY', () => {
         expect([tynn.registers, tynn.enrolls]).toEqual([0, 0]);
     });
 
-    it('CONTROL: a key really gone, with nothing sealed, is not registered, and a new one is enrolled', async () => {
-        writeFileSync(file, JSON.stringify({ [HOST]: { workstationId: 'ws_1' } }));
+    /*
+     * A MACHINE ON RECORD NEVER REGISTERS UNPROVEN (beta.61.1; the owner's Pilot became a drone). The file names this
+     * machine's workstation; the keychain answered "no such entry". That read as "no identity", so Genie registered again
+     * with no proof, and Tynn treats the same machine registering unproven as untrusted: it is made a drone and its
+     * grants are revoked. With a workstation on record and no usable key, nothing is sent, and it says why.
+     */
+    it('the workstation on record and its key not in the keychain: read REFUSES, and Tynn is asked nothing', async () => {
+        writeFileSync(file, JSON.stringify({ [HOST]: { workstationId: 'ws_1', legacyDone: 'ws_old' } }));
+        const store = workstationKeyStore(file, keychain());
+        await expect(store.read(HOST)).rejects.toThrow(/ws_1[^]*key[^]*not[^]*keychain|key[^]*missing/i);
+        const tynn = tynnFake();
+        await expect(ensureWorkstation(ports(store, tynn))).rejects.toThrow();
+        expect([tynn.registers, tynn.enrolls]).toEqual([0, 0]);
+        expect(rows()[HOST]).toEqual({ workstationId: 'ws_1', legacyDone: 'ws_old' });
+    });
+
+    it('the identity file is there and cannot be read: read REFUSES, and Tynn is asked nothing', async () => {
+        writeFileSync(file, '{ "https://tynn.test": { "workstationId": "ws_1"');
+        const store = workstationKeyStore(file, keychain());
+        await expect(store.read(HOST)).rejects.toThrow(/workstation\.json|could not be read/i);
+        const tynn = tynnFake();
+        await expect(ensureWorkstation(ports(store, tynn))).rejects.toThrow();
+        expect([tynn.registers, tynn.enrolls]).toEqual([0, 0]);
+    });
+
+    it('CONTROL: a machine with nothing on record (no file, or no row for this Tynn) registers as new', async () => {
         const store = workstationKeyStore(file, keychain());
         expect(await store.read(HOST)).toBeNull();
         const tynn = tynnFake();
@@ -121,9 +145,29 @@ describe('A KEY THAT CANNOT BE READ IS NOT A MACHINE WITH NO IDENTITY', () => {
         expect(tynn.enrolls).toBe(1);
     });
 
-    it('what is in the keychain and is not a key reads as not registered, as a damaged file did', async () => {
+    it('after a restart or an upgrade, with its key: what it sends Tynn carries the proof, every time', async () => {
+        const pair = generateHostKeypair();
         writeFileSync(file, JSON.stringify({ [HOST]: { workstationId: 'ws_1' } }));
-        expect(await workstationKeyStore(file, keychain({ [ENTRY]: 'not a key' })).read(HOST)).toBeNull();
+        const bodies: Array<Record<string, unknown>> = [];
+        // Tynn's `me` names no workstation for this pairing (a new pairing after the upgrade): the machine must prove itself.
+        const request = (async (path: string, init: { body?: unknown }) => {
+            const answer = (status: number, body: unknown) => ({ ok: status < 300, status, json: async () => body });
+            if (path === '/api/v1/workstations/me') return answer(200, { workstation: null });
+            if (path === '/api/v1/workstations/self-register') { bodies.push(init.body as Record<string, unknown>); return answer(200, { workstation: { id: 'ws_1' }, enrollment: null }); }
+            return answer(404, {});
+        }) as never;
+        for (let start = 0; start < 3; start += 1) {
+            // A new store each time, as a new genie-host process has.
+            const store = workstationKeyStore(file, keychain({ [ENTRY]: pair.privateKeyPem }));
+            expect(await ensureWorkstation({ host: () => HOST, hostname: () => 'box', request, store })).toMatchObject({ ok: true, workstationId: 'ws_1' });
+        }
+        expect(bodies).toHaveLength(3);
+        for (const body of bodies) expect(body.proof).toMatchObject({ workstation_id: 'ws_1', sig: expect.any(String) });
+    });
+
+    it('what is in the keychain and is not a key REFUSES too: the workstation is on record', async () => {
+        writeFileSync(file, JSON.stringify({ [HOST]: { workstationId: 'ws_1' } }));
+        await expect(workstationKeyStore(file, keychain({ [ENTRY]: 'not a key' })).read(HOST)).rejects.toThrow(/key/i);
     });
 });
 

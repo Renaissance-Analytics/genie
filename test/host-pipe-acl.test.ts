@@ -98,6 +98,7 @@ function daclOf(sddl: string): { flags: string; aces: { type: string; rights: st
     return { flags: d[1]!, aces };
 }
 
+// CI: WINDOWS ONLY (the host's named pipe and its ACL exist on Windows only)
 describe.skipIf(process.platform !== 'win32')('the host pipe answers its own user only (Windows)', () => {
     let home: string;
     let host: ChildProcess;

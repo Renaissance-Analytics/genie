@@ -1,12 +1,12 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { providerLogin } from '../core/provider-login.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { buildCarryOver, type CarryOver } from '../core/carry-over.js';
 import type { StreamEvent } from '../core/stream-event.js';
+import { withMcpServer } from '../core/agent-mcp.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
@@ -40,6 +40,9 @@ export interface AgentOpsPorts {
         setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
         setManageTabs(id: AgentRecord['id'], manageTabs: boolean): Promise<AgentRecord | null>;
         setDrivePages(id: AgentRecord['id'], drivePages: boolean): Promise<AgentRecord | null>;
+        setMcpOff(id: AgentRecord['id'], mcpOff: readonly string[], mcpOn?: readonly string[]): Promise<AgentRecord | null>;
+        /** What its workspace has off by default. Absent = a registry with no workspace defaults. */
+        workspaceMcpOff?(workspaceId: string): readonly string[];
         setIssueWatch(id: AgentRecord['id'], setting: IssueWatchSetting): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
@@ -67,6 +70,8 @@ export interface AgentOpsPorts {
          * them their work again.
          */
         deliverOwed(id: AgentRecord['id'], then?: { text: string; by: string }): Promise<number>;
+        /** A deleted or unmounted agent: the host drops what its ledger last showed (`SessionHost.forgetShown`, Tynn #647). */
+        forgetShown?(id: AgentRecord['id']): void | Promise<void>;
     };
     /**
      * WHY A START WOULD BE REFUSED (§6.1, main.ts's `startRefusal`): an asleep workspace, the agent cap — what Start
@@ -77,8 +82,6 @@ export interface AgentOpsPorts {
     models?: { get(provider: string, options?: { refresh?: boolean }): Promise<ModelChoices> };
     cwdFor(record: AgentRecord): string;
     workspacePathFor(record: AgentRecord): string | null;
-    /** The persona file's text, or `null` when there is none. */
-    readManifest(record: AgentRecord): Promise<string | null>;
     /**
      * The agent's recorded conversation (Genie's own ledger, core/thread-store.ts), oldest first: what a switch carries to the
      * new provider (Tynn story #380). Absent = nothing is carried.
@@ -260,6 +263,8 @@ export async function deleteAgent(ports: AgentOpsPorts, agentId: string, outcome
     if (!folder.ok) return folder;
     const handoff = options.handoff === true ? await askForHandoff(ports, record, outcome) : 'not-asked';
     ports.host.stop(record.id);
+    // Nothing of it stands in for its history again (Tynn #647): the host drops what its ledger last showed.
+    await ports.host.forgetShown?.(record.id);
     await ports.registry.forget(record.id);
     // A handoff asked for and written is the one thing a delete keeps: Genie 1's "that note survives even though its
     // .agents/ files do not". Without a fresh one, an old note goes with the agent as before.
@@ -281,8 +286,8 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (!isAcpProvider(to)) return { ok: false, reason: `Genie cannot run a "${to}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
-    // The persona is READ (its name), never written: AGENT.md names no provider, and nothing in it refuses a switch (Tynn story #380).
-    const manifest = parseAgentManifest(await ports.readManifest(record), record.name);
+    // The persona is not read at all: AGENT.md names no provider, and nothing in it refuses a switch (Tynn story #380); its
+    // config is project.json's (Tynn #694), and the name the carry-over uses is the agent's own.
     const decision = switchDriverDecision(record.provider, to);
     if (!decision.ok || decision.noop) return decision;
     // Refused BEFORE anything is stopped: a provider that cannot run here would leave the agent on nothing.
@@ -302,7 +307,7 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     await ports.host.ended(record.id);
     const since = record.leftAt?.[to] !== undefined ? Date.parse(record.leftAt[to]!) : null;
     const rows = ports.history ? await ports.history(record).catch(() => []) : [];
-    const carryOver = buildCarryOver({ from: record.provider, to, agentName: manifest.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
+    const carryOver = buildCarryOver({ from: record.provider, to, agentName: record.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
     const switched = await ports.registry.setProvider(record.id, to, { keepModel, carryOver });
     if (!switched.ok) return switched;
     return {
@@ -414,17 +419,18 @@ async function defaultModelOf(ports: AgentOpsPorts, record: AgentRecord): Promis
 export async function listModels(ports: AgentOpsPorts, agentId: string, refresh = false): Promise<ModelChoices | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
+    // THE PROVIDER'S LIST, RUNNING OR NOT (Tynn #608; the owner: the list would not refresh while the agent ran). A running
+    // session's own state is fixed at its start, so it says only which model is in use, and is the list only when the
+    // provider cannot be asked now, with why.
     const live = ports.host.modelState?.(record.id) ?? null;
-    if (live) {
-        try {
-            const state = await live;
-            if (state.availableModels.length > 0) return { ok: true, provider: record.provider, source: 'session', models: state.availableModels, current: state.currentModelId };
-        } catch {
-            // The session could not say (an older CLI, a refused model/list): the provider's CLI is asked below instead.
-        }
+    const session = live ? await live.then((s) => s, () => null) : null;
+    const asked = ports.models ? await ports.models.get(record.provider, { refresh }) : null;
+    if (asked?.ok) return session ? { ...asked, inUse: session.currentModelId } : asked;
+    if (session && session.availableModels.length > 0) {
+        const why = asked && !asked.ok ? asked.reason : 'this Genie cannot ask a provider for its models';
+        return { ok: true, provider: record.provider, source: 'session', models: session.availableModels, current: session.currentModelId, note: `Couldn’t ask ${record.provider} for its models now (${why}): this is the list the running session started with.` };
     }
-    if (!ports.models) return { ok: false, provider: record.provider, reason: 'this Genie cannot ask a provider for its models' };
-    return ports.models.get(record.provider, { refresh });
+    return asked ?? { ok: false, provider: record.provider, reason: 'this Genie cannot ask a provider for its models' };
 }
 
 /**
@@ -498,6 +504,20 @@ export async function setManageTabs(ports: AgentOpsPorts, agentId: string, manag
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const updated = await ports.registry.setManageTabs(record.id, manageTabs);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/**
+ * ONE MCP SERVER ON OR OFF FOR ONE AGENT (Tynn #628). Kept on its record; its provider is told at the agent's next session
+ * start (session-host.ts mcpPolicyOptions), so nothing restarts here. Genie's own server is refused in words.
+ */
+export async function setMcpServer(ports: AgentOpsPorts, agentId: string, name: unknown, on: unknown): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    // Against its workspace's default: a choice equal to it is not kept, so the agent inherits (core/agent-mcp.ts).
+    const changed = withMcpServer(record, name, on, ports.registry.workspaceMcpOff?.(record.workspaceId) ?? []);
+    if (!changed.ok) return changed;
+    const updated = await ports.registry.setMcpOff(record.id, changed.record.mcpOff ?? [], changed.record.mcpOn ?? []);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

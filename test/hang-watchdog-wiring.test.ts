@@ -44,8 +44,9 @@ describe('the entries are wired', () => {
         // Every record's common header: the host's version and its build string.
         expect(host).toMatch(/header: \(\) => crashHeader\(build\.split\('\+'\)\[0\] \?\? build, build\),/);
         expect(host).toMatch(/hangWatchdog\.start\(\);/);
-        // The host's own end is clean: the windows that drop with it are not lost.
-        expect(host).toMatch(/shuttingDown = true;\n\s*hangWatchdog\.shuttingDown\(\);/);
+        // The host's own end is clean: the windows that drop with it are not lost. Still the first thing shutdown() does,
+        // now inside the try whose finally gives back an upgrade's hold if the end does not happen (Tynn #616).
+        expect(host).toMatch(/shuttingDown = true;\r?\n\s*try \{\r?\n\s*hangWatchdog\.shuttingDown\(\);/);
     });
 
     it('window main beats over the link and records every exit path it can catch', () => {
@@ -57,5 +58,12 @@ describe('the entries are wired', () => {
         expect(main).toMatch(/if \(step === 'close-ui'\) \{[^\n]*\}\n\s*crashRecorder\.beforeQuit\(\);/);
         // A quit that ran to its end is clean: its record is taken back and the host told goodbye.
         expect(main).toMatch(/\.finally\(\(\) => \{ crashRecorder\.cleanQuit\(\); heartbeatNow\?\.bye\(\); app\.quit\(\); \}\);/);
+    });
+
+    it('a lost window is named and its exit looked for (Tynn issue #711): main beats its route and heap; the host reads the exit it saw, else the window’s record', () => {
+        const main = src('src/main/main.ts');
+        expect(main).toMatch(/route: mainRoute,\n\s*heap: \(\) => \{ const h = getHeapStatistics\(\); return \{ used: h\.used_heap_size, limit: h\.heap_size_limit \}; \},/);
+        const host = src('src/main/genie-host.ts');
+        expect(host).toMatch(/exitOf: windowExitOf,\n\s*ownExit: \(pid, since\) => exitRecordOf\(join\(runtime, 'crash'\), pid, since\),/);
     });
 });

@@ -29,6 +29,7 @@ afterEach(async () => {
     for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
+// CI: WINDOWS ONLY (Windows credential ACLs, through the native commands)
 describe.skipIf(process.platform !== 'win32')('private credential native failure diagnostics', () => {
     it.each([
         { code: null, errno: undefined, killed: true, signal: 'SIGTERM', elapsedMs: 60_021, reason: 'terminated-after-deadline' },

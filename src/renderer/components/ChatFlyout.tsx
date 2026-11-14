@@ -3,7 +3,13 @@ import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
 import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
-import { Button, Icon, PromptInput } from '@particle-academy/react-fancy';
+import { ChatQueueBar } from './ChatQueueBar.js';
+import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { toHotkey, fancyPlatform } from '../hotkey-strings.js';
+import { sendKeyHint } from '../../core/send-key.js';
+import { SentAttachments } from './SentAttachments.js';
+import type { AttachmentReply } from '../../core/thread-store.js';
+import { useSendKey } from '../send-key-store.js';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -52,7 +58,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'promptId' | 'draftProblem' | 'carried'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -127,6 +133,34 @@ export function ChatWaiting({ id, agentName, waiting, now, onInterruptAndSend }:
             ) : null}
         </div>
     );
+}
+
+/** A turn with no output this long is worth stopping for what waits behind it (Tynn #699). */
+export const QUEUED_SILENT_MS = 120_000;
+
+/**
+ * QUEUED BEHIND A SILENT TURN (Tynn #699: two messages read "waiting for the current turn to end" for 20 minutes behind
+ * a turn that had said nothing since, and nothing on the row let the person act). Past `QUEUED_SILENT_MS` of silence,
+ * `Send now (stop the current turn)` — the Interrupt-and-send path: the turn ends and what waits goes next, in order.
+ * Without a way to stop the turn, only the words. Hook-free: `now` comes from the caller.
+ */
+export function ChatQueuedNote({ id, agentName, silentSince, now, onSendNow }: { id: string; agentName: string; silentSince: number | null; now: number; onSendNow?: (() => void) | undefined }) {
+    const silent = silentSince !== null && now - silentSince >= QUEUED_SILENT_MS;
+    return (
+        <span data-chat-queued={id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]">
+            <span>Queued · waiting for the current turn to end</span>
+            {silent && onSendNow ? (
+                <Button type="button" size="xs" color="amber" data-action="send-now" data-message={id} title={`${agentName} has shown nothing for ${ago(silentSince, now)}: stop its current turn and send what waits, in order`} onClick={() => onSendNow()} className="shrink-0 font-sans">
+                    Send now (stop the current turn)
+                </Button>
+            ) : null}
+        </span>
+    );
+}
+
+function ChatQueuedNoteLive(props: Omit<Parameters<typeof ChatQueuedNote>[0], 'now'>) {
+    const now = useNow(true);
+    return <ChatQueuedNote {...props} now={now} />;
 }
 
 /** `ChatWaiting` with the time kept current, so how long the step has run appears once it is long. */
@@ -218,6 +252,8 @@ export interface ChatFlyoutProps {
     approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
+    /** Trust the chat agent's workspace, from its approval card (Tynn #618). Absent = not offered. */
+    onTrustWorkspace?: (() => Promise<unknown>) | undefined;
     /**
      * `agentId`: the chat the message was typed in (genie#1261) — each chat has its own composer, and reading the
      * attachments is async, so the chat on screen by the time it is sent may be another.
@@ -242,6 +278,8 @@ export interface ChatFlyoutProps {
      * next. Absent = this turn cannot be stopped from here; the waiting message still says why.
      */
     onInterruptAndSend?: (() => void) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642): its pill's thumbnail on first hover. Absent: images are named only. */
+    loadAttachment?: ((agentId: string, attachmentId: string) => Promise<AttachmentReply>) | undefined;
     /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
     onResumeLimit?: (() => void) | undefined;
     /** Signed out: `Log in` on the context line, with the provider's name. */
@@ -331,8 +369,8 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
 function ChatFlyoutBody({
     onChooseProviderProgram,
-    thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
+    thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -348,7 +386,16 @@ function ChatFlyoutBody({
         agents: canAgent ? refsIn?.agents ?? [] : [],
         workspaces: canWorkspace ? refsIn?.workspaces ?? [] : [],
     }), [canFile, canAgent, canWorkspace, refsIn]);
-    const setWidth = (w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
+    // A sent image's thumbnail, read for THIS thread's agent (Tynn #642): stable while the agent is, as the agent view's is.
+    const attachmentRef = useRef(loadAttachment);
+    attachmentRef.current = loadAttachment;
+    const canLoadAttachment = loadAttachment !== undefined;
+    const threadAgentId = thread?.agentId ?? null;
+    const threadAttachment = useMemo(
+        () => (canLoadAttachment && threadAgentId !== null ? (attachmentId: string) => attachmentRef.current!(threadAgentId, attachmentId) : undefined),
+        [canLoadAttachment, threadAgentId],
+    );
+    const setWidth =(w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
 
     /**
      * Drag the LEFT edge (the panel is anchored right). Pointer capture keeps the drag alive over whatever is underneath;
@@ -401,6 +448,12 @@ function ChatFlyoutBody({
     const shown = windowStart === 0 ? messages : messages.slice(windowStart);
     // ONE RESTART IN THE CHAT (genie#1238): on the latest message waiting for one — the restart sends every undelivered
     // message, in order, so a Restart on each was the same button many times over.
+    // THE QUEUE (Tynn #702): your messages waiting behind the turn, and those not delivered, in the order written.
+    const queue = (() => {
+        const yours = messages.filter((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you');
+        const undelivered = yours.filter((m) => !m.delivered && !m.queued);
+        return { waiting: yours.filter((m) => m.queued || (m.waiting !== undefined && m.delivered)).length, undelivered, sendable: undelivered.filter((m) => !m.reason) };
+    })();
     const restartOn = [...messages].reverse().find((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you' && !m.delivered && !m.queued && !m.reason && m.resend !== 'send')?.id ?? null;
     /** The scroll height before a page of history was added: the reader stays on the message they were reading. */
     const anchorRef = useRef<number | null>(null);
@@ -452,6 +505,10 @@ function ChatFlyoutBody({
      */
     const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
     const blocked = scope?.kind === 'blocked' ? scope.reason : null;
+    const sendKey = useSendKey();
+    // Resolved after mount, as the title bar's hint is: reading `navigator` while rendering is a hydration mismatch.
+    const [keysPlatform, setKeysPlatform] = useState('generic');
+    useEffect(() => { setKeysPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
     const addressee = thread ? (elsewhere ? `${thread.name} — in ${elsewhere}` : thread.name) : null;
     // The agent's workspace COLOUR (genie#1300): beside its name in the header, and down the composer's edge.
     const color = useAgentColor(thread?.agentId);
@@ -660,7 +717,7 @@ function ChatFlyoutBody({
                     </div>
                 ) : null}
                 {/* genie's empty thread (the board): what genie is for — the one thread with no work of its own to show. */}
-                {thread?.agentId === 'genie' && thread.messages.length === 0 ? (
+                {thread?.agentId === 'genie' && thread.messages.length === 0 && thread.loaded !== false ? (
                     <div data-chat-empty="genie" className="my-auto flex flex-col items-start gap-1.5 px-1">
                         <div className="text-[14px] font-semibold">No messages with genie yet.</div>
                         <div className="text-[13px] leading-normal text-[var(--fg-3)]">genie can reach any agent in any workspace. Name one with @, or pick a thread above.</div>
@@ -672,95 +729,28 @@ function ChatFlyoutBody({
                         {windowStart > 0 ? `${windowStart.toLocaleString('en-US')} earlier ${windowStart === 1 ? 'message' : 'messages'} · show more` : 'Earlier messages · show more'}
                     </Button>
                 ) : null}
-                {shown.map((m) => {
-                    const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
-                    const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
-                    // The agent's mail with another agent (the board): one mono line, the arrows icon — no bubble, no speaker.
-                    // A STOPPED TURN (the composer's `Stop this turn`): one plain line where the reply ends.
-                    if (who === 'stopped') {
-                        return (
-                            <div key={m.id} data-chat-message={m.id} data-who="stopped" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
-                                <Icon name="square" size="xs" />
-                                <span>{m.text}</span>
-                                {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
-                            </div>
-                        );
-                    }
-                    // THE AGENT'S THINKING (the owner, 2026-10-20): in its place among the replies, closed until you open it.
-                    if (who === 'thinking') {
-                        return (
-                            <details key={m.id} data-chat-message={m.id} data-who="thinking" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
-                                <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
-                                    <Icon name="sparkles" size="xs" />
-                                    {/* Underlined on hover so it reads as something to open (the owner, 2026-10-23: "I did not realize I could click the thinking row to expand it"). */}
-                                    <span className="group-hover:underline">{m.from}’s thinking</span>
-                                    {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
-                                </summary>
-                                <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
-                                    <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
-                                </div>
-                            </details>
-                        );
-                    }
-                    if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
-                    if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
-                    if (who === 'system' && m.carried !== undefined) return <ChatCarriedRow key={m.id} m={m} />;
-                    if (who === 'system') {
-                        return (
-                            <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
-                                <span className="text-[var(--violet-400)]"><Icon name="arrow-right-left" size="xs" /></span>
-                                <span>{m.text}</span>
-                            </div>
-                        );
-                    }
-                    return who === 'you' ? (
-                        <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
-                            <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
-                            {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
-                            <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
-                            {m.attachments ? (
-                                <div data-chat-attachments={m.id} className="flex flex-wrap justify-end gap-1">
-                                    {m.attachments.map((name) => (
-                                        <span key={name} className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-3)]"><Icon name="paperclip" size="xs" />{name}</span>
-                                    ))}
-                                </div>
-                            ) : null}
-                            {/*
-                             * An undelivered message is KEPT and MARKED, with the route to send it:
-                             * the agent is not running. Dropping it loses what someone wrote, and
-                             * showing it as sent is worse — they would wait for an answer that
-                             * cannot come.
-                             */}
-                            {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
-                            {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} onInterruptAndSend={onInterruptAndSend} /> : null}
-                            {mailOnly && m.read !== undefined ? (
-                                <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
-                            ) : null}
-                            {m.queued ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : m.queuedForProvider ? 'Queued · waiting for the provider to resume' : 'Queued · waiting for the current turn to end'}</span> : null}
-                            {m.delivered || m.queued ? null : (
-                                <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
-                                    {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
-                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
-                                    {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
-                                    <div className="flex items-center gap-1.5">
-                                        {onDiscardDraft ? <Button size="xs" type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</Button> : null}
-                                        {m.reason ? null : m.resend === 'send'
-                                            ? <Button size="xs" type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</Button>
-                                            : m.id === restartOn
-                                                ? <Button size="xs" type="button" data-action="restart" data-draft={m.id} title={`Restart ${thread?.name ?? 'the agent'}; every message not yet delivered to it is sent, in order, once it is up`} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart</Button>
-                                                : null}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
-                            <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
-                            {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
-                            <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
-                        </div>
-                    );
-                })}
+                <ChatMessages
+                    messages={shown}
+                    thread={thread}
+                    refs={replyRefs}
+                    mailOnly={mailOnly}
+                    onOpenMail={onOpenMail}
+                    onDiscardDraft={onDiscardDraft}
+                    loadAttachment={threadAttachment}
+                />
+                {/* ONE QUEUE, ONE ACTION (Tynn #702): what waits and what was not delivered, counted, with one Send all now. */}
+                <ChatQueueBar
+                    agentName={thread?.name ?? 'the agent'}
+                    waiting={queue.waiting}
+                    undelivered={queue.undelivered.length}
+                    onInterruptAndSend={onInterruptAndSend}
+                    onSendAll={queue.sendable.length > 0 && onRestartAndSend ? () => {
+                        // While it runs, each in the order written; not running, the chat's one Restart, which sends them all.
+                        if (queue.sendable.some((m) => m.resend === 'send')) for (const m of queue.sendable) onRestartAndSend(m.id);
+                        else onRestartAndSend(restartOn ?? queue.sendable.at(-1)!.id);
+                    } : undefined}
+                    onDiscardAll={queue.undelivered.length > 0 && onDiscardDraft ? () => { for (const m of queue.undelivered) onDiscardDraft(m.id); } : undefined}
+                />
                 {/* The board's error rule: a broken session ends the transcript with the failure, in red. */}
                 {thread?.context?.tone === 'bad' ? (
                     <div data-chat-error="" className="flex items-center gap-2 border-y border-[var(--danger)] py-1.5 font-mono text-[11px] text-[var(--danger)]">
@@ -808,6 +798,7 @@ function ChatFlyoutBody({
                         refusal={approvalRefusal ?? null}
                         onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                         agentName={thread?.name}
+                        onTrustWorkspace={onTrustWorkspace}
                     />
                 </div>
             ) : null}
@@ -857,6 +848,17 @@ function ChatFlyoutBody({
                             : { budgetTokens: 0, meter: 'hidden' as const })}
                         attachButton="icon"
                         sendButton="icon"
+                        /*
+                         * THE PERSON'S SEND KEY (Tynn #637, react-fancy 6.21+): exactly this combination sends, its new line is
+                         * the other, and the send button's tooltip and name say it. THE KEYS LINE IN THE BOX (Tynn #641; the
+                         * owner: "this line should be in the box, not under it. it should be to the left of the send button"):
+                         * Genie's whole line, both keys, in the slot left of Send, which truncates before it moves Send. The
+                         * kit's own hint names only the send key, so it is off: the keys are said once.
+                         */
+                        submitKey={toHotkey(sendKey, keysPlatform)}
+                        platform={fancyPlatform(keysPlatform)}
+                        showHint={false}
+                        beforeSend={blocked ? null : <span data-composer-keys="" className="block truncate text-[10px] text-[var(--fg-4)]">{sendKeyHint(sendKey, keysPlatform)}</span>}
                         pasteThreshold={PASTE_PILL_CHARS}
                         pasteImages
                         previewChars={30}
@@ -895,6 +897,121 @@ function ChatFlyoutBody({
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
         </aside>
+    );
+}
+
+export interface ChatMessagesProps {
+    readonly messages: readonly ChatThreadMessage[];
+    readonly thread: ChatThread | null;
+    readonly refs: ChatRefs;
+    /** An observed agent (a Take Over window): your mail shows whether it was read. */
+    readonly mailOnly: boolean;
+    readonly onOpenMail?: ((messageId: string) => void) | undefined;
+    readonly onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /** Read one image a sent message kept, for THIS thread's agent (Tynn #642): the pill's thumbnail. Absent: images are named only. */
+    readonly loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
+}
+
+/**
+ * THE CHAT'S ROWS, one per message — the desktop chat's, and the phone's (Tynn #652: "full chat stream" on the phone, the
+ * same rows as here, never a phone summary). The scroller, the history window, the queue bar and the composer are the
+ * surface's own.
+ */
+export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOpenMail, onDiscardDraft, loadAttachment }: ChatMessagesProps) {
+    return (
+        <>
+            {/*
+             * THE CONVERSATION IS STILL COMING (Tynn #659): an agent never viewed, while its host reads or sends the ledger.
+             * A loading state, never its mail cards alone. An observed (mail-only) chat has no ledger to wait for.
+             */}
+            {thread?.loaded === false && !mailOnly ? (
+                <div data-chat-loading="" role="status" aria-busy="true" aria-label={`Loading ${thread.name}’s conversation`} className="flex flex-col gap-2 py-1">
+                    <div className="h-4 w-3/5 animate-pulse rounded-md bg-[var(--bg-2)]" />
+                    <div className="ml-auto h-4 w-2/5 animate-pulse rounded-md bg-[var(--bg-2)]" />
+                    <div className="h-4 w-4/5 animate-pulse rounded-md bg-[var(--bg-2)]" />
+                </div>
+            ) : null}
+            {messages.map((m) => {
+                const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
+                const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
+                // The agent's mail with another agent (the board): one mono line, the arrows icon — no bubble, no speaker.
+                // A STOPPED TURN (the composer's `Stop this turn`): one plain line where the reply ends.
+                if (who === 'stopped') {
+                    return (
+                        <div key={m.id} data-chat-message={m.id} data-who="stopped" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
+                            <Icon name="square" size="xs" />
+                            <span>{m.text}</span>
+                            {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
+                        </div>
+                    );
+                }
+                // THE AGENT'S THINKING (the owner, 2026-10-20): in its place among the replies, closed until you open it.
+                if (who === 'thinking') {
+                    return (
+                        <details key={m.id} data-chat-message={m.id} data-who="thinking" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
+                            <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
+                                <Icon name="sparkles" size="xs" />
+                                {/* Underlined on hover so it reads as something to open (the owner, 2026-10-23: "I did not realize I could click the thinking row to expand it"). */}
+                                <span className="group-hover:underline">{m.from}’s thinking</span>
+                                {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
+                            </summary>
+                            <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
+                                <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
+                            </div>
+                        </details>
+                    );
+                }
+                if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
+                if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
+                if (who === 'system' && m.carried !== undefined) return <ChatCarriedRow key={m.id} m={m} />;
+                if (who === 'system') {
+                    return (
+                        <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
+                            <span className="text-[var(--violet-400)]"><Icon name="arrow-right-left" size="xs" /></span>
+                            <span>{m.text}</span>
+                        </div>
+                    );
+                }
+                return who === 'you' ? (
+                    <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
+                        <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
+                        {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
+                        <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
+                        {/* What it sent (Tynn #642): a kept image is the composer's own pill, its thumbnail read from the host on first hover. */}
+                        {m.attachments ? <SentAttachments id={m.id} names={m.attachments} refs={m.attachmentRefs} load={loadAttachment} /> : null}
+                        {/*
+                         * An undelivered message is KEPT and MARKED, with the route to send it:
+                         * the agent is not running. Dropping it loses what someone wrote, and
+                         * showing it as sent is worse — they would wait for an answer that
+                         * cannot come.
+                         */}
+                        {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
+                        {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} /> : null}
+                        {mailOnly && m.read !== undefined ? (
+                            <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
+                        ) : null}
+                        {m.queued ? (m.queuedForStart || m.queuedForProvider
+                            ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>
+                            : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} />) : null}
+                        {m.delivered || m.queued ? null : (
+                            <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
+                                {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
+                                <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
+                                {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
+                                {/* One message sent by mistake comes out here; sending is the queue bar's one action (Tynn #702). */}
+                                {onDiscardDraft ? <Button size="xs" variant="ghost" type="button" data-action="remove-draft" data-draft={m.id} aria-label="Remove this message" title="Remove this message" onClick={() => onDiscardDraft(m.id)} className="h-auto px-1 py-0 text-[13px] leading-none text-[var(--fg-3)] hover:text-[var(--fg-1)]">×</Button> : null}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
+                        <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
+                        {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
+                        <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
+                    </div>
+                );
+            })}
+        </>
     );
 }
 

@@ -1,4 +1,5 @@
 import { activityRows } from '../../core/stream-view.js';
+import { formatRoute } from '../../core/route.js';
 import type { OutputStream } from '../../core/terminal-output-stream.js';
 import { outputViewObserver } from '../terminal-output-view.js';
 import { terminalAction, watchTerminal } from '../local-terminal-client.js';
@@ -12,6 +13,8 @@ import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOu
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
+import type { McpRow } from '../../core/agent-mcp.js';
+import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
 import { FidelityDot } from './Dashboard.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
@@ -162,6 +165,9 @@ export interface AgentOpsProps {
     /** May drive pages (browser rebuild step 7). */
     readonly drivePages?: boolean;
     readonly onSetDrivePages?: (on: boolean) => void;
+    /** Its MCP servers (Tynn #628): the rows, and the switch. Absent rows = no list; absent setter = a list with no switch. */
+    readonly mcp?: readonly McpRow[];
+    readonly onSetMcpServer?: (name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>;
     /** What it hears from IssueWatch (Tynn #806): how, and which kinds. Absent setter = no section (a window that cannot set it). */
     readonly issueWatch?: IssueWatchPrefs;
     readonly onSetIssueWatch?: (setting: IssueWatchSetting) => Promise<IssueWatchSaved>;
@@ -228,6 +234,8 @@ export interface AgentViewProps {
     approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
+    /** Trust this agent's workspace, from its approval card (Tynn #618). Absent = not offered. */
+    onTrustWorkspace?: (() => Promise<unknown>) | undefined;
     onNavigate: (route: string) => void;
     /** The agents and workspaces a message's pills may name (genie#1263); absent = agent and workspace pills are words. */
     chatRefs?: { agents: ChatRefs['agents']; workspaces: ChatRefs['workspaces'] } | undefined;
@@ -296,6 +304,8 @@ export interface AgentViewProps {
     onStart?: ((agentId: string) => void) | undefined;
     /** Why this agent's last start was refused (`AgentDetail.refusal`). */
     startRefusal?: string | null | undefined;
+    /** Its provider's CLI says it is signed out (Tynn #698): Log in is offered beside Start. */
+    providerSignedOut?: boolean | undefined;
     /** The Settings tab's sub-tab — controlled, for tests that render server-side; otherwise the view keeps its own (General first). */
     settingsSection?: SettingsSection | undefined;
 }
@@ -356,8 +366,8 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
-    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    startRefusal, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
+    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -374,6 +384,7 @@ function AgentViewBody({
             else if (t.kind === 'agent') go(`genie://agent/${encodeURIComponent(t.id)}`);
             else go(`genie://workspace/${encodeURIComponent(t.id)}`);
         },
+        onCommandRun: (run) => navigateRef.current(formatRoute({ surface: 'hosting', tab: 'processes', commandRun: { processId: run.processId, workspaceId: run.workspaceId }, chat: null, pin: null })),
     }), [agent.workspaceId, chatRefs]);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
     const indexStore = indexStorage === undefined ? (typeof localStorage === 'undefined' ? null : localStorage) : indexStorage;
@@ -429,7 +440,7 @@ function AgentViewBody({
         return () => { live = false; off(); };
     }, [files, workspace, agent.name]);
     const pill = statePill(session, now ?? (() => Date.now()), { turns, takeOver: agent.fidelity === 'observed' ? takeOver : null });
-    const actions = headerActions(session, agent.fidelity);
+    const actions = headerActions(session, agent.fidelity, providerSignedOut === true);
     // "Stop agent" is offered while the session is up and there is something to end it with.
     const menu = ops ? agentOpsMenu(agent, undefined, { running: session?.running === true && onStop !== undefined }) : [];
     const act = (id: string) => {
@@ -1061,6 +1072,7 @@ function AgentViewBody({
                                     refusal={approvalRefusal ?? null}
                                     onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                                     agentName={agent.name}
+                                    onTrustWorkspace={onTrustWorkspace}
                                 />
                             ) : null}
 
@@ -1120,7 +1132,7 @@ function AgentViewBody({
                             model: ops?.onSetModel !== undefined, tools: ops?.onSetPermissions !== undefined, autonomous: ops?.onSetAutoApprove !== undefined,
                             manageTabs: ops?.onSetManageTabs !== undefined, drivePages: ops?.onSetDrivePages !== undefined,
                             issueWatch: ops?.onSetIssueWatch !== undefined && ops.issueWatch !== undefined,
-                            persona: persona !== null, skills: session?.extensions != null,
+                            persona: persona !== null, skills: session?.extensions != null || ops?.mcp !== undefined,
                         });
                         const shown = settingsSectionShown(sections, settingsSectionProp ?? ownSettingsSection);
                         const has = new Set(sections.find((s) => s.id === shown)?.controls ?? []);
@@ -1221,7 +1233,7 @@ function AgentViewBody({
                                                         const listed = choices !== undefined && choices !== 'loading' && choices.ok ? choices : null;
                                                         // IN USE: the running session's own answer (modelState) — a provider list asked before any session
                                                         // knows only the provider's default, which is not a reading of this agent.
-                                                        const inUseId = listed?.source === 'session' ? listed.current : null;
+                                                        const inUseId = listed?.inUse ?? (listed?.source === 'session' ? listed.current : null);
                                                         const inUse = inUseId === null ? null : listed?.models.find((m) => m.modelId === inUseId) ?? null;
                                                         const reading = inUse ? modelLabel(inUse) : inUseId ?? session?.model ?? null;
                                                         const defaultEntry = listed?.models.find((m) => m.isDefault === true) ?? null;
@@ -1275,36 +1287,29 @@ function AgentViewBody({
                                                                         {refresh}
                                                                     </label>
                                                                 ) : (
+                                                                    // NO FALLBACK (Tynn #608; the owner: "Do not use a pre compiled list"): with no list from the
+                                                                    // provider there is nothing to choose from, only why, and Retry. What it starts with stays said.
                                                                     <>
                                                                         {choices !== undefined && !choices.ok ? (
                                                                             <p data-model-list="failed" className="mb-1 text-[var(--fg-4)]">
                                                                                 Couldn’t get {agent.provider}’s list of models: {choices.reason}
-                                                                                {refresh}
+                                                                                {ops.onRefreshModels ? (
+                                                                                    <Button size="xs" type="button" data-action="models-retry" onClick={() => ops.onRefreshModels?.()} className="ml-2 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 hover:bg-[var(--bg-2)]">
+                                                                                        Retry
+                                                                                    </Button>
+                                                                                ) : null}
                                                                                 {ops.onChooseProviderProgram ? <ProviderProgramChoice provider={agent.provider} reason={choices.reason} onChoose={() => ops.onChooseProviderProgram!(agent.provider)} /> : null}
                                                                             </p>
+                                                                        ) : (
+                                                                            <p data-model-list="unavailable" className="mb-1 text-[var(--fg-4)]">This window can’t ask {agent.provider} for its models.</p>
+                                                                        )}
+                                                                        {ops.model ? (
+                                                                            <p className="text-[var(--fg-4)]">Starts with <span data-model-chosen={ops.model} className="font-mono text-[var(--fg-2)]">{ops.model}</span></p>
                                                                         ) : null}
-                                                                        <label className="block" title={applies}>
-                                                                            Start {agent.name} with
-                                                                            {/* The other path, only when the provider's list could not be had: any name the provider
-                                                                                accepts, suggesting only the model the provider reported. */}
-                                                                            <input
-                                                                                key={ops.model ?? ''}
-                                                                                data-model-input={ops.model ?? ''}
-                                                                                type="text"
-                                                                                list={session?.model ? `models-${agent.id}` : undefined}
-                                                                                defaultValue={ops.model ?? ''}
-                                                                                placeholder="provider default"
-                                                                                spellCheck={false}
-                                                                                onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) { touch('model'); ops.onSetModel?.(v === '' ? null : v); } }}
-                                                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                                                                className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
-                                                                            />
-                                                                            {session?.model ? (
-                                                                                <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist>
-                                                                            ) : null}
-                                                                        </label>
                                                                     </>
                                                                 )}
+                                                                {/* The list is the running session's own, the provider not being reachable now: said, with why (Tynn #608). */}
+                                                                {listed?.note ? <p data-model-note className="mt-1 text-[var(--fg-4)]">{listed.note}</p> : null}
                                                                 {selectedEntry?.description || beside?.control === 'model' ? (
                                                                     <p className="mt-1 truncate text-[var(--fg-4)]">
                                                                         {selectedEntry?.description ? <span data-model-description={selectedEntry.modelId}>{selectedEntry.description}</span> : null}
@@ -1453,32 +1458,12 @@ function AgentViewBody({
                                             ) : null}
 
                                             {/* ── SKILLS: what the agent's OWN CLI can run (the owner, 2026-10-14), read-only; run one from the chat's `/` menu. */}
+                                            {/* ── MCP SERVERS: one switch each, kept on the agent, applied at its next session start (Tynn #628). */}
+                                            {ops?.mcp && has.has('skills') ? (
+                                                <McpServerSwitches rows={ops.mcp} agentName={agent.name} onSet={ops.onSetMcpServer} />
+                                            ) : null}
                                             {session?.extensions && has.has('skills') ? (
-                                                <section data-rail="extensions">
-                                                    <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Skills and commands</h3>
-                                                    {session.extensions.commands.length === 0 ? (
-                                                        <p className="text-[11px] text-[var(--fg-3)]">Its CLI offers none.</p>
-                                                    ) : (
-                                                        <ul data-rail-commands={session.extensions.commands.length} className="grid grid-cols-1 gap-x-6 font-mono text-[11px] text-[var(--fg-2)] md:grid-cols-2">
-                                                            {session.extensions.commands.map((c) => (
-                                                                <li key={c.name} data-command={c.name} className="flex justify-between gap-2 py-px">
-                                                                    <span className="truncate">/{c.name}</span>
-                                                                    <span className="shrink-0 truncate font-sans text-[var(--fg-4)]">{c.source ?? c.description}</span>
-                                                                </li>
-                                                            ))}
-                                                        </ul>
-                                                    )}
-                                                    {session.extensions.plugins && session.extensions.plugins.length > 0 ? (
-                                                        <p data-rail-plugins={session.extensions.plugins.length} className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">
-                                                            Plugins: {session.extensions.plugins.map((p) => (p.version ? `${p.name} ${p.version}` : p.name)).join(', ')}
-                                                        </p>
-                                                    ) : null}
-                                                    {session.extensions.subagents && session.extensions.subagents.length > 0 ? (
-                                                        <p data-rail-subagents={session.extensions.subagents.length} className="mt-1 text-[11px] leading-normal text-[var(--fg-3)]">
-                                                            Subagents: {session.extensions.subagents.join(', ')}
-                                                        </p>
-                                                    ) : null}
-                                                </section>
+                                                <SkillsAndCommands extensions={session.extensions} provider={agent.provider} />
                                             ) : null}
                                         </div>
                                     </div>

@@ -57,8 +57,14 @@ const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 const WS = { workspaceId: 'tynn', workspacePath: join('/w', 'tynn') };
 const queue = { kind: 'hosting.createProcess' as const, ...WS, name: 'queue', command: 'php artisan queue:work', folder: 'repos/app', restart: 'on-failure' as const };
 
+/** What this test composed and has not shut down yet: afterEach closes it even when the boot outlived its hook (below). */
+let running: ComposedServices | null = null;
+/** This test's beforeEach work, so afterEach can wait for it to end. */
+let setup: Promise<void> = Promise.resolve();
+
 async function boot(): Promise<void> {
     services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker });
+    running = services;
     const book = await ProcessBook.open(dir, { supervisor: services.supervisor, envFor: () => ({ ...serviceEnv }), asleep: (id) => asleep.has(id) });
     ownBook = book;
     ports = { processes: book };
@@ -66,6 +72,7 @@ async function boot(): Promise<void> {
 
 /** Quit and launch again on the same home — what an app restart is, minus Electron. */
 async function relaunch(): Promise<void> {
+    running = null;
     await services.shutdown();
     await boot();
     ownBook.restore();
@@ -81,12 +88,23 @@ beforeEach(async () => {
     exitListeners.clear();
     serviceEnv = { DB_HOST: '127.0.0.1' };
     asleep = new Set();
-    await boot();
+    setup = boot();
+    await setup;
 });
 
+/*
+ * A boot can outlive its hook (Tynn #660): on a Windows test VM in one of the suite's disk bursts a durable write took 0.7-3 s
+ * (measured, 2026-11-13), and a boot makes several. Vitest then runs this hook while that boot is still opening stores. It used
+ * to shut down `services` — the PREVIOUS test's, or undefined in the first test (TypeError) — and to remove the folder under
+ * the new boot's open knowledge.db (EBUSY). So: wait for this test's own boot to end, close what it opened, then remove the
+ * folder, retrying while Windows still holds a handle that was just closed.
+ */
 afterEach(async () => {
-    await services.shutdown();
-    await rm(dir, { recursive: true, force: true });
+    await setup.catch(() => undefined);
+    const open = running;
+    running = null;
+    await open?.shutdown();
+    await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
 describe('adding a background process', () => {

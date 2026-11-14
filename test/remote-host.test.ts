@@ -132,7 +132,7 @@ describe('the welcome says the protocol and the build', () => {
     it('a PIN pairing: the old fields as before, with protocol and build beside them', async () => {
         const { code } = host.issuePin();
         const welcome = await connect().hello({ kind: 'pin', code, label: 'glenn’s phone' });
-        expect(welcome).toEqual({ kind: 'welcome', connectionId: expect.any(String), host: 'alphar', isOwner: true, workspaceId: null, token: 'tok0', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
+        expect(welcome).toEqual({ kind: 'welcome', connectionId: expect.any(String), host: 'alphar', isOwner: true, workspaceId: null, token: 'tok0', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab', readonly: false });
         expect(REMOTE_PROTOCOL).toBe(1);
     });
 
@@ -140,7 +140,8 @@ describe('the welcome says the protocol and the build', () => {
         const { code } = host.issuePin();
         await connect().hello({ kind: 'pin', code, label: 'glenn’s phone' });
         const again = await connect().hello({ kind: 'token', token: 'tok0' });
-        expect(Object.keys(again).sort()).toEqual([...OLD_FIELDS, 'build', 'protocol'].sort());
+        // Tynn #688: `readonly` beside them, so a window can tell a read-only share from a driving one.
+        expect(Object.keys(again).sort()).toEqual([...OLD_FIELDS, 'build', 'protocol', 'readonly'].sort());
         expect(again).toMatchObject({ protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
         const guest = await connectRelay({ label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false }).hello({ kind: 'relay' }, 'wren');
         expect(guest).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
@@ -402,14 +403,16 @@ describe('a guest receives ONLY its workspace’s pushes (beta.33 item 26, SECUR
     // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN, the paired devices, the share links and the
     // connections. A guest who read the PIN could pair as an OWNER. A guest gets the snapshot without them; the owner still
     // gets all of it (positive control).
-    it('a guest’s features.snapshot carries no pairing PIN, devices or connections; the owner’s does', async () => {
+    // Tynn #688: a guest of ONE workspace is not answered the workstation's features at all (its settings, processes,
+    // sites, services, flows) — the whole-workstation guest's redacted call is held below, unchanged.
+    it('a workspace guest’s features.snapshot is refused outright; the owner’s carries everything', async () => {
         const { g, o } = await guestAndOwner();
-        const guest = JSON.stringify(await g.call('features.snapshot'));
+        const guest = await g.call('features.snapshot');
         const owner = JSON.stringify(await o.call('features.snapshot'));
         expect(owner).toContain('771122');
         expect(owner).toContain('owner phone');
-        for (const secret of ['771122', 'owner phone', '"c1"']) expect(guest).not.toContain(secret);
-        expect(guest).toContain('"theme":"dark"'); // CONTROL: the guest still gets the rest of the snapshot
+        expect(guest).toMatchObject({ kind: 'result', ok: false, reason: expect.stringContaining('the workspace this link shares') });
+        for (const secret of ['771122', 'owner phone', '"c1"', '"theme":"dark"']) expect(JSON.stringify(guest)).not.toContain(secret);
     });
 
     const leaks: Array<[string, string, unknown]> = [

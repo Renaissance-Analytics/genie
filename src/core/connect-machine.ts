@@ -10,9 +10,6 @@
  */
 import { mayBrowse, type WorkstationRole } from './workstation-role.js';
 
-/** Settings → Remote access, where "Drive another machine" is. */
-export const CONNECT_ROUTE = 'genie://settings/remote';
-
 /** What the button and its menu are called. */
 export const CONNECT_LABEL = 'Connect to another machine';
 

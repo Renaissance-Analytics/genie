@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** CI/test VM only. Copy both draft scripts to the pinned 7D baseline and add --baseline there. */
+import { mainWindow } from './cdp-main-window.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
@@ -67,7 +68,7 @@ try {
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, launchStarted = Date.now();
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', e => console.error(e.message));
     // Startup is measured separately (#1587); it is not part of any content row's elapsed time.
-    const target = await until('owned app page', async () => (await targets(PORT)).find(t => t.type === 'page' && /index\.html/.test(t.url)), 240000);
+    const target = await until('owned app page', async () => mainWindow(await targets(PORT)), 240000);
     startup.pageTargetMs = Date.now() - launchStarted;
     page = await Cdp.connect(target.webSocketDebuggerUrl); main = await Cdp.connect((await until('owned main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
     startup.inspectorsConnectedMs = Date.now() - launchStarted;
@@ -82,8 +83,8 @@ try {
         s.timer=setInterval(()=>{const now=performance.now();s.gap=Math.max(s.gap,now-s.last);s.last=now;s.ticks++;s.rss=Math.max(s.rss,process.memoryUsage().rss);},16);
         s.listener=(_event,action,_handle,text)=>{if(action==='frame'){const m=JSON.parse(text);if(m.method)s.methods[m.method]=(s.methods[m.method]??0)+1;}};
         ipc.on('genie:local-frame',s.listener);s.stop=()=>{clearInterval(s.timer);ipc.removeListener('genie:local-frame',s.listener);};
-        return {drafts:['load','save','put-file','read-file','release'].map(op=>ipc._invokeHandlers.has('genie:chat-drafts-'+op)),snapshot:ipc._invokeHandlers.has('genie:snapshot')}; })()`);
-    demand(handlers.snapshot && handlers.drafts.every(present => present === BASELINE), 'native draft-handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
+        return {drafts:['load','save','put-file','read-file','release'].map(op=>ipc._invokeHandlers.has('genie:chat-drafts-'+op)),windowRead:ipc._invokeHandlers.has('genie:window-overlay-colors-current')}; })()`);
+    demand(handlers.windowRead && handlers.drafts.every(present => present === BASELINE), 'native draft-handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
     await page.evaluate(`(() => { window.__draftWire={maxBytes:0,forbidden:0,pages:0,invalidPages:0}; window.genieLocalProtocol.onFrame((action,_handle,text)=>{if(action!=='frame')return;const m=JSON.parse(text),s=window.__draftWire;s.maxBytes=Math.max(s.maxBytes,new TextEncoder().encode(text).length);
         if(m.kind==='result'&&Array.isArray(m.value?.items)){s.pages++;if(m.value.items.length>128||new TextEncoder().encode(JSON.stringify(m.value)).length>524288)s.invalidPages++;}
         if(m.kind==='event'&&(m.channel==='snapshot'||m.channel==='activity'||m.channel==='local-activity'||m.channel?.startsWith('agent:')||m.channel?.startsWith('terminal-')))s.forbidden++;}); return true; })()`);

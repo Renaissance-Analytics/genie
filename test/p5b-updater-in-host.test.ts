@@ -8,7 +8,7 @@ import { entryFor } from '../src/core/entry-mode.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
-import { spawnGenieWindow, spawnUpdaterProcess } from '../src/main/engine-launch.js';
+import { spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
@@ -34,6 +34,17 @@ const HELPER_GPU = 901;
 const BROWSER = 600;
 const ORPHAN = 501;
 const tick = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 1)); };
+/** The helper advances a simulated clock. Wait for its outcome, not hundreds of real Windows timer ticks (#673). */
+async function until(label: string, ready: () => boolean): Promise<void> {
+    const deadline = performance.now() + 1_000;
+    while (!ready()) {
+        if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+}
+// Fake quitAndInstall returns without a helper-done event. Give queued follow-ups a short bounded settle
+// before success-path absence/count assertions; a single timer avoids the measured Windows tick-count cost.
+const settleSuccessfulInstall = () => new Promise<void>((resolve) => setTimeout(resolve, 25));
 const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 const exe = `${INSTALL}/genie`;
@@ -232,7 +243,8 @@ describe('the install order', () => {
         // The window and its renderer end 2 s into the helper's wait.
         r.machine.onSleep = () => { if (r.machine.t >= 2_000) { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); } };
         const result = await w.replica.install();
-        await tick(200);
+        await until('the helper to install after the simulated processes end', () => r.calls.includes('quitAndInstall'));
+        await settleSuccessfulInstall();
         // The teardown leaves the host's, the window's and the helper's trees; the browser and the orphan are ended.
         expect(r.order).toEqual(['drain agents', 'stop hosted', `kill ${BROWSER}`, `kill ${ORPHAN}`, 'host exit', 'quitAndInstall']);
         expect(result?.report).toMatch(/Ada/);
@@ -246,7 +258,7 @@ describe('the install order', () => {
         await w.replica.check();
         await w.replica.download();
         await w.replica.install();
-        await tick(400);
+        await until('the helper to record the live window and quit', () => r.order.includes('helper quit'));
         expect(r.order).toContain('host exit');
         expect(r.calls).not.toContain('quitAndInstall');
         expect(r.logs.join('\n')).toMatch(new RegExp(`not installed[\\s\\S]*${WINDOW}|${WINDOW}[\\s\\S]*not installed`, 'i'));
@@ -263,7 +275,8 @@ describe('the install order', () => {
         await w.replica.download();
         r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
         await w.replica.install();
-        await tick(200);
+        await until('the successful helper install', () => r.calls.includes('quitAndInstall'));
+        await settleSuccessfulInstall();
         expect(r.calls).toContain('quitAndInstall');
         expect(r.failures).toEqual([]);
         expect(r.order.filter((o) => /relaunch|failure/.test(o))).toEqual([]);
@@ -276,7 +289,7 @@ describe('the install order', () => {
         await w.replica.check();
         await w.replica.download();
         await w.replica.install();
-        await tick(200);
+        await until('the host to finish its failed handover and exit', () => r.order.includes('host exit'));
         expect(r.calls).not.toContain('quitAndInstall');
         const at = (step: string) => r.order.indexOf(step);
         expect(at('host records failure')).toBeGreaterThan(at('drain agents'));
@@ -293,7 +306,7 @@ describe('the install order', () => {
         await w.replica.download();
         r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
         await w.replica.install();
-        await tick(400);
+        await until('the helper to record the live browser and quit', () => r.order.includes('helper quit'));
         expect(r.calls).not.toContain('quitAndInstall');
         expect(r.logs.join('\n')).toMatch(new RegExp(`${BROWSER}`));
     });
@@ -452,6 +465,11 @@ function importsOf(file: string): { readonly static: string[]; readonly dynamic:
     return { static: stat, dynamic: dyn };
 }
 
+/** Normalize package subpaths exactly as the import graph does. */
+function packageOf(spec: string): string {
+    return spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!;
+}
+
 /** Every file and bare package reachable from `entry` (dynamic imports followed only when asked). */
 function graph(entry: string, followDynamic: boolean): { files: Set<string>; packages: Set<string> } {
     const files = new Set<string>();
@@ -467,7 +485,7 @@ function graph(entry: string, followDynamic: boolean): { files: Set<string>; pac
                 const hit = ['.ts', '.tsx'].map((x) => base + x).find((p) => existsSync(p));
                 if (hit) visit(hit);
             } else {
-                packages.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!);
+                packages.add(packageOf(spec));
             }
         }
     };
@@ -501,10 +519,10 @@ describe('electron-updater: the helper mode imports it; main statically and geni
         expect(main.files.has(port)).toBe(false);
     });
 
-    it('only electron-updater-port.ts names the package', () => {
+    it('only the real port and published provider name the package, including subpaths', () => {
         const helper = graph('src/main/updater-process.ts', false);
-        const naming = [...helper.files].filter((f) => importsOf(f).static.includes('electron-updater'));
-        expect(naming).toEqual([port]);
+        const naming = [...helper.files].filter((f) => importsOf(f).static.some((spec) => packageOf(spec) === 'electron-updater'));
+        expect(naming.sort()).toEqual([port, resolve('src/main/published-github-provider.ts')].sort());
     });
 });
 
@@ -569,6 +587,24 @@ describe('a failed install, told to the next window once', () => {
         expect(spawnGenieWindow({ file: exe, args: ['/app'] }, { ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin' }, fakeSpawn)).toBe(5150);
         expect(spawned[0]).toMatchObject({ file: exe, args: ['/app'], options: { detached: true } });
         expect(spawned[0]!.options.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    });
+
+    it('a window it started: its exit code and signal are kept by pid, for a lost record (Tynn issue #711)', () => {
+        const exits = new Map<number, (code: number | null, signal: string | null) => void>();
+        let pid = 6100;
+        const fakeSpawn = (() => {
+            const mine = ++pid;
+            return { pid: mine, on: (event: string, fn: (code: number | null, signal: string | null) => void) => { if (event === 'exit') exits.set(mine, fn); }, unref: () => {} };
+        }) as never;
+        const a = spawnGenieWindow({ file: exe, args: ['/app'] }, {}, fakeSpawn)!;
+        const b = spawnGenieWindow({ file: exe, args: ['/app'] }, {}, fakeSpawn)!;
+        expect(windowExitOf(a)).toBeNull();
+        exits.get(a)!(null, 'SIGKILL');
+        exits.get(b)!(3221225477, null);
+        expect(windowExitOf(a)).toEqual({ code: null, signal: 'SIGKILL' });
+        expect(windowExitOf(b)).toEqual({ code: 3221225477, signal: null });
+        // CONTROL: a pid it never started has no exit here.
+        expect(windowExitOf(4242)).toBeNull();
     });
 
     it('wired: the helper records and relaunches; the host reads, clears and relaunches; the window says it on the Deck', () => {

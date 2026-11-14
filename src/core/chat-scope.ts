@@ -110,30 +110,25 @@ export function chatScope(route: Route, roster: readonly ChatRosterAgent[], work
     return { kind: 'elsewhere', workspace: theirs };
 }
 
-/** The slice of a workspace the chat's subject reads: its chosen default agent (Workspace settings). */
-export interface ChatSubjectWorkspace {
-    readonly id: string;
-    readonly defaultAgentId?: string | undefined;
+/**
+ * THE CHAT IS ALWAYS OPEN, AND THE PERSON DECIDES WHOSE IT IS (the owner, 2026-10-19: "Chat cannot be closed PERIOD";
+ * Tynn #639, 2026-11-12: "let's disable the agent chat switching to genie when I navigate to other pages. It should stay
+ * on whatever agent I select either from any of the dashboards or tabs."):
+ *  - an agent's tab on screen → that agent (opening it is a pick, `chatPickAfter`);
+ *  - anywhere else → the agent the person last picked (the WINDOW's pick, passed in, never the address's: a Dashboard row,
+ *    a workspace dashboard's lane, an agent's tab), while it is on the roster;
+ *  - never picked, or the pick is gone → genie.
+ * No page chooses it any more: a workspace's default agent no longer takes the chat on entering the workspace, and a
+ * `chat=` in a route is not read here (the address is losing it, Tynn #831).
+ */
+export function chatSubjectFor(route: Route, roster: readonly ChatRosterAgent[], pick: string | null): string {
+    if (route.surface === 'agent') return resolveChatAgent(route.agentId, roster)?.id ?? route.agentId;
+    if (pick !== null && roster.some((r) => r.id === pick)) return pick;
+    return genieOf(roster);
 }
 
-/**
- * THE CHAT IS ALWAYS OPEN, AND THE VIEW DECIDES WHOSE IT IS (the owner, 2026-10-19: "Chat cannot be closed PERIOD"; "the
- * chat is always the workspace agent unless I click on another agents tab then the chat shows that agent's chat"):
- *  - an agent's tab → that agent;
- *  - a workspace's view → its DEFAULT agent (Workspace settings), else its first agent;
- *  - any other view → genie.
- *  - the Dashboard → the agent picked there, else genie (genie#1209; the owner, 2026-10-26: "on the dashboard page I
- *    should be able to click on agent to bring up their chat and stay on the dashboard"). The pick is the WINDOW's,
- *    passed in, never the address's.
- * Nothing else moves it: a `chat=` in a route is not read here (the address is losing it, Tynn #831).
- */
-export function chatSubjectFor(route: Route, roster: readonly ChatRosterAgent[], workspaces: readonly ChatSubjectWorkspace[], dashboardPick: string | null = null): string {
-    if (route.surface === 'agent') return resolveChatAgent(route.agentId, roster)?.id ?? route.agentId;
-    if (route.surface === 'dashboard' && dashboardPick !== null && roster.some((r) => r.id === dashboardPick)) return dashboardPick;
-    const screen = workspaceOnScreen(route, roster);
-    if (screen === null) return genieOf(roster);
-    const chosen = workspaces.find((w) => w.id === screen)?.defaultAgentId;
-    const here = roster.filter((r) => r.workspaceId === screen);
-    if (chosen !== undefined && here.some((r) => r.id === chosen)) return chosen;
-    return here[0]?.id ?? genieOf(roster);
+/** The window's pick once `route` is on screen: an agent's tab picks that agent; any other page leaves the pick as it is. */
+export function chatPickAfter(route: Route, roster: readonly ChatRosterAgent[], pick: string | null): string | null {
+    if (route.surface !== 'agent') return pick;
+    return resolveChatAgent(route.agentId, roster)?.id ?? pick;
 }

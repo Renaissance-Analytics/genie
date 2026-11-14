@@ -89,8 +89,9 @@ describe('3. the agent chat and its stream', () => {
 
     it('the stream’s rows, and what this agent waits on you for — answerable right there', () => {
         const html = view();
-        expect(html).toContain('data-mobile-row="r1"');
-        expect(html).toContain('data-mobile-row="r2"');
+        // The desktop chat's rows (Tynn #652), yours and the agent's.
+        expect(html).toContain('data-chat-message="r1"');
+        expect(html).toContain('data-chat-message="r2"');
         expect(html).toContain('data-mobile-waiting');
         expect(html).toContain('data-approval-option="allow"');
     });

@@ -1,5 +1,6 @@
 import { Button, Icon, Input } from '@particle-academy/react-fancy';
 import { useState } from 'react';
+import { AUTONOMY_UNTRUSTED } from '../../core/agent-ops.js';
 import type { Approval, OptionTone } from '../../core/approval.js';
 import { visibleApprovalText } from '../../core/approval-text.js';
 
@@ -39,7 +40,15 @@ export interface ApprovalCardProps {
     onAnswer: (optionId: string, note: string) => void;
     /** The asking agent, for the board's heading `atlas asks to run Bash`; without it the heading names the tool alone. */
     agentName?: string | undefined;
+    /**
+     * Trust the asking agent's workspace (Tynn #618): offered on a card that asks only because the workspace isn't trusted.
+     * Rejects, or answers `{ ok: false, reason }`, when it could not. Absent = this surface cannot trust it, and offers nothing.
+     */
+    onTrustWorkspace?: (() => Promise<unknown>) | undefined;
 }
+
+/** Where "Trust this workspace" stands on a card. */
+export type CardTrustPhase = 'idle' | 'pending' | 'trusted' | { readonly failed: string };
 
 /** The board's key hints on the two decisions the keys reach (§4.2 `a` / `d`). */
 const KEY_HINT: Partial<Record<OptionTone, string>> = { ok: 'A', bad: 'D' };
@@ -51,7 +60,21 @@ const KEY_HINT: Partial<Record<OptionTone, string>> = { ok: 'A', bad: 'D' };
  */
 export function ApprovalCard(props: ApprovalCardProps) {
     const [note, setNote] = useState('');
-    return <ApprovalCardView {...props} note={note} onNote={setNote} />;
+    const [trust, setTrust] = useState<CardTrustPhase>('idle');
+    const pressTrust = (): void => {
+        const run = props.onTrustWorkspace;
+        if (!run || trust === 'pending') return;
+        setTrust('pending');
+        void Promise.resolve().then(run).then(
+            (outcome) => {
+                // A refusal that comes back as an answer is a failure too (features.act's `{ ok: false, reason }`).
+                const refused = typeof outcome === 'object' && outcome !== null && 'ok' in outcome && outcome.ok === false && 'reason' in outcome ? String(outcome.reason) : null;
+                setTrust(refused === null ? 'trusted' : { failed: refused });
+            },
+            (error: unknown) => { setTrust({ failed: error instanceof Error ? error.message : String(error) }); },
+        );
+    };
+    return <ApprovalCardView {...props} note={note} onNote={setNote} trust={trust} onTrust={pressTrust} />;
 }
 
 /** All of an approval's text (core/approval-text.ts). The toast draws this too. */
@@ -59,7 +82,9 @@ export function ApprovalText({ text }: { text: string }) {
     return <>{visibleApprovalText(text).map((part, i) => (part.named ? <span key={i} data-approval-named="" className="rounded bg-[var(--warning)]/15 px-0.5 font-semibold text-[var(--warning)]">{part.text}</span> : part.text))}</>;
 }
 
-export function ApprovalCardView({ approval, answering, refusal = null, onAnswer, agentName, note, onNote }: ApprovalCardProps & { note: string; onNote: (note: string) => void }) {
+export function ApprovalCardView({ approval, answering, refusal = null, onAnswer, agentName, note, onNote, onTrustWorkspace, trust = 'idle', onTrust }: ApprovalCardProps & { note: string; onNote: (note: string) => void; trust?: CardTrustPhase; onTrust?: () => void }) {
+    // Asked ONLY because the workspace isn't trusted, on a surface that can trust it: the way out is offered right here.
+    const canTrust = approval.why === AUTONOMY_UNTRUSTED && onTrustWorkspace !== undefined;
     // The board's heading and meta, each only when the request reported the piece; the question itself always.
     const heading = approval.tool ? `${agentName ? `${agentName} asks` : 'asks'} to run ${approval.tool}` : null;
     const meta = approval.toolCallId ? `tool_call ${approval.toolCallId.replace(/^toolu_/, '').slice(0, 4)} · 1 of 1 pending` : null;
@@ -74,18 +99,39 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
                     {meta ? <span data-approval-meta="" className="font-mono text-[11px] text-[var(--fg-4)]">{meta}</span> : null}
                 </div>
             ) : null}
-            <div className="mb-2 flex items-start gap-2">
-                <Icon name="circle-help" size="sm" className="mt-0.5 shrink-0 text-[var(--warning)]" />
-                <span data-approval-question className="min-w-0 flex-1 whitespace-pre-wrap font-mono text-xs text-[var(--fg-1)] [overflow-wrap:anywhere]">
-                    <ApprovalText text={approval.question} />
-                </span>
+            {/*
+              * WHAT IS ASKED SCROLLS; THE ANSWER DOES NOT (Tynn #618; the owner, 2026-11-11): a long command pushed Allow and
+              * Deny off the bottom of the card. The question and the command read whole inside a bounded height, and
+              * everything after this block (why, the note, the options) stays in view.
+              */}
+            <div data-approval-body="" className="mb-2 max-h-[40vh] min-h-0 overflow-y-auto">
+                <div className="flex items-start gap-2">
+                    <Icon name="circle-help" size="sm" className="mt-0.5 shrink-0 text-[var(--warning)]" />
+                    <span data-approval-question className="min-w-0 flex-1 whitespace-pre-wrap font-mono text-xs text-[var(--fg-1)] [overflow-wrap:anywhere]">
+                        <ApprovalText text={approval.question} />
+                    </span>
+                </div>
+                {approval.command && approval.command !== approval.question ? (
+                    <pre data-approval-command="" className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-1.5 font-mono text-[11px] leading-[17px] text-[var(--fg-2)] [overflow-wrap:anywhere]"><ApprovalText text={approval.command} /></pre>
+                ) : approval.command ? (
+                    <pre data-approval-command="" className="hidden">{approval.command}</pre>
+                ) : null}
             </div>
             {/* Asked although the agent is Autonomous (Tynn #439): why, in words, before the answer. */}
             {approval.why ? <div data-approval-why="" className="mb-2 text-xs text-[var(--fg-2)]">{approval.why}</div> : null}
-            {approval.command && approval.command !== approval.question ? (
-                <pre data-approval-command="" className="mb-2 whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-1.5 font-mono text-[11px] leading-[17px] text-[var(--fg-2)] [overflow-wrap:anywhere]"><ApprovalText text={approval.command} /></pre>
-            ) : approval.command ? (
-                <pre data-approval-command="" className="hidden">{approval.command}</pre>
+            {canTrust && trust === 'trusted' ? (
+                <div data-approval-trusted="" role="status" className="mb-2 text-xs text-[var(--success)]">
+                    This workspace is trusted. Autonomous applies from {agentName ?? 'the agent'}’s next request; this one still needs your answer.
+                </div>
+            ) : canTrust && typeof trust === 'object' ? (
+                <div data-approval-trust-failed="" role="alert" className="mb-2 flex flex-wrap items-center gap-2 text-xs text-[var(--danger)]">
+                    <span>Couldn’t trust this workspace: {trust.failed}</span>
+                    <Button size="xs" type="button" icon="rotate-ccw" data-action="approval-trust-retry" onClick={onTrust}>Retry</Button>
+                </div>
+            ) : canTrust ? (
+                <div className="mb-2">
+                    <Button size="xs" type="button" icon="shield-check" data-action="approval-trust-workspace" loading={trust === 'pending'} disabled={trust === 'pending'} onClick={onTrust}>Trust this workspace</Button>
+                </div>
             ) : null}
 
             {/* An optional note, sent with the answer — the agent is told "You rejected …: <note>" (item 16). */}
@@ -98,7 +144,7 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
                 aria-label="Note with your answer"
                 className="mb-2"
             />
-            <div className="flex flex-wrap gap-2">
+            <div data-approval-actions="" className="flex shrink-0 flex-wrap gap-2">
                 {approval.options.map((option) => (
                     <Button size="xs" labelClassName="contents"
                         key={option.id}

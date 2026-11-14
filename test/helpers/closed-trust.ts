@@ -10,6 +10,7 @@ export function closedTrust(): TrustApi {
         view: () => null,
         entries: () => [],
         refresh: async () => null,
+        untrust: async () => null,
         trust: async () => null,
         mayWriteInto: async () => false,
         onVerdict: () => () => {},

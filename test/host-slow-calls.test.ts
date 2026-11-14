@@ -73,12 +73,12 @@ describe('genie-host times the calls a window makes', () => {
         try {
             expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
             // No stores attached: even refused calls must identify the allowed operation they attempted.
-            for (const [store, method] of [['knowledge', 'list'], ['attention', 'markSeen'], ['registry', 'readAgents']]) {
+            for (const [store, method] of [['knowledge', 'list'], ['attention', 'withdraw'], ['registry', 'readAgents']]) {
                 expect((await client.call('engine.stores', [store, method, [{ query: 'private-content' }]])).ok).toBe(false);
             }
             expect(timed.filter((s) => s.startsWith('engine.stores'))).toEqual([
                 'engine.stores store=knowledge method=list',
-                'engine.stores store=attention method=markSeen',
+                'engine.stores store=attention method=withdraw',
                 'engine.stores store=registry method=readAgents',
             ]);
             timed.length = 0;

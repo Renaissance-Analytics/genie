@@ -1,4 +1,4 @@
-import { addressOf, isInternalRoute, routeOfAddress, type AddressContext } from '../core/address.js';
+import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
 import { DEFAULT_ROUTE } from '../core/route.js';
 
 /**
@@ -20,9 +20,18 @@ export function routeFor(address: string, ctx: AddressContext | null): string {
     return ctx ? routeOfAddress(address, ctx) ?? DEFAULT_ROUTE : isInternalRoute(address) ? address : DEFAULT_ROUTE;
 }
 
-/** An internal route (an old address, a route main opened) rewritten to the machine's address form; `null` = leave it. */
-export function rewrittenAddress(address: string, ctx: AddressContext | null): string | null {
+/**
+ * An internal route (an old address, a route main opened) rewritten to the machine's address form; `null` = leave it.
+ * `before`: the workstation this window read until now. A window that now reads ANOTHER (it connected in place, beta.61
+ * step four) takes its page there: `genie://<pilot>/settings/remote` → `genie://<drone>/settings/remote`. Read against the
+ * new machine the old name is nothing, and the window fell to that machine's Dashboard.
+ */
+export function rewrittenAddress(address: string, ctx: AddressContext | null, before: string | null = null): string | null {
     if (!ctx) return null;
+    if (before !== null && before.toLowerCase() !== ctx.workstation.toLowerCase()) {
+        const moved = rehomeAddress(address, before, ctx.workstation);
+        if (moved !== address && routeOfAddress(moved, ctx) !== null) return moved;
+    }
     const shown = addressOf(routeFor(address, ctx), ctx);
     return shown === address || !isInternalRoute(address) ? null : shown;
 }

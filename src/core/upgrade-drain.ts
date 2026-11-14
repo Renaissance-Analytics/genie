@@ -1,7 +1,6 @@
 /**
- * RESTORE AFTER AN UPGRADE (§7.6) — pure. Starts are spaced `RESTORE_GAP_MS` apart, in order. (The drain that asked
- * every live agent for a handoff before installing is gone: the owner, 2026-10-12 — an agent is a session that
- * resumes its own thread.)
+ * RESTORE AFTER AN UPGRADE (§7.6) — pure. Starts are spaced `RESTORE_GAP_MS` apart, in order.
+ * No handoff file is needed; Tynn #616's safe-point wait lives in agent-shutdown-drain.ts.
  */
 
 export const RESTORE_GAP_MS = 3_000;

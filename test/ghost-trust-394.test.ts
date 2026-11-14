@@ -17,7 +17,7 @@ async function fixture() {
     const reads: string[] = [];
     let held: Promise<void> | null = null, failed = false;
     const git = vi.fn(async () => []), record = vi.fn(async (id: string, hash: string) => { book.workspaces[id] = hash; });
-    const ports: WorkspaceTrustPorts = { workspaces: () => [workspace], record: () => book, recordWorkspace: record, approveSites: async () => {}, gitConfig: git,
+    const ports: WorkspaceTrustPorts = { workspaces: () => [workspace], record: () => book, recordWorkspace: record, forgetWorkspace: async (id) => { delete book.workspaces[id]; }, approveSites: async () => {}, gitConfig: git,
         readText: async (path) => { reads.push(path); if (path === join(root, '.mcp.json')) { if (held) await held; if (failed) throw new Error('trust read refused'); } return files.get(path) ?? null; },
     };
     book.workspaces.workspace = trustHash(await readTrustList(root, ports));
@@ -37,7 +37,7 @@ describe('story394: trust has no asleep folder reads and redock never reuses a s
         expect(f.reads).toEqual([]); expect(f.git).not.toHaveBeenCalled(); expect(f.record).not.toHaveBeenCalled();
     });
 
-    it('redock fails closed during the fresh read and catches configuration changed while asleep without approving it', async () => {
+    it('redock fails closed during the fresh read; configuration changed while asleep does not end the person\'s yes (Tynn #618)', async () => {
         const f = await fixture(); const before = f.book.workspaces.workspace;
         f.workspace.asleep = true;
         f.files.set(join(root, '.mcp.json'), JSON.stringify({ mcpServers: { theirs: { command: 'changed while asleep' } } }));
@@ -48,7 +48,10 @@ describe('story394: trust has no asleep folder reads and redock never reuses a s
             f.workspace.asleep = false;
             expect(f.trust.isTrustedPath(root)).toBe(false);
         } finally { release(); }
-        expect(await reading).toMatchObject({ trusted: false, changed: true });
+        const after = await reading;
+        expect(after).toMatchObject({ trusted: true, changed: false });
+        // The list read is the one of now, for anyone who looks.
+        expect(after!.list.servers).toEqual([{ file: '.mcp.json', name: 'theirs', command: 'changed while asleep' }]);
         expect(f.book.workspaces.workspace).toBe(before); expect(f.record).not.toHaveBeenCalled();
     });
 
@@ -61,7 +64,7 @@ describe('story394: trust has no asleep folder reads and redock never reuses a s
 
     it('the owning trust factory refuses writes and advertises no trust entry for an asleep workspace without reading it', async () => {
         const read = vi.fn(async () => null);
-        const own = ownTrust({ workspaces: () => [{ id: 'workspace', path: root, asleep: true }], envelopeSites: { trustRecord: () => ({ carried: [], workspaces: {} }), recordWorkspace: async () => {}, approveSites: async () => {} }, readText: read, watchFolders: false, everyMs: 1_000_000 });
+        const own = ownTrust({ workspaces: () => [{ id: 'workspace', path: root, asleep: true }], envelopeSites: { trustRecord: () => ({ carried: [], workspaces: {} }), recordWorkspace: async () => {}, forgetWorkspaceTrust: async () => {}, approveSites: async () => {} }, readText: read, watchFolders: false, everyMs: 1_000_000 });
         try { expect(await own.api.mayWriteInto(root)).toBe(false); expect(own.api.entries()).toEqual([]); expect(read).not.toHaveBeenCalled(); }
         finally { await own.close(); }
     });

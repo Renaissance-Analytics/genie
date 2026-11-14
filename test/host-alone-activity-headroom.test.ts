@@ -62,7 +62,7 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         startRefusal: () => null,
         models: { get: async () => ({ models: [] }) },
         providerInstalled: () => true,
-        attention: { finished: () => [], markSeen: () => {}, answer: async () => true, lists: { done: async () => true } },
+        attention: { finished: () => [], answer: async () => true, lists: { done: async () => true } },
         approvals: { resolve: () => true },
         inbox: { unread: () => [], receive: async () => [], involving: () => [] },
         deliverToAgent: async () => true,
@@ -71,6 +71,7 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
+        settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         ...over,
     } as unknown as HostAlonePorts;
 }

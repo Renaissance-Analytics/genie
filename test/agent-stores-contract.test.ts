@@ -158,7 +158,7 @@ describe('the attention replica answers what the store answers', () => {
         r.close();
     });
 
-    it('imDone, the lists and markSeen: finished, lastHandoff, allUserItems and lists.show answer the same', async () => {
+    it('imDone and the lists: finished, lastHandoff, allUserItems and lists.show answer the same', async () => {
         const r = await rig();
         await r.attention.imDone({ agentId: A, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: 'Shipped the fix.\nNext: tests.' });
         await r.attention.lists.add({ list: 'user', workspaceId: 'ws', agentId: A, text: 'review the PR' });
@@ -167,15 +167,6 @@ describe('the attention replica answers what the store answers', () => {
         expect(r.replica.attention.lastHandoff(A)).toEqual(r.attention.lastHandoff(A));
         expect(r.replica.attention.allUserItems()).toEqual(r.attention.allUserItems());
         expect(r.replica.attention.lists.show({ list: 'user', workspaceId: 'ws', agentId: A })).toEqual(r.attention.lists.show({ list: 'user', workspaceId: 'ws', agentId: A }));
-        const finishedId = r.attention.finished()[0]!.id;
-        // The write behind markSeen lands 100 ms late: the replica hears it only then.
-        slowWrites.ms = 100;
-        r.replica.attention.markSeen(finishedId);
-        // The replica hears the change once the store's write lands: waited for, bounded, never a fixed number of ticks.
-        await vi.waitFor(() => {
-            expect(r.attention.finished()[0]!.seen).toBe(true);
-            expect(r.replica.attention.finished()).toEqual(r.attention.finished());
-        }, { timeout: 5_000, interval: 5 });
         r.close();
     });
 });

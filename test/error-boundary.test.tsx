@@ -29,7 +29,7 @@ import { Workspace } from '../src/renderer/components/Workspace.js';
  * chat) is still drawn as an element.
  */
 const { boom, thrower, ce } = vi.hoisted(() => {
-    const boom = { Dashboard: false, AgentView: false, ChatFlyout: false, InboxFlyout: false, Deck: false, Workspace: false, TynnBoardTab: false };
+    const boom = { Dashboard: false, AgentView: false, ChatFlyout: false, InboxFlyout: false, Deck: false, Workspace: false, TynnBoardTab: false, WorkspaceTabs: false, Sidebar: false, ApprovalToasts: false, PairPrompt: false };
     const thrower = (ce: (type: never, props: never) => unknown, name: keyof typeof boom, real: unknown) => (p: object) => {
         if (boom[name]) throw new Error(`${name} exploded`);
         return ce(real as never, p as never);
@@ -43,6 +43,10 @@ vi.mock('../src/renderer/components/ChatFlyout.js', async (orig) => { const m = 
 vi.mock('../src/renderer/components/InboxFlyout.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/InboxFlyout.js')>(); return { ...m, InboxFlyout: thrower(await ce(), 'InboxFlyout', m.InboxFlyout) }; });
 vi.mock('../src/renderer/components/Deck.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Deck.js')>(); return { ...m, Deck: thrower(await ce(), 'Deck', m.Deck) }; });
 vi.mock('../src/renderer/components/Workspace.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Workspace.js')>(); return { ...m, Workspace: thrower(await ce(), 'Workspace', m.Workspace) }; });
+vi.mock('../src/renderer/components/WorkspaceTabs.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/WorkspaceTabs.js')>(); return { ...m, WorkspaceTabs: thrower(await ce(), 'WorkspaceTabs', m.WorkspaceTabs) }; });
+vi.mock('../src/renderer/components/Sidebar.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Sidebar.js')>(); return { ...m, Sidebar: thrower(await ce(), 'Sidebar', m.Sidebar) }; });
+vi.mock('../src/renderer/components/ApprovalToasts.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/ApprovalToasts.js')>(); return { ...m, ApprovalToasts: thrower(await ce(), 'ApprovalToasts', m.ApprovalToasts) }; });
+vi.mock('../src/renderer/components/PairPrompt.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/PairPrompt.js')>(); return { ...m, PairPrompt: thrower(await ce(), 'PairPrompt', m.PairPrompt) }; });
 vi.mock('../src/renderer/components/TynnBoardPanel.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/TynnBoardPanel.js')>(); return { ...m, TynnBoardTab: thrower(await ce(), 'TynnBoardTab', m.TynnBoardTab) }; });
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean; genieClipboard?: { write(text: string): Promise<boolean> } };
@@ -203,6 +207,49 @@ describe('a render error stays in the surface that threw (the real Shell, render
         await act(async () => root.render(draw('genie://deck?chat=a_atlas')));
         expect(failed('Deck')).not.toBeNull();
         expect(host.querySelector('[data-chat="pinned"]')).not.toBeNull();
+    });
+
+    /*
+     * THE CHROME OUTSIDE EVERY SURFACE (Tynn #662 soak, issue #712): react-fancy's TabsList looped (React #185) in the
+     * workspace strip an agent's page sits under, which had no boundary of its own, so the WHOLE window drew "Genie failed
+     * to draw". The strip, the rail, the approval toasts and the pair prompt each get their own card now.
+     */
+    it('the tab strip above an agent’s page throwing keeps the agent view, the chat and the title bar', async () => {
+        boom.WorkspaceTabs = true;
+        await act(async () => root.render(draw('genie://agent/a_atlas?tab=stream&chat=a_atlas')));
+        expect(failed('Tab strip')).not.toBeNull();
+        expect(host.querySelector('[data-surface-failed][data-whole="true"]')).toBeNull();
+        expect(host.querySelector('[data-chat="pinned"]')).not.toBeNull();
+        expect(host.querySelector('[data-title-bar]')).not.toBeNull();
+        expect(failed('Agent view')).toBeNull();
+    });
+
+    it('the rail throwing keeps the page and the chat', async () => {
+        boom.Sidebar = true;
+        await act(async () => root.render(draw('genie://dashboard?chat=a_atlas')));
+        expect(failed('Sidebar')).not.toBeNull();
+        expect(host.querySelector('[data-surface-failed][data-whole="true"]')).toBeNull();
+        expect(host.querySelector('[data-surface="dashboard"]')).not.toBeNull();
+        expect(host.querySelector('[data-chat="pinned"]')).not.toBeNull();
+    });
+
+    it('the approval toasts and the pair prompt throwing keep the page', async () => {
+        boom.ApprovalToasts = true;
+        boom.PairPrompt = true;
+        await act(async () => root.render(draw('genie://dashboard?chat=a_atlas')));
+        expect(failed('Approvals')).not.toBeNull();
+        expect(failed('Pair prompt')).not.toBeNull();
+        expect(host.querySelector('[data-surface-failed][data-whole="true"]')).toBeNull();
+        expect(host.querySelector('[data-surface="dashboard"]')).not.toBeNull();
+    });
+
+    it('a child caught in an update loop (React #185, as react-fancy TabsList on the soak) is a card, not a blank window', async () => {
+        const { useLayoutEffect, useState } = await import('react');
+        function Loop() { const [n, setN] = useState(0); useLayoutEffect(() => { setN((x) => x + 1); }); return <span>{n}</span>; }
+        await act(async () => root.render(<div><ErrorBoundary surface="Tab strip"><Loop /></ErrorBoundary><p data-beside="">still here</p></div>));
+        expect(failed('Tab strip')).not.toBeNull();
+        expect(host.querySelector('[data-beside]')?.textContent).toBe('still here');
+        expect(errors.mock.calls.some((c) => String(c[0]).includes('surface=Tab strip'))).toBe(true);
     });
 
     it('the workspace page throwing keeps the chat and the rail', async () => {

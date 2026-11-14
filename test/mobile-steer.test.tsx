@@ -76,16 +76,20 @@ describe('MobileAgent', () => {
     const render = (over: Partial<Parameters<typeof MobileAgent>[0]> = {}) =>
         renderToStaticMarkup(<MobileAgent detail={detail()} sending={false} onBack={() => {}} onSend={() => {}} onStart={() => {}} onResumeLimit={() => {}} {...over} />);
 
-    it('names the agent, shows its activity as a ledger (newest last) and a composer to keep it going', () => {
+    it('names the agent; its words in the chat panel, its tool calls in the work panel (Tynn #652), and a composer to keep it going', () => {
         const html = render();
         expect(html).toContain('data-mobile-agent-view="agent_kai"');
         expect(html).toContain('data-action="back"');
         expect(html).toMatch(/>kai</);
-        expect(html).toContain('data-mobile-activity');
-        expect(html).toContain('data-mobile-row="e1"');
-        expect(html).toContain('data-mobile-row="e2"');
-        expect(html.indexOf('data-mobile-row="e1"')).toBeLessThan(html.indexOf('data-mobile-row="e2"'));
-        expect(html).toMatch(/npm test/);
+        // The chat panel: the desktop chat's rows — the reply, not the tool call.
+        expect(html).toContain('data-mobile-panel="chat"');
+        expect(html).toContain('data-chat-message="e2"');
+        expect(html).not.toContain('data-chat-message="e1"');
+        // The work panel: the desktop Stream's rows — the tool call, oldest first.
+        const work = render({ initialPanel: 'work' });
+        expect(work).toContain('data-mobile-panel="work"');
+        expect(work).toContain('data-stream-row="e1"');
+        expect(work).toMatch(/npm test/);
         expect(html).toContain('data-mobile-composer');
         expect(html).toMatch(/<textarea[^>]*name="text"/);
         expect(html).toContain('data-action="send-prompt"');

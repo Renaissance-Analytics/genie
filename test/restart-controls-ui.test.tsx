@@ -73,20 +73,20 @@ describe('the Agent view: one Restart (or Start) in every state', () => {
     });
 });
 
-describe('the chat: one Restart, on the latest undelivered message', () => {
+describe('the chat: one Send all now for every undelivered message (Tynn #702; the one Restart, genie#1238)', () => {
     const thread = (messages: ChatThread['messages']): ChatThread => ({ agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: null, messages });
     const undelivered = (id: string, at: number) => ({ id, who: 'you' as const, from: 'you', text: `message ${id}`, delivered: false, at, resend: 'restart' as const });
 
-    it('two undelivered messages to an agent that is not running: one Restart, labelled Restart, on the latest', () => {
-        const html = renderToStaticMarkup(<ChatFlyout thread={thread([undelivered('d1', 1_000), undelivered('d2', 2_000)])} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} onDiscardDraft={() => {}} />);
-        expect(count(html, /data-action="restart"/g)).toBe(1);
-        const restart = control(html, 'data-action="restart"');
-        expect(restart).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
-        expect(restart!.open).toContain('data-draft="d2"');
+    it('two undelivered messages to an agent that is not running: one Send all now, and each its own remove', () => {
+        const restarted: string[] = [];
+        const html = renderToStaticMarkup(<ChatFlyout thread={thread([undelivered('d1', 1_000), undelivered('d2', 2_000)])} onSend={() => {}} onClose={() => {}} onRestartAndSend={(id) => restarted.push(id)} onDiscardDraft={() => {}} />);
+        expect(count(html, /data-action="send-all"/g)).toBe(1);
+        expect(control(html, 'data-action="send-all"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send all now' });
+        expect(count(html, /data-action="restart"/g)).toBe(0);
         expect(html).not.toContain('restart-and-send');
-        // Each is still said to be undelivered, and each can still be discarded.
+        // Each is still said to be undelivered, and each can still be removed.
         expect(count(html, /data-chat-undelivered=/g)).toBe(2);
-        expect(count(html, /data-action="discard-draft"/g)).toBe(2);
+        expect(count(html, /data-action="remove-draft"/g)).toBe(2);
     });
 });
 

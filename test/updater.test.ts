@@ -244,11 +244,14 @@ describe('install — §7.2 teardown first', () => {
         expect(fake.installs).toBe(0);
         expect(deferred.map((d) => d.ms)).toEqual([QUIT_DELAY_MS]);
         expect(QUIT_DELAY_MS).toBeGreaterThanOrEqual(100);
-        deferred[0]!.fn();
-        expect(fake.installs).toBe(1);
         // POSITIVE CONTROL: a second install() while installing does not queue a second quit.
         expect(h.install()).toBeNull();
         expect(deferred).toHaveLength(1);
+        deferred[0]!.fn();
+        expect(fake.installs).toBe(1);
+        // A quitAndInstall that RETURNS means this host survived it (Tynn #616; the real host's exit never returns): the
+        // drain's hold is given back and the update is ready to install again, never left "installing" for ever.
+        expect(h.state().phase).toBe('downloaded');
     });
 
     it('reports what was killed, by pid and path, and says so when it was nothing', async () => {

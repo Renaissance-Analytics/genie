@@ -1,5 +1,5 @@
 import { appMailNote, isAppSender } from '../core/app-inbox.js';
-import { HUMAN } from '../core/inbox.js';
+import { HUMAN, UNNAMED_AGENT } from '../core/inbox.js';
 import type { ReminderBook } from '../core/inbox-reminders.js';
 import type { NoticeMail } from '../core/stream-event.js';
 import type { InboxMessage } from './inbox-store.js';
@@ -31,7 +31,7 @@ export function inboxNotices(input: {
         // JSON keeps names, body text and hostile app bytes inside their own fields. Only the card preview is shortened.
         const messages = unread.map((m) => ({
             id: m.id, from: m.from,
-            fromName: m.from === HUMAN ? 'you' : m.app?.label ?? input.agents.get(m.from)?.name ?? m.from,
+            fromName: m.from === HUMAN ? 'you' : m.app?.label ?? input.agents.get(m.from)?.name ?? UNNAMED_AGENT,
             sentAt: m.sentAt, text: m.text,
             attachments: m.attachments.map(({ id, name }) => ({ id, name })),
             ...(isAppSender(m.from) ? { app: { ...m.app, note: appMailNote(m.app?.label ?? m.from) } } : {}),

@@ -120,7 +120,7 @@ describe('the drone stops in main, before any socket', () => {
 
     it('a drone is refused and the host is asked nothing', async () => {
         const o = open();
-        const result = await deviceLinkGate(URL_A, { role: () => 'drone', link: () => o.link });
+        const result = await deviceLinkGate(URL_A, { role: () => 'drone', said: () => 'drone', reread: async () => {}, link: () => o.link });
         expect(result.ok).toBe(false);
         expect(o.calls).toEqual([]);
     });
@@ -128,19 +128,19 @@ describe('the drone stops in main, before any socket', () => {
     it('a pilot, and a machine not on the Tynn network, dial', async () => {
         for (const role of ['pilot', null] as const) {
             const o = open();
-            expect((await deviceLinkGate(URL_A, { role: () => role, link: () => o.link })).ok).toBe(true);
+            expect((await deviceLinkGate(URL_A, { role: () => role, said: () => role, reread: async () => {}, link: () => o.link })).ok).toBe(true);
             expect(o.calls).toEqual([URL_A]);
         }
     });
 
     it('a Tynn workstation or a web address is not a device link, whatever the role', async () => {
         const o = open();
-        for (const url of ['relay:abc', 'https://evil.example/', 7]) expect((await deviceLinkGate(url, { role: () => 'pilot', link: () => o.link })).ok).toBe(false);
+        for (const url of ['relay:abc', 'https://evil.example/', 7]) expect((await deviceLinkGate(url, { role: () => 'pilot', said: () => 'pilot', reread: async () => {}, link: () => o.link })).ok).toBe(false);
         expect(o.calls).toEqual([]);
     });
 
     it('with no host it says so', async () => {
-        const result = await deviceLinkGate(URL_A, { role: () => 'pilot', link: () => null });
+        const result = await deviceLinkGate(URL_A, { role: () => 'pilot', said: () => 'pilot', reread: async () => {}, link: () => null });
         expect(result.ok).toBe(false);
         expect(result.ok ? '' : result.reason).toMatch(/host/i);
     });

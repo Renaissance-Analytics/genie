@@ -64,6 +64,8 @@ async function install(id: string, options: { uses: string[]; storage?: string; 
 function bridgeOver(quotaBytes?: number): GAppBridge {
     return new GAppBridge({
         book,
+        // A preview of an installed app, with that app's grant: what is tested here is that its store is its own.
+        previews: { entry: (id) => { const e = book.list().find((x) => x.packageId === id); return e ? { ...e, workspaceId: 'w1', workspaceName: 'w1', publisher: e.grant.publisher, networkAllowed: false } : null; }, appElement: (id) => book.appElement(id) },
         catalog: (id) => (gone.has(id) ? null : catalog.get(id)),
         run,
         onCatalogChange: (fn) => { fireCatalog = fn; return () => undefined; },
@@ -457,7 +459,7 @@ describe('the app as a caller of Genie\'s tools', () => {
 describe('genie-host wires the bridge (source guard)', () => {
     const source = readFileSync('src/main/genie-host.ts', 'utf8');
     it('the server is given the bridge; the host resolves an app\'s session key; the tool is the MCP server\'s own', () => {
-        expect(source).toMatch(/new GAppServer\(\{ book: gappBook, bridge: gappBridge \}\)/);
+        expect(source).toMatch(/new GAppServer\(\{ book: gappBook, previews: gappPreviews, bridge: gappBridge \}\)/);
         expect(source).toMatch(/flowCallers\.callerFor\(key\) \?\? gappCallers\.callerFor\(key\)/);
         expect(source).toMatch(/createGAppToolRunner\(\{ registrations: \(\) => mcp\?\.registrations\(\) \?\? \[\], callers: gappCallers \}\)/);
     });

@@ -2,7 +2,10 @@ import { memo, useContext, useEffect, useLayoutEffect, useRef, useState, type Re
 import { WorkspaceColorsContext, WorkspaceSwatch } from '../workspace-colors.js';
 import { Badge, Button, ContentRenderer, Drawer, Icon, Input, Modal, Select, Textarea } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
+import { composerKey } from '../../core/send-key.js';
+import { sendKeyNow } from '../send-key-store.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
+import { UNNAMED_AGENT } from '../../core/inbox.js';
 import { highlightParts, inViewOrder, mergeWindow, ORDER_ICON, questionRef, scrollAfterInsert, searchSnippet, shortQuestionId, THREAD_BUFFER, type ThreadOrder } from '../../core/inbox-view.js';
 import type { AskedRecord } from '../../main/attention-store.js';
 import type { InboxMessage } from '../../main/inbox-store.js';
@@ -248,7 +251,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
     const summary = p.openKey ? p.threads.find((t) => t.key === p.openKey) ?? null : null;
     const [a, b] = p.openKey ? (p.openKey.split('|') as [string, string]) : ['', ''];
     const withHuman = p.openKey !== null && (a === HUMAN || b === HUMAN);
-    const nameOf = (id: string): string => (id === HUMAN ? 'you' : summary ? (id === summary.a ? summary.aName : summary.bName) : p.peers.find((x) => x.agentId === id)?.name ?? id);
+    const nameOf = (id: string): string => (id === HUMAN ? 'you' : summary ? (id === summary.a ? summary.aName : summary.bName) : p.peers.find((x) => x.agentId === id)?.name ?? UNNAMED_AGENT);
     const agentOfThread = p.openKey ? otherOf(a, b) : null;
     const reachable = p.peers.filter((x) => x.reachable && x.agentId);
     const order: ThreadOrder = p.order ?? 'newest';
@@ -517,7 +520,13 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                             })}
                                         </div>
                                     ) : null}
-                                    <Textarea data-inbox-draft="" value={p.draft} autoResize minRows={2} maxRows={8} placeholder={`Message ${nameOf(agentOfThread!)} — it reads it with agentinbox receive`} onValueChange={p.onDraft} aria-label="Message" />
+                                    <Textarea data-inbox-draft="" value={p.draft} autoResize minRows={2} maxRows={8} placeholder={`Message ${nameOf(agentOfThread!)} — it reads it with agentinbox receive`} onValueChange={p.onDraft} aria-label="Message"
+                                        onKeyDown={(e) => {
+                                            // The person's send key, as in every composer (Tynn issue #697); the other key is the textarea's own new line.
+                                            if (composerKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }, sendKeyNow()) !== 'send') return;
+                                            e.preventDefault();
+                                            if (p.sending !== true && p.draft.trim() !== '') p.onSend();
+                                        }} />
                                     <div className="flex items-center gap-2">
                                         {p.compose ? <Button type="button" size="sm" variant="ghost" icon="paperclip" data-action="attach-files" onClick={p.compose.onPick}>Attach…</Button> : null}
                                         <span className="ml-auto" />

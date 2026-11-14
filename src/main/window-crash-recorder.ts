@@ -141,14 +141,26 @@ function typeOf(value: unknown): string {
  * Window main's beat: one at once (the host watches a window from its first beat), then every {@link BEAT_MS}. A send
  * that throws (no link) never escapes the timer. `bye` sends the goodbye and stops.
  */
-export function startHeartbeat(options: { send(beat: WindowBeat): void; pid: number; rss: () => number; rendererRss?: () => number | null; every?: (fn: () => void, ms: number) => () => void }): { stop(): void; bye(): void } {
+export function startHeartbeat(options: {
+    send(beat: WindowBeat): void;
+    pid: number;
+    rss: () => number;
+    rendererRss?: () => number | null;
+    /** The route the main window shows (#711): a lost record names the window by it. */
+    route?: () => string | null;
+    /** Window main's V8 heap in use and its limit, in bytes (#711). */
+    heap?: () => { used: number; limit: number } | null;
+    every?: (fn: () => void, ms: number) => () => void;
+}): { stop(): void; bye(): void } {
+    const read = <T>(fn: (() => T | null) | undefined): T | null => { try { return fn?.() ?? null; } catch { return null; } };
     const beat = (bye: boolean): void => {
         try {
             const rss = options.rss();
-            let page: number | null = null;
-            try { page = options.rendererRss?.() ?? null; } catch { page = null; }
-            const rendererRss = page !== null ? { rendererRss: page } : {};
-            options.send(bye ? { pid: options.pid, rss, ...rendererRss, bye: true } : { pid: options.pid, rss, ...rendererRss });
+            const page = read(options.rendererRss);
+            const route = read(options.route);
+            const heap = read(options.heap);
+            const extra = { ...(page !== null ? { rendererRss: page } : {}), ...(route ? { route } : {}), ...(heap !== null ? { heapUsed: heap.used, heapLimit: heap.limit } : {}) };
+            options.send(bye ? { pid: options.pid, rss, ...extra, bye: true } : { pid: options.pid, rss, ...extra });
         } catch { /* not linked: the next beat tries again */ }
     };
     const every = options.every ?? ((fn: () => void, ms: number) => {

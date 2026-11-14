@@ -24,6 +24,8 @@ let dir: string;
 let services: ComposedServices;
 let roster: AgentRecord[];
 const state = { toolStatuses: null, knowledgeQuery: '' };
+/** This test's compose, so afterEach closes what it opened even when it outlived its hook. */
+let composing: Promise<ComposedServices> | null = null;
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-inbox-flyout-'));
@@ -31,10 +33,20 @@ beforeEach(async () => {
         agentRecord({ id: 'agent_atlas' as never, workspaceId: 'tynn', provider: 'claude', name: 'atlas' }),
         agentRecord({ id: 'agent_wren' as never, workspaceId: 'tynn', provider: 'claude', name: 'wren' }),
     ];
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, docker: async () => ({ stdout: '', exitCode: 1 }), portFree: async () => true });
+    composing = composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, docker: async () => ({ stdout: '', exitCode: 1 }), portFree: async () => true });
+    services = await composing;
 });
+/*
+ * A compose can outlive its hook (Tynn #660): on a Windows test VM in one of the suite's disk bursts a durable write took 0.7-3 s
+ * (measured, 2026-11-13), and composing makes several. Vitest then runs afterEach while that compose is still opening stores; it
+ * used to shut down `services` (the PREVIOUS test's, or undefined) and remove the folder under the new compose's open
+ * knowledge.db (EBUSY), and the stores' late writes landed in a folder already gone. So afterEach waits for THIS test's compose,
+ * closes what it opened, then removes the folder, retrying while Windows still holds a handle that was just closed.
+ */
 afterEach(async () => {
-    await services.shutdown();
+    const composed = await composing?.catch(() => null);
+    composing = null;
+    await composed?.shutdown();
     await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 

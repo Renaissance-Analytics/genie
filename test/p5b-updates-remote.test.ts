@@ -60,19 +60,19 @@ function withReplica() {
     const replica = new UpdatesReplica(toHost, 4242);
     replica.rebase({ phase: 'downloaded', version: '2.0.1', percent: 100, error: null, checkedAt: 9 });
     const deps = protocolContractDeps(dir);
-    deps.updates = { state: () => replica.state(), check: () => replica.check(), download: () => replica.download(), install: () => replica.install(), notes: () => replica.refreshNotes(), onChange: (l) => replica.onChange(l) };
+    deps.updates = { state: () => replica.state(), check: () => replica.check(), download: () => replica.download(), install: () => replica.install(), forceDrain: () => replica.forceDrain(), notes: () => replica.refreshNotes(), onChange: (l) => replica.onChange(l) };
     return { deps, toHost };
 }
 
 describe('a remote or phone connection keeps today’s owner-only updates.* rules', () => {
-    it.each(['check', 'download', 'install'] as const)('updates.%s from a guest is refused, and nothing reaches the host', async (name) => {
+    it.each(['check', 'download', 'install', 'forceDrain'] as const)('updates.%s from a guest is refused, and nothing reaches the host', async (name) => {
         const { deps, toHost } = withReplica();
         const guest = await serve(deps)('guest');
         await expect((guest.bridge as unknown as { updates: Record<string, () => Promise<unknown>> }).updates[name]!()).rejects.toThrow();
         expect(toHost).not.toHaveBeenCalled();
     });
 
-    it.each(['check', 'download', 'install'] as const)('updates.%s from the owner reaches genie-host through the window’s replica', async (name) => {
+    it.each(['check', 'download', 'install', 'forceDrain'] as const)('updates.%s from the owner reaches genie-host through the window’s replica', async (name) => {
         const { deps, toHost } = withReplica();
         const owner = await serve(deps)('owner');
         await (owner.bridge as unknown as { updates: Record<string, () => Promise<unknown>> }).updates[name]!();

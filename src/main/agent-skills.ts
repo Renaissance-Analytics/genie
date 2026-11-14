@@ -39,7 +39,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`openFileForUser\` to put a file in front of the person.
 - \`plan\` to show your plan in your Active Plan column: the whole list each time, each step pending, in_progress or completed. Call it when you start work with more than one step, and again as each step starts or finishes. Genie keeps your latest plan across restarts and new conversations: when you start, call it without steps to read that plan back and pick up where you left off.
 - \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
-- \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie keeps it running and brings it back after a restart; never leave one running in a terminal or with nohup.
+- \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie restarts it by its policy; restart: never stays stopped after Genie restarts until explicitly started. Never leave one running in a terminal or with nohup.
 - \`mail\` to test the email an app sends (signup, password reset): make an inbox, get its SMTP login once, then list and read what arrived. It is Genie's own local catcher; nothing leaves the machine. The workspace's sites and processes already send as its default inbox.
 - \`flows\` for scheduled or repeating work — a watcher that runs a check every 30 minutes and prompts an agent on what it finds, a nightly job. You make the flow; it is created disarmed and runs only once the person arms it in Genie's Flows tab.
 - \`manageTerminals\` for shells and builds. You are never run in one yourself.
@@ -105,7 +105,7 @@ Genie sets up, starts and stops the workspace's service engines and sites. Never
         description: 'Use when something must keep running in the background in Genie (a queue worker, a watcher, a dev server) or you need its log; Genie keeps it, never nohup or a terminal.',
         body: `# Background processes
 
-Genie keeps the workspace's background processes running: it starts each in the workspace with the service variables, restarts it by its policy, brings it back after Genie restarts until it is stopped, and keeps its log after it exits or crashes. Never leave one running in a terminal, with nohup, or with a trailing &.
+Genie keeps the workspace's background processes running: it starts each in the workspace with the service variables, restarts it by its policy, and keeps its log after it exits or crashes. With restart: never, a process stays stopped after Genie restarts until you explicitly Start it; other policies bring it back on launch until it is stopped. Never leave one running in a terminal, with nohup, or with a trailing &.
 
 - \`processes\` with action \`list\` shows this workspace's processes, its sites' servers included.
 - \`processes\` with action \`logs\` (process, lines) reads the end of a process's output, still there after a crash. Read it before you restart something that keeps failing.

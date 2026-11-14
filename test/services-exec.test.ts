@@ -158,7 +158,7 @@ describe('services exec — the MCP call goes away (genie#1360)', () => {
         expect(execWith?.progress).toBe(progress);
     });
 
-    it('a command stopped because the client went away says so, and is not reported as a timeout', async () => {
+    it('a client disconnect reports the stopped-command error', async () => {
         const gone = new AbortController();
         const own = hostingTools({
             resolveCaller: (id) => (id === 't-example' ? caller : null),
@@ -169,6 +169,6 @@ describe('services exec — the MCP call goes away (genie#1360)', () => {
         const reg = own.find((t) => t.definition.name === 'services')!;
         const r = await reg.handler({ action: 'exec', command: 'php artisan migrate', terminalId: 't-example' } as never, { server: 'genie', tool: 'services', headers: {}, signal: gone.signal });
         expect(r.isError).toBe(true);
-        expect(JSON.parse(r.text).error).toMatch(/client disconnected/);
+        expect(JSON.parse(r.text).error).toBe('the command was stopped');
     });
 });

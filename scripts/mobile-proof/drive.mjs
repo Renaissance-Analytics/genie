@@ -146,9 +146,9 @@ async function main() {
     const receivedBefore = frames.received.length;
     await page.fill('textarea[name="text"]', 'Hello from the phone — what is the plan?');
     await page.tap('[data-action="send-prompt"]');
-    await page.waitForSelector('[data-mobile-row] >> text=Got it', { timeout: 30_000 });
+    await page.waitForSelector('[data-chat-message] >> text=Got it', { timeout: 30_000 });
     await shot(page, '04-reply-streaming');
-    await page.waitForSelector('[data-mobile-row] >> text=a few words at a time.', { timeout: 30_000 });
+    await page.waitForSelector('[data-chat-message] >> text=a few words at a time.', { timeout: 30_000 });
     await shot(page, '05-reply-done');
     const agentFrames = frames.received.slice(receivedBefore).filter((f) => f.text.includes('"channel":"agent:'));
     const terminalFrames = frames.received.filter((f) => f.text.includes('terminal-data') || f.text.includes('"channel":"features"'));
@@ -164,8 +164,8 @@ async function main() {
     await page.fill('textarea[name="text"]', 'What is in this photo?');
     await shot(page, '06-photo-attached');
     await page.tap('[data-action="send-prompt"]');
-    await page.waitForSelector('[data-mobile-row] >> text=I received 1 image file', { timeout: 60_000 });
-    await page.waitForSelector('[data-mobile-row] >> text=I received 1 image file >> xpath=.. >> text=a few words at a time.', { timeout: 30_000 }).catch(() => {});
+    await page.waitForSelector('[data-chat-message] >> text=I received 1 image file', { timeout: 60_000 });
+    await page.waitForSelector('[data-chat-message] >> text=I received 1 image file >> xpath=.. >> text=a few words at a time.', { timeout: 30_000 }).catch(() => {});
     await sleep(1500);
     await shot(page, '07-photo-received');
     const got = existsSync(RECEIVED) ? readdirSync(RECEIVED) : [];
@@ -240,7 +240,7 @@ async function main() {
 
     // 8. The connection drops (Settings → Restart): the phone says Reconnecting and comes back on its own, resuming.
     await page.goto(`${PAGE}#agent=${ATLAS}`);
-    await page.waitForSelector('[data-mobile-row] >> text=I received 1 image file', { timeout: 30_000 });
+    await page.waitForSelector('[data-chat-message] >> text=I received 1 image file', { timeout: 30_000 });
     const before = frames.received.length;
     await act(g, { kind: 'remote.restart' });
     await page.waitForSelector('[data-mobile-reconnecting]', { timeout: 15_000 }).then(() => shot(page, '15-reconnecting')).catch(() => {});

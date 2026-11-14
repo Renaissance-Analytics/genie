@@ -17,7 +17,7 @@ import * as windowAddress from '../src/renderer/window-address.js';
 const { windowBridge, routeFor, rewrittenAddress } = windowAddress as unknown as {
     windowBridge<B>(input: { bound: string | null; connected: boolean; remote: B | null; local: B | undefined }): B | undefined;
     routeFor(address: string, ctx: AddressContext | null): string;
-    rewrittenAddress(address: string, ctx: AddressContext | null): string | null;
+    rewrittenAddress(address: string, ctx: AddressContext | null, before?: string | null): string | null;
 };
 
 const pilot: AddressContext = { workstation: 'gpp0e98c5', workspaces: [{ id: 'ws_p', name: 'pilot-work', path: '/p' }], agents: [] };
@@ -32,15 +32,19 @@ const REMOTE = { ctx: drone } as const;
 function simulate(bound: string | null, hash: string, phases: Array<{ connected: boolean }>): { hash: string; route: string } {
     let address = hash.replace(/^#/, '');
     let route = '';
+    // The workstation this window read last: where its address may come FROM when it now reads another.
+    let before: string | null = null;
     for (const phase of phases) {
         // Each phase settles: the rewrite (an effect) runs, and the route is read again from the rewritten address.
         for (let i = 0; i < 3; i += 1) {
             const bridge = windowBridge({ bound, connected: phase.connected, remote: phase.connected ? REMOTE : null, local: LOCAL });
             const ctx = bridge ? bridge.ctx : null;
             route = routeFor(address, ctx);
-            const next = rewrittenAddress(address, ctx);
+            const next = rewrittenAddress(address, ctx, before);
             if (next !== null) address = next;
         }
+        const read = windowBridge({ bound, connected: phase.connected, remote: phase.connected ? REMOTE : null, local: LOCAL });
+        if (read) before = read.ctx.workstation;
     }
     return { hash: `#${address}`, route };
 }
@@ -79,6 +83,30 @@ describe('a Take Over window bound to another host', () => {
         const app = strip(readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8'));
         expect(app).toMatch(/const resolvedBridge = windowBridge\(\{ bound: remote\.bound, connected: remote\.state\?\.connected === true,/);
         expect(app).toMatch(/const route = routeFor\(address, addressContext\);/);
-        expect(app).toMatch(/const next = rewrittenAddress\(address, addressContext\);/);
+        expect(app).toMatch(/const next = rewrittenAddress\(address, addressContext, readBefore\.current\);/);
+    });
+});
+
+/*
+ * A PILOT'S OWN WINDOW CONNECTING IN PLACE (beta.61 blocker step four, Azure pair gp-11110111-a378e7): Settings → Remote
+ * access, Connect. Connected, the window reads the Drone, but its hash still named the Pilot
+ * (`#genie://gppa378e7/settings/remote`): the Drone read that as nothing and showed its Dashboard, so Settings → Remote
+ * access, and its Disconnect, were never drawn. Its page goes with it to the host it now drives, as it comes back on leaving.
+ */
+describe('a Pilot\'s own window connecting in place', () => {
+    it('on Settings, Remote access: connected, the same page on the Drone, at the Drone\'s address', () => {
+        const end = simulate(null, '#genie://gpp0e98c5/settings/remote', [{ connected: false }, { connected: true }]);
+        expect(parseRoute(end.route)).toMatchObject({ surface: 'settings', section: 'remote' });
+        expect(end.hash).toBe('#genie://gpd0e98c5/settings/remote');
+    });
+
+    it('CONTROL: not connected, it stays this machine\'s', () => {
+        const own = simulate(null, '#genie://gpp0e98c5/settings/remote', [{ connected: false }]);
+        expect(own.hash).toBe('#genie://gpp0e98c5/settings/remote');
+        expect(parseRoute(own.route)).toMatchObject({ surface: 'settings', section: 'remote' });
+    });
+
+    it('CONTROL: an address of a workstation it reads neither before nor after is not moved', () => {
+        expect(rewrittenAddress('genie://somewhere-else/settings/remote', drone, 'gpp0e98c5')).toBeNull();
     });
 });

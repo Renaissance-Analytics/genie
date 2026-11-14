@@ -178,6 +178,26 @@ describe('a phone receives only what a phone shows', () => {
         expect(api.wants('agent_b')).toBe(true);
     });
 
+    it('what the events must carry, said for the window that forwards them (Tynn #662): nothing with nobody connected, a phone’s watched agents, every agent for a desktop, and a change each time', async () => {
+        let changes = 0;
+        host.onChange(() => { changes += 1; });
+        expect(host.wanted()).toEqual({ remote: false, all: false, agents: [], local: false });
+        const { c: phone } = await pairedPhone('mobile');
+        expect(host.wanted()).toEqual({ remote: true, all: false, agents: [], local: false });
+        const before = changes;
+        await phone.call('agent.watch', 'agent_a', {});
+        expect(host.wanted()).toEqual({ remote: true, all: false, agents: ['agent_a'], local: false });
+        expect(changes).toBeGreaterThan(before);
+        const mid = changes;
+        await phone.call('agent.unwatch', 'agent_a');
+        expect(host.wanted()).toEqual({ remote: true, all: false, agents: [], local: false });
+        expect(changes).toBeGreaterThan(mid);
+        const t = (await pairedPhone(null)).token;
+        const desk = connect();
+        await desk.hello({ kind: 'token', token: t });
+        expect(host.wanted()).toMatchObject({ remote: true, all: true });
+    });
+
     it('a guest phone may not watch an agent outside its workspace', async () => {
         const g = connectLinkGuest('tynn');
         expect(await g.hello({ kind: 'relay' }, { profile: 'mobile' })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });

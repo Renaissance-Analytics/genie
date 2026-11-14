@@ -23,6 +23,16 @@ import type { TerminalHost } from './terminal-host.js';
  * says to type it. It has no status command: when that terminal ends, `onDesignLoginEnded` tells the agents that waited
  * to retry, and a retry refused again raises the prompt again.
  */
+/**
+ * SIGNED IN THROUGH GENIE: the agents the provider signed out are restarted, and — the account may be another one now (Tynn
+ * #699: the owner switched accounts at his limit and his agent never resumed) — every agent held on that provider's limit is
+ * released and what waited goes, as when the limit resets.
+ */
+export function afterSignedIn(provider: string, deps: { signedOutAgents: (provider: string) => readonly string[]; restart: (id: string) => void; resumeLimit: (provider: string) => void }): void {
+    for (const id of deps.signedOutAgents(provider)) deps.restart(id);
+    deps.resumeLimit(provider);
+}
+
 export interface LoginHostOptions {
     terminals: Pick<TerminalHost, 'open' | 'onExit'>;
     openWindow: (route: string) => void;
@@ -51,6 +61,18 @@ const OS_WORKSPACE = '__genie__';
 const PLAIN_NAME = /^[A-Za-z0-9._-]+$/;
 /** A resolved path goes inside double quotes in a shell line. These leave them, or are read inside them: a quote, a line break, cmd's %, a POSIX shell's $ and backtick, and a final backslash, which eats the closing quote. */
 const quotable = (path: string): boolean => !/["\r\n%$`]/.test(path) && !path.endsWith('\\');
+
+/**
+ * A provider's status command as a shell line, its first word the resolved CLI when there is one; `null` for a provider
+ * Genie has no status for, or a path Genie will not put in a command.
+ */
+export function statusCommandFor(provider: string, binary: string | null): string | null {
+    const known = providerLogin(provider);
+    if (!known) return null;
+    if (binary === null) return known.status;
+    if (!quotable(binary)) return null;
+    return `"${binary}"${known.status.slice(known.status.indexOf(' '))}`;
+}
 
 export class LoginHost {
     readonly #options: LoginHostOptions;

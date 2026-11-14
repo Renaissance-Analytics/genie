@@ -239,12 +239,35 @@ export interface AgentPrompterDeps {
     readonly asleep: (workspaceId: string) => boolean;
     /** Who the turn is from, as the agent's ledger shows it — the flow, by name (Genie 1's genie#543: name the task). */
     readonly by: string;
+    /** The wait's timer (`FLOW_TURN_QUIET_MS`): fire after `ms`, answering its cancel. Absent = `setTimeout`. */
+    readonly after?: (ms: number, fire: () => void) => () => void;
 }
+
+/**
+ * HOW LONG A FLOW WAITS FOR AN AGENT'S TURN (Tynn #684, genie#721). The wait used to have no bound: a turn whose end never
+ * reached Genie held the run open, and the scheduler held every later run back ("the previous run is still going") for
+ * 11 hours. The end not arriving is fixed where it was lost (core/session.ts `#endHeldTurn`); this is the safety net for
+ * anything else that ever loses one.
+ *
+ * QUIET: nothing new in the agent's ledger — no reply, thought, tool call or notice, and no line added to one — for half
+ * an hour. A turn that is working shows itself well inside that, and the turns flows start are rounds of minutes (the
+ * one in genie#721 took under a minute). MAX: two hours, whatever it shows, so a turn
+ * that keeps talking but never ends cannot hold a flow — or every 15-minute run after it — for a day. Either way the
+ * run fails in words, the agent's turn is left alone, and the next scheduled run is the next chance (it is held back as
+ * busy while that turn really is running).
+ */
+export const FLOW_TURN_QUIET_MS = 30 * 60_000;
+export const FLOW_TURN_MAX_MS = 2 * 60 * 60_000;
 
 /**
  * `genie/agent_prompt` on a live session: resolve the address, refuse what cannot be prompted, HOLD BACK
  * what must not be prompted now (a hibernated workspace, an agent mid-turn or waiting on an approval), then
  * prompt and wait for the turn to end. The reply is what the agent said in that turn.
+ *
+ * WHY IT WAITS AT ALL, even for a flow whose only step this is (Tynn #684 asked): the reply is the step's output
+ * (`{ reply, agent }`, flow-executors.ts), kept with the run in flight so a resume hands it on, and any later step reads
+ * it through its template; a later step also runs AFTER the agent's work, not beside it. The run's `ran` means the agent
+ * did the round. So it waits — bounded (`FLOW_TURN_QUIET_MS`, `FLOW_TURN_MAX_MS`).
  */
 export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent'] {
     return async (address, text) => {
@@ -272,7 +295,9 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
         let sent = false;
         let off: () => void = () => {};
         let recheck: () => void = () => {};
+        let giveUp: (error: Error) => void = () => {};
         const finished = new Promise<void>((done, fail) => {
+            giveUp = fail;
             // THIS PROMPT'S TURN, not the state at the moment it was taken: a prompt sent while the session is still
             // starting waits for its `ready` (a session only started reads idle, not working), so idle before its turn
             // began is not its end. Begun = seen working, or its turn marker is in the ledger.
@@ -304,7 +329,33 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
         if (!delivered) throw new Error(`${name} stopped before the prompt could be delivered`);
         sent = true;
         recheck();
-        await finished;
+        // THE BOUND (FLOW_TURN_QUIET_MS): checked once per quiet window — a window with a new ledger row is a turn still
+        // working, one without is not, and the windows add up to FLOW_TURN_MAX_MS at most.
+        const after = deps.after ?? ((ms: number, fire: () => void) => { const t = setTimeout(fire, ms); return () => clearTimeout(t); });
+        // A row added, or the last one grown (a reply streaming in replaces its row): the turn is alive.
+        const mark = (): { n: number; last: unknown } => { const r = deps.sessions.rows(id); return { n: r.length, last: r[r.length - 1] }; };
+        let seen = mark();
+        let waited = 0;
+        let cancelTimer: () => void = () => {};
+        const watch = (): void => {
+            cancelTimer = after(FLOW_TURN_QUIET_MS, () => {
+                waited += FLOW_TURN_QUIET_MS;
+                const now = mark();
+                const quiet = now.n === seen.n && now.last === seen.last;
+                seen = now;
+                if (!quiet && waited < FLOW_TURN_MAX_MS) { watch(); return; }
+                off();
+                giveUp(new Error(quiet
+                    ? `${name}'s turn did not end: nothing new came from it for ${FLOW_TURN_QUIET_MS / 60_000} minutes. The flow stopped waiting for it; the next run will try again.`
+                    : `${name}'s turn did not end within ${FLOW_TURN_MAX_MS / 3_600_000} hours. The flow stopped waiting for it; the next run will try again.`));
+            });
+        };
+        watch();
+        try {
+            await finished;
+        } finally {
+            cancelTimer();
+        }
         return deps.sessions
             .rows(id)
             .slice(from)

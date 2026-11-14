@@ -8,11 +8,11 @@ import { control } from './helpers/control-markup.js';
 /**
  * TAILSCALE FROM GENIE (Tynn #821; Genie 1's tailscale.status / install / up + openAuth). Remote access runs over the
  * tailnet, so Settings → Remote access says where Tailscale stands — absent, stopped, needs sign-in, running — and offers
- * the one action that moves it on: Install, Connect (which may hand back a sign-in link), Sign in. Running, it names this
+ * the one action that moves it on: Install, Connect (which asks Tailscale for a fresh sign-in link and opens it). Running, it names this
  * machine on the tailnet and counts its peers.
  */
 const base: RemoteSection = { host: 'alphar', url: null, unavailable: 'Tailscale is not installed', locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: false };
-const ts = (over: Partial<TailscaleStatus>): TailscaleStatus => ({ installed: true, running: false, state: 'needs-login', self: null, peers: [], authUrl: null, remedy: null, ...over });
+const ts = (over: Partial<TailscaleStatus>): TailscaleStatus => ({ installed: true, running: false, state: 'needs-login', self: null, peers: [], remedy: null, ...over });
 const render = (tailscale: TailscaleStatus | null) => renderToStaticMarkup(<RemoteAccess remote={{ ...base, tailscale }} workspaces={[]} onAction={() => {}} />);
 
 describe('Settings → Remote access → Tailscale', () => {
@@ -23,14 +23,13 @@ describe('Settings → Remote access → Tailscale', () => {
         expect(html).not.toContain('data-action="tailscale-up"');
     });
 
-    it('needs sign-in: Connect; with a sign-in link, Sign in opens it', () => {
+    it('needs sign-in: Connect, which asks Tailscale for a fresh link; never a kept link to open (Tynn #675)', () => {
         expect(render(ts({ state: 'needs-login' }))).toContain('data-action="tailscale-up"');
-        const withLink = render(ts({ state: 'needs-login', authUrl: 'https://login.tailscale.com/a/abc123' }));
-        // A LINK, in Button's link form: an <a> to Tailscale's page, opened outside Genie.
-        const signIn = control(withLink, 'data-action="tailscale-signin"');
-        expect(signIn).toMatchObject({ tag: 'a', fancy: true, text: 'Sign in' });
-        expect(signIn!.open).toContain('href="https://login.tailscale.com/a/abc123"');
-        expect(signIn!.open).toContain('target="_blank"');
+        // A status that still carries the daemon's last link (it may be long expired) offers no way to open it.
+        const stale = render(ts({ state: 'needs-login', authUrl: 'https://login.tailscale.com/a/expired0000' } as Partial<TailscaleStatus>));
+        expect(stale).toContain('data-action="tailscale-up"');
+        expect(stale).not.toContain('data-action="tailscale-signin"');
+        expect(stale).not.toContain('login.tailscale.com');
     });
 
     it('stopped (or needs an operator): the remedy, with its exact command', () => {

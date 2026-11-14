@@ -9,7 +9,7 @@ import { SCHEMA_REVISION, stampSchema } from './workspace-model.js';
  * workspace colour (checked against its code), so this is new rather than a port.
  *
  * - **Where it lives:** `appearance.color` in the workspace's project.json, six-digit sRGB hex — Civicognita/shared-schemas
- *   v0.3.0 (issue #2). Writing it stamps that revision; a manifest on a NEWER revision is never rewritten (stampSchema).
+ *   v0.3.0 (issue #2). Writing it stamps this Genie's revision (SCHEMA_REVISION); a manifest on a NEWER one is never rewritten.
  * - **Automatic:** a workspace without one gets a palette colour — every palette colour once before any repeats, never
  *   the colour of the row beside it, and, once written, never moved.
  * - **Seen on both themes:** every palette colour stands 3:1 (WCAG 1.4.11, non-text contrast) against every surface of

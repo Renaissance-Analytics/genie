@@ -4,17 +4,21 @@ import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
 import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
+import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
+import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
 import { heldLimiter, localPageClient, localUploadClient } from './local-content-client.js';
+import { measureAgentRead, measureAgentReadAsync } from '../core/agent-read-timing.js';
 import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
@@ -34,6 +38,8 @@ export interface RemoteState {
     readonly host: string | null;
     readonly isOwner: boolean;
     readonly workspaceId: string | null;
+    /** The host's word that this window may only read (Tynn #688); absent/false = it may act (an older host says nothing). */
+    readonly readonly?: boolean;
     readonly driver: string | null;
     readonly driving: boolean;
     readonly locked: boolean;
@@ -46,6 +52,10 @@ export interface RemoteState {
     readonly token: string | null;
     /** The PIN was right and the host's screen asks "Pair this device?" until `expiresAt` (q_8c07b142); `null` otherwise. */
     readonly pairing?: { readonly expiresAt: number } | null;
+    /** The build the host said in its welcome (P10.1e); absent/`null` = it said none. */
+    readonly hostBuild?: string | null;
+    /** The host runs a Genie older than this client needs (Tynn #651); the link was closed for it. */
+    readonly skew?: DroneSkew | null;
 }
 
 export interface RemoteClient {
@@ -55,10 +65,12 @@ export interface RemoteClient {
     readonly pages?: PageClient;
     /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
     readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
+    /** Only a local-auth client: an agent's patches, for the agents this window's views show (Tynn #564). */
+    readonly agentWire?: (agentId: string, onPayload: (payload: AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>) => void) => () => void;
     /** Share links on the host this client is connected to (Tynn #587): that host makes them, for itself. */
     readonly shares: NonNullable<import('./relay-transport.js').TynnNetworkBridge['shares']>;
     readonly bridge: GenieBridge;
-    readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
+    readonly ready: Promise<{ ok: true } | { ok: false; reason: string; skew?: DroneSkew }>;
     state(): RemoteState;
     onState(listener: (state: RemoteState) => void): () => void;
     /** `force`: Take control from whoever drives (Tynn #529); without it, a take never takes control from someone driving. */
@@ -99,6 +111,12 @@ export interface RemoteOptions {
      * types into that one terminal while that window drives, and is told why when it may not any more. Never `drive`.
      */
     readonly companion?: string;
+    /**
+     * THE OLDEST HOST BUILD THIS CLIENT CAN DRIVE (Tynn #651; core/drone-version.ts). A welcome from an older host, or one
+     * that says no build, is not a connection: `ready` says the skew and the link closes, before anything is asked of a
+     * host that cannot answer it. A call it refuses as "not a bridge method" is the same skew. Absent = any host, as before.
+     */
+    readonly minBuild?: string;
 }
 
 /**
@@ -144,6 +162,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
 
     const pending = new Map<number, (r: Result) => void>();
     let nextId = 0;
+    let closed = false;
     const events = new Map<string, Set<(payload: unknown) => void>>();
     const on = (channel: string, listener: (payload: unknown) => void): (() => void) => {
         const set = events.get(channel) ?? new Set();
@@ -152,16 +171,27 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         return () => { set.delete(listener); };
     };
 
-    let resolveReady: (r: { ok: true } | { ok: false; reason: string }) => void = () => {};
-    const ready = new Promise<{ ok: true } | { ok: false; reason: string }>((r) => { resolveReady = r; });
+    let resolveReady: (r: { ok: true } | { ok: false; reason: string; skew?: DroneSkew }) => void = () => {};
+    const ready = new Promise<{ ok: true } | { ok: false; reason: string; skew?: DroneSkew }>((r) => { resolveReady = r; });
+    /** The host is older than `minBuild`: said, and the link closed (Tynn #651). Never the host's protocol words. */
+    const skewed = (skew: DroneSkew): void => {
+        const reason = skew.build === null ? 'that machine runs an older Genie' : `that machine runs Genie ${skew.build}`;
+        if (!state.connected) resolveReady({ ok: false, reason, skew });
+        setState({ skew });
+        transport.close();
+    };
 
     transport.onMessage((text) => {
         const parsed = parseMessage(text);
         if (!parsed.ok) return;
         const m: WireMessage = parsed.message;
         switch (m.kind) {
-            case 'welcome':
-                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null });
+            case 'welcome': {
+                const hostBuild = typeof m.build === 'string' ? m.build : null;
+                // An older host than this client needs is not a connection (Tynn #651): nothing is asked of it.
+                const tooOld = options.minBuild !== undefined ? welcomeSkew(m, options.minBuild) : null;
+                if (tooOld) { setState({ hostBuild }); skewed(tooOld); return; }
+                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, readonly: m.readonly === true, token: m.token ?? null, pairing: null, hostBuild, skew: null });
                 resolveReady({ ok: true });
                 // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
                 if (options.drive === true && options.companion === undefined && auth.kind !== 'local') {
@@ -169,14 +199,19 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                     void control('baton.take');
                 }
                 return;
+            }
             case 'pairing':
                 setState({ pairing: { expiresAt: m.expiresAt } });
                 return;
-            case 'refused':
+            case 'refused': {
+                // A call the host does not know: an older host than this client needs, said as such (Tynn #651).
+                const unknown = options.minBuild !== undefined ? refusalSkew(m.reason) : null;
+                if (unknown) { skewed({ build: state.hostBuild ? shownBuild(state.hostBuild) : null, method: unknown.method }); return; }
                 if (state.pairing) setState({ pairing: null });
                 if (!state.connected) resolveReady({ ok: false, reason: m.reason });
                 else setState({ lastRefusal: m.reason });
                 return;
+            }
             case 'result': {
                 const waiter = pending.get(m.id);
                 pending.delete(m.id);
@@ -191,6 +226,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         }
     });
     transport.onClose(() => {
+        closed = true;
         filesWatches?.dispose();
         terminalClient?.dispose();
         // A refused handshake arrives as a close with no welcome and no refused frame: say so, once.
@@ -206,9 +242,18 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     const refused = (reason: string): void => setState({ lastRefusal: reason, needsBaton: reason.endsWith(BATON_REFUSAL) });
     const call = (method: RemoteMethod | ControlMethod, ...args: unknown[]): Promise<Result> =>
         new Promise<Result>((resolve) => {
+            // A closed transport may silently drop writes. Never leave a new call waiting on it (#636).
+            if (closed) { resolve({ ok: false, reason: 'the connection closed' }); return; }
             const id = ++nextId;
+            const frame = JSON.stringify({ kind: 'call', id, method, args });
             pending.set(id, resolve);
-            transport.send(JSON.stringify({ kind: 'call', id, method, args }));
+            try { transport.send(frame); }
+            catch (error) {
+                pending.delete(id);
+                // Delivery is uncertain: refuse this request, never replay it. Reads still reject in read() below.
+                try { console.error(`[remote] Could not send ${method}.`, error); } catch { /* Reporting must not reject the call. */ }
+                resolve({ ok: false, reason: 'the connection closed' });
+            }
         }).then((r) => {
             // Every write refused for lack of the baton is kept, whatever path asked: no dead click (Tynn #529).
             if (!r.ok && r.reason.endsWith(BATON_REFUSAL)) refused(r.reason);
@@ -378,7 +423,6 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         resolvePrompt: (agentId, promptId, action) => answer<{ ok: true }>('resolvePrompt', agentId, promptId, action),
         // The host's reply ends the answer's flight and a refusal is said on the card (core/approval-answering.ts).
         answerApproval: (agentId, optionId, note) => answer<{ ok: true }>('answerApproval', agentId, optionId, note ?? ''),
-        restartWithHandoff: (agentId, finishedId) => answer<{ ok: true }>('restartWithHandoff', agentId, finishedId),
         addAgent: (workspaceId, input) => answer<{ ok: true; id: string }>('addAgent', workspaceId, input),
         addWorkspace: () => fire('addWorkspace'),
         // A Take over the host refused is said to the person, never dropped (Tynn #529).
@@ -422,6 +466,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             ...(auth.kind === 'local' ? { onSettingsChanged: (listener: (id: string) => void) => on('workspace-settings-changed', (id) => listener(id as string)) } : {}),
             setGoverns: (workspaceId, childIds) => answer('workspaces.setGoverns', workspaceId, [...childIds]),
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
+            setMcpServer: (workspaceId, name, on) => answer('workspaces.setMcpServer', workspaceId, name, on),
             setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
         },
         agents: {
@@ -440,6 +485,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
             setManageTabs: (agentId, on) => answer('agents.setManageTabs', agentId, on),
             setDrivePages: (agentId, on) => answer('agents.setDrivePages', agentId, on),
+            setMcpServer: (agentId, name, on) => answer('agents.setMcpServer', agentId, name, on),
             setIssueWatch: (agentId, setting) => answer('agents.setIssueWatch', agentId, setting),
             setPermissions: (agentId, permissions) => answer('agents.setPermissions', agentId, permissions),
             setModel: (agentId, model) => model === undefined
@@ -448,6 +494,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             models: (agentId, refresh) => answer('agents.models', agentId, refresh === true),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
             toolOutput: (agentId, toolCallId) => answer('agents.toolOutput', agentId, toolCallId),
+            // Inline when it fits a frame; this machine's own window takes a larger image as a blob (below, Tynn #642).
+            attachment: (agentId, attachmentId) => answer('agents.attachment', agentId, attachmentId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: phone ? {
@@ -506,6 +554,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             check: () => read<UpdateState>('updates.check'),
             download: () => read<boolean>('updates.download'),
             install: () => read<{ report: string } | null>('updates.install'),
+            forceDrain: () => read<boolean>('updates.forceDrain'),
             ...(local ? { notes: () => read<UpdateState | null>('updates.notes') } : {}),
         },
     };
@@ -562,6 +611,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         next: cursor => blobRead<MetadataPage>('page.next', cursor),
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
+    let agentWire: RemoteClient['agentWire'];
     if (local) {
         bridge.gapps = {
             list: () => read('gapps.list'),
@@ -570,6 +620,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setOn: async (id, on) => { await read('gapps.setOn', id, on); },
             uninstall: async (id) => { await read('gapps.uninstall', id); },
             open: async (id) => { await read('gapps.open', id); },
+            preview: async (id) => { await read('gapps.preview', id); },
+            allowPreviewNetwork: async (id, allowed) => { await read('gapps.allowPreviewNetwork', id, allowed); },
             onChanged: (listener) => on(LOCAL_EVENTS.gapps, () => listener()),
         };
         bridge.marketplace = {
@@ -584,16 +636,81 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
          * THE FEATURE SNAPSHOT (P4 family 11, Tynn #560): it has no bound of its own, so it crosses inline when small and
          * as one blob when not; a change is pushed as a revision, and the window re-reads: one read at a time, the latest last.
          */
-        const decodeJson = <T>(read0: () => Promise<unknown>): Promise<T> => limit(async () => {
+        const decodeJson = <T>(read0: () => Promise<unknown>, agentId?: string): Promise<T> => limit(async () => {
             const result = await read0();
             if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as T;
             const content = (result as { jsonContent: { ref: string; blob: string } }).jsonContent;
-            try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await blobs!.readAll('features-json', content.blob))) as T; }
+            try {
+                const readBytes = () => blobs!.readAll('features-json', content.blob);
+                const bytes = agentId === undefined ? await readBytes() : await measureAgentReadAsync(agentId, 'blob', readBytes);
+                const decode = () => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as T;
+                return agentId === undefined ? decode() : measureAgentRead(agentId, 'decode', decode);
+            }
             finally { await blobRead('content.release', content.ref); }
         });
         const snapshotNow = (): Promise<FeatureData> => decodeJson<FeatureData>(() => read('features.snapshot'));
         // A frame over the door's cap would end this window's connection, so a call that large is refused here, with a reason.
         const tooLargeForFrame = (args: readonly unknown[]): boolean => new TextEncoder().encode(JSON.stringify(args)).length > LOCAL_FRAME_LIMIT_BYTES - 4 * 1024;
+        /*
+         * P4 FAMILY 9A (Tynn #564): the snapshot and an agent's detail cross inline when small and as one blob when not. The
+         * snapshot's push is inline when it fits a frame, else a revision the window re-reads; a subscribe reads at once.
+         */
+        const snapshotNow2 = (): Promise<GenieSnapshot> => decodeJson<GenieSnapshot>(() => read('snapshot'));
+        const snapshotListeners = new Set<(snapshot: GenieSnapshot) => void>();
+        let snapshotInline = 0, snapshotBusy = false, snapshotAgain = false;
+        const rereadSnapshot = async (): Promise<void> => {
+            if (snapshotBusy) { snapshotAgain = true; return; }
+            snapshotBusy = true;
+            try {
+                do {
+                    snapshotAgain = false;
+                    const started = snapshotInline;
+                    const snapshot = await snapshotNow2();
+                    // A newer one came inline while this was read: that one stands.
+                    if (started === snapshotInline) for (const listener of [...snapshotListeners]) listener(snapshot);
+                } while (snapshotAgain);
+            } catch (error) {
+                console.warn(`[genie] the snapshot could not be read: ${error instanceof Error ? error.message : String(error)}`);
+            } finally { snapshotBusy = false; }
+        };
+        on(LOCAL_EVENTS.snapshot, (raw) => {
+            const event = raw as { snapshot?: GenieSnapshot };
+            if (event.snapshot === undefined) { if (snapshotListeners.size > 0) void rereadSnapshot(); return; }
+            snapshotInline += 1;
+            for (const listener of [...snapshotListeners]) listener(event.snapshot);
+        });
+        Object.assign(bridge, {
+            snapshot: snapshotNow2,
+            subscribe: (listener: (snapshot: GenieSnapshot) => void) => { snapshotListeners.add(listener); void rereadSnapshot(); return () => { snapshotListeners.delete(listener); }; },
+            agentDetail: (agentId: string) => decodeJson<AgentDetail | null>(() => read('agentDetail', agentId)),
+        });
+        // One order per agent: a blob read at the front never lets a later patch overtake it.
+        type LocalAgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
+        const wires = new Map<string, Set<(payload: LocalAgentPayload) => void>>();
+        const orders = new Map<string, Promise<void>>();
+        on(LOCAL_EVENTS.agent, (raw) => {
+            const { agentId, payload } = raw as { agentId: string; payload: unknown };
+            orders.set(agentId, (orders.get(agentId) ?? Promise.resolve()).then(async () => {
+                const value = await decodeJson<LocalAgentPayload>(async () => payload, agentId);
+                for (const listener of [...(wires.get(agentId) ?? [])]) listener(value);
+            }).catch((error: unknown) => { console.warn(`[genie] an agent's detail could not be read: ${error instanceof Error ? error.message : String(error)}`); }));
+        });
+        agentWire = (agentId, onPayload) => {
+            let set = wires.get(agentId);
+            if (set === undefined) { set = new Set(); wires.set(agentId, set); }
+            set.add(onPayload);
+            // Watching (again) starts with the whole ledger, to every subscriber: one joining late holds no rows to patch.
+            void call('agent.watch', agentId);
+            return () => {
+                const held = wires.get(agentId);
+                if (!held) return;
+                held.delete(onPayload);
+                if (held.size > 0) return;
+                wires.delete(agentId);
+                orders.delete(agentId);
+                if (state.connected) void call('agent.unwatch', agentId);
+            };
+        };
         // P4 family 9b (Tynn #563): the composer keeps a host's reason (a slash command the agent does not offer, Tynn #440).
         Object.assign(bridge, {
             prompt: (agentId: string, text: string, attachments?: readonly { name: string; type: string; bytes: Uint8Array }[]) => (attachments && attachments.length > 0
@@ -632,6 +749,13 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             picked: async (paths: readonly string[]) => {
                 if (tooLargeForFrame([paths])) throw new Error('too many files were picked to report in one piece');
                 await read('features.picked', paths);
+            },
+        });
+        // ONE KEPT IMAGE (Tynn #642): inline when small, one blob when not (RemoteHost's jsonResult); a refusal is an answer.
+        Object.assign(bridge.agents, {
+            attachment: async (agentId: string, attachmentId: string): Promise<AttachmentReply> => {
+                try { return await decodeJson<AttachmentReply>(() => read('agents.attachment', agentId, attachmentId)); }
+                catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
             },
         });
         terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });
@@ -688,6 +812,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         ...(uploads ? { uploads } : {}),
         ...(pages ? { pages } : {}),
         ...(localOwner ? { localOwner } : {}),
+        ...(agentWire ? { agentWire } : {}),
         shares: {
             list: (workspaceId) => answer('tynnNetwork.shares.list', workspaceId),
             mint: (input) => answer('tynnNetwork.shares.mint', input),

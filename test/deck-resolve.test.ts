@@ -56,13 +56,6 @@ describe('the other three sources', () => {
         expect(resolveDeckAnswer(item, 'read')).toEqual({ kind: 'mark-read', messageId: 'msg_1' });
     });
 
-    it('finished-handoff: open navigates to the agent, restart restarts it with the handoff, seen marks it seen', () => {
-        const item = base({ id: 'fin_1', source: 'finished-handoff', blocking: false, answer: { kind: 'inline', options: [{ id: 'open', label: 'Open', tone: 'neutral' }, { id: 'restart', label: 'Restart with this', tone: 'neutral' }, { id: 'seen', label: 'mark read', tone: 'neutral' }] } });
-        expect(resolveDeckAnswer(item, 'open')).toEqual({ kind: 'navigate', route: 'genie://agent/agent_a?tab=stream' });
-        expect(resolveDeckAnswer(item, 'restart')).toEqual({ kind: 'restart-with-handoff', agentId: 'agent_a', finishedId: 'fin_1' });
-        expect(resolveDeckAnswer(item, 'seen')).toEqual({ kind: 'mark-seen', finishedId: 'fin_1' });
-    });
-
     it('a user-list item with no workspace cannot be marked done — refused, not guessed into a workspace', () => {
         const item = base({ id: 'li_2', source: 'user-list', workspaceId: null, blocking: false, answer: { kind: 'inline', options: [{ id: 'done', label: 'Done', tone: 'neutral' }] } });
         expect(resolveDeckAnswer(item, 'done')).toEqual({ kind: 'refused', reason: 'this item names no workspace; it cannot be marked done from here' });

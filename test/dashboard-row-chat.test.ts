@@ -21,19 +21,20 @@ const workspaces = [{ id: 'ws', defaultAgentId: 'a_wren' }];
 
 describe('the chat’s subject on the Dashboard', () => {
     it('is the agent picked there (CONTROL: none picked → genie, as before)', () => {
-        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, workspaces, 'a_atlas')).toBe('a_atlas');
-        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, workspaces, null)).toBe('a_genie');
+        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, 'a_atlas')).toBe('a_atlas');
+        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, null)).toBe('a_genie');
     });
 
-    it('a pick is the Dashboard’s only: on a workspace or an agent page the view decides, as before', () => {
-        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, workspaces, 'a_atlas')).toBe('a_wren');
-        expect(chatSubjectFor(parseRoute('genie://agent/a_wren?tab=stream'), agents, workspaces, 'a_atlas')).toBe('a_wren');
+    it('a pick stays when the Dashboard is left (Tynn #639); an agent page on screen is that agent', () => {
+        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, 'a_atlas')).toBe('a_atlas');
+        expect(chatSubjectFor(parseRoute('genie://agent/a_wren?tab=stream'), agents, 'a_atlas')).toBe('a_wren');
     });
 
     it('a picked agent no longer on the roster is not the subject (deleted meanwhile): genie', () => {
-        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, workspaces, 'a_gone')).toBe('a_genie');
+        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, 'a_gone')).toBe('a_genie');
     });
 });
+void workspaces;
 
 describe('the wiring (comment LINES dropped — a // inside a string such as genie://deck stays)', () => {
     const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8').split(/\r?\n/).filter((l) => !l.trim().startsWith('//')).join('\n');
@@ -47,9 +48,9 @@ describe('the wiring (comment LINES dropped — a // inside a string such as gen
         expect(block).not.toMatch(/deckItemFor|genie:\/\/deck/);
     });
 
-    it('App passes the picked agent to the chat’s subject, and forgets it once the Dashboard is left', () => {
+    it('App passes the picked agent to the chat’s subject, and keeps it when the Dashboard is left (Tynn #639)', () => {
         const app = source('../src/renderer/App.tsx');
-        expect(app).toMatch(/chatSubjectFor\(parsed, snapshot\.agents, snapshot\.workspaces \?\? \[\], dashboardChat\)/);
-        expect(app).toMatch(/if \(parsed\.surface !== 'dashboard'\) setDashboardChat\(null\)/);
+        expect(app).toMatch(/chatSubjectFor\(parsed, chatRoster, chatPick\)/);
+        expect(app).not.toMatch(/setDashboardChat\(null\)/);
     });
 });

@@ -296,8 +296,13 @@ export class EnvelopeSites {
             this.#tracked.set(info.id, { workspaceId: w.id, key: site.key, enabled: site.enabled, servable: true, fingerprint });
             const recorded = this.#trust!.sites[`${w.id}/${site.key}`];
             if (recorded !== fingerprint) {
-                this.#sites.setFirstStart(info.id, { ...firstStartWords(site), changed: recorded !== undefined });
-                continue;
+                // A TRUSTED WORKSPACE'S SITES NEVER WAIT (Tynn #618; the owner: "I should not have to keep re-trusting it
+                // every time it adds a new service or site"): new or changed, it is recorded and follows the usual rule.
+                if (!this.#workspaceTrusted(w.id)) {
+                    this.#sites.setFirstStart(info.id, { ...firstStartWords(site), changed: recorded !== undefined });
+                    continue;
+                }
+                await this.#record(w.id, site.key, fingerprint);
             }
             if (site.enabled && !asleep && !stopped.has(`${w.id}/${site.key}`)) this.#tryStart(info.id);
         }
@@ -363,7 +368,29 @@ export class EnvelopeSites {
         return { carried: book.carried, workspaces };
     }
 
-    /** The list a workspace's verdict is against. Throws when it can't be kept: the person is told, and it stays as it was. */
+    /** The person's yes to a workspace, or its carry at the upgrade (core/workspace-trust.ts `trustVerdict`, less the nothing-would-run case). */
+    #workspaceTrusted(workspaceId: string): boolean {
+        const book = this.trustRecord();
+        return book.workspaces[workspaceId] !== undefined || book.carried.includes(workspaceId);
+    }
+
+    /** The person's Untrust: the workspace's yes is gone, carried or said. Its sites' own records stay: what already runs here keeps running. Throws when it can't be kept, and it stays trusted. */
+    async forgetWorkspaceTrust(workspaceId: string): Promise<void> {
+        if (this.#trust === null) throw new Error('the record of what runs here has not been read yet');
+        const book = this.#trust;
+        const before = { hash: book.workspaces[workspaceId], carried: book.carried };
+        delete book.workspaces[workspaceId];
+        book.carried = book.carried.filter((id) => id !== workspaceId);
+        try {
+            await this.#ports.trust.save(book);
+        } catch (error) {
+            if (before.hash !== undefined) book.workspaces[workspaceId] = before.hash;
+            book.carried = before.carried;
+            throw error;
+        }
+    }
+
+    /** The person's yes to a workspace: being recorded here is the yes. Throws when it can't be kept: the person is told, and it stays as it was. */
     async recordWorkspace(workspaceId: string, hash: string): Promise<void> {
         if (this.#trust === null) throw new Error('the record of what runs here has not been read yet');
         const book = this.#trust;

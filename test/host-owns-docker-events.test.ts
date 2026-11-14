@@ -78,7 +78,18 @@ afterAll(async () => {
 describe('genie-host’s own long-lived commands have one owner', () => {
     it.skipIf(!linux)('a host KILLED leaves no `docker events` behind (CONTROL: the gauge finds it while the host lives)', async () => {
         expect(record.pid).toBe(hostProcess.pid);
-        found = await until('this host’s docker events', () => { const pids = dockerEventsOf(hostProcess.pid!); return pids.length > 0 ? pids : null; }, 60_000);
+        // A STREAM, not a `docker events` on its way out (Tynn #692, omarchy-test): with no Docker daemon to talk to, the
+        // command ends at once and the host tries again after 5, 10, 20 s. This control used to accept any pid it happened
+        // to catch in one of those tries (it passed after 35.9 s, on the fourth), and then proved nothing about a stream
+        // being ended with the host. The same pid must be there a second later; a machine with no daemon fails here, and
+        // says so.
+        const firstSeen = new Map<number, number>();
+        found = await until('this host’s docker events, alive for a second (a daemon it can stream from; `docker info` says whether there is one)', () => {
+            const pids = dockerEventsOf(hostProcess.pid!);
+            for (const pid of pids) if (!firstSeen.has(pid)) firstSeen.set(pid, Date.now());
+            const steady = pids.filter((pid) => Date.now() - firstSeen.get(pid)! >= 1_000);
+            return steady.length > 0 ? steady : null;
+        }, 60_000);
         expect(found.every((pid) => pidAlive(pid))).toBe(true); // POSITIVE CONTROL
         hostProcess.kill('SIGKILL');
         await until('the host to be gone', () => hostProcess.exitCode !== null || hostProcess.signalCode !== null, 15_000);

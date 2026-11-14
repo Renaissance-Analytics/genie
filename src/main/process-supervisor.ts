@@ -50,7 +50,7 @@ export type RestartPolicy = 'never' | 'on-failure' | 'always';
  * path), or a window's replica of the host's (supervisor-host.ts SupervisorReplica). Sites, the front door, the process
  * book and the Processes view are written against this, never the class.
  */
-export type SupervisorApi = Pick<ProcessSupervisor, 'start' | 'stop' | 'restart' | 'forget' | 'status' | 'list' | 'command' | 'log' | 'readLog' | 'recheck' | 'watchLiveness' | 'onChange' | 'onOutput'>;
+export type SupervisorApi = Pick<ProcessSupervisor, 'start' | 'stop' | 'restart' | 'forget' | 'status' | 'list' | 'command' | 'log' | 'readLog' | 'recheck' | 'watchLiveness' | 'onChange' | 'onOutput'> & Partial<Pick<ProcessSupervisor, 'onForget'>>;
 
 export interface ProcessSpec {
     readonly id: string;
@@ -75,6 +75,10 @@ export interface ProcessStatus {
     readonly restarts: number;
     readonly since: number;
     readonly reason?: string;
+    /** A one-shot command already owned by its executor: observed here, never kept or restarted. */
+    readonly commandRun?: true;
+    /** Actual command start, retained after completion so elapsed time does not become time since exit. */
+    readonly startedAt?: number;
 }
 
 export interface SupervisorClock {
@@ -106,6 +110,8 @@ const HEALTHY_AFTER_MS = 60_000;
 export const LIVENESS_INTERVAL_MS = 30_000;
 /** How long a process seen gone may still deliver its own exit before it is declared lost. */
 export const LOST_GRACE_MS = 5_000;
+/** Completed transient commands retained per host. Active and ordinary supervised processes are excluded. */
+export const COMPLETED_COMMAND_HISTORY_MAX = 100;
 
 interface Entry {
     spec: ProcessSpec;
@@ -125,13 +131,49 @@ interface Entry {
     log: OutputTail;
     /** When `recheck` first found this run gone; null while it is there (P2). */
     suspectAt: number | null;
+    external?: { stop: () => void; stopping: boolean; finished: boolean };
 }
 
 export class ProcessSupervisor {
+    /** Observe an existing command through the ordinary Processes protocol. The executor owns spawn, reap and exit. */
+    trackExternal(spec: Omit<ProcessSpec, 'restart' | 'env'>, control: { pid: number | null; stop: () => void }): { output(data: string): void; finish(exitCode: number | null, stopped?: boolean): void } {
+        if (this.#entries.has(spec.id) || this.#adopted.has(spec.id)) throw new Error(`process ${spec.id} already exists`);
+        const external = { stop: control.stop, stopping: false, finished: false };
+        const entry: Entry = {
+            spec: { ...spec, restart: 'never' }, ptyId: null, pid: control.pid,
+            state: 'running', exitCode: null, restarts: 0, consecutiveFailures: 0,
+            startedAt: this.#clock.now(), since: this.#clock.now(), wanted: false,
+            cancelRestart: null, log: new OutputTail(), suspectAt: null, external,
+        };
+        this.#entries.set(spec.id, entry);
+        this.#transition(entry, 'running');
+        const current = () => this.#entries.get(spec.id) === entry && !external.finished;
+        return {
+            output: (data) => {
+                if (!current() || data === '') return;
+                entry.log.append(data);
+                for (const listener of this.#outputListeners) listener(spec.id, data);
+            },
+            finish: (exitCode, stopped = false) => {
+                if (!current()) return;
+                external.finished = true;
+                // Release the executor/child/environment closure while its sanitized history remains visible.
+                external.stop = () => {};
+                entry.pid = null;
+                entry.exitCode = exitCode;
+                this.#completedCommands.set(spec.id, entry);
+                try { this.#transition(entry, stopped ? 'stopped' : exitCode === 0 ? 'exited' : 'failed'); }
+                finally { this.#trimCommandHistory(); }
+            },
+        };
+    }
+
     readonly #pty: PtyPort;
     readonly #clock: SupervisorClock;
     readonly #liveness: SupervisorLiveness;
     readonly #entries = new Map<string, Entry>();
+    /** In completion order, independent of start order and equal clock timestamps. Ordinary/active work is never here. */
+    readonly #completedCommands = new Map<string, Entry>();
     readonly #byPty = new Map<string, string>();
     /**
      * ADOPTED, NOT YET CLAIMED (the host split, P2.1): a live pty a previous window started, found under genie-host after
@@ -142,6 +184,7 @@ export class ProcessSupervisor {
     readonly #adoptedByPty = new Map<string, string>();
     readonly #changeListeners = new Set<(status: ProcessStatus) => void>();
     readonly #outputListeners = new Set<(id: string, data: string) => void>();
+    readonly #forgetListeners = new Set<(id: string) => void>();
     #confirmPending = false;
 
     constructor(
@@ -188,6 +231,7 @@ export class ProcessSupervisor {
 
     start(spec: ProcessSpec): ProcessStatus {
         const existing = this.#entries.get(spec.id);
+        if (existing?.external) throw new Error('a command run cannot be started again; request a new approved command');
         if (existing && existing.state === 'running') return this.#status(existing);
         if (existing?.cancelRestart) existing.cancelRestart();
         const entry: Entry = {
@@ -219,6 +263,7 @@ export class ProcessSupervisor {
      */
     adopt(pty: ListedPty): void {
         if (pty.tag?.kind !== 'process') return;
+        if (this.#entries.get(pty.tag.processId)?.external) return;
         if (this.#entries.get(pty.tag.processId)?.state === 'running') return;
         this.#adopted.set(pty.tag.processId, { ptyId: pty.id, pid: pty.pid, output: pty.scrollback });
         this.#adoptedByPty.set(pty.id, pty.tag.processId);
@@ -254,6 +299,14 @@ export class ProcessSupervisor {
     stop(id: string): boolean {
         const entry = this.#entries.get(id);
         if (!entry) return false;
+        if (entry.external) {
+            if (!entry.external.finished && !entry.external.stopping) {
+                entry.external.stopping = true;
+                entry.external.stop();
+            }
+            // Do not claim the command ended before its executor confirms exit/reap.
+            return true;
+        }
         entry.wanted = false;
         if (entry.cancelRestart) {
             entry.cancelRestart();
@@ -275,15 +328,35 @@ export class ProcessSupervisor {
      * visible; a process that was REMOVED must not linger as a stopped row whose Restart revives it.
      */
     forget(id: string): boolean {
-        if (!this.stop(id)) return false;
+        const entry = this.#entries.get(id);
+        if (!entry || (entry.external && !entry.external.finished)) return false;
+        if (!entry.external && !this.stop(id)) return false;
         this.#entries.delete(id);
+        this.#completedCommands.delete(id);
+        for (const listener of [...this.#forgetListeners]) {
+            try { listener(id); } catch { /* one observer cannot prevent removal or another window's update */ }
+        }
         return true;
+    }
+
+    #trimCommandHistory(): void {
+        while (this.#completedCommands.size > COMPLETED_COMMAND_HISTORY_MAX) {
+            const oldest = this.#completedCommands.keys().next().value;
+            if (oldest === undefined) break;
+            this.forget(oldest);
+        }
+    }
+
+    /** Removed from status/command/log already, whether forgotten by the host, a window or history expiry. */
+    onForget(listener: (id: string) => void): () => void {
+        this.#forgetListeners.add(listener);
+        return () => { this.#forgetListeners.delete(listener); };
     }
 
     /** Stop the current run and start a new one, by hand: the failure count starts over. */
     restart(id: string): ProcessStatus | null {
         const entry = this.#entries.get(id);
-        if (!entry) return null;
+        if (!entry || entry.external) return null;
         this.stop(id);
         return this.start(entry.spec);
     }
@@ -478,6 +551,7 @@ export class ProcessSupervisor {
             restarts: entry.restarts,
             since: entry.since,
             ...(entry.reason === undefined ? {} : { reason: entry.reason }),
+            ...(entry.external ? { commandRun: true as const, startedAt: entry.startedAt } : {}),
         };
     }
 }

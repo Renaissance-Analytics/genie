@@ -2,6 +2,8 @@ import { execFile, spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { resolveProgram } from '../core/program-lookup.js';
+import { systemProcessTree } from '../core/process-tree.js';
+import { endChildTrees } from './end-child-trees.js';
 
 /**
  * THE PROCESS-CREATING CODE `execFileRunner` STANDS ON (genie#1397), run by the SPAWN HOST (main/spawn-host.ts) — a child
@@ -40,19 +42,36 @@ export interface RunResult {
     readonly streams: RunStreams;
 }
 
+/**
+ * Tynn #698: A COMMAND CAN NEITHER WAIT ON A PROMPT NOR OUTLIVE ITS LIMIT. Its input is closed at once, so a question it asks
+ * reads end-of-input instead of holding the whole limit (the Toolchain's Update sat on "Starting"). At the limit it is ended
+ * WITH WHAT IT STARTED (end-child-trees.ts, the process tree's rules), not only the cmd.exe in front of npm or an installer;
+ * then it is reported as ETIMEDOUT. Should the ending itself not end it, the call is still answered a little later.
+ */
+const ENDED_GRACE_MS = 15_000;
+
 export function execInProcess(binary: string, args: readonly string[], options: RunOptions = {}): Promise<RunResult> {
     return new Promise((resolve, reject) => {
+        const limit = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        let timedOut = false;
+        let settled = false;
+        let grace: NodeJS.Timeout | null = null;
+        const timedOutError = () => Object.assign(new Error(`${binary} did not answer within ${limit} ms`), { code: 'ETIMEDOUT' });
         const child = execFile(
             options.shell === true ? binary : resolveProgram(binary),
             [...args],
-            { timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...(options.cwd ? { cwd: options.cwd } : {}), ...(options.env ? { env: { ...process.env, ...options.env } } : {}), shell: options.shell === true },
+            { windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...(options.cwd ? { cwd: options.cwd } : {}), ...(options.env ? { env: { ...process.env, ...options.env } } : {}), shell: options.shell === true },
             (error, stdout, stderr) => {
+                clearTimeout(timer);
+                if (grace) clearTimeout(grace);
+                if (settled) return;
+                settled = true;
                 if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
                     reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: 'ENOENT' }));
                     return;
                 }
-                if (error && (error as { killed?: boolean }).killed) {
-                    reject(Object.assign(new Error(`${binary} did not answer within ${options.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`), { code: 'ETIMEDOUT' }));
+                if (timedOut) {
+                    reject(timedOutError());
                     return;
                 }
                 const exitCode = typeof child.exitCode === 'number' ? child.exitCode : error ? 1 : 0;
@@ -60,6 +79,17 @@ export function execInProcess(binary: string, args: readonly string[], options: 
                 resolve({ stdout: String(stdout) || String(stderr), exitCode, streams: { stdout: String(stdout), stderr: String(stderr) } });
             },
         );
+        // Nothing is ever written to a command Genie runs: its input ends now.
+        child.stdin?.end();
+        const timer = setTimeout(() => {
+            timedOut = true;
+            void endChildTrees([child], systemProcessTree).catch(() => { child.kill(); });
+            grace = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                reject(timedOutError());
+            }, ENDED_GRACE_MS);
+        }, limit);
     });
 }
 

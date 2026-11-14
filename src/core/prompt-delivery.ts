@@ -1,6 +1,7 @@
 import type { StreamEvent } from './stream-event.js';
 
-export type PromptDelivery = 'queued' | 'sent' | 'undelivered' | 'discarded' | 'unconfirmed';
+/** `carried`: kept for the next run after an interrupt it could not confirm (Tynn #702); a new run does not make it undelivered. */
+export type PromptDelivery = 'queued' | 'sent' | 'undelivered' | 'discarded' | 'unconfirmed' | 'carried';
 
 /** Unacknowledged input from an earlier run is a draft, never silently sent on a restart. */
 export function promptDeliveries(rows: readonly { event: StreamEvent }[]): Map<string, PromptDelivery> {

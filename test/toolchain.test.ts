@@ -90,7 +90,8 @@ describe('planning an update for THIS platform — Genie builds the command from
         // pkexec, not sudo: Genie runs commands with no terminal, so sudo could never ask for the password.
         expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'pkexec apt-get install --only-upgrade -y git', manager: 'apt' });
         expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'dnf' })).toEqual({ command: 'pkexec dnf upgrade -y git', manager: 'dnf' });
-        expect(planUpdate({ tool: 'claude-code', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'npm install -g @anthropic-ai/claude-code@latest', manager: 'npm' });
+        // Agent CLIs update the way their vendor documents (Tynn #698): `npm install -g` on npm 12 left Claude Code a placeholder.
+        expect(planUpdate({ tool: 'claude-code', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'claude update', manager: 'vendor' });
     });
 
     it('a tool this manager does not know, or a manager that cannot update it, is a refusal with the reason — not a guessed command', () => {

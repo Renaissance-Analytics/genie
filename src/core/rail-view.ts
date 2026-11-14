@@ -42,6 +42,9 @@ export interface RailWorkspace {
     governedBy?: string | null;
     /** Its default agent (Genie 1's), when one is designated. */
     defaultAgentId?: string;
+    /** MCP servers off by default for its agents, and every server one of their sessions reported (Tynn #628). */
+    mcpOff?: readonly string[];
+    mcpSeen?: readonly string[];
     /** Its colour (genie#1300): project.json `appearance.color`, `#rrggbb`. Absent = none known yet. */
     color?: string;
 }

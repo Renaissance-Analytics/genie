@@ -115,7 +115,7 @@ describe('in any other build', () => {
 
     it('the flag is built in only when asked for, and nothing that ships asks', () => {
         expect(readFileSync('vite.main.config.ts', 'utf8')).toMatch(/__GENIE_TEST_HOLDS__: process\.env\.GENIE_TEST_HOLDS === '1' \? 'true' : 'false'/);
-        for (const file of ['.github/workflows/ci.yml', '.github/workflows/release.yml', 'package.json', 'electron-builder.yml']) {
+        for (const file of ['scripts/ci/linux.sh', 'scripts/ci/windows.ps1', '.github/workflows/release.yml', 'package.json', 'electron-builder.yml']) {
             expect(readFileSync(file, 'utf8'), file).not.toContain('GENIE_TEST_HOLDS');
         }
     });

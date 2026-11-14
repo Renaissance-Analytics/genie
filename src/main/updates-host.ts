@@ -55,9 +55,6 @@ export const UPDATER_HELPER_LABEL = 'genie updater';
 /** How long a started helper has to link before what needed it is told, in words. */
 export const HELPER_PATIENCE_MS = 30_000;
 
-/** How long a host update lets turns in flight reach a safe point before it drains anyway (Tynn #414). */
-export const HOST_UPDATE_SETTLE_MS = 60_000;
-
 /** How long the helper waits for every Genie process to be gone before it gives up the install (and says so). */
 export const INSTALL_WAIT_MS = 30_000;
 
@@ -77,7 +74,7 @@ export interface UpdatesServiceOptions {
     readonly defaultLaunch: HelperLaunch;
     readonly windowConnected: () => boolean;
     /** This host's own end, after the helper has the install. */
-    readonly exit: () => void;
+    readonly exit: () => void | Promise<void>;
     readonly helperPatienceMs?: number;
     readonly installWaitMs?: number;
     readonly defer?: (fn: () => void, ms: number) => void;
@@ -207,7 +204,7 @@ export class UpdatesService {
             check: async () => (await this.#request('check')) as { version: string } | null,
             download: async (onProgress) => { await this.#request('download', onProgress); },
             prepareInstall: async () => { await this.#request('prepare'); },
-            quitAndInstall: () => { void this.#handOver(); },
+            quitAndInstall: () => this.#handOver(),
         };
         this.#host = new UpdateHost({
             ...options.host,
@@ -252,6 +249,16 @@ export class UpdatesService {
     /** A window's (or, through it, an owner's remote) call. */
     async call(method: string, args: readonly unknown[], caller: UpdatesCaller): Promise<unknown> {
         switch (method) {
+            case 'prepareQuit':
+                if (!caller.window) throw new Error('Only a local window can prepare a quit.');
+                return this.#host.prepareQuit();
+            case 'cancelDrain':
+                if (!caller.window) throw new Error('Only a local window can abandon its shutdown.');
+                this.#host.cancelDrain();
+                return true;
+            case 'forceDrain':
+                if (!caller.window) throw new Error(NO_WINDOW_INSTALL);
+                return this.#host.forceDrain();
             case 'state':
                 return this.#host.state();
             case 'check':
@@ -411,7 +418,7 @@ export class UpdatesService {
                 }
             }
         }
-        this.#options.exit();
+        await this.#options.exit();
     }
 }
 
@@ -436,30 +443,17 @@ export function hostDrainAgents(input: {
     writeInterruptedAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     stopAll: (onLeft?: (left: number) => void) => Promise<void>;
     onRecordError?: (error: unknown) => void;
-    /** How long the drain waits for turns in flight (Tynn #414). */
-    settleMs?: number;
-    now?: () => number;
-    sleep?: (ms: number) => Promise<void>;
+    waitForSafe?: DrainAgentsPort['waitForSafe'];
+    force?: () => boolean;
+    release?: () => void;
 }): DrainAgentsPort {
     // Each agent once (Tynn #414): restored exactly once, however the roster names it.
     const agents = (): readonly { id: string; name: string }[] => [...new Map(input.agents().map((a) => [a.id, a])).values()];
-    const live = () => agents().filter((a) => input.probe(a.id as AgentId)?.running === true);
-    const sleep = input.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    const now = input.now ?? Date.now;
     return {
-        live: () => live().map((a) => ({ id: a.id, name: a.name })),
-        // A SAFE POINT (Tynn #414): every turn in flight is let end, bounded; who is still mid-turn at the bound is recorded
-        // as interrupted and resumed after the swap, told to continue.
-        settle: async (onWaiting) => {
-            const until = now() + (input.settleMs ?? HOST_UPDATE_SETTLE_MS);
-            for (;;) {
-                const waiting = live().filter((a) => input.probe(a.id as AgentId)?.inTurn === true).map((a) => a.name);
-                if (waiting.length === 0) return;
-                onWaiting(waiting);
-                if (now() >= until) return;
-                await sleep(Math.min(1_000, Math.max(0, until - now())));
-            }
-        },
+        ...(input.waitForSafe ? { waitForSafe: input.waitForSafe } : {}),
+        ...(input.force ? { force: input.force } : {}),
+        ...(input.release ? { release: input.release } : {}),
+        live: () => agents().filter((a) => input.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
         stopAll: recordThenStopAll({
             markRecorded: () => {},
             record: () => recordShutdown({

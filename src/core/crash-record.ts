@@ -103,6 +103,11 @@ export type CrashRecord = CrashHeader & (
           readonly lastRssMb: number | null;
           readonly lifecycle: readonly string[];
           readonly memory: readonly RssSample[];
+          /** WHICH WINDOW (Tynn issue #711); absent in a record written before it. */
+          readonly window?: LostWindow;
+          /** HOW IT ENDED, when that was seen (#711); `null` = not seen, and {@link exitUnseen} says what that leaves. */
+          readonly exit?: LostExit | null;
+          readonly exitUnseen?: string;
       }
     | {
           readonly kind: 'exit';
@@ -145,26 +150,67 @@ export function hangNoticeView(notice: HangNotice): SafeModeView {
     return { active: true, at: notice.at, cause: 'hang', crashLoop: false, agents: notice.agents.map((a) => a.id), processes: [], sites: [] };
 }
 
+/**
+ * A LOST WINDOW, NAMED (Tynn issue #711): its pid, when it first beat on the link that dropped, the route its main window
+ * showed, its V8 heap against its limit at its last beat (a window near its limit dies of out-of-memory with no exit
+ * path run), and how long it had been silent when its link dropped (a window that stops beating seconds before it is
+ * gone was busy, or stuck, as it died). `null` = its beats did not say (an older window).
+ */
+export interface LostWindow {
+    readonly pid: number;
+    readonly firstBeatAt: string;
+    readonly route: string | null;
+    readonly heapMb: number | null;
+    readonly heapLimitMb: number | null;
+    readonly silentMsBeforeDrop: number | null;
+}
+
+/**
+ * How a lost window's process ended, as far as it was SEEN (#711): `genie-host` = a window it started itself (after a hang,
+ * or an update), so it saw the exit code and signal; `window` = the window's own exit record (an exit path it caught).
+ */
+export interface LostExit {
+    readonly code: number | null;
+    readonly signal: string | null;
+    readonly seenBy: 'genie-host' | 'window';
+    /** The window's own record's reason (`exit`, `uncaught-exception`, …); absent for genie-host's. */
+    readonly reason?: string;
+}
+
+/** What a `lost` record says when no exit was seen. */
+export const EXIT_UNSEEN = 'genie-host did not start this window, and the window wrote no exit record: its exit handlers never ran. It was ended from outside, crashed in native code, or ran out of memory.';
+
 /** What window main says each second: its pid and its own RSS in bytes; `bye` = its quit ran to its end. */
 export interface WindowBeatPayload {
     readonly pid: number;
     readonly rss: number;
     /** The main window's page (its renderer's working set), in bytes; absent = not sampled. What grew before an oom. */
     readonly rendererRss?: number;
+    /** The route the main window shows (#711): which window a lost record is about. */
+    readonly route?: string;
+    /** Window main's V8 heap in use and its limit, in bytes (#711): how near out-of-memory it was. */
+    readonly heapUsed?: number;
+    readonly heapLimit?: number;
     readonly bye?: true;
 }
+
+/** A route as a beat may carry it: a short string, or nothing. */
+const ROUTE_CHARS = 300;
 
 /** A beat as it arrived, or `null`: a frame that is not one is ignored, never trusted. */
 export function parseBeat(value: unknown): WindowBeatPayload | null {
     if (value === null || typeof value !== 'object') return null;
-    const v = value as { pid?: unknown; rss?: unknown; rendererRss?: unknown; bye?: unknown };
+    const v = value as { pid?: unknown; rss?: unknown; rendererRss?: unknown; route?: unknown; heapUsed?: unknown; heapLimit?: unknown; bye?: unknown };
     const pid = v.pid;
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
     const raw = v.rss;
     const rss = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0;
-    const page = v.rendererRss;
-    const rendererRss = typeof page === 'number' && Number.isFinite(page) && page >= 0 ? { rendererRss: page } : {};
-    return v.bye === true ? { pid, rss, ...rendererRss, bye: true } : { pid, rss, ...rendererRss };
+    const bytes = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+    const rendererRss = bytes(v.rendererRss) ? { rendererRss: v.rendererRss } : {};
+    const route = typeof v.route === 'string' && v.route.length > 0 ? { route: v.route.slice(0, ROUTE_CHARS) } : {};
+    const heap = bytes(v.heapUsed) && bytes(v.heapLimit) ? { heapUsed: v.heapUsed, heapLimit: v.heapLimit } : {};
+    const beat = { pid, rss, ...rendererRss, ...route, ...heap };
+    return v.bye === true ? { ...beat, bye: true } : beat;
 }
 
 /** Bytes as whole MB (what a lifecycle line and a record say). */

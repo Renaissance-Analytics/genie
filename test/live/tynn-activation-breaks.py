@@ -18,7 +18,7 @@ controls = [
      'workspacePath: here.path, agent, signal, tynn,', "workspacePath: here.path, agent: { ...agent, id: 'agent_shared' }, signal, tynn,",
      'test/tynn-activation.test.ts', 'uses distinct keys', 'expected true to be false'),
     ('inherited denial', 'src/main/session-host.ts',
-     "const inheritedPolicy = extras?.mcpServers?.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };", 'const inheritedPolicy = {};',
+     "...(supplied.some((server) => server.name === 'tynn') ? [] : ['tynn'])])]", '...[]])]',
      'test/tynn-inherited-policy.test.ts', 'disables inherited Tynn', 'disabledMcpServers'),
     ('cancelled lookup', 'src/main/tynn-agent-identities.ts',
      "            if (input.signal?.aborted) throw new ProvisionFailure('refused', 'Tynn agent credential preparation was cancelled.');",

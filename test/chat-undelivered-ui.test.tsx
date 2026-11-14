@@ -5,8 +5,8 @@ import { control } from './helpers/control-markup.js';
 
 /**
  * THE UNDELIVERED MESSAGE ON SCREEN (the board's `failed` shape): your bubble with a dashed red border, "Not delivered.
- * <agent> is not running.", and `[Restart]` — the chat's one Restart (genie#1238), which restarts the agent and sends what
- * was not delivered. Never dropped, never shown as sent.
+ * <agent> is not running.", and the queue bar's `Send all now` (Tynn #702) — the chat's one Restart (genie#1238), which
+ * restarts the agent and sends what was not delivered. Never dropped, never shown as sent.
  */
 const thread: ChatThread = {
     agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: { text: 'Broken · ACP stream closed', tone: 'bad' },
@@ -16,24 +16,23 @@ const render = (t: ChatThread) =>
     renderToStaticMarkup(<ChatFlyout thread={t} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
 
 describe('an undelivered message', () => {
-    it('is kept, marked with the agent’s name, and offers Restart', () => {
+    it('is kept, marked with the agent’s name, and the queue offers Send all now', () => {
         const html = render(thread);
         expect(html).toContain('data-chat-undelivered="d1"');
         expect(html).toContain('Not delivered. lark is not running.');
-        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
-        expect(control(html, 'data-action="restart"')!.open).toContain('data-draft="d1"');
+        expect(control(html, 'data-action="send-all"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send all now' });
     });
 
     it('a delivered message carries none of that (positive control)', () => {
         const html = render({ ...thread, messages: [{ ...thread.messages[0]!, delivered: true }] });
         expect(html).not.toContain('data-chat-undelivered');
-        expect(html).not.toContain('data-action="restart"');
+        expect(html).not.toContain('data-action="send-all"');
     });
 
     it('a refused retry says why beside the kept draft, with the retry action still available', () => {
         const html = render({ ...thread, messages: [{ ...thread.messages[0]!, draftProblem: 'The previous run is still stopping.' }] });
         expect(html).toContain('role="alert"');
         expect(html).toContain('The previous run is still stopping.');
-        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
+        expect(control(html, 'data-action="send-all"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send all now' });
     });
 });

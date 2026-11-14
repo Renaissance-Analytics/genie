@@ -34,7 +34,7 @@ describe('ensure — the automatic colour', () => {
         await r.colors.ensure(WS);
         expect(r.writes.sort()).toEqual(['/w/a/project.json', '/w/c/project.json']);
         const a = JSON.parse(r.files['/w/a/project.json']!);
-        expect(a).toMatchObject({ $schema: SCHEMA('0.3.0'), name: 'A', repos: [] });
+        expect(a).toMatchObject({ $schema: SCHEMA('0.4.0'), name: 'A', repos: [] });
         expect(WORKSPACE_PALETTE).toContain(a.appearance.color);
         expect(r.colors.colorOf('/w/a')).toBe(a.appearance.color);
         expect(r.colors.colorOf('/w/b')).toBe('#123456');

@@ -95,13 +95,13 @@ function stack(state: ToastState, items: readonly DeckItem[], over: Partial<Appr
 }
 
 describe('which Deck items are toasts', () => {
-    it('the approval queue’s requests (`appr_`), and nothing else: a question, a provider’s own permission, a forwarded one, a finish', () => {
+    it('the approval queue’s requests (`appr_`), and nothing else: a question, a provider’s own permission, a forwarded one, a mail', () => {
         const items: DeckItem[] = [
             approval(1),
             { ...approval(2), id: 'q_1', answer: { kind: 'form', fields: 1 } },
             { ...approval(3), id: 'approval:agent_x' },
             approval(4, { forwardedFrom: 'host.example' }),
-            { ...approval(5), id: 'fin_1', source: 'finished-handoff' },
+            { ...approval(5), id: 'msg_1', source: 'unread-dm' },
         ];
         // COUNTED: exactly the one.
         expect(items.filter(isApprovalToast).map((i) => i.id)).toEqual([approval(1).id]);

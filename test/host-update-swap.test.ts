@@ -14,8 +14,8 @@ const lib = (offer = { version: '2.0.0-beta.62', hostHash: 'ffffffffffff', engin
     configure: () => {}, check: async () => offer, download: async (p) => { p(100); }, quitAndInstall: () => {},
 });
 
-describe('the drain waits for turns to reach a safe point', () => {
-    it('settles first, saying who it waits on, then stops the agents', async () => {
+describe('the drain waits for turns to reach a safe point (the line’s safe-point drain, Tynn #616)', () => {
+    it('waits for safe points first, saying who it waits on, then stops the agents', async () => {
         const order: string[] = [];
         const seen: unknown[] = [];
         const host = new UpdateHost({
@@ -23,43 +23,28 @@ describe('the drain waits for turns to reach a safe point', () => {
             running: { build: '2.0.0-beta.61+0123456789ab', protocol: 3 },
             agents: {
                 live: () => [{ id: 'a1', name: 'Ada' }],
-                settle: async (onWaiting) => { onWaiting(['Ada']); order.push('settle'); },
+                waitForSafe: async (_reason, progress) => { progress({ waiting: [{ id: 'a1', name: 'Ada' }], deadline: 0 }); order.push('safe'); return { interrupted: [], forced: false, timedOut: false }; },
                 stopAll: async () => { order.push('stop'); },
             },
         });
-        host.onChange((s) => { if (s.installing?.step === 'turns') seen.push(s.installing.waitingOn); });
+        host.onChange((s) => { if (s.installing?.step === 'waiting') seen.push(s.installing.waiting?.map((a) => a.name)); });
         await host.check();
         await host.download();
         await host.install();
-        expect(order).toEqual(['settle', 'stop']);
-        expect(seen).toContainEqual(['Ada']);
+        expect(order).toEqual(['safe', 'stop']);
     });
 
-    it('hostDrainAgents waits for every turn in flight, naming them, and gives up at its bound', async () => {
-        let t = 0;
-        let inTurn = new Set(['a1', 'a2']);
-        const waited: string[][] = [];
+    it('hostDrainAgents hands the line’s safe-point wait to the drain, over the deduped roster', async () => {
+        const waited: string[] = [];
         const drain = hostDrainAgents({
-            agents: () => [{ id: 'a1', name: 'Ada' }, { id: 'a2', name: 'Bo' }],
-            probe: (id) => ({ running: true, turnState: 'working', inTurn: inTurn.has(id) }),
+            agents: () => [{ id: 'a1', name: 'Ada' }, { id: 'a1', name: 'Ada' }],
+            probe: () => ({ running: true, turnState: 'working', inTurn: true }),
             writeRunningAtQuit: async () => {}, writeInterruptedAtQuit: async () => {}, stopAll: async () => {},
-            settleMs: 60_000, now: () => t, sleep: async (ms) => { t += ms; if (t >= 1_000) inTurn = new Set(['a2']); },
+            waitForSafe: async (reason) => { waited.push(reason); return { interrupted: [], forced: false, timedOut: false }; },
         });
-        await drain.settle!((names) => { waited.push([...names]); });
-        expect(waited[0]).toEqual(['Ada', 'Bo']);
-        expect(waited.at(-1)).toEqual(['Bo']);
-        expect(t).toBeGreaterThanOrEqual(60_000);
-    });
-
-    it('CONTROL: with no turn in flight it does not wait', async () => {
-        let slept = 0;
-        const drain = hostDrainAgents({
-            agents: () => [{ id: 'a1', name: 'Ada' }], probe: () => ({ running: true, turnState: 'idle', inTurn: false }),
-            writeRunningAtQuit: async () => {}, writeInterruptedAtQuit: async () => {}, stopAll: async () => {},
-            now: () => 0, sleep: async () => { slept += 1; },
-        });
-        await drain.settle!(() => {});
-        expect(slept).toBe(0);
+        await drain.waitForSafe!('upgrade', () => {});
+        expect(waited).toEqual(['upgrade']);
+        expect(drain.live()).toEqual([{ id: 'a1', name: 'Ada' }]);
     });
 
     it('records each agent that was running exactly once', async () => {
@@ -126,9 +111,7 @@ describe('the install directory is the install, not the host’s copy', () => {
 
 describe('the restart screen says who it waits on', () => {
     it('names the agents whose turn is still in flight', () => {
-        expect(installScreen({ phase: 'installing', version: '2.0.0-beta.62', installing: { step: 'turns', agents: 2, left: 2, waitingOn: ['Ada', 'Bo'] } }, true)?.detail)
-            .toBe('Waiting for Ada and Bo to finish their turn');
-        expect(installScreen({ phase: 'installing', version: '2.0.0-beta.62', installing: { step: 'turns', agents: 1, left: 1, waitingOn: ['Ada'] } }, true)?.detail)
-            .toBe('Waiting for Ada to finish its turn');
+        expect(installScreen({ phase: 'installing', version: '2.0.0-beta.62', installing: { step: 'waiting', agents: 2, left: 2, reason: 'upgrade', waiting: [{ id: 'a1', name: 'Ada' }, { id: 'a2', name: 'Bo' }] } }, true)?.detail)
+            .toMatch(/Waiting for Ada, Bo to reach a safe point/);
     });
 });

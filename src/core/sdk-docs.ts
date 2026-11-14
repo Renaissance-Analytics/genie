@@ -21,7 +21,7 @@ const SIDE_WORDS: Record<string, string> = {
     both: 'a client draws it and its work is done on the host, over its `reach.link`',
 };
 
-const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+const cell = (text: string) => text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 const yesNo = (required: boolean) => (required ? 'yes' : 'no');
 const defaultOf = (f: { readonly default?: unknown }) => (f.default === undefined ? '—' : `\`${JSON.stringify(f.default)}\``);
 

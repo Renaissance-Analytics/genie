@@ -56,6 +56,13 @@ describe('the report Genie builds', () => {
 describe('redaction: the SAME rules as Tynn (test/fixtures/crash-redaction.json, tynn.ai has the same file)', () => {
     const rules = JSON.parse(readFileSync('test/fixtures/crash-redaction.json', 'utf8')) as { workspaceNames: string[]; rows: Array<{ name: string; input: string; expected: string }> };
     const ctx = { workspaceNames: rules.workspaceNames, agentNames: [] };
+    // Token-shaped test values are built here, never stored as literals, so no scanner reads the repo as holding a secret.
+    const fake: Record<string, string> = {
+        GITHUB_TOKEN: ['ghp', '_', 'x'.repeat(36)].join(''),
+        API_KEY: ['sk', '-ant-', 'api03', '-', 'x'.repeat(30)].join(''),
+        JWT: [Buffer.from('{"alg":"none"}').toString('base64url'), Buffer.from('{"sub":"test"}').toString('base64url'), 'x'.repeat(16)].join('.'),
+    };
+    for (const row of rules.rows) row.input = row.input.replace(/[{][{](\w+)[}][}]/g, (_, k: string) => fake[k] ?? '');
     it.each(rules.rows.map((r) => [r.name, r] as const))('%s', (_, row) => {
         const redact = fn<(t: string, c: unknown) => string>('redactCrashText');
         const once = redact(row.input, ctx);
@@ -107,7 +114,7 @@ describe('what is sent is what the person saw', () => {
     });
     it('an edit that adds a private detail is NOT sent: the cleaned text comes back to be looked at again', () => {
         const check = fn<(t: string, c: unknown) => { ok: boolean; text: string; reason?: string }>('checkBeforeSend');
-        const r = check('it broke in /home/wish/secret and mailed wish@impact.do', SECRETS);
+        const r = check('it broke in /home/someone/secret and mailed someone@example.com', SECRETS);
         expect(r.ok).toBe(false);
         expect(r.text).toBe('it broke in [path] and mailed [email]');
         expect(r.reason).toMatch(/removed/i);

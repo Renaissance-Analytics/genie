@@ -47,9 +47,10 @@ describe('what it shows', () => {
     it('first time and changed since are different words, and changed says what becomes of a running agent', () => {
         expect(body(step())).toMatch(/data-trust-first/);
         expect(body(step())).not.toMatch(/data-trust-changed/);
+        // Nothing is ever "changed since you trusted it" (Tynn #618): trust stays, so the step only ever asks the first time.
         const changed = body(step({ changed: true }));
-        expect(changed).toMatch(/data-trust-changed/);
-        expect(changed).toContain('keep their conversations');
+        expect(changed).not.toMatch(/data-trust-changed/);
+        expect(changed).toMatch(/data-trust-first/);
     });
 });
 

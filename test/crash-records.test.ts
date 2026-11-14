@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { release } from 'node:os';
 import { CRASH_KEEP, CRASH_MAX_BYTES, crashCause, type CrashHeader, type CrashRecord } from '../src/core/crash-record.js';
-import { crashHeader, latestCrashRecord, readLifecycleTail, writeCrashRecord } from '../src/main/crash-records.js';
+import { crashHeader, exitRecordOf, latestCrashRecord, readLifecycleTail, writeCrashRecord } from '../src/main/crash-records.js';
 
 /**
  * THE CRASH RECORDS (Tynn story #386): `<genieRoot()>/runtime/crash/<ISO time>.json`, one per hang, lost window or exit
@@ -123,5 +123,27 @@ describe('the cause the safe-mode banner shows, from the record', () => {
         expect(crashCause({ ...HEADER, kind: 'exit', at: '2026-11-06T10:00:00.000Z', pid: 1, reason: 'exit', code: 3, rssMb: 100, agents: [] })).toBe('it exited with code 3');
         expect(crashCause({ ...HEADER, kind: 'lost', at: '2026-11-06T10:00:00.000Z', windowPid: 1, lastBeatAt: null, lastRssMb: null, lifecycle: [], memory: [] })).toBe('it ended without a trace');
         expect(crashCause(null)).toBe('it ended without a trace');
+    });
+});
+
+describe('a lost window’s own exit record (Tynn issue #711)', () => {
+    const exitOf = (pid: number, at: number, reason = 'exit', code: number | null = 1): CrashRecord => ({ ...HEADER, kind: 'exit', at: new Date(at).toISOString(), pid, reason, code, rssMb: 300, agents: [] });
+    const t = Date.UTC(2026, 10, 12, 14, 40, 0, 0);
+
+    it('the newest exit record of that pid written since it first beat: its reason and code', () => {
+        const crash = join(fresh(), 'crash');
+        writeCrashRecord(crash, exitOf(52432, t - 60_000, 'exit', 9));
+        writeCrashRecord(crash, exitOf(52432, t + 5_000, 'uncaught-exception', null));
+        writeCrashRecord(crash, exitOf(52432, t + 9_000, 'exit', 3));
+        writeCrashRecord(crash, hang(t + 10_000));
+        expect(exitRecordOf(crash, 52432, t)).toEqual({ reason: 'exit', code: 3 });
+    });
+
+    it('CONTROL: another pid’s, or one written before this window first beat, is not its exit', () => {
+        const crash = join(fresh(), 'crash');
+        writeCrashRecord(crash, exitOf(1111, t + 5_000));
+        writeCrashRecord(crash, exitOf(52432, t - 1));
+        expect(exitRecordOf(crash, 52432, t)).toBeNull();
+        expect(exitRecordOf(join(crash, 'none'), 52432, t)).toBeNull();
     });
 });

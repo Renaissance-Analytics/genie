@@ -53,6 +53,11 @@ function firstOnPath(provider: string, ports: ProviderProgramPorts): string | nu
     return null;
 }
 
+/** What `<provider>` on PATH is on Windows (an .exe, or a shim), as the driver searches; `null` elsewhere or when nothing is. */
+export function providerOnPath(provider: string, ports: Pick<ProviderProgramPorts, 'platform' | 'env' | 'isFile'>): string | null {
+    return ports.platform === 'win32' ? firstOnPath(provider, ports as ProviderProgramPorts) : null;
+}
+
 /** The program or script a wrapper names, read from its text: the first that exists and is not an interpreter or a batch file. */
 function namedByWrapper(file: string, text: string, ports: ProviderProgramPorts): string | null {
     const own = `${win32.dirname(file)}\\`;

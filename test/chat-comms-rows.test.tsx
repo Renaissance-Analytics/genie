@@ -88,9 +88,10 @@ describe('the thread', () => {
         expect(thread.messages.find((m) => m.id === 'e3')).toBeUndefined();
     });
 
-    it('a mail card names a known agent sender, and otherwise retains its id without inventing a sender', () => {
+    // Tynn #621 changed this contract: an id is never shown to the person, so an unknown sender gets words, not its id.
+    it('a mail card names a known agent sender, and otherwise says so in words, never showing its id or inventing a name', () => {
         expect(chatThreadFrom(detail([mail('m1', 'a2', 'a1', 'hi', T)]), 'a1', rows, () => 0).messages.find(m => m.id === 'm1')!.from).toBe('wren → atlas');
-        expect(chatThreadFrom(detail([mail('m2', 'a9', 'a1', 'hi', T)]), 'a1', rows, () => 0).messages.find(m => m.id === 'm2')!.from).toBe('a9 → atlas');
+        expect(chatThreadFrom(detail([mail('m2', 'a9', 'a1', 'hi', T)]), 'a1', rows, () => 0).messages.find(m => m.id === 'm2')!.from).toBe('an agent no longer in Genie → atlas');
     });
 });
 

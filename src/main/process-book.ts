@@ -27,8 +27,9 @@ import { scheduledTaskFromFlow } from './scheduled-tasks-move.js';
  *
  * `wanted` is set by add / start / restart and cleared by the person's stop. Genie's own quit
  * stops the supervisor's processes directly and never touches this book, so a quit is not a stop:
- * what was running comes back. What the person stopped stays stopped — through restarts and
- * upgrades — and is still LISTED as stopped, never silently dropped. Remove forgets it.
+ * what was running comes back unless its restart policy is `never`. A `never` process is kept
+ * stopped on launch, with the reason, until explicitly started. What the person stopped stays
+ * stopped — through restarts and upgrades — and is still LISTED, never silently dropped. Remove forgets it.
  *
  * ## Nothing starts in a hibernated workspace
  *
@@ -345,7 +346,7 @@ export class ProcessBook {
         return this.#data.processes.filter((p) => !this.#deps.asleep(p.workspaceId));
     }
 
-    /** Refresh connected views after hibernation metadata changes, without touching kept specs. */
+    /** Refresh connected views after row visibility or a restore explanation changes, without touching kept specs. */
     visibilityChanged(): void { for (const listener of this.#listeners) listener(); }
 
     /**
@@ -382,13 +383,22 @@ export class ProcessBook {
         return rows.filter((p) => !this.#deps.asleep(p.workspaceId));
     }
 
-    /** At launch: start every process the person wants, except in a hibernated workspace — or in safe mode. */
+    /** At launch: restore wanted services, never one-shots; hibernation and safe mode hold services back. */
     restore(): { started: string[]; heldBack: string[] } {
         const started: string[] = [];
         const heldBack: string[] = [];
+        let stoppedByRestart = false;
         for (const p of this.#data.processes) {
             // A scheduled task is never brought back as a running process: its schedule fires it (process-scheduler.ts).
             if (!p.wanted || p.schedule) continue;
+            // Tynn #654: wanted remembers the explicit add/start, even after a one-shot completed. It
+            // cannot override `never` on a new host launch. Keep the row and the command's own files.
+            // Do not return it in heldBack: genie-host offers those ids for safe-mode Resume.
+            if (p.restart === 'never') {
+                this.#heldBack.set(p.id, 'stopped by restart (restart: never); use Start to run it again');
+                stoppedByRestart = true;
+                continue;
+            }
             // SAFE MODE (Tynn #386): held back, saying why; the person's Start (or the banner's) runs it. safe mode holds
             if (this.#deps.safeMode?.() === true) {
                 this.#heldBack.set(p.id, SAFE_MODE_REASON);
@@ -410,6 +420,9 @@ export class ProcessBook {
             this.#run(p);
             started.push(p.id);
         }
+        // The host attaches its Processes service before restore. No supervisor event is emitted for
+        // these stopped rows, so notify its already-connected replicas of the explanation ourselves.
+        if (stoppedByRestart) this.visibilityChanged();
         return { started, heldBack };
     }
 

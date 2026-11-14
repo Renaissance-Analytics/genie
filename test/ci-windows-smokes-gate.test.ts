@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { windowsFunction, windowsPs1 } from './helpers/ci-scripts.js';
 
 /**
  * EVERY WINDOWS SMOKE GATES THE JOB (found 2026-10-21 on genie#1050: the "a real window (windows)" job PASSED while its
@@ -9,19 +9,18 @@ import { describe, expect, it } from 'vitest';
  * sight on a green job. Each smoke now ends the step when it fails. (Bash on Linux runs `-e`: each line already gates.)
  */
 
-const ci = readFileSync('.github/workflows/ci.yml', 'utf8').split(/\r?\n/);
+// THE GATE NOW (Tynn #692): scripts/ci/windows.ps1 runs each smoke as its own row through `Run '<name>' { node … }`, which
+// throws when the command exits non-zero; a row that throws is a FAIL and the run's exit is 1.
+const smokes = ['agents-hold-no-pty-cdp', 'smoke-cdp', 'layout-sweep', 'trust-step-cdp', 'safe-mode-cdp', 'hang-cdp', 'renderer-crash-cdp'];
 
-describe('the Windows real-window step', () => {
-    const runs = ci.map((line, i) => ({ line, i })).filter(({ line }) => /^\s+node scripts\/[a-z-]+\.mjs\s*$/.test(line));
-    const windows = runs.filter(({ i }) => ci.slice(0, i).reverse().find((l) => /^\s+shell:/.test(l))?.includes('pwsh'));
-
+describe('the Windows real-window rows', () => {
     it('runs the smokes (COUNTED, so a removed smoke is not a quiet pass)', () => {
-        expect(windows.map(({ line }) => line.trim())).toEqual(['node scripts/agents-hold-no-pty-cdp.mjs', 'node scripts/smoke-cdp.mjs', 'node scripts/layout-sweep.mjs', 'node scripts/trust-step-cdp.mjs', 'node scripts/safe-mode-cdp.mjs', 'node scripts/hang-cdp.mjs', 'node scripts/renderer-crash-cdp.mjs']);
+        const run = [...windowsPs1.matchAll(/Run '([a-z-]+)' \{ node scripts\/([a-z-]+)\.mjs \}/g)].map((m) => m[2]!);
+        for (const smoke of smokes) expect(run.filter((x) => x === smoke), smoke).toHaveLength(1);
     });
 
-    it('each is followed by a check that ends the step on its failure', () => {
-        for (const { line, i } of windows) {
-            expect(ci[i + 1] ?? '', `after ${line.trim()}`).toMatch(/^\s+if \(\$LASTEXITCODE -ne 0\) \{ throw "[^"]+ failed \(exit \$LASTEXITCODE\)" \}\s*$/);
-        }
+    it('each ends its row on its failure: Run throws on a non-zero exit, naming the command', () => {
+        expect(windowsFunction('Run')).toMatch(/if \(\$LASTEXITCODE -ne 0\) \{ throw "\$what failed \(exit \$LASTEXITCODE\)" \}/);
+        for (const smoke of smokes) expect(windowsPs1, smoke).toMatch(new RegExp(`Run '${smoke}' \\{ node scripts/${smoke}\\.mjs \\}`));
     });
 });

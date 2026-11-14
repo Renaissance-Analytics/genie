@@ -125,7 +125,8 @@ describe('agent settings show them, read-only', () => {
         expect(section).toContain('Plugins: code-simplifier 1.0.0, plugin-dev');
         expect(section).toContain('Subagents: Explore, Plan');
         const own = section.slice(0, section.indexOf('</section>'));
-        expect(own.match(/<(button|input|select)\b/g) ?? []).toHaveLength(0);
+        // Read-only still (Tynn #628 added a search box and a description that opens): nothing that switches one on or off.
+        expect(own.match(/<select\b|role="switch"|type="checkbox"/g) ?? []).toHaveLength(0);
     });
 
     it('reported none: says so; never reported: no section (positive control pair)', () => {

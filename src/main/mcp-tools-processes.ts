@@ -12,8 +12,8 @@ import type { RestartPolicy } from './process-supervisor.js';
 /**
  * THE AGENTS' BACKGROUND PROCESSES (the hosting ship line P3; Genie 1's `manageProcess`). A queue worker, a watcher, a
  * dev server an agent needs kept running: it asks Genie, and Genie makes the very calls Hosting → Processes makes — the
- * process book (process-book.ts) writes it down and brings it back on every launch, the supervisor restarts it by its
- * policy and keeps its log after it exits. An agent never needs `nohup`, `&` or a terminal left open for this.
+ * process book (process-book.ts) writes it down and restores it on launch unless restart is never; the supervisor
+ * restarts it by its policy and keeps its log after it exits. An agent never needs `nohup`, `&` or a terminal left open.
  *
  * The name is `processes`, beside `services` and `sites`, not Genie 1's `manageProcess`: Genie 2 names its tools for
  * what they hold, and the skills Genie 2 writes are pinned to never name a Genie 1-only tool (test/workspace-skills,
@@ -23,7 +23,7 @@ import type { RestartPolicy } from './process-supervisor.js';
  * - Its OWN workspace only. It sees its workspace's processes — the ones kept here and its sites' servers — and acts by
  *   id or name looked up among THOSE; another workspace's process is "not one of this workspace's", with nothing done.
  * - `add` and `remove` wait for the PERSON's approval (approval-queue.ts), as `services add/remove` do: a process the
- *   book keeps is started on every launch from now on, so the person sees the command, the folder and the policy. A
+ *   book keeps may be restored on launch, so the person sees the command, the folder and the policy. A
  *   request Genie would refuse (no name, a folder outside the workspace, a hibernated workspace) is refused BEFORE the
  *   person is asked, and a denial creates nothing.
  * - `start`, `stop`, `restart` act at once, on a process the book keeps; a site's server belongs to its site (`sites`).
@@ -72,7 +72,7 @@ function view(p: HostedProcess): Record<string, unknown> {
         exitCode: p.exitCode,
         restarts: p.restarts,
         since: new Date(p.since).toISOString(),
-        // Kept: Genie brings it back on every launch and an agent may start/stop it. Not kept: a site's server.
+        // Kept: the book remembers it, and an agent may start/stop it. Not kept: a site's server.
         kept: p.durable === true,
         ...(p.reason === undefined ? {} : { reason: p.reason }),
         ...(p.schedule === undefined ? {} : {
@@ -169,7 +169,10 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                         };
                         // The book's own checks, BEFORE anyone is asked: a request Genie would refuse is never put to the person.
                         const ready = await port.book.prepare(input);
-                        const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: \`${ready.command}\` in ${ready.cwd}, restart ${ready.restart} — Genie starts it now and brings it back on every launch until it is stopped`, context);
+                        const afterRestart = ready.restart === 'never'
+                            ? 'keeps it stopped after Genie restarts; use Start to run it again'
+                            : 'brings it back on every launch until it is stopped';
+                        const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: \`${ready.command}\` in ${ready.cwd}, restart ${ready.restart} — Genie starts it now and ${afterRestart}`, context);
                         if (verdict !== 'allowed') return err(`adding ${ready.name} was denied by the person; nothing was started or kept`);
                         const status = await port.book.create(input);
                         const row = after(status.id);
@@ -228,7 +231,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
 export const PROCESSES_TOOL: BuiltinTool = declareBuiltinTool(
     'processes',
     'Your workspace’s background processes — queue workers, watchers, dev servers — kept running by GENIE: never leave one running in a terminal or with `nohup`/`&`. '
-        + 'Genie starts it in the workspace with the workspace’s service variables, restarts it by its policy, brings it back on every launch until it is stopped, and keeps its log after it exits or crashes. '
+        + 'Genie starts it in the workspace with the workspace’s service variables, restarts it by its policy, and keeps its log after it exits or crashes. With restart: never it stays stopped after Genie restarts until explicitly started; other policies bring it back on launch until it is stopped. '
         + 'Actions: `list` — this workspace’s processes, including its sites’ servers. '
         + '`logs` {process, lines?} — the end of its output (default 200 lines), still there after a crash. '
         + '`add` {name, command, folder? (inside the workspace; default its root), restart? on-failure (default) | always | never} — the person approves it first and sees the command. '
@@ -246,7 +249,7 @@ export const PROCESSES_TOOL: BuiltinTool = declareBuiltinTool(
             name: { type: 'string', description: 'add: what to call it (queue worker).' },
             command: { type: 'string', description: 'add: the command Genie runs (php artisan queue:work).' },
             folder: { type: 'string', description: 'add: a folder inside this workspace, relative to its root (repos/app); default the root.' },
-            restart: { type: 'string', enum: ['on-failure', 'always', 'never'], description: 'add: when Genie restarts it by itself; default on-failure.' },
+            restart: { type: 'string', enum: ['on-failure', 'always', 'never'], description: 'add: when Genie restarts it by itself; default on-failure. never also stays stopped after Genie restarts; Start runs it again.' },
             schedule: { type: 'string', description: 'add: a five-field cron (minute hour day-of-month month day-of-week, local time), e.g. "0 3 * * *" — makes it a scheduled task.' },
             scheduleKind: { type: 'string', enum: ['command', 'agent-nudge'], description: 'add with schedule: run the command (default), or nudge an agent.' },
             prompt: { type: 'string', description: 'add agent-nudge: the text delivered to the agent at each due.' },

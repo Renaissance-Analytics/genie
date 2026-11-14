@@ -23,6 +23,7 @@ export function RelayConnecting({ name, state, onRetry }: { name: string | null;
                     </li>
                 ))}
             </ol>
+            {view.notice !== null ? <p data-notice="reconnecting" className="text-center text-sm text-[var(--fg-2)]">{view.notice}</p> : null}
             {view.problem !== null ? (
                 <div data-problem="connect" className="flex w-full flex-col items-center gap-3 rounded-xl bg-[var(--bg-2)] px-4 py-3 text-center">
                     <p className="text-sm text-[var(--fg-1)]">{view.problem}</p>

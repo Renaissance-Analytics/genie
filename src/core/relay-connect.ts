@@ -1,3 +1,5 @@
+import { skewSentence } from './drone-version.js';
+
 /**
  * CONNECTING TO A TYNN WORKSTATION, STEP BY STEP (the owner, 2026-10-28, on beta.50's window: "So is the actually
  * connecting UX [ugly]"). beta.50 titled the window with the raw `relay:<id>`, opened the tailnet host/PIN form under it,
@@ -15,11 +17,19 @@
 export type RelayStep = 'tynn' | 'relay' | 'host';
 export type RelayConnect =
     | { readonly kind: 'working'; readonly step: RelayStep }
-    | { readonly kind: 'failed'; readonly step: RelayStep; readonly reason: string; readonly offline?: boolean };
+    /**
+     * `skew` (Tynn #651): the drone runs a Genie older than this Pilot needs: its build (`null`: it did not say) and this
+     * Pilot's, to update it to. Said in place of the reason, which is the drone's protocol words.
+     */
+    | { readonly kind: 'failed'; readonly step: RelayStep; readonly reason: string; readonly offline?: boolean; readonly skew?: { readonly drone: string | null; readonly pilot: string | null } }
+    /** The drone went away after it was up (an upgrade's restart, a quit): the window dials again by itself (Tynn #651). */
+    | { readonly kind: 'reconnecting' };
 export interface RelayConnectView {
     readonly title: string;
     readonly steps: ReadonlyArray<{ readonly step: RelayStep; readonly label: string; readonly status: 'done' | 'working' | 'failed' | 'waiting' }>;
     readonly problem: string | null;
+    /** What is happening that needs no click ("aion is restarting, reconnecting…"); `null` otherwise. */
+    readonly notice: string | null;
 }
 
 const ORDER: readonly RelayStep[] = ['tynn', 'relay', 'host'];
@@ -43,6 +53,14 @@ export function relayConnectView(name: string | null, state: RelayConnect): Rela
         relay: `Reach ${who}`,
         host: `Open ${who}’s Genie`,
     };
+    if (state.kind === 'reconnecting') {
+        return {
+            title: `Connecting to ${who}`,
+            steps: ORDER.map((step) => ({ step, label: labels[step], status: step === 'host' ? 'working' as const : 'done' as const })),
+            problem: null,
+            notice: `${who} is restarting, reconnecting…`,
+        };
+    }
     const at = ORDER.indexOf(state.step);
     return {
         title: `Connecting to ${who}`,
@@ -51,6 +69,7 @@ export function relayConnectView(name: string | null, state: RelayConnect): Rela
             label: labels[step],
             status: i < at ? 'done' : i > at ? 'waiting' : state.kind === 'failed' ? 'failed' : 'working',
         })),
-        problem: state.kind === 'failed' ? (state.offline ? offlineSentence(name) : state.reason) : null,
+        problem: state.kind !== 'failed' ? null : state.skew ? skewSentence(name, state.skew) : state.offline ? offlineSentence(name) : state.reason,
+        notice: null,
     };
 }

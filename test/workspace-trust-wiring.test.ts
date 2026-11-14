@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
-import { TRUST_PASS_MS } from '../src/main/trust-watch.js';
 import type { ComposedServices } from '../src/main/compose.js';
 import type { composeServices } from './helpers/compose-alone.js';
 import { envFileSites } from '../src/main/dotenv-sync.js';
@@ -84,10 +83,17 @@ describe('a workspace added after the upgrade, with a git key that could run som
         expect(existsSync(mark)).toBe(true);
     });
 
-    it('the key changes after that: it asks again, and git stops', async () => {
+    it('the key changes after that: still trusted, and git still runs (Tynn #618: trust is given once and stays)', async () => {
         await services.workspaceTrust.trust('acme');
         git('config', 'core.fsmonitor', `${join(dir, 'tool.sh').replace(/\\/g, '/')} --other`);
-        expect(await services.workspaceTrust.refresh('acme')).toMatchObject({ trusted: false, changed: true });
+        expect(await services.workspaceTrust.refresh('acme')).toMatchObject({ trusted: true, changed: false });
+        expect(await gitMayRun(repo)).toBe(true);
+    });
+
+    it('the person untrusts it: git stops', async () => {
+        await services.workspaceTrust.trust('acme');
+        expect(await gitMayRun(repo)).toBe(true); // CONTROL
+        expect(await services.workspaceTrust.untrust('acme')).toMatchObject({ trusted: false });
         expect(await gitMayRun(repo)).toBe(false);
     });
 });
@@ -143,7 +149,7 @@ describe('a real pull moves the verdict, and the gate holds', () => {
         await services.workspaceTrust.trust('pulled');
     });
 
-    it('noticed by itself: untrusted without anyone asking, and no work reaches the run launched before it', async () => {
+    it('a pull that adds a hook: the workspace stays trusted, and work still reaches the run (Tynn #618)', async () => {
         const prompts: string[] = [];
         const noTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
         const driverFor: DriverFor = () => () => ({ start: () => {}, prompt: (content: unknown) => { prompts.push(String(content)); }, kill: () => {}, cancel: () => {}, cliSessionId: null, ready: Promise.resolve() }) as never;
@@ -162,12 +168,13 @@ describe('a real pull moves the verdict, and the gate holds', () => {
         run(clone, 'pull', '-q');
 
         // Elsewhere, long of a watcher and far short of the slow pass. Windows has the slow pass alone (trust-watch.ts).
-        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false, changed: true }); }, { timeout: process.platform === 'win32' ? TRUST_PASS_MS * 2 : 15_000, interval: 100 });
-        expect(services.untrustedNow(record)).toBe(true);
+        // The new hook is read and listed; the person's yes stands.
+        const view = await services.workspaceTrust.refresh('pulled');
+        expect(view).toMatchObject({ trusted: true, changed: false });
+        expect(view!.list.hooks.map((h) => h.command)).toContain('added by the pull');
+        expect(services.untrustedNow(record)).toBe(false);
         host.prompt(record.id, 'after', 'you');
-        await new Promise((r) => setTimeout(r, 200));
-        expect(prompts).toEqual(['before']);
-        expect(host.workWaiting(record.id)).toBe(true);
+        await vi.waitFor(() => { expect(prompts).toEqual(['before', 'after']); }, { timeout: 20_000 });
         host.stopAll();
         await host.settled();
     }, 60_000);
@@ -181,13 +188,14 @@ describe('a real pull moves the verdict, and the gate holds', () => {
         expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: true });
     }, 30_000);
 
-    it('the watchers lost: the slow pass notices', async () => {
+    it('the watchers lost: the slow pass still reads the list, and the workspace stays trusted', async () => {
         await services.shutdown();
         await composed.compose({ userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, workspaces: () => workspaces, trustWatchEveryMs: 200, trustWatchFolders: false } as Parameters<typeof composeServices>[0]).then((next) => { services = next; });
         await services.workspaceTrust.refresh('pulled');
         expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: true });
         writeFileSync(join(clone, '.claude', 'settings.json'), SETTINGS('edited by hand'));
-        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false }); }, { timeout: 15_000, interval: 100 });
+        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')!.list.hooks.map((h) => h.command)).toContain('edited by hand'); }, { timeout: 15_000, interval: 100 });
+        expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: true, changed: false });
     }, 40_000);
 });
 
@@ -219,6 +227,15 @@ describe('the trust step, through the real composition', () => {
         expect(await stepOf()).toBeUndefined();
         expect(services.untrustedNow({ workspaceId: 'acme' })).toBe(false);
         expect(existsSync(join(repo, '.mcp.json'))).toBe(true);
+    });
+
+    it('the person\'s Untrust: not trusted any more, and the step is back', async () => {
+        await handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'acme', workspacePath: repo }, state());
+        expect(await stepOf()).toBeUndefined(); // CONTROL
+        await handleFeatureAction(services, { kind: 'workspace.untrust', workspaceId: 'acme' }, state());
+        expect(services.workspaceTrust.view('acme')).toMatchObject({ trusted: false });
+        expect((await stepOf())?.workspaceId).toBe('acme');
+        expect(services.untrustedNow({ workspaceId: 'acme' })).toBe(true);
     });
 
     it('CONTROL: without it, none of that happened', async () => {

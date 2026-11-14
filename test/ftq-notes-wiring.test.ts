@@ -66,9 +66,11 @@ describe('main and the renderers pass notes, never drop them', () => {
         const main = strip('../src/main/main.ts');
         expect(main.match(/answer:\s*async\s*\(item,\s*selections,\s*notes\)\s*=>\s*\{\s*await handleFeatureAction\(composed,\s*\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}/g) ?? []).toHaveLength(1);
     });
-    it('App.tsx: the Deck’s form becomes deck.answerForm WITH the notes', () => {
+    it('App.tsx: the Deck’s form, and the phone’s (Tynn #652), become deck.answerForm WITH the notes — one call, in renderer/deck-answer.ts', () => {
         const app = strip('../src/renderer/App.tsx');
-        expect(app.match(/act\(\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}\)/g) ?? []).toHaveLength(1);
+        expect(app.match(/answerDeckForm\([^)]*item,\s*selections,\s*notes\)/g) ?? []).toHaveLength(2);
+        const answer = strip('../src/renderer/deck-answer.ts');
+        expect(answer.match(/act\(\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}\)/g) ?? []).toHaveLength(1);
     });
     it('question-main.tsx: the window’s page sends the notes over the bridge — for the question they were written in', () => {
         const page = strip('../src/renderer/question-main.tsx');

@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, screen, shell } from 'electron';
-import { join } from 'node:path';
+import { loadWindowPage } from './window-pages.js';
 import type { QuestionView, QuestionWindow, QuestionWindowPort } from './question-window.js';
 import { genieWindowIcon } from './app-identity.js';
 import { askWindowBounds } from '../core/question-drawer.js';
@@ -113,7 +113,7 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         onceShowable(win, process.platform, () => win.showInactive());
         current = win;
         win.on('closed', () => { if (current === win) { current = null; baseWidth = null; } onClosed(); });
-        void win.loadFile(join(input.here, '../renderer/question.html'));
+        void loadWindowPage(win.webContents, 'question').catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
         return {
             show: (view) => {
                 last = view;

@@ -18,6 +18,7 @@
  * processes is the number of live ptys on an otherwise idle machine. On Linux it is the number
  * of allocated pty slaves (`/dev/pts`). Deltas against a baseline taken before anything starts.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
@@ -72,7 +73,7 @@ async function findTarget() {
     while (Date.now() < until) {
         try {
             const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-            const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+            const page = mainWindow(targets);
             if (page) return page;
             last = `no page yet (${targets.length})`;
         } catch (e) { last = String(e); }
@@ -112,12 +113,20 @@ let terminalId = null;
 let codexId = null;
 try {
     await cdp.evaluate('document.readyState');
+    // THE BRIDGE BEFORE IT IS USED (Tynn #692, the Azure Windows gate: "Cannot read properties of undefined (reading
+    // 'snapshot')": the first page target was there before window.genie was). Waited for, bounded; when it never comes the
+    // failure says which page this was and what it had.
+    const bridgeBy = Date.now() + 60_000;
+    while (Date.now() < bridgeBy && !(await cdp.evaluate("typeof window.genieTest?.snapshot === 'function'"))) await new Promise((r) => setTimeout(r, 250));
+    if (!(await cdp.evaluate("typeof window.genieTest?.snapshot === 'function'"))) {
+        throw new Error(`the page never had window.genieTest.snapshot within 60 s: ${await cdp.evaluate("JSON.stringify({ url: location.href.slice(0, 120), readyState: document.readyState, genie: typeof window.genie, keys: window.genie ? Object.keys(window.genie).slice(0, 20) : null })")}`);
+    }
     const base = ptys();
     const baseStubs = stubProcesses();
     console.log(`  baseline: ptys ${base.total} (${base.detail}); provider processes ${baseStubs}`);
     check(baseStubs === 0, '0. no provider process exists before anything starts', String(baseStubs));
 
-    const snap = await cdp.evaluate('window.genie.snapshot()');
+    const snap = await cdp.evaluate('window.genieTest.snapshot()');
     codexId = (snap.agents.find((a) => a.provider === 'codex') ?? {}).id ?? null;
     const workspaceId = snap.workspaces?.[0]?.id ?? null;
     check(typeof codexId === 'string' && typeof workspaceId === 'string', '1. the seed left a codex agent and a workspace', `${codexId} in ${workspaceId}`);
@@ -129,7 +138,7 @@ try {
     let running = null;
     for (const end = Date.now() + 30_000; Date.now() < end && running !== true;) {
         // Past its preparation too: a session reads as running while its launch is still being prepared, before there is any process to count.
-        running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => (d?.session ? d.session.running && d.session.starting === false : null))`);
+        running = await cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(codexId)}).then((d) => (d?.session ? d.session.running && d.session.starting === false : null))`);
         if (running !== true) await sleep(500);
     }
     check(running === true, '2. the agent\'s session is RUNNING (the host says so)', String(running));
@@ -140,7 +149,7 @@ try {
     // THE RULE: N = 1 running agent, 0 agent-attributable ptys.
     const withAgent = ptys();
     check(withAgent.total - base.total === 0, '4. ptys did not move while the agent runs — 0 agent-attributable ptys', `${base.total} → ${withAgent.total} (${withAgent.detail})`);
-    const sessions = await cdp.evaluate(`Promise.all(${JSON.stringify(snap.agents.map((a) => a.id))}.map((id) => window.genie.agentDetail(id).then((d) => d?.session?.running === true))).then((xs) => xs.filter(Boolean).length)`);
+    const sessions = await cdp.evaluate(`Promise.all(${JSON.stringify(snap.agents.map((a) => a.id))}.map((id) => window.genieTest.agentDetail(id).then((d) => d?.session?.running === true))).then((xs) => xs.filter(Boolean).length)`);
     check(sessions === 1, '5. the session count equals the number of agents running (N = 1)', String(sessions));
 
     // POSITIVE CONTROL for the scan: a plain terminal spawns EXACTLY ONE pty.
@@ -150,7 +159,7 @@ try {
     let withTerm = ptys();
     for (const end = Date.now() + 10_000; Date.now() < end && withTerm.total - withAgent.total < 1;) { await sleep(500); withTerm = ptys(); }
     check(withTerm.total - withAgent.total === 1, '7. CONTROL: that terminal is exactly ONE more pty in the same scan', `${withAgent.total} → ${withTerm.total} (${withTerm.detail})`);
-    const stillRunning = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);
+    const stillRunning = await cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);
     check(stillRunning === true, '8. and the agent is still running beside it — the two are unrelated', String(stillRunning));
 
     // Close the terminal: the pty goes; the agent stays.

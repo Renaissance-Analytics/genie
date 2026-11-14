@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { windowsFunction, windowsRows } from './helpers/ci-scripts.js';
 import { ELECTRON_BUILDER_VERSION, classify, shouldSignFile } from '../scripts/win-sign-plan.mjs';
 
 /*
@@ -76,16 +77,10 @@ describe('a signed Windows build signs only what ships unsigned', () => {
 describe('the checks that hold it', () => {
     const read = (p: string) => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 
-    it('CI\'s Windows packaging fails if the build would sign a file another publisher signed (the unsigned package, before any signing)', () => {
-        const ci = read('.github/workflows/ci.yml');
-        const start = ci.indexOf('name: it packages');
-        // To the next job: a line of two spaces, a key and a colon, after the start.
-        const next = ci.slice(start).search(/\n {2}[a-z][a-z0-9-]*:\n/);
-        const job = ci.slice(start, next > 0 ? start + next : undefined);
-        const build = job.indexOf('npx electron-builder --publish never');
-        const check = job.search(/if: runner\.os == 'Windows'\s+run: node scripts\/win-sign-plan\.mjs release\/win-unpacked electron-builder\.yml --check/);
-        expect(build).toBeGreaterThan(-1);
-        expect(check, 'after the unsigned build, in the same job').toBeGreaterThan(build);
+    it('the Windows gate fails if the build would sign a file another publisher signed (scripts/ci/windows.ps1: sign-plan after the unsigned package)', () => {
+        expect(windowsFunction('Row-package')).toMatch(/npx electron-builder --publish never --config\.win\.signExecutable=false/);
+        expect(windowsFunction('Row-sign-plan')).toContain('node scripts/win-sign-plan.mjs release/win-unpacked electron-builder.yml --check');
+        expect(windowsRows.indexOf('sign-plan'), 'after the unsigned build').toBeGreaterThan(windowsRows.indexOf('package'));
     });
 
     it('the release\'s and sign-test\'s verifier takes the plan: what the build does not sign must keep its own publisher\'s valid signature', () => {

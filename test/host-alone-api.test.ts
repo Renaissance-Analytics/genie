@@ -77,8 +77,7 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
         cwdFor: (r) => (r.workspaceId === 'tynn' ? '/w/tynn' : '/home'),
         startRefusal: () => null,
         attention: {
-            finished: () => [{ id: 'fin_1', agentId: atlas.id, agentName: 'atlas', handoff: 'shipped the fix; next, the docs', at: '2026-11-08T20:00:00Z', seen: false }],
-            markSeen: (id) => { calls.push(`markSeen ${id}`); },
+            finished: () => [{ id: 'fin_1', agentId: atlas.id, agentName: 'atlas', handoff: 'shipped the fix; next, the docs', at: '2026-11-08T20:00:00Z' }],
             answer: async (id, answer) => { calls.push(`answer ${id} ${JSON.stringify(answer.selections)}`); return true as never; },
             // The question the Deck answers is still waiting (deck-answer.ts checks, Tynn #600).
             pending: () => [{ id: 'q_1' }] as never,
@@ -99,7 +98,7 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
         tynnTab: { board: () => ({ signedIn: () => false, projectFor: () => null, request: async () => ({ ok: false, status: 404, json: async () => null }) }), readPage: async () => ({ ok: false, state: 'error', reason: 'n/a' }) },
         workspaceLifecycle: { terminals: () => null, supervisor: () => null, engines: () => null, reverifyTrust: async () => {}, github: () => null, tynn: () => null, defaultEnvFile: () => '', stagingDirectory: () => '' },
         colors: { set: async () => ({ ok: true as const }) },
-        settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {} },
+        settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
@@ -139,13 +138,6 @@ describe('genie-host answers the phone itself', () => {
         expect(await api.invoke('resumeLimit', [atlas.id])).toEqual({ ok: true });
         expect(await api.invoke('agents.restart', [atlas.id, 'graceful'])).toEqual({ ok: true, kind: 'graceful' });
         expect(calls).toEqual(['answerApproval allow go ahead', 'resumeLimit claude', 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
-    });
-
-    it('Restart with handoff: the one restart, then the note, and the finished item seen', async () => {
-        const api = hostAloneApi(ports(engine(true)));
-        expect(await api.invoke('restartWithHandoff', [atlas.id, 'fin_1'])).toMatchObject({ ok: true });
-        expect(calls.slice(0, 4)).toEqual(['stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
-        expect(calls.slice(4)).toEqual(['prompt You are restarting from your own handoff note. Pick up where it leaves off:\n\nshipped the fix; next, the docs by undefined', 'markSeen fin_1']);
     });
 
     it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {
@@ -188,7 +180,7 @@ describe('the remote host uses it only while no window is connected', () => {
         windowOpen = false;
         expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
         await expect(api.invoke('addAgent', ['tynn', {}])).rejects.toThrow('alphar answers addAgent only while a Genie window is open there: open Genie on alphar');
-        expect([...PHONE_METHODS].sort()).toEqual(['agentDetail', 'agents.restart', 'answerApproval', 'features.act', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'prompt', 'restartWithHandoff', 'resumeLimit', 'snapshot']);
+        expect([...PHONE_METHODS].sort()).toEqual(['agentDetail', 'agents.restart', 'answerApproval', 'features.act', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'prompt', 'resumeLimit', 'snapshot']);
     });
 
     it('genie-host\'s own events reach remote connections only while no window is connected (a window forwards its own)', async () => {

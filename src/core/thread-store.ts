@@ -84,6 +84,68 @@ export class ThreadStore extends FileSessionStore {
         this.#rotateBytes = options.rotateBytes ?? THREAD_ROTATE_BYTES;
         this.#slowMs = options.slowMs ?? STORE_SLOW_MS;
         this.#onSlow = options.onSlow ?? null;
+        this.#attachmentMaxCount = options.attachmentMaxCount ?? ATTACHMENT_MAX_COUNT;
+        this.#attachmentMaxBytes = options.attachmentMaxBytes ?? ATTACHMENT_MAX_BYTES;
+    }
+
+    readonly #attachmentMaxCount: number;
+    readonly #attachmentMaxBytes: number;
+
+    #attachmentFolder(key: string): string { return join(this.#directory, ledgerName(key)); }
+
+    async #attachmentIndex(key: string): Promise<AttachmentEntry[]> {
+        let raw: unknown;
+        try { raw = JSON.parse(await readFile(join(this.#attachmentFolder(key), ATTACHMENT_INDEX), 'utf8')); } catch { return []; }
+        if (!Array.isArray(raw)) return [];
+        return raw.filter((e): e is AttachmentEntry => typeof e === 'object' && e !== null
+            && typeof (e as AttachmentEntry).id === 'string' && ATTACHMENT_ID.test((e as AttachmentEntry).id)
+            && typeof (e as AttachmentEntry).mimeType === 'string' && ATTACHMENT_EXT[(e as AttachmentEntry).mimeType] !== undefined
+            && typeof (e as AttachmentEntry).bytes === 'number');
+    }
+
+    #attachmentFile(key: string, entry: { id: string; mimeType: string }): string {
+        return join(this.#attachmentFolder(key), `att-${entry.id}.${ATTACHMENT_EXT[entry.mimeType]}`);
+    }
+
+    /**
+     * Keep one image sent in this thread (Tynn #642), under the id its message row names; then the oldest go until the
+     * thread is within its bounds. A mime type that is not an image Genie keeps, or an id it did not make, is refused.
+     */
+    async writeAttachment(key: string, id: string, mimeType: string, data: string): Promise<void> {
+        if (!ATTACHMENT_ID.test(id) || ATTACHMENT_EXT[mimeType] === undefined) throw new Error('not an image Genie keeps');
+        const bytes = Buffer.from(data, 'base64');
+        await mkdir(this.#attachmentFolder(key), { recursive: true });
+        await writeFile(this.#attachmentFile(key, { id, mimeType }), bytes);
+        const index = (await this.#attachmentIndex(key)).filter((e) => e.id !== id);
+        index.push({ id, mimeType, bytes: bytes.byteLength });
+        let total = index.reduce((n, e) => n + e.bytes, 0);
+        while (index.length > 0 && (index.length > this.#attachmentMaxCount || total > this.#attachmentMaxBytes)) {
+            const gone = index.shift()!;
+            total -= gone.bytes;
+            await unlink(this.#attachmentFile(key, gone)).catch(() => undefined);
+        }
+        const file = join(this.#attachmentFolder(key), ATTACHMENT_INDEX);
+        await writeFile(`${file}.tmp`, JSON.stringify(index), 'utf8');
+        await renameOver(`${file}.tmp`, file);
+    }
+
+    /** One kept image, as base64 with its type; `null` when this thread keeps none under that id. */
+    async readAttachment(key: string, id: string): Promise<{ mimeType: string; data: string; bytes: number } | null> {
+        if (!ATTACHMENT_ID.test(id)) return null;
+        const entry = (await this.#attachmentIndex(key)).find((e) => e.id === id);
+        if (!entry) return null;
+        let bytes: Buffer;
+        try { bytes = await readFile(this.#attachmentFile(key, entry)); } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
+        }
+        return { mimeType: entry.mimeType, data: bytes.toString('base64'), bytes: bytes.byteLength };
+    }
+
+    /** Every image the thread keeps, gone with it. */
+    async #clearAttachments(key: string): Promise<void> {
+        for (const entry of await this.#attachmentIndex(key)) await unlink(this.#attachmentFile(key, entry)).catch(() => undefined);
+        await unlink(join(this.#attachmentFolder(key), ATTACHMENT_INDEX)).catch(() => undefined);
     }
 
     /** One IO step, timed: past the threshold it is logged by name, so the next stall says which step it was. */
@@ -376,6 +438,7 @@ export class ThreadStore extends FileSessionStore {
         }
         await unlink(this.#indexFile(key)).catch(() => undefined);
         await unlink(`${this.logFile(key)}${LOG_SIDECAR}`).catch(() => undefined);
+        await this.#clearAttachments(key);
         this.#segments.set(key, []);
         this.#counts.delete(key);
         await super.clearLog(key);
@@ -453,7 +516,28 @@ const LEGACY_LOCK_MAX_MS = 60_000;
 export const THREAD_ROTATE_BYTES = 64 * 1024 * 1024;
 /** A store step this slow is logged by name. */
 export const STORE_SLOW_MS = 200;
-export type ThreadStoreOptions = { rotateBytes?: number; slowMs?: number; onSlow?: (line: string) => void };
+export type ThreadStoreOptions = {
+    rotateBytes?: number; slowMs?: number; onSlow?: (line: string) => void;
+    /** The most images one thread keeps (`ATTACHMENT_MAX_COUNT`); a test may make it small. */
+    attachmentMaxCount?: number;
+    /** The most bytes of images one thread keeps (`ATTACHMENT_MAX_BYTES`). */
+    attachmentMaxBytes?: number;
+};
+
+/**
+ * THE IMAGES A THREAD KEEPS (Tynn #642): the ones sent in it, so a sent message's pill can show its image. Per agent (one
+ * thread per agent), in the folder beside its ledger; the oldest go first past either bound.
+ */
+export const ATTACHMENT_MAX_COUNT = 100;
+export const ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024;
+/** An attachment id is one Genie made: 32 hex characters. Anything else names no file, so nothing outside can be read. */
+export const ATTACHMENT_ID = /^[0-9a-f]{32}$/;
+/** The images kept, and the only file names they get. */
+const ATTACHMENT_EXT: Readonly<Record<string, string>> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const ATTACHMENT_INDEX = 'attachments.json';
+type AttachmentEntry = { id: string; mimeType: string; bytes: number };
+/** One kept image as the window gets it (`agents.attachment`, Tynn #642): base64 with its type, or why not. */
+export type AttachmentReply = { ok: true; mimeType: string; data: string; bytes: number } | { ok: false; reason: string };
 let slowLog: ((line: string) => void) | null = null;
 /** Where every store's slow steps are logged (genie-host: its lifecycle log). */
 export function setThreadStoreSlowLog(log: ((line: string) => void) | null): void { slowLog = log; }

@@ -139,7 +139,9 @@ describe('who writes it: genie-host, LAST, on every end it makes', () => {
     });
 
     it('the update install, the window’s quit and the idle exit all end through shutdown()', () => {
-        expect(host).toMatch(/exit: \(\) => \{ void shutdown\('an update is installing'\); \}/);
+        // The update's exit RETURNS shutdown()'s promise (Tynn #616): the updater reads a returning exit as "this host
+        // survived" and gives back the drain's hold. shutdown() itself is unchanged: process.exit(0) after the marker.
+        expect(host).toMatch(/exit: \(\) => shutdown\('an update is installing'\),/);
         expect(host).toMatch(/onShutdown: \(\) => void shutdown\('a window asked'\)/);
         expect(host).toMatch(/if \(step\.exit\) void shutdown\(/);
     });

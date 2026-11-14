@@ -47,6 +47,7 @@ afterEach(() => {
     if (!/restriction failure/.test(expect.getState().currentTestName ?? '')) expect(failures, 'a failed ACL this test did not provoke').toEqual([]);
 });
 
+// CI: WINDOWS ONLY (Windows credential ACLs, through the native commands)
 describe.skipIf(process.platform !== 'win32')('a failed ACL refuses the write: the native command really gone', () => {
     const SECRET = 'rpk_a_secret_that_must_not_be_left_on_disk';
     const holdingTheSecret = async (root: string) => {

@@ -298,7 +298,8 @@ describe('the upgrade: what was already here carries over, once', () => {
         const second = m.launch();
         await second.envelope.sync([acme]);
         expect(second.ran('serve-it')).toBe(true);
-        expect(second.ran('pulled-thing')).toBe(false);
+        // A carried workspace is a trusted one, and a trusted workspace's new site starts (Tynn #618).
+        expect(second.ran('pulled-thing')).toBe(true);
     });
 
     it('a site the person stopped stays stopped, and does not ask', async () => {
@@ -321,7 +322,7 @@ describe('the upgrade: what was already here carries over, once', () => {
         expect(g.ran('serve-it')).toBe(true);
     });
 
-    it('a disabled site never ran, so it is not carried: turned on later, it waits', async () => {
+    it('a disabled site never ran; turned on later in its carried (trusted) workspace, it starts without asking (Tynn #618)', async () => {
         const m = machine({ [PROJECT('acme')]: manifestOf({ k1: siteEntry('web', ['serve-it', '--port=9000'], { enabled: false }) }) });
         const g = m.launch();
         await g.envelope.sync([acme]);
@@ -329,8 +330,8 @@ describe('the upgrade: what was already here carries over, once', () => {
         m.fs.set(PROJECT('acme'), webFiles()[PROJECT('acme')]!);
         const next = m.launch();
         await next.envelope.sync([acme]);
-        expect(next.opened).toEqual([]);
-        expect(next.sites.list()[0]?.firstStart).toBeDefined();
+        expect(next.ran('serve-it')).toBe(true);
+        expect(next.sites.list()[0]?.firstStart).toBeUndefined();
     });
 
     it('a site whose folder is away at the upgrade is carried, and starts when the folder is back', async () => {
@@ -367,13 +368,13 @@ describe('the upgrade: what was already here carries over, once', () => {
         expect(second.ran('serve-it')).toBe(true);
     });
 
-    it('a workspace that had no project.json at the upgrade is finished: one added later waits', async () => {
+    it('a workspace that had no project.json at the upgrade is carried all the same: one added later starts (Tynn #618)', async () => {
         const m = machine({});
         await m.launch().envelope.sync([acme]);
         m.fs.set(PROJECT('acme'), webFiles()[PROJECT('acme')]!);
         const second = m.launch();
         await second.envelope.sync([acme]);
-        expect(second.opened).toEqual([]);
+        expect(second.ran('serve-it')).toBe(true);
     });
 
     it('a new install carries nothing: the first workspace it ever adds waits', async () => {
@@ -389,6 +390,47 @@ describe('the upgrade: what was already here carries over, once', () => {
         const m = machine(webFiles());
         await m.launch().envelope.sync([acme]);
         expect(m.state.record).toMatchObject({ version: 1, carried: ['ws_acme'], pendingCarry: [] });
+    });
+});
+
+describe('a trusted workspace\'s sites start; nothing it adds or changes waits (Tynn #618)', () => {
+    const trustedRecord = (sites: Record<string, string> = {}) => ({ version: 1, carried: [], pendingCarry: [], sites, workspaces: { ws_acme: 'the-yes' } });
+
+    it('a site never started on this machine starts, with no first-start step', async () => {
+        const m = machine(webFiles(), { record: trustedRecord() });
+        const g = m.launch();
+        await g.envelope.sync([acme]);
+        expect(g.ran('serve-it')).toBe(true);
+        expect(g.sites.list()[0]?.firstStart).toBeUndefined();
+    });
+
+    it('a changed command, and a second site added, both start on the next launch', async () => {
+        const m = machine(webFiles(), { record: trustedRecord() });
+        await m.launch().envelope.sync([acme]);
+        m.fs.set(PROJECT('acme'), manifestOf({ k1: siteEntry('web', ['different-thing', '--port=9000']), k2: siteEntry('api', ['second-thing', '--port=9000']) }));
+        const next = m.launch();
+        await next.envelope.sync([acme]);
+        expect(next.ran('different-thing')).toBe(true);
+        expect(next.ran('second-thing')).toBe(true);
+        expect(next.sites.list().every((s) => s.firstStart === undefined)).toBe(true);
+    });
+
+    it('CONTROL: the same site in a workspace nobody trusted waits', async () => {
+        const m = machine(webFiles(), { record: { version: 1, carried: [], pendingCarry: [], sites: {}, workspaces: {} } });
+        const g = m.launch();
+        await g.envelope.sync([acme]);
+        expect(g.opened).toEqual([]);
+        expect(g.sites.list()[0]?.firstStart).toBeDefined();
+    });
+
+    it('the person\'s Stop is still kept: a stopped site in a trusted workspace stays stopped', async () => {
+        const m = machine(webFiles(), { record: trustedRecord() });
+        const g = m.launch();
+        await g.envelope.sync([acme]);
+        await g.envelope.stop(g.sites.list()[0]!.id);
+        const next = m.launch();
+        await next.envelope.sync([acme]);
+        expect(next.opened).toEqual([]);
     });
 });
 

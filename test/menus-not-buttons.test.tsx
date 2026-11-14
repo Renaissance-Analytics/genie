@@ -61,7 +61,8 @@ describe('the Settings nav is a react-fancy Sidebar, not Buttons', () => {
     it('items are LEFT-aligned (never centred) and ring only on keyboard focus', () => {
         const general = control(html, 'data-settings-nav="general"')!;
         expect(general.open).not.toMatch(/\sjustify-center/);
-        expect(general.inner).toMatch(/class="[^"]*\btext-left\b[^"]*"[^>]*>General</);
+        // Start-aligned: the kit's logical `text-start` since 6.9's right-to-left pass (left in a left-to-right page), never centred.
+        expect(general.inner).toMatch(/class="[^"]*\btext-start\b[^"]*"[^>]*>General</);
         expect(general.open).toContain('focus-visible:ring');
         expect(general.open).not.toMatch(MOUSE_FOCUS_RING);
     });

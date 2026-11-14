@@ -672,7 +672,7 @@ probe "localStorage-only-after-the-read-back" src/renderer/remote-session.ts \
     test/device-link-window.test.ts "a token the host did not read back stays"
 
 probe "a-drone-stops-before-the-host" src/main/device-link-gate.ts \
-    "    if (refused) return Promise.resolve({ ok: false, reason: refused });" "" \
+    "    if (outboundDialRefusal(ports.role(), url)) return { ok: false, reason: connectOutRefusal({ role: ports.role(), said: ports.said(), why: ports.why?.() ?? null })! };" "" \
     test/device-link-window.test.ts "a drone is refused and the host is asked nothing"
 
 probe "the-desktop-hook-holds-no-token" src/renderer/App.tsx \

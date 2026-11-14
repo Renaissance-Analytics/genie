@@ -330,6 +330,7 @@ export class HostingService {
             case 'deferTrustCertificate': return s.deferTrustCertificate();
             // The person's yes to a workspace (genie#1519). `engine.hosting` is a local window's only (session-engine-server.ts).
             case 'trust.trust': return s.trust.trust(str(a[0]));
+            case 'trust.untrust': return s.trust.untrust(str(a[0]));
             case 'trust.refresh': return a[1] === 'redock' ? s.trust.refresh(str(a[0]), 'redock') : s.trust.refresh(str(a[0]));
             default: throw new Error(`a window cannot call hosting.${method}`);
         }
@@ -438,6 +439,7 @@ export class HostingReplica implements HostingApi {
         entries: () => [...this.#trustEntries()],
         refresh: (workspaceId: string, purpose?: 'redock') => purpose === undefined ? this.#ask<TrustView | null>('trust.refresh', workspaceId) : this.#ask<TrustView | null>('trust.refresh', workspaceId, purpose),
         trust: (workspaceId: string) => this.#ask<TrustView | null>('trust.trust', workspaceId),
+        untrust: (workspaceId: string) => this.#ask<TrustView | null>('trust.untrust', workspaceId),
         mayWriteInto: async (folder: string) => {
             const dump = this.#dump;
             // Fail closed: no dump yet, or the link is down, and nothing is known to be trusted.

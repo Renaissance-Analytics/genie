@@ -200,22 +200,28 @@ describe('the installer UPGRADES the installed Genie rather than installing besi
         expect(releasesAbove('2.0.0-beta.4', '2.0.0-beta.4')).toBe(false);
         expect(releasesAbove('0.7.0-beta.343', '2.0.0-beta.4')).toBe(false);
         expect(releasesAbove('2.0.0-beta.10', '2.0.0-beta.4')).toBe(true);
+        // A hotfix of a beta (`-beta.N.M`, beta.61.1): semver sorts it above beta.N and below beta.N+1.
+        expect(releasesAbove('2.0.0-beta.61.1', '2.0.0-beta.61')).toBe(true);
+        expect(releasesAbove('2.0.0-beta.62', '2.0.0-beta.61.1')).toBe(true);
+        expect(releasesAbove('2.0.0-beta.61', '2.0.0-beta.61.1')).toBe(false);
     });
 });
 
-/** semver "a > b" for the shapes Genie uses: MAJOR.MINOR.PATCH with an optional -beta.N. */
+/** semver "a > b" for the shapes Genie uses: MAJOR.MINOR.PATCH with an optional -beta.N or a hotfix -beta.N.M. */
 function releasesAbove(a: string, b: string): boolean {
     const parse = (v: string) => {
-        const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(v);
+        const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)((?:\.\d+)+))?$/.exec(v);
         if (!m) throw new Error(`not a Genie version: ${v}`);
-        return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] === undefined ? null : { tag: m[4], n: Number(m[5]) } };
+        return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] === undefined ? null : { tag: m[4], ns: m[5]!.slice(1).split('.').map(Number) } };
     };
     const x = parse(a), y = parse(b);
     for (let i = 0; i < 3; i += 1) if (x.core[i] !== y.core[i]) return x.core[i]! > y.core[i]!;
     if (x.pre === null) return y.pre !== null;   // a release beats the same version's prerelease
     if (y.pre === null) return false;
     if (x.pre.tag !== y.pre.tag) return x.pre.tag > y.pre.tag;
-    return x.pre.n > y.pre.n;
+    // semver: numeric identifiers compare in order; with all equal, the one with more identifiers is greater.
+    for (let i = 0; i < Math.min(x.pre.ns.length, y.pre.ns.length); i += 1) if (x.pre.ns[i] !== y.pre.ns[i]) return x.pre.ns[i]! > y.pre.ns[i]!;
+    return x.pre.ns.length > y.pre.ns.length;
 }
 
 describe('the release lands where the installed Genies look', () => {

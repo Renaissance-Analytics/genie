@@ -60,9 +60,9 @@ describe('the install plan — the package manager per platform, from Genie’s 
         expect(planInstall({ tool: 'node', platform: 'linux', packageManager: 'dnf' })).toMatchObject({ argv: ['pkexec', 'dnf', 'install', '-y', 'nodejs'], manager: 'dnf', elevated: true });
     });
 
-    it('agent CLIs install with npm (through cmd.exe on Windows); npm, rustc and an unknown tool are refused with the reason', () => {
-        expect(planInstall({ tool: 'claude-code', platform: 'linux', packageManager: 'apt' })).toMatchObject({ argv: ['npm', 'install', '-g', '@anthropic-ai/claude-code'], manager: 'npm' });
-        expect(planInstall({ tool: 'codex', platform: 'win32', packageManager: 'winget' })).toMatchObject({ argv: ['cmd.exe', '/d', '/s', '/c', 'npm', 'install', '-g', '@openai/codex'], label: 'npm install -g @openai/codex' });
+    it('agent CLIs install with their vendor\'s installer (Tynn #698); npm, rustc and an unknown tool are refused with the reason', () => {
+        expect(planInstall({ tool: 'claude-code', platform: 'linux', packageManager: 'apt' })).toMatchObject({ argv: ['bash', '-c', `set -eu; f="$(mktemp)"; trap 'rm -f "$f"' EXIT; curl --proto '=https' --tlsv1.2 -fsSL https://claude.ai/install.sh -o "$f"; bash "$f"`], manager: 'vendor' });
+        expect(planInstall({ tool: 'codex', platform: 'win32', packageManager: 'winget' })).toMatchObject({ argv: ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `$installer = irm https://chatgpt.com/codex/install.ps1 -ErrorAction Stop; if (-not $installer) { throw 'https://chatgpt.com/codex/install.ps1 sent nothing' }; $installer | iex`], manager: 'vendor' });
         expect(planInstall({ tool: 'npm', platform: 'win32', packageManager: 'winget' })).toEqual({ refused: 'npm comes with Node; install node and it is there' });
         expect(planInstall({ tool: 'rustc', platform: 'win32', packageManager: 'winget' })).toMatchObject({ refused: expect.stringContaining('rustup') });
         expect(planInstall({ tool: 'frobnicate', platform: 'linux', packageManager: 'apt' })).toEqual({ refused: 'frobnicate is not a tool Genie manages' });

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { linuxRow, linuxRows, linuxSh } from './helpers/ci-scripts.js';
 import { touchedZip64, zipWriters } from '../scripts/zip64-paths.mjs';
 
 /**
@@ -13,8 +14,6 @@ import { touchedZip64, zipWriters } from '../scripts/zip64-paths.mjs';
  */
 const code = (yaml: string) => yaml.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const ci = code(read('.github/workflows/ci.yml'));
-const job = ci.slice(ci.indexOf('\n  zip64:'), ci.indexOf('\n  smoke:'));
 const release = code(read('.github/workflows/release.yml'));
 const repo = fileURLToPath(new URL('..', import.meta.url));
 
@@ -39,31 +38,11 @@ describe('the check itself', () => {
     });
 });
 
-describe('the CI job', () => {
-    it('always reports and runs the check only when the writer changed: a required check that never reports blocks every other PR', () => {
-        expect(job).toContain('name: zip64 acceptance');
-        expect(job).not.toMatch(/\n {4}if:/);
-        expect(ci).not.toMatch(/\n\s+paths:/);
-        expect(job).toMatch(/- run: npm run verify:zip64\n\s+if: steps\.changed\.outputs\.zip64 == 'true'/);
-    });
-
-    it('asks scripts/zip64-paths.mjs, and checks the dependency, with nothing piped into grep', () => {
-        expect(job).toContain('git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed.txt"');
-        expect(job).toContain('node scripts/zip64-paths.mjs --touched "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/touched.txt"');
-        expect(job).toMatch(/if \[ -s "\$RUNNER_TEMP\/touched\.txt" \]; then [^\n]*zip64=true; fi/);
-        expect(job).toContain(`if grep -qE '^[+-].*"yazl"' "$RUNNER_TEMP/package.diff"; then zip64=true; fi`);
-        expect(job).toContain(`if grep -qE '^[+-].*/(yazl|buffer-crc32)-[0-9]' "$RUNNER_TEMP/package-lock.diff"; then zip64=true; fi`);
-        expect(job).not.toMatch(/\|\s*grep/);
-        const setup = job.indexOf('uses: actions/setup-node@v4');
-        expect(setup).toBeGreaterThan(-1);
-        expect(setup).toBeLessThan(job.indexOf('node scripts/zip64-paths.mjs'));
-        expect(job.slice(setup, job.indexOf('- name: did this change touch the zip writer?'))).not.toContain('if:');
-    });
-
-    it('with no base to compare, it runs the check rather than guess', () => {
-        const noBase = job.slice(job.indexOf('if [ -z "$BASE" ]'), job.indexOf('git diff --name-only'));
-        expect(noBase).toContain('echo "zip64=true" >> "$GITHUB_OUTPUT"');
-        expect(noBase).toContain('exit 0');
+describe('the Linux gate', () => {
+    it('runs it in its own row (scripts/ci/linux.sh), and only there', () => {
+        expect(linuxRows).toContain('zip64');
+        expect(linuxRow('zip64')).toMatch(/npm run verify:zip64/);
+        expect(linuxSh.match(/npm run verify:zip64/g)).toHaveLength(1);
     });
 });
 
@@ -110,11 +89,10 @@ describe('what counts as touching the writer', () => {
     });
 });
 
-describe('the release gate', () => {
-    it('runs on the Linux leg, after the unit suite and before anything is built or uploaded', () => {
-        const publish = release.slice(release.indexOf('\n  publish:'), release.indexOf('\n  verify:'));
-        const step = publish.indexOf("- run: npm run verify:zip64\n        if: runner.os != 'Windows'");
-        expect(step).toBeGreaterThan(publish.indexOf('- run: npm test'));
-        expect(step).toBeLessThan(publish.indexOf('- run: npm run build'));
+describe('the release', () => {
+    it('runs no tests: the gate before a tag is the local CI (the owner, 2026-11-11)', () => {
+        expect(release).not.toMatch(/npm run verify:zip64/);
+        expect(release).not.toMatch(/run: npm test\b/);
+        expect(release).toMatch(/run: npm run build\b/);
     });
 });

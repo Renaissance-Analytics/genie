@@ -110,6 +110,15 @@ describe('the heartbeat window main sends genie-host', () => {
         expect(tick).toBeNull();
     });
 
+    it('each beat says the route its main window shows and its V8 heap against the limit (Tynn issue #711); a reader that throws costs only its field', () => {
+        const sent: WindowBeat[] = [];
+        startHeartbeat({ send: (b) => sent.push(b), pid: 4242, rss: () => 512 * MB, route: () => 'genie://AlphaR/deck', heap: () => ({ used: 300 * MB, limit: 4096 * MB }), every: () => () => {} });
+        expect(sent).toEqual([{ pid: 4242, rss: 512 * MB, route: 'genie://AlphaR/deck', heapUsed: 300 * MB, heapLimit: 4096 * MB }]);
+        const bare: WindowBeat[] = [];
+        startHeartbeat({ send: (b) => bare.push(b), pid: 4242, rss: () => 512 * MB, route: () => { throw new Error('window gone'); }, heap: () => null, every: () => () => {} });
+        expect(bare).toEqual([{ pid: 4242, rss: 512 * MB }]);
+    });
+
     it('a send that throws (the link down) never escapes the timer', () => {
         let tick: (() => void) | null = null;
         startHeartbeat({ send: () => { throw new Error('not connected'); }, pid: 1, rss: () => 1, every: (fn) => { tick = fn; return () => { tick = null; }; } });

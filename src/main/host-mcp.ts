@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { writeTextPrivate } from './store.js';
 import type { McpServer } from '@particle-academy/prism-acp';
+import { withInterruptibleCalls } from './mcp-interrupt.js';
 import { livenessOf } from '../core/liveness.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { AgentStores } from './agent-stores-host.js';
@@ -62,9 +63,11 @@ export interface HostMcpPorts {
     readonly takeOverCaller?: (id: string) => Caller | null;
     /**
      * The sites and service engines `sites` and `services` act on (Tynn #444): the host's own hosting (P5a) and its
-     * supervisor. Absent = the host's hosting did not start, and the tools say so. `sites open` / `services exec` are the window's.
+     * supervisor. Absent = the host's hosting did not start, and the tools say so. Only `sites open` needs the window.
      */
     readonly hosting?: import('./hosting-actions.js').HostingServices;
+    /** Host-owned command execution, with the existing approval, confinement and cancellation contract. */
+    readonly serviceExec?: import('./mcp-tools-hosting.js').ServiceExec;
     /** The terminals `manageTerminals` acts on (P3.3e): the host's own. Absent = the tool is the window's. */
     readonly terminals?: import('./mcp-tools-more.js').TerminalsPort;
     /** A shell an agent opens: the workspace's service variables and Genie's endpoint. */
@@ -77,6 +80,8 @@ export interface HostMcpPorts {
     readonly forwardedCalls?: Map<string, import('./mcp-tools.js').McpCall>;
     /** Where the endpoint is remembered (`<genieHome>/mcp-endpoint.json`). */
     readonly endpointFile: string;
+    /** The Genie tool calls running for each agent, ended by its Interrupt (Tynn #702). Absent = calls run on regardless. */
+    readonly toolCalls?: import('./mcp-interrupt.js').AgentToolCalls;
     /** What this host can have (hostCapabilities, P10.1d): its window tools answer from it. Absent = all, as in the app. */
     readonly capabilities?: import('../core/host-runtime.js').HostCapabilities;
     /** The OSA's home, `<root>/osa` (P7: from the host's root, never homedir()'s `.genie`). */
@@ -154,7 +159,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             reportPlan: (agentId, steps) => ports.reportPlan(agentId as AgentId, steps),
             readPlan: (agentId) => ports.records().find((r) => r.id === agentId)?.plan ?? null,
             // THE WINDOW'S: these tools are forwarded whole (mcp-host-tools.ts); here they only give the tools their shape.
-            issueWatch: { forWorkspace: unavailable('checkIssues') },
+            // checkIssues is forwarded whole. With no host count provider, imDone omits its optional count.
             openFile: unavailable('openFileForUser'),
             terminals: ports.terminals ?? { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             ...(ports.terminalEnv ? { terminalEnv: ports.terminalEnv } : {}),
@@ -163,6 +168,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.flows ? { flows: ports.flows } : {}),
             ...(ports.mail ? { mail: ports.mail } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
+            ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
@@ -174,7 +180,9 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         // The plugins' tools run HERE (ADF A3): the host has their plugins, so nothing of theirs is forwarded to a window.
         const pluginNames = new Set((ports.plugins?.tools() ?? []).map((ref) => `${ref.pluginId}.${ref.tool.name}`));
         const isNative = (name: string) => HOST_NATIVE_TOOLS.has(name) || pluginNames.has(name);
-        const served = hostRegistrations(all, { native: (name) => pluginNames.has(name), resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
+        const servedAll = hostRegistrations(all, { native: (name) => pluginNames.has(name), resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
+        // Every call this server answers is the calling agent's to have ended by its Interrupt (Tynn #702), forwarded ones too.
+        const served = ports.toolCalls ? withInterruptibleCalls(servedAll, resolveCaller, ports.toolCalls) : servedAll;
         tools = served.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         native = new Map(served.filter((r) => isNative(r.definition.name)).map((r) => [r.definition.name, r]));
         servedNow = served;

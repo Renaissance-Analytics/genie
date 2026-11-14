@@ -77,6 +77,8 @@ describe('nothing writes or restores it any more', () => {
     });
 
     it('a full quit records the running set and saves no screen', () => {
-        expect(code('src/main/main.ts')).toMatch(/void recordShutdownNow\(\)\.catch\(/);
+        // Recorded once the agents' safe-point wait is over (Tynn #616: only turns actually cut off are resumed), its
+        // failure never blocking the quit; nothing of the screen is saved.
+        expect(code('src/main/main.ts')).toMatch(/\.then\(\(\) => recordShutdownNow\(\)\)\s*\.catch\(\(\) => \{/);
     });
 });

@@ -23,7 +23,7 @@ export function gappWindowsElectron(deps: {
     readonly preload: string;
     readonly ledger: ActivationLedger;
     readonly log?: (line: string) => void;
-}): { open(packageId: string): Promise<void>; reroute(): void } {
+}): { open(packageId: string, options?: { preview?: boolean }): Promise<void>; reroute(): void } {
     const log = deps.log ?? ((line: string) => console.log(line));
     const sessions = new Map<string, Session>();
     const host = (): GAppSessionsApi => {
@@ -32,14 +32,16 @@ export function gappWindowsElectron(deps: {
         return api;
     };
     const windows = new GAppWindows<Session>({
-        sessions: { open: async (id) => host().open(id), close: (token) => { deps.sessions()?.close(token); } },
+        sessions: { open: async (id, options) => host().open(id, options), close: (token) => { deps.sessions()?.close(token); } },
         caPem: () => deps.frontDoor().caPem,
-        prepareSession: async (packageId) => {
-            let ses = sessions.get(packageId);
+        prepareSession: async (key) => {
+            let ses = sessions.get(key);
             if (!ses) {
-                ses = session.fromPartition(`gapp-${appSlug(packageId)}`);
+                const preview = key.startsWith('preview:');
+                const packageId = preview ? key.slice('preview:'.length) : key;
+                ses = session.fromPartition(preview ? `gapp-preview-${appSlug(packageId)}` : `gapp-${appSlug(packageId)}`);
                 guardSession(ses, () => deps.frontDoor().caPem);
-                sessions.set(packageId, ses);
+                sessions.set(key, ses);
             }
             await routeSession(ses, deps.frontDoor().port, log);
             return ses;
@@ -49,7 +51,7 @@ export function gappWindowsElectron(deps: {
         bringUp: (win) => { bringUp(win as BrowserWindow, { activation: 'user-gesture', reason: 'GApp window', ledger: deps.ledger, label: 'gapp' }); },
     });
     return {
-        open: (packageId) => windows.open(packageId),
+        open: (packageId, options) => windows.open(packageId, options),
         reroute: () => { for (const ses of sessions.values()) void routeSession(ses, deps.frontDoor().port, log); },
     };
 }

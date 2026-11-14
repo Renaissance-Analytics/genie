@@ -95,6 +95,12 @@ function workspaceWord(record: AgentRecord, slugs: ReadonlyMap<string, string>):
 }
 
 /** An agent's address: `name@workspace`. No provider — names are unique in a workspace, whoever runs them. */
+/**
+ * A PARTICIPANT NOBODY CAN NAME, IN WORDS (Tynn #621): an id is never shown to the person. Used wherever a sender or
+ * recipient is no longer among the agents Genie knows.
+ */
+export const UNNAMED_AGENT = 'an agent no longer in Genie';
+
 export function agentAddress(record: AgentRecord, slugs: ReadonlyMap<string, string>): string {
     return `${record.name}@${workspaceWord(record, slugs)}`;
 }

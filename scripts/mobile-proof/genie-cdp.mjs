@@ -2,13 +2,15 @@
  * A minimal CDP client into Genie's main window (the mobile proofs, run INSIDE the test VM): evaluate an expression, send
  * any CDP command (a screenshot, a mouse move), and press Allow / Deny on "Pair this device?" as the owner would.
  */
+import { isGeniePage } from '../cdp-main-window.mjs';
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function genieWindow() {
     for (let i = 0; i < 120; i++) {
         try {
             const targets = await (await fetch('http://127.0.0.1:9222/json/list')).json();
-            const page = targets.find((t) => t.type === 'page' && /index\.html/.test(t.url) && !/[?&](remote|view)=/.test(t.url));
+            const page = targets.find((t) => t.type === 'page' && isGeniePage(t.url) && !/[?&](remote|view)=/.test(t.url));
             if (page) {
                 const ws = new WebSocket(page.webSocketDebuggerUrl);
                 await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });

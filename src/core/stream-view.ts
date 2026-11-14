@@ -2,6 +2,7 @@ import { headroomLine } from './headroom.js';
 import { computeDiff } from '@particle-academy/fancy-file-commons';
 import { DIFF_TOO_LARGE, editLabel } from './file-edits.js';
 import type { StreamEvent, ToolKind } from './stream-event.js';
+import type { CommandRunRef } from './command-run.js';
 
 /**
  * HOW THE STREAM IS READ — the ledger's presentation decisions, with no React in sight.
@@ -71,6 +72,8 @@ export interface TimedEvent {
 export type Tone = 'default' | 'muted' | 'violet' | 'emerald' | 'sky' | 'amber' | 'bad';
 
 export interface LedgerRow {
+    /** Exact host-authored run target; command text is a label, never its identity (#633). */
+    commandRun?: CommandRunRef | undefined;
     id: string;
     at: number | null;
     icon: string;
@@ -231,6 +234,13 @@ function toolRow(
     context: RowContext,
 ): LedgerRow {
     const isEdit = event.toolKind === 'edit';
+    // Genie knows its own operation even when the provider has no ACP category for MCP calls.
+    // Keep that missing provider category untouched, and do not relabel another server's services tool.
+    const input = typeof event.rawInput === 'object' && event.rawInput !== null && !Array.isArray(event.rawInput)
+        ? event.rawInput as Record<string, unknown> : null;
+    const serviceCommand = ['services', 'mcp__genie__services', 'genie.services'].includes(event.name ?? '')
+        && input?.action === 'exec' && typeof input.command === 'string' && input.command.trim() !== ''
+        ? oneLine(input.command) : null;
 
     // `null` kind gets its own glyph AND its own note. `other` is a category the provider can
     // claim; `null` is one it did not, and the two must not share a rendering.
@@ -244,7 +254,9 @@ function toolRow(
     // A native edit (Codex) names its files in its edit list, not in its input (Tynn #440 part C).
     const nativeLabel = isEdit && event.edits !== undefined ? editLabel(event.edits) : null;
     const label = nativeLabel ?? (isEdit ? argument : null) ?? event.title ?? event.name ?? '(tool call)';
-    const main = isEdit ? label : [event.name, titleIsName ? argument : event.title].filter(Boolean).join('  ') || label;
+    const main = serviceCommand !== null
+        ? `${event.status === 'completed' ? 'Ran' : event.status === 'failed' ? 'Failed' : event.status === null ? 'Command' : 'Running'} ${serviceCommand} via services`
+        : isEdit ? label : [event.name, titleIsName ? argument : event.title].filter(Boolean).join('  ') || label;
 
     // `rawInput === null` means the agent did not send this call's arguments — never `{}`. An
     // inspector opened on nothing is a panel that appears and says nothing, which reads as a
@@ -256,7 +268,7 @@ function toolRow(
         : undefined;
 
     const note =
-        event.toolKind === null ? '(kind not reported)'
+        event.toolKind === null && serviceCommand === null ? '(kind not reported)'
         : isEdit && (event.editsOmitted === true || (event.edits?.some((e) => e.diff === undefined) ?? false)) ? DIFF_TOO_LARGE
         : isEdit && !hasArguments && event.edits === undefined ? '(arguments not reported)'
         : null;
@@ -457,7 +469,7 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
 
         case 'notice':
             // A rate-limit notice reads as its headroom line, never the provider's raw sentence with an ISO date.
-            return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom) : row.event.message, lane: null };
+            return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom) : row.event.message, lane: null, ...(row.event.commandRun ? { commandRun: row.event.commandRun } : {}) };
 
         case 'approval': {
             // The decision, in one line: `allowed · php artisan migrate --force`. The tool, when the request named one.
