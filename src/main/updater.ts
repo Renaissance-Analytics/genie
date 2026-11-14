@@ -92,6 +92,8 @@ export interface UpdaterPort {
      * install there, in words, with every agent and site still running. Absent = nothing to make ready.
      */
     prepareInstall?(): Promise<void>;
+    /** The install will not happen (Tynn #729): the helper's upgrade lease from `prepareInstall` is given back. */
+    releaseInstall?(): Promise<void>;
 }
 
 /**
@@ -402,6 +404,15 @@ export class UpdateHost {
         // The helper is ready. Ask for safe points before recording who was actually interrupted.
         // Legacy/testing ports without a safe-point gate retain their synchronous stop setup.
         const drain = this.options.agents?.waitForSafe ? await this.waitForAgents('upgrade') : { interrupted: [], forced: false, timedOut: false };
+        // STILL THERE? (Tynn #729) The drain can last minutes; before anything irreversible, the helper is asked again — a
+        // helper that went is started and waited for, or the upgrade fails in words with everything still running.
+        if (this.options.port.prepareInstall) {
+            try {
+                await this.options.port.prepareInstall();
+            } catch (error: unknown) {
+                return this.failedInstall(error, true);
+            }
+        }
         const interrupted = drain.interrupted;
         const stopping = (step: 'agents' | 'processes' | 'restarting', left: number): InstallProgress => ({ step, agents: live.length, left, ...(interrupted.length ? { interrupted } : {}) });
         // §7.4: the existing record-before-stop path remains the only restore-roster writer.
@@ -445,6 +456,7 @@ export class UpdateHost {
     private failedInstall(error: unknown, beforeStop = false): InstallResult {
         const message = error instanceof Error ? error.message : String(error);
         try { this.cancelDrain(); } catch { /* phase recovery still happens if one release observer failed */ }
+        try { void Promise.resolve(this.options.port.releaseInstall?.()).catch(() => undefined); } catch { /* the helper also leaves when the link closes */ }
         const { installing: _dropped, ...rest } = this.current;
         this.set({ ...rest, phase: 'error', error: message });
         const result: InstallResult = { killed: [], report: `Not installed: ${message}.${beforeStop ? ' Nothing was stopped.' : ''}` };
