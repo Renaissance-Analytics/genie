@@ -10,12 +10,14 @@ afterEach(async () => { vi.restoreAllMocks(); await f?.close(); });
 
 async function read(): Promise<FeatureData> {
     const result = await f.outcome('features.snapshot');
+    if (!result.ok) console.error(`features.snapshot refused: ${result.reason}`);
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) throw new Error('the preceding assertion failed');
     return result.value as FeatureData;
 }
 async function act(action: FeatureAction): Promise<FeatureData> {
     const result = await f.outcome('features.act', [action]);
+    if (!result.ok) console.error(`${action.kind} refused: ${result.reason}`);
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) throw new Error('the preceding assertion failed');
     return result.value as FeatureData;
@@ -55,7 +57,9 @@ describe('host feature group two with no window (Tynn #720)', () => {
     });
     it('Docker unavailability is reported with its real reason instead of a healthy status', async () => {
         await f.seedEngine(); f.docker.down = true;
-        expect((await read()).services?.instances).toEqual([expect.objectContaining({ status: 'docker-not-running', note: expect.stringContaining('fixture Docker daemon is unavailable') })]);
+        const instances = (await read()).services?.instances;
+        console.error('Docker availability notes:', instances?.map(({ status, note }) => ({ status, note })));
+        expect(instances).toEqual([expect.objectContaining({ status: 'docker-not-running', note: expect.stringContaining('fixture Docker daemon is unavailable') })]);
     });
     it('service Add and Cancel preserve the existing form defaults', async () => {
         const data = await act({ kind: 'services.add', workspaceId: 'work' });
