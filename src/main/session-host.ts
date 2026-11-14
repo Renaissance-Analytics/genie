@@ -1639,6 +1639,20 @@ export class SessionHost {
         return this.handOff(agentId, text, by, context) !== null;
     }
 
+    /** A flow's prompt for a busy agent, held in its queue for the turn's end (Tynn #704; `AgentSession.queueForTurnEnd`). `null` = no session to take it. */
+    queueFlowPrompt(agentId: AgentId, text: string, by: string, replacing: string | null): { id: string } | null {
+        const entry = this.#running.get(agentId);
+        if (!entry || !entry.session.running) return null;
+        const id = entry.session.queueForTurnEnd(text, by, replacing);
+        this.#emit(agentId);
+        return { id };
+    }
+
+    /** Whether a prompt `queueFlowPrompt` held is still waiting for its turn. */
+    isPromptQueued(agentId: AgentId, promptId: string): boolean {
+        return this.#running.get(agentId)?.session.hasQueuedPrompt(promptId) ?? false;
+    }
+
     /**
      * `prompt`, answering what became of it (`AgentSession.deliver`): `{ queued: null }` = the provider has it now (a new
      * turn, or folded into the running one); `{ queued: id }` = held, sent when a turn ends (`hasQueuedPrompt`); `null` =

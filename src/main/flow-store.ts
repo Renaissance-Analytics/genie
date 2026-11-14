@@ -435,7 +435,7 @@ function resumable(flow: FlowRecord): boolean {
     const going = flow.inFlight;
     if (!going || !going.outputs) return false;
     const kinds = new Map(flowNodes(flow.document).map((n) => [String(n.id), n.kind]));
-    const running = Object.entries(going.nodes).filter(([, o]) => o === 'running').map(([id]) => id);
+    const running = Object.entries(going.nodes).filter(([, o]) => o === 'running' || o === 'queued').map(([id]) => id);
     if (running.length === 0) return false;
     if (!running.every((id) => safeToRerun(kinds.get(id) ?? ''))) return false;
     return Object.entries(going.nodes).filter(([, o]) => o === 'ran').every(([id]) => id in going.outputs!);
@@ -444,7 +444,7 @@ function resumable(flow: FlowRecord): boolean {
 /** A flow whose run was in flight when Genie quit: that run recorded `stopped`, at the step it was on (genie#1204 (e)). */
 function stoppedByQuit(flow: FlowRecord, at: string): FlowRecord {
     const going = flow.inFlight!;
-    const nodes: Record<string, NodeOutcome> = Object.fromEntries(Object.entries(going.nodes).map(([id, o]) => [id, o === 'running' ? 'stopped' : o]));
+    const nodes: Record<string, NodeOutcome> = Object.fromEntries(Object.entries(going.nodes).map(([id, o]) => [id, o === 'running' || o === 'queued' ? 'stopped' : o]));
     const docNodes = flowNodes(flow.document);
     const at_ = Object.keys(nodes).find((id) => nodes[id] === 'stopped');
     const where = at_ !== undefined ? docNodes.find((n) => String(n.id) === at_) : undefined;
