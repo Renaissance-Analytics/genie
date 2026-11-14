@@ -26,6 +26,7 @@ function settings() {
     return {
         snapshotFor: (id: string) => ({ theme: 'dark', ...own.get(id) }),
         workspaceValues: (id: string) => ({ ...own.get(id) }),
+        onChange: () => () => {},
         setFor: async (id: string, key: string, value: unknown) => {
             if (key === 'not_a_setting') throw new Error('no setting not_a_setting');
             own.set(id, { ...own.get(id), [key]: value });

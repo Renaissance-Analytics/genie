@@ -4,7 +4,7 @@ import { Baton, PairingPins } from '../core/remote.js';
 import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
-import { HOST_ALONE_METHODS } from './host-alone-api.js';
+import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 
 /**
  * REMOTE ACCESS'S HOST SIDE, IN GENIE-HOST (Tynn #409, host split P5d.1). A phone (over the tailnet) and a Pilot (over the
@@ -28,9 +28,9 @@ export interface HostRemoteApiPorts {
     /** Events for remote connections: the host's own, and those a connected window forwards. */
     readonly onEvent?: (listener: (channel: string, payload: unknown) => void) => () => void;
     /**
-     * GENIE-HOST'S OWN ANSWERS TO A PHONE (Tynn #551, host-alone-api.ts): the phone's methods, used only while no window is
-     * connected; its events reach remote connections only then (a connected window forwards its own). A getter: genie-host
-     * builds it once its session host is up.
+     * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, host-alone-api.ts): the five workspace read/settings methods and their
+     * settings-change signal always come from here. Other families use this only while no window is connected.
+     * A getter: genie-host builds it once its session host is up.
      */
     readonly alone?: HostApi | (() => HostApi | null);
     /** A Pilot's Take Over window closed: the TUI it started goes with it, whoever else is connected. */
@@ -45,15 +45,22 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
         invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);
+            // These reads and writes share the host's store even while a window is connected (Tynn #666).
+            if (HOST_WORKSPACE_READ_METHODS.has(method)) {
+                const answers = alone();
+                if (!answers) throw new Error(`${ports.hostName}'s workspace services are still starting; try again in a moment`);
+                return answers.invoke(method, args, context);
+            }
             if (ports.window.connected()) return ports.window.invoke(method, args, context);
             const answers = HOST_ALONE_METHODS.has(method) ? alone() : null;
             if (answers) return answers.invoke(method, args, context);
             throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
         },
         onEvent: (listener, options) => {
-            const offWindow = ports.onEvent?.(listener) ?? (() => {});
-            // genie-host's own events only while no window is connected: a connected window forwards its own.
-            const offAlone = alone()?.onEvent((channel, payload) => { if (!ports.window.connected()) listener(channel, payload); }, options) ?? (() => {});
+            // A window's replica can echo this change. Only the owned store's signal counts (Tynn #666).
+            const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed') listener(channel, payload); }) ?? (() => {});
+            // Other families keep their existing window/no-window event source.
+            const offAlone = alone()?.onEvent((channel, payload) => { if (channel === 'workspace-settings-changed' || !ports.window.connected()) listener(channel, payload); }, options) ?? (() => {});
             return () => { offWindow(); offAlone(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
