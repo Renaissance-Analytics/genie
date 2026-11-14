@@ -13,8 +13,8 @@ import { driverEvents } from '../src/main/session-host.js';
 /**
  * Tynn #684 against prism-acp's REAL ClaudeDriver (the version this tree pins), not a model of it: a stand-in Claude Code
  * CLI that does what the owner's ledger shows Claude Code doing — a prompt written while a turn runs is FOLDED into that
- * turn and gets no `result` of its own. The driver then holds every later turn's end behind it
- * (test/turn-end-held-684.test.ts says why); the next prompt's turn must still end in Genie.
+ * turn and gets no `result` of its own. The covered-prompt list now settles it as joined; the next prompt's turn must
+ * still end in Genie. Before prism-acp 0.42 the driver held every later end behind that folded prompt (#684).
  *
  * The stand-in: a prompt whose text starts with `HOLD` opens a turn that stays open until the next prompt arrives; that
  * prompt is folded in, and the held turn's `result` (naming the HOLD prompt) closes it. Any other prompt is a turn of its
@@ -114,7 +114,7 @@ describe('the real ClaudeDriver, after a prompt Claude folded into a turn', () =
         expect(outcomes[1]).toMatchObject({ foldedInto: outcomes[0]!.turnId, stopReason: 'end_turn', isError: false });
         expect(outcomes[1]!.turnId).not.toBe(outcomes[0]!.turnId);
 
-        // The flow's prompt: the driver holds its end behind the folded one.
+        // The flow's prompt: its own end must arrive after the joined input has settled.
         session.deliver('Hourly round', 'flow "hourly round"');
         await vi.waitFor(async () => expect((await ledger()).filter((e) => e.kind === 'finished').map((e) => e.n)).toEqual([1, 2]), { timeout: 15_000 });
         expect(session.turnState).toBe('idle');

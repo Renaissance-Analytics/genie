@@ -39,8 +39,8 @@ export interface SessionDriver {
     start(): void;
     /** Deferred drivers surround the actual synchronous spawn with the session's ownership snapshot. */
     startTracked?(aroundSpawn: (spawn: () => void) => void): void;
-    /** Text, or ACP prompt content blocks when files are attached (prism-acp's `prompt`). */
-    prompt(content: string | readonly PromptBlock[]): void;
+    /** Text or ACP content blocks; Claude's prompt id (prism-acp 0.42), absent for a driver without prompt ids. */
+    prompt(content: string | readonly PromptBlock[]): string | void;
     kill(signal?: NodeJS.Signals): void;
     /**
      * CLOSE THE PROVIDER'S STDIN — prism-acp's `endInput()`: "tells the CLI no more turns are coming". Claude ends on its
@@ -138,6 +138,10 @@ export interface SteerRecordLike {
 
 /** A turn's outcome, as `prism-acp` reports it. */
 export interface TurnOutcomeLike {
+    /** The prompt id returned by ClaudeDriver.prompt (prism-acp 0.42); other drivers may omit it. */
+    readonly turnId?: string;
+    /** This prompt was consumed by the named turn, rather than becoming another turn. Its other fields repeat that outcome. */
+    readonly foldedInto?: string;
     /**
      * `null` when the turn did NOT finish cleanly.
      *
@@ -497,21 +501,7 @@ export class AgentSession {
      * Each prompt still waiting for its turn, oldest first: who sent it (`by`, as `prompt` takes it), and what it was, so
      * one Claude DROPS at a Stop (prism-acp 0.37.0, `#dropped`) can be sent again or kept as a draft.
      */
-    #queued: Array<{ by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
-    /**
-     * A TURN'S END CAN BE HELD BY THE DRIVER (Tynn #684, genie#721). prism-acp's ClaudeDriver releases turn ends in the
-     * order the prompts were written (`#flushOutcomes`), and a prompt Claude Code FOLDS into a running turn gets no `result`
-     * of its own: it never settles, and every later turn's end waits behind it for the rest of the run. The `result` itself
-     * still arrives (its usage_update, mapped from the same frame, comes first), so that is what ends such a turn here.
-     * - `#resultAwaitingEnd`: a `result` came in this dispatch and no end has followed it yet (`#sawTurnResult`).
-     * - `#endsOut`: prompts handed to the driver whose end it has not reported, oldest first in the driver's own order.
-     * - `#endsOwed`: how many of the next ends the driver reports are for prompts already accounted for here — the folded
-     *   ones, and the turns closed on their `result` — and are dropped when they come, all at once after a cancel settles
-     *   the folded prompt (the owner's ledger: 26 `finished` rows in one second).
-     */
-    #resultAwaitingEnd = false;
-    #endsOut = 0;
-    #endsOwed = 0;
+    #queued: Array<{ turnId?: string; by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
     /**
      * THE DRIVER STOPPED ITSELF and will take no prompt again (prism-acp 0.37.0: Claude's cancel state uncertain,
      * `CANCEL_STATE_UNCERTAIN`). Not Broken — nothing about the agent is wrong — but this run is over: the person's next
@@ -1404,7 +1394,6 @@ export class AgentSession {
             events: {
                 onUpdate: (update) => {
                     if (this.#ended) { this.#straggler(); return; }
-                    if (isTurnResult(update)) this.#sawTurnResult();
                     void this.#ingest(update);
                 },
                 onSteerUpdate: (update) => {
@@ -1748,9 +1737,7 @@ export class AgentSession {
         const heldShownAs = held === null ? null : this.#heldShownAs;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
-        this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
-        // One more end the driver will report, whenever it does (`#endHeldTurn`).
-        this.#endsOut += 1;
+        const turnId = this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
         if (redockAt !== null) {
             this.#redockAt = null;
             this.#options.onRedockSent?.(redockAt);
@@ -1766,7 +1753,7 @@ export class AgentSession {
         }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
-        if (this.#inTurn) this.#queued.push({ by, text, sent, context });
+        if (this.#inTurn) this.#queued.push({ ...(typeof turnId === 'string' ? { turnId } : {}), by, text, sent, context });
         else {
             // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
             this.#queued = [];
@@ -2349,45 +2336,18 @@ export class AgentSession {
         this.#options.onStateChange?.();
     }
 
-    /** The driver reported a prompt's end (`onTurnEnd`): one already accounted for is dropped; any other ends its turn. */
+    /** A joined prompt shares its parent's result; only an outcome for a turn of its own ends a turn here. */
     #onDriverTurnEnd(outcome: TurnOutcomeLike): void {
-        this.#resultAwaitingEnd = false;
-        this.#endsOut = Math.max(0, this.#endsOut - 1);
-        // In the driver's order, the owed ends come before any prompt written since (they were all written earlier).
-        if (this.#endsOwed > 0) {
-            this.#endsOwed -= 1;
+        if (outcome.foldedInto !== undefined) {
+            // The driver proves the join from Claude's result list. A listener may already have started newer work
+            // while the parent ended: do not close that turn, clear its queue, repeat a failure or restart Cooling.
+            if (outcome.turnId !== undefined) this.#queued = this.#queued.filter((p) => p.turnId !== outcome.turnId);
             return;
         }
         this.#turnEnded(outcome);
     }
 
-    /**
-     * A PROVIDER `result` (Claude's turn-scoped usage, `isTurnResult`). Its end, when the driver releases it, is reported in
-     * the SAME synchronous dispatch, after the updates (prism-acp `#emit`: updates, then `#flushOutcomes`). So a microtask
-     * later is after that dispatch: the end has come, or the driver is holding it.
-     */
-    #sawTurnResult(): void {
-        this.#resultAwaitingEnd = true;
-        queueMicrotask(() => this.#endHeldTurn());
-    }
-
-    /**
-     * The provider ended the turn and the driver holds its end behind a prompt that will never settle (`#endsOwed`). The
-     * turn is closed here, as the turn's end would have: `finished`, idle, cooling, what waited sent as a turn of its own.
-     * Nothing open (a `result` while idle), nothing closed. What is not known: the result's own stop reason — a held turn
-     * that failed (a limit, a sign-out) reads as replied; one the person stopped reads as stopped.
-     */
-    #endHeldTurn(): void {
-        if (!this.#resultAwaitingEnd || this.#ended) return;
-        this.#resultAwaitingEnd = false;
-        if (!this.#inTurn && this.#turnState !== 'working') return;
-        // Everything still out except what was sent into this turn (it may yet run as its own) is this turn's end, or a
-        // folded prompt's ahead of it: all are owed, and dropped when the driver lets them go.
-        this.#endsOwed = Math.max(0, this.#endsOut - this.#queued.length);
-        this.#turnEnded({ stopReason: this.#stopAskedBy !== null ? 'cancelled' : 'end_turn', isError: false, raw: 'result (its end held by the driver)' });
-    }
-
-    /** A turn ended: the provider said so (`onTurnEnd`), or its `result` came and its end is held (`#endHeldTurn`). */
+    /** A turn ended: the driver's actual outcome, including its own stop reason and failure. */
     #turnEnded(outcome: TurnOutcomeLike): void {
         this.#clearCancelWait();
         // Two turns are two replies even with nothing between them. Without this a
@@ -2835,27 +2795,6 @@ export interface PromptContext {
  */
 /** prism-acp's `META_USAGE`: a Claude `result` frame's usage, `scope: 'turn'` (a Codex reading is the THREAD's, mid-turn). */
 const USAGE_META = 'particle.academy/usage';
-/** prism-acp's `META_UNMAPPED_FRAME`, on the `turn complete` notice a `result` becomes when it carries no usable usage. */
-const UNMAPPED_FRAME_META = 'particle.academy/unmapped_frame';
-
-/**
- * A PROVIDER TURN'S `result` (Tynn #684): prism-acp's ClaudeDriver maps every `result` frame it accepts — and only those,
- * and only for a prompt this session wrote — to a usage_update with the turn's usage (`scope: 'turn'`), or, with no context
- * size or no per-call usage to report, to a `turn complete` debug notice. Never a replayed one.
- */
-function isTurnResult(update: Record<string, unknown>): boolean {
-    const meta = update['_meta'];
-    if (typeof meta !== 'object' || meta === null || replayOf(update) !== null) return false;
-    const m = meta as Record<string, unknown>;
-    if (update['sessionUpdate'] === 'usage_update') {
-        const usage = m[USAGE_META];
-        return typeof usage === 'object' && usage !== null && (usage as Record<string, unknown>)['scope'] === 'turn';
-    }
-    if (update['sessionUpdate'] !== 'notice' || !(UNMAPPED_FRAME_META in m)) return false;
-    const notice = update['notice'];
-    return typeof notice === 'object' && notice !== null && (notice as Record<string, unknown>)['message'] === 'turn complete';
-}
-
 /**
  * A REPLAYED UPDATE (genie#1249), by prism-acp's mark (`REPLAY_META`): `null` when the update is not history. `summary` is
  * the one sentence Genie says for the whole replay, from the summary notice that ends it (`REPLAY_SUMMARY_META`); every

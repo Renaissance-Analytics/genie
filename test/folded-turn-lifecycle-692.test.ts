@@ -14,10 +14,9 @@ import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
 
 /**
- * Release-independent #692 regressions: the current #1927 workaround is expected to make these pass. This pins the
- * observable lifecycle before adoption, using the current driver's held callback order from #684. Once the typed
- * release exists this fixture must follow its measured reporting contract; it does not invent that unreleased API.
- * The unchanged real-driver / stand-in CLI scenario in turn-end-held-real-driver-684.test.ts runs alongside this file.
+ * #692 lifecycle regressions, first measured with #1927 and now using the published 0.42 prompt ids and explicit joins.
+ * Every lifecycle assertion remains: the host's replica and automatic mail must work after a joined prompt, regardless
+ * of which implementation settles it. The real-driver / stand-in CLI scenario runs alongside this file.
  */
 const END: TurnOutcomeLike = { stopReason: 'end_turn', isError: false, raw: 'end_turn' };
 const processTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
@@ -57,15 +56,18 @@ async function open() {
         events = options.events;
         return {
             start: () => {}, kill: () => { alive = false; },
-            prompt: (text) => { pending.push({ index: prompts.length, outcome: null }); prompts.push(String(text)); },
+            prompt: (text) => { const index = prompts.length; pending.push({ index, outcome: null }); prompts.push(String(text)); return `prompt-${index}`; },
             get running() { return alive; }, cliSessionId: null,
         };
     };
-    const result = (index: number) => {
+    const result = (index: number, folded: readonly number[] = []) => {
         events.onUpdate?.({ sessionUpdate: 'usage_update', used: 1200, size: 200000,
             _meta: { 'particle.academy/usage': { scope: 'turn', inputTokens: 10, outputTokens: 20 } } });
         const prompt = pending.find((p) => p.index === index);
-        if (prompt) prompt.outcome = END;
+        if (prompt) prompt.outcome = { ...END, turnId: `prompt-${index}` };
+        for (const joined of pending.filter((p) => folded.includes(p.index))) {
+            joined.outcome = { ...END, turnId: `prompt-${joined.index}`, foldedInto: `prompt-${index}` };
+        }
         flush();
     };
     const server = new SessionEngineServer({ token: 'folded-692', build: 'test',
@@ -92,11 +94,11 @@ async function open() {
         exit: (code: number) => { alive = false; events.onExit?.(code, null); } };
 }
 
-/** The first turn ends, but the folded prompt has no outcome, so the old driver holds the next turn's callback. */
+/** The result explicitly covers both prompts; the joined outcome is not a second turn. */
 async function foldOne(s: Awaited<ReturnType<typeof open>>) {
     expect(await s.replica.prompt(s.id, 'first turn', 'you')).toBe(true); // index 0
     expect(await s.replica.prompt(s.id, 'fold this into it', 'you')).toBe(true); // index 1
-    s.result(0);
+    s.result(0, [1]);
     await settle();
     expect(s.finished()).toEqual([1]);
 }
@@ -108,7 +110,7 @@ describe('a provider-ended folded sequence reaches the window and the automatic 
         expect(await s.replica.prompt(s.id, 'the next ordinary turn', 'you')).toBe(true); // index 2
         await settle();
         expect(s.replica.probe(s.id)).toMatchObject({ turnState: 'working', cooling: false });
-        s.result(2); // result exists, but its callback is behind the folded prompt
+        s.result(2); // The next ordinary turn settles from its own outcome.
         await settle();
         expect(s.finished()).toEqual([1, 2]);
         expect(s.replica.probe(s.id)).toMatchObject({ turnState: 'idle', cooling: true });
@@ -139,7 +141,7 @@ describe('a provider-ended folded sequence reaches the window and the automatic 
         expect(await s.replica.prompt(s.id, 'first turn', 'you')).toBe(true); // index 0
         due = true; onSend!(s.id); // automatic notice, index 1, folded into the first turn
         expect(s.prompts).toHaveLength(2);
-        s.result(0);
+        s.result(0, [1]);
         await settle();
         expect(settled).toEqual([true]);
         expect(s.finished()).toEqual([1]);
