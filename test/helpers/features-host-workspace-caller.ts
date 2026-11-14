@@ -36,14 +36,17 @@ export async function workspaceCallerFixture() {
     };
     const endpoint = { url: 'http://127.0.0.1:7400/mcp', token: '' };
     const withConfig = configWriter();
-    await writeFile(join(f.workspace, '.mcp.json'), JSON.stringify({ mcpServers: { other: { url: 'https://example.com/mcp' } } }));
+    // An empty runnable list is trusted without approval. Declare a fixture-only command (never launched), so the
+    // real trust service must wait for the person's Trust before the no-write control permits either writer.
+    await writeFile(join(f.workspace, '.mcp.json'), JSON.stringify({ mcpServers: { other: { command: 'fixture-mcp-server', args: [] } } }));
     // These are the same owned ports used by the host and historical shared action path. The host's wrappers keep
     // their receiver; the underlying trust service and disk writers are real. Only errors are injected below.
     const docs = vi.fn(async (path: string, source?: string) => {
         order.push(`docs:${source}`);
         if (faults.docs) throw new Error('fixture protocol writer failed');
         if (!await f.hosting.trust.mayWriteInto(path)) return;
-        await writeAgentProtocol({ workspacePath: path, fs, enabled: f.settings.get('mcp_sync_agents') !== false,
+        // Match compose.syncAgentDocs: snapshot tolerates this absent legacy flag; strict get() does not.
+        await writeAgentProtocol({ workspacePath: path, fs, enabled: f.settings.snapshot().mcp_sync_agents !== false,
             tools: [{ name: 'fixture_tool', description: 'fixture tool' }], tracking: 'files' });
     });
     const config = vi.fn(async (path: string, source?: string) => {

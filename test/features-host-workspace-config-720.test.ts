@@ -17,7 +17,7 @@ describe('host workspace/config and explicit release notes use their owned servi
             { id: 'claude', ok: true }, { id: 'cursor', ok: true }, { id: 'codex', ok: true }, { id: 'hooks', ok: true },
         ] });
         const mcp = JSON.parse(await f.read('.mcp.json'));
-        expect(mcp.mcpServers.other).toEqual({ url: 'https://example.com/mcp' });
+        expect(mcp.mcpServers.other).toEqual({ command: 'fixture-mcp-server', args: [] });
         expect(JSON.stringify(mcp)).toContain(f.endpoint.url);
         expect(await f.read('.agents/_genie/shared.md')).toContain('`fixture_tool`');
         expect(f.invokeWindow).not.toHaveBeenCalled();
@@ -120,6 +120,7 @@ describe('host workspace/config and explicit release notes use their owned servi
         expect(f.docs).not.toHaveBeenCalled(); expect(f.config).not.toHaveBeenCalled();
     });
     it('CONTROL: the canonical writers themselves refuse to write into the untrusted folder', async () => {
+        expect((await f.hosting.trust.refresh('work'))?.trusted).toBe(false);
         const before = await f.read('.mcp.json'); await f.docs(f.workspace, 'you'); expect(await f.config(f.workspace, 'you')).toEqual([]);
         expect(await f.read('.mcp.json')).toBe(before); expect(await f.fs.read(f.workspace + '/.agents/_genie/shared.md')).toBeNull();
     });
