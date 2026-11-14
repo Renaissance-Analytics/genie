@@ -71,7 +71,7 @@ describe('wired: the title bar and ⌘K hand the popover no role switch', () => 
     const app = strip(readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8'));
 
     it('Shell’s title-bar connect object carries no onSetRole', () => {
-        const connect = /connect=\{remote \|\| !remoteConnect[^\n]*/.exec(shell)?.[0] ?? '';
+        const connect = /connect=\{remote \|\| scoped \|\| !remoteConnect[^\n]*/.exec(shell)?.[0] ?? '';
         expect(connect).toContain('onOpenWorkstation');
         expect(connect).not.toContain('onSetRole');
     });

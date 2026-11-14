@@ -102,6 +102,6 @@ describe('the host picker holds every way to another machine', () => {
         expect(app).not.toMatch(/navigate\(CONNECT_ROUTE\)/);
         expect(readFileSync('src/renderer/components/TitleBar.tsx', 'utf8')).not.toMatch(/onNavigate\(CONNECT_ROUTE\)/);
         // Still only in a local window, never on a drone (Genie 1 hid it in a host window).
-        expect(readFileSync('src/renderer/Shell.tsx', 'utf8')).toMatch(/connect=\{remote \|\| !remoteConnect \|\| !mayBrowse\(/);
+        expect(readFileSync('src/renderer/Shell.tsx', 'utf8')).toMatch(/connect=\{remote \|\| scoped \|\| !remoteConnect \|\| !mayBrowse\(/);
     });
 });

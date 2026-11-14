@@ -90,6 +90,12 @@ export interface TitleBarProps {
      * icon routes as before.
      */
     gapps?: { apps: readonly GAppListing[] | null; actions?: GAppStoreActions | undefined } | undefined;
+    /**
+     * A WORKSPACE-SHARE WINDOW (Tynn #690): the workspace's page this window is scoped to. Set, the bar shows none of the
+     * workstation — no Dashboard on the mark (it lands here instead), no feature icons, no Command Window, no workstation
+     * chip. What the window shows is the host's welcome (core/workspace-window.ts); absent = a workstation window.
+     */
+    scopedHome?: string | undefined;
     /** Share this workstation through Tynn (Tynn #587), the host's when driving one. Absent for a guest. */
     share?: { readonly onShare: () => void } | undefined;
     /**
@@ -125,7 +131,11 @@ export interface RemoteBadge {
     readonly onDisconnect?: (() => void) | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps, share, dnd }: TitleBarProps) {
+export function TitleBar(props: TitleBarProps) {
+    // A workspace window (Tynn #690) carries none of the workstation's controls, whatever it was handed.
+    const scopedHome = props.scopedHome;
+    const { route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, onOpenUpdate, paletteKey, workspace } = props;
+    const { update, version, inbox, connect, gapps, share, dnd } = scopedHome ? { update: null, version: null, inbox: undefined, connect: undefined, gapps: undefined, share: undefined, dnd: undefined } : props;
     const [storeOpen, setStoreOpen] = useState(false);
     // The write is in flight until the host's next snapshot redraws the state: the button shows it is working meanwhile.
     const [dndPending, setDndPending] = useState(false);
@@ -182,9 +192,9 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
             {/* The mark is a button, not an ornament: clicking it lands on the Dashboard. */}
             <Button variant="ghost" size="xs" labelClassName="contents"
                 type="button"
-                data-nav="genie://dashboard"
-                aria-label="Genie — Dashboard"
-                onClick={() => onNavigate('genie://dashboard')}
+                data-nav={scopedHome ?? 'genie://dashboard'}
+                aria-label={scopedHome ? 'Genie — this workspace' : 'Genie — Dashboard'}
+                onClick={() => onNavigate(scopedHome ?? 'genie://dashboard')}
                 className="[-webkit-app-region:no-drag] flex shrink-0 items-center gap-2"
             >
                 <GenieLogo />
@@ -202,7 +212,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
              * and nobody ever finds it, which is exactly what happened to the Conversation UI.
              */}
             <div className="flex shrink-0 items-center gap-0.5">
-                {FEATURE_ICONS.map((f) => (
+                {scopedHome ? null : FEATURE_ICONS.map((f) => (
                     <Tooltip key={f.label} content={f.label} placement="bottom">
                         <Button variant="ghost" size="xs" labelClassName="contents"
                             type="button"
@@ -321,6 +331,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
              * `Command`, which owns its own input when it opens — two inputs for one search is
              * a focus fight nobody wins.
              */}
+            {scopedHome ? null : (
             <Button variant="ghost" size="xs" labelClassName="contents"
                 type="button"
                 data-palette
@@ -337,6 +348,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                  */}
                 <span data-palette-hint className="ml-auto whitespace-nowrap font-mono text-[11px]">{hint}</span>
             </Button>
+            )}
 
             {/*
              * The workstation chip. Health is a DOT, not a word — the word would be read as a
@@ -390,7 +402,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     </span>
                 )
             ) : null}
-            {workstation ? (
+            {workstation && !scopedHome ? (
                 <div
                     data-workstation-health={workstation.healthy ? 'healthy' : 'unhealthy'}
                     className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"

@@ -267,7 +267,7 @@ export function ScheduleInspector({ cron, now, onCron }: { cron: string; now: nu
     );
 }
 
-const OUTCOME_WORDS: Record<string, string> = { ran: 'ran', failed: 'failed', held: 'held back', skipped: 'skipped (its branch was not taken)', 'not reached': 'not reached', stopped: 'stopped (Genie quit)', running: 'running' };
+const OUTCOME_WORDS: Record<string, string> = { ran: 'ran', failed: 'failed', held: 'held back', skipped: 'skipped (its branch was not taken)', 'not reached': 'not reached', stopped: 'stopped (Genie quit)', running: 'running', queued: 'queued behind the agent’s current turn' };
 
 /**
  * A RUN ON THE CANVAS, READ-ONLY (genie#1204 item 6; Genie 1's FlowManagerFlyout drew the last run's statuses on

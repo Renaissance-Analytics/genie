@@ -35,6 +35,6 @@ describe('where it comes from', () => {
         const ipc = readFileSync('src/main/feature-ipc.ts', 'utf8');
         expect(ipc).toMatch(/version: ports\.appVersion \? ports\.appVersion\(\) : null,/);
         const shell = readFileSync('src/renderer/Shell.tsx', 'utf8');
-        expect(shell).toMatch(/version=\{features\.version \?\? null\}/);
+        expect(shell).toMatch(/version=\{scoped \? null : features\.version \?\? null\}/);
     });
 });

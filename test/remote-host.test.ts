@@ -34,6 +34,7 @@ function fakeApi() {
         invoke: async (method, args) => {
             calls.push({ method, args });
             if (method === 'snapshot') return snapshot;
+            if (method === 'features.snapshot' && featuresOverride !== null) return featuresOverride;
             if (method === 'features.snapshot') return { settings: { values: { theme: 'dark' } }, remote: { url: 'wss://alphar', pin: { code: '771122', expiresAt: 9 }, devices: [{ id: 'd1', label: 'owner phone' }], connections: [{ id: 'c1', label: 'laptop' }], enabled: true } };
             if (method === 'openAgent') return { ok: true };
             if (method === 'updates.install') return { report: 'stopped 2 processes' };
@@ -82,6 +83,8 @@ async function tynnLinkGuest(workspaceId: string) {
 }
 /** How many "Pair this device?" prompts were raised on this screen. */
 let pairPrompts = 0;
+/** A features snapshot the host answers with instead of the small one (Tynn #579). */
+let featuresOverride: unknown = null;
 /** Whether the host's Take Over host STARTED the TUI (false: one was already open here). */
 let takeOverStarts = true;
 /** The TUIs the host was told to end. */
@@ -98,6 +101,7 @@ beforeEach(async () => {
     devices = await DeviceStore.open(dir, { now: () => now, random: () => 'tok' + (devices?.list().length ?? 0) });
     const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
     pairPrompts = 0;
+    featuresOverride = null;
     takeOverStarts = true;
     ended = [];
     timers = [];
@@ -718,5 +722,53 @@ describe('Take over from another machine (Tynn #529 part A)', () => {
         await new Promise((r) => setTimeout(r, 0));
         runTimers();
         expect(ended).toEqual([]);
+    });
+});
+
+/**
+ * NO FRAME A REMOTE CONNECTION CANNOT TAKE (Tynn #579). The tailnet transport closes a connection on a frame over 1 MiB, the
+ * relay has its own cap, and the whole features snapshot can be larger. So a remote `features` event carries the snapshot
+ * only when it fits, and a revision to re-read when it does not (as this machine's own windows get it since Tynn #560); a
+ * read too large to send is a refusal; no frame over the cap is ever sent, so none closes a connection.
+ */
+describe('remote frames stay under the cap (Tynn #579)', () => {
+    const CAP = 512 * 1024;
+    const huge = () => ({ settings: { values: { theme: 'dark' } }, filler: 'x'.repeat(CAP + 1024) });
+    async function owner() {
+        host.issuePin();
+        const o = connect();
+        await o.hello({ kind: 'pin', code: '482913', label: 'laptop' });
+        return o;
+    }
+
+    it('a features push that fits is inline; one over the cap is a revision, that rises, for the owner and a whole-workstation guest', async () => {
+        const o = await owner();
+        const g = connectRelay({ label: 'wren', isOwner: false, workspaceId: null, readonly: false });
+        await g.hello({ kind: 'relay' });
+        api.emit('features', { settings: { values: { theme: 'dark' } } });
+        expect(await o.next()).toMatchObject({ kind: 'event', channel: 'features', payload: { settings: { values: { theme: 'dark' } } } }); // CONTROL
+        await g.next();
+        api.emit('features', huge());
+        api.emit('features', huge());
+        const first = await o.next();
+        const second = await o.next();
+        expect(first).toEqual({ kind: 'event', channel: 'features', payload: { revision: expect.any(Number) } });
+        expect((second as { payload: { revision: number } }).payload.revision).toBeGreaterThan((first as { payload: { revision: number } }).payload.revision);
+        expect(await g.next()).toEqual({ kind: 'event', channel: 'features', payload: { revision: expect.any(Number) } });
+    });
+
+    it('a features.snapshot read over the cap is a refusal in words, and the connection carries on', async () => {
+        const o = await owner();
+        featuresOverride = huge();
+        const refused = await o.call('features.snapshot');
+        expect(refused).toMatchObject({ kind: 'result', ok: false, reason: expect.stringMatching(/too large/) });
+        featuresOverride = null;
+        expect(await o.call('features.snapshot')).toMatchObject({ kind: 'result', ok: true }); // CONTROL
+    });
+
+    it('no event over the cap is sent to a remote connection, and the next call is answered', async () => {
+        const o = await owner();
+        api.emit('snapshot', { ...snapshot, filler: 'x'.repeat(CAP + 1024) });
+        expect(await o.call('snapshot')).toMatchObject({ kind: 'result', ok: true }); // the very next frame is the answer: the event was dropped
     });
 });

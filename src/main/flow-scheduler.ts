@@ -253,7 +253,9 @@ export class FlowScheduler {
         const startedAt = this.#deps.now();
         const file = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
         if (this.#running.has(flow.id)) {
-            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
+            // A previous run whose prompt waits in an agent's queue (Tynn #704) is still going: this fire is not stacked behind it.
+            const queued = Object.values(this.#deps.store.get(flow.id)?.inFlight?.nodes ?? {}).includes('queued');
+            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: queued ? `the previous run of "${flow.name}" is still queued behind its agent's current turn; this fire was not stacked behind it` : `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
             this.#records.add(held);
             const done = (): void => { this.#records.delete(held); };
             held.then(done, done);
