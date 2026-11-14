@@ -113,7 +113,7 @@ export interface HostAlonePorts {
     readonly tynnTab: { board: Parameters<typeof workspaceTynnApi>[0]; readPage: Parameters<typeof workspaceTynnApi>[1] };
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
-    /** The owned feature aggregator (Tynn #720); its RED seam is not wired until the measured move. */
+    /** The owned feature aggregator (Tynn #720), supplied when its measured contributors are composed. */
     readonly features?: HostApiDeps['features'];
 }
 
@@ -207,7 +207,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
-        features: windowOnly<HostApiDeps['features']>('features', {
+        features: ports.features ?? windowOnly<HostApiDeps['features']>('features', {
             // The Deck's answer only (the phone's Deck, deck-answer.ts); the phone reads nothing back from it.
             act: async (action: FeatureAction) => {
                 if (action.kind !== 'deck.answer' && action.kind !== 'deck.answerForm') throw new Error(needsWindow(`features.act ${action.kind}`));
@@ -220,5 +220,5 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         headroom: ports.headroom,
         updates: ports.updates ?? null,
     };
-    return buildHostApi(deps);
+    return { ...buildHostApi(deps), ...(ports.features ? { ownsFeatures: true } : {}) };
 }

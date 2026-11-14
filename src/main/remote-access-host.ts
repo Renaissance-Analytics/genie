@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import { Baton, PairingPins } from '../core/remote.js';
-import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
 import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
@@ -41,10 +41,14 @@ export interface HostRemoteApiPorts {
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
+    const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
+    const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
     return {
         invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);
+            const owned = alone();
+            if (owned?.ownsFeatures && featureMethod(method)) return owned.invoke(method, args, context);
             // These reads and writes share the host's store even while a window is connected (Tynn #666).
             if (HOST_WORKSPACE_READ_METHODS.has(method)) {
                 const answers = alone();
@@ -58,9 +62,9 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
         },
         onEvent: (listener, options) => {
             // A window's replica can echo this change. Only the owned store's signal counts (Tynn #666).
-            const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed') listener(channel, payload); }) ?? (() => {});
+            const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed' && !(alone()?.ownsFeatures && featureEvent(channel))) listener(channel, payload); }) ?? (() => {});
             // Other families keep their existing window/no-window event source.
-            const offAlone = alone()?.onEvent((channel, payload) => { if (channel === 'workspace-settings-changed' || !ports.window.connected()) listener(channel, payload); }, options) ?? (() => {});
+            const offAlone = alone()?.onEvent((channel, payload) => { if (channel === 'workspace-settings-changed' || (alone()?.ownsFeatures && featureEvent(channel)) || !ports.window.connected()) listener(channel, payload); }, options) ?? (() => {});
             return () => { offWindow(); offAlone(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,

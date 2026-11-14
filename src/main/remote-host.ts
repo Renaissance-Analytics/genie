@@ -72,6 +72,8 @@ const REMOTE_ATTACHMENT_MAX_BYTES = 512 * 1024;
 export type LocalAgentDetail = { readonly rows: readonly unknown[] };
 
 export interface HostApi {
+    /** The owned aggregator is supplied; its reads and events must not be answered by a window replica (Tynn #720). */
+    readonly ownsFeatures?: boolean;
     readonly marketplace?: () => MarketplaceApi | null;
     readonly gapps?: () => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
