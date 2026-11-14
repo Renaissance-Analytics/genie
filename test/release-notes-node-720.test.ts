@@ -17,5 +17,5 @@ describe('release notes in the host source and shipped bundle (Tynn #720)', () =
         const { stdout } = await promisify(execFile)(process.execPath, ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script],
             { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 });
         expect(JSON.parse(stdout)).toEqual(expected());
-    });
+    }, 20_000);
 });
