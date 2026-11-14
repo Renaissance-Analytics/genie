@@ -10,7 +10,7 @@ import type { InboxStore } from './inbox-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import type { SettingsStore } from './settings-store.js';
 import { applyPersonalFeatureAction, customSoundData, personalFeatureSnapshot, type PersonalFeatureServices } from './feature-personal.js';
-import type { FeatureState } from './feature-ipc.js';
+import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import { REMOTE_ORIGIN } from './host-picks.js';
 import type { HostingApi } from './hosting-host.js';
 import type { ProcessBookApi } from './processes-host.js';
@@ -18,6 +18,19 @@ import type { ProcessScheduler } from './process-scheduler.js';
 import type { SupervisorApi } from './process-supervisor.js';
 import { applyHostingFeatureAction, hostingFeatureSnapshot, type HostingFeaturePorts, type HostingFeatureServices } from './feature-hosting.js';
 import { trustSteps } from './hosting-trust.js';
+import type { WindowServices } from './compose.js';
+
+/** Owned machine contributors. Supplying these ports never constructs another service graph. */
+export interface HostFeatureMachinePorts {
+    readonly services: Pick<WindowServices, 'remote' | 'pairing' | 'pluginsDir' | 'catalogDefinitions'
+        | 'integrations' | 'syncAgentDocs' | 'syncConfig'> & {
+            readonly plugins: Pick<WindowServices['plugins'], 'list' | 'setEnabled' | 'setNetworkAllowed'>;
+            readonly workspaceTrust: Pick<WindowServices['workspaceTrust'], 'trust' | 'untrust'>;
+        };
+    readonly effects: Pick<FeaturePorts, 'tynnAccount' | 'githubAccount' | 'keyring' | 'issueWatch' | 'issueWatchRefresh'
+        | 'issueWatchSetRepo' | 'tailscale' | 'firewall' | 'toolchain' | 'tynnWorkstation' | 'remoteAccess' | 'appVersion' | 'whatsNew'>;
+    readonly onChange: (listener: () => void) => () => void;
+}
 
 /** The canonical host dependencies for service/site/process reads and actions. */
 export interface HostFeatureHostingPorts {
@@ -46,6 +59,7 @@ export interface HostFeaturesPorts {
     readonly refreshPlugins: () => Promise<void>;
     readonly applyRemote: () => Promise<void>;
     readonly hosting?: HostFeatureHostingPorts;
+    readonly machine?: HostFeatureMachinePorts;
 }
 
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });

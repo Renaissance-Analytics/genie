@@ -5,7 +5,7 @@ import { vi } from 'vitest';
 import type { SiteForm } from '../../src/core/forms.js';
 import { LOCAL_EVENTS, type CallContext, type RemoteMethod } from '../../src/core/remote-protocol.js';
 import { AttentionStore } from '../../src/main/attention-store.js';
-import { HostFeatures } from '../../src/main/features-host.js';
+import { HostFeatures, type HostFeatureMachinePorts } from '../../src/main/features-host.js';
 import { FlowStore } from '../../src/main/flow-store.js';
 import { hostAloneApi, type HostAlonePorts } from '../../src/main/host-alone-api.js';
 import { composeHosting } from '../../src/main/hosting-compose.js';
@@ -29,7 +29,7 @@ export const siteForm: SiteForm = { name: 'fixture', mode: 'proxy', devServer: n
 export const settleFeatures = async () => { for (let i = 0; i < 16; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
 
 /** Real host composition/book/supervisor over inert OS ports, with real temporary files. No window composition. */
-export async function groupTwoFixture() {
+export async function groupTwoFixture(machine?: HostFeatureMachinePorts) {
     const dir = await mkdtemp(join(tmpdir(), 'genie-features-group-two-')), workspace = join(dir, 'work');
     await mkdir(workspace);
     await writeFile(join(workspace, 'project.json'), JSON.stringify({ name: 'work', repos: [] }));
@@ -107,6 +107,7 @@ export async function groupTwoFixture() {
     const service = new HostFeatures({ settings, knowledge, flows, inbox, attention, roster: () => [], resolveAddress: () => ({ kind: 'none' }),
         mailRefusal: () => null, workspaceIds: () => ['work'], runFlow: async () => {}, refreshPlugins: async () => {}, applyRemote: async () => {},
         hosting: { api: hostingApi, supervisor, processes: book, processScheduler: scheduler, workspaceVisible: id => visible.has(id), engineStatusWaitMs: 5 },
+        ...(machine ? { machine } : {}),
     });
     let windows = 0;
     const invokeWindow = vi.fn(async (method: RemoteMethod) => ({ windowAnswered: method }));
