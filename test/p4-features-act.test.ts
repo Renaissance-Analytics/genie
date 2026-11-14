@@ -173,8 +173,16 @@ describe('the IPC path is gone', () => {
         expect(inventory).not.toContain('genie:features-act');
         expect(inventory).not.toContain('genie:features-picked');
     });
-    it('the host\'s act does the window\'s follow-ups, only for a window, and the pick is the host\'s', () => {
-        expect(main).toMatch(/isWindowCaller\(context\)/);
-        expect(main).toMatch(/picked: \(paths\) => hostPicks\.record\(paths\)/);
+    it('the host\'s act uses only the admitted caller\'s own window, and records picks in that caller\'s host ledger', () => {
+        const owner = read('main/features-host.ts');
+        expect(owner).toContain('const ui = this.#presentation(context, needsPresentation(action));');
+        expect(owner).toContain("const ui = context.origin === 'local-window' ? this.ports.presentation?.(context) ?? undefined : undefined;");
+        expect(owner).toContain('if (required && !ui) throw new Error(OWN_WINDOW);');
+        expect(read('main/genie-host.ts')).toContain('presentation: context => { const ui = featureCallers.presentation(context); return ui ? { ...ui,');
+        const callers = read('main/feature-callers.ts');
+        expect(callers).toContain('const binding = this.#callers.get(context.connectionId);');
+        expect(callers).toContain("if (!binding || binding.context.origin !== 'local-window') return null;");
+        expect(callers).toContain('await binding.effect(original[1], method, args)');
+        expect(owner).toMatch(/picked\(paths: readonly unknown\[\], context: CallContext\): void \{\s*this\.#check\(context\);\s*if \(context\.origin === 'local-window'\) this\.#caller\(context\.connectionId\)\.picks\.record\(paths\);\s*\}/);
     });
 });

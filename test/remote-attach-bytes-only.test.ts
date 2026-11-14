@@ -143,11 +143,11 @@ describe('HostPicks', () => {
 });
 
 /*
- * THE WIRING (main.ts): read as text, comments stripped, because main.ts only runs inside Electron. The remote API's
+ * THE WIRING: the window delegates to genie-host. Read as text because main.ts only runs inside Electron. The remote API's
  * `features.act` takes its origin from what the host admitted (host-picks.ts `featureOriginOf`), and a pick counts only
- * from this machine's own window (host-api.ts); p4-call-context.test.ts and p4-features-act.test.ts assert who that is.
+ * from this machine's own window, in that caller's host ledger; p4-call-context.test.ts and p4-features-act.test.ts assert who that is.
  */
-describe('main.ts wiring', () => {
+describe('window delegation and host pick wiring', () => {
     const source = readFileSync('src/main/main.ts', 'utf8')
         .split('\n')
         .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
@@ -155,8 +155,15 @@ describe('main.ts wiring', () => {
 
     it('an action’s origin is the host’s context, never the action, and a pick is recorded by the host', () => {
         expect(source).toContain('features: featureReplica(() => agentEngineLink!.client, context => {');
-        expect(readFileSync('src/main/features-host.ts', 'utf8')).toContain('featureOriginOf(context, caller.picks)');
+        const owner = readFileSync('src/main/features-host.ts', 'utf8');
+        expect(owner).toContain('featureOriginOf(context, caller.picks)');
         expect(readFileSync('src/main/feature-replica.ts', 'utf8')).toContain("picked: (paths, context) => call<void>('picked', [paths], context)");
-        expect(source).toMatch(/picked: \(paths\) => hostPicks\.record\(paths\)/);
+        const callers = readFileSync('src/main/feature-callers.ts', 'utf8');
+        expect(callers).toContain('const context = admittedContext(raw);');
+        expect(callers).toContain('const key = JSON.stringify([owner, context.connectionId]);');
+        expect(callers).toContain('const scoped = { ...context, connectionId: key };');
+        expect(callers).toContain("case 'picked': service.picked(Array.isArray(args[0]) ? args[0] : [], scoped); return null;");
+        expect(owner).toMatch(/picked\(paths: readonly unknown\[\], context: CallContext\): void \{\s*this\.#check\(context\);\s*if \(context\.origin === 'local-window'\) this\.#caller\(context\.connectionId\)\.picks\.record\(paths\);\s*\}/);
+        expect(source).not.toContain('new HostPicks(');
     });
 });

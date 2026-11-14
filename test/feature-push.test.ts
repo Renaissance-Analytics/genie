@@ -170,7 +170,10 @@ describe('pushes are one at a time, the latest state always last (core/latest-pu
 
     it('the host owner pushes through LatestPush, and asks again when Docker answers late', () => {
         const owner = readFileSync(new URL('../src/main/features-host.ts', import.meta.url), 'utf8');
-        expect(owner).toMatch(/new LatestPush<FeatureData>\(/);
+        expect(owner).toContain('readonly #push: LatestPush<FeatureData>;');
+        expect(owner).toContain('this.#push = new LatestPush({ build: () => this.#snapshot(emptyState()), deliver: data => {');
+        expect(owner).toContain('if (!this.#closed) for (const listener of this.#listeners) listener(data);');
+        expect(owner).toContain('#changed(): void { if (!this.#closed && this.#listeners.size > 0) this.#push.request(); }');
         expect(owner).toMatch(/onEngineStatusesLate: \(\) => this\.#changed\(\)/);
         expect(readFileSync('src/main/genie-host.ts', 'utf8')).toContain('hostFeatures.onChange(() => engine.featuresChanged());');
     });
