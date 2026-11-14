@@ -61,16 +61,16 @@ describe('local-door failure evidence identifies a reply by its actual request (
 
     it('includes the request ID and method in the page frame failure metadata', async () => {
         const records = [
-            { seq: 1, action: 'frame', frame: { kind: 'result', id: 101 } },
-            { seq: 2, action: 'frame', frame: { kind: 'event', channel: 'local-snapshot' } },
+            { seq: 1, action: 'frame', handle: 'app-handle', frame: { kind: 'result', id: 101 } },
+            { seq: 2, action: 'frame', handle: 'app-handle', frame: { kind: 'event', channel: 'local-snapshot' } },
         ];
-        const page = { __doorCdp: { frames: records, welcome: { connectionId: 'app' } } };
+        const page = { __doorCdp: { frames: records, welcome: { connectionId: 'app' }, connections: new Map([['app-handle', 'app']]) } };
         const main = { evaluate: (expression: string) => new Function('window', `return (${expression});`)(page) };
         const summary = { records: [{ connectionId: 'app', results: [{ id: 101, method: 'agentDetail' }] }] };
         const metadata = new Function('main', 'nativeSummary', 'demand', `${metadataSource}; return frameMetadata;`)(main, async () => summary, demand);
         expect(await metadata(0, 2)).toEqual([
-            { seq: 1, action: 'frame', kind: 'result', channel: null, id: 101, method: 'agentDetail' },
-            { seq: 2, action: 'frame', kind: 'event', channel: 'local-snapshot', id: null, method: null },
+            { seq: 1, action: 'frame', kind: 'result', channel: null, id: 101, method: 'agentDetail', connectionId: 'app' },
+            { seq: 2, action: 'frame', kind: 'event', channel: 'local-snapshot', id: null, method: null, connectionId: 'app' },
         ]);
     });
 
