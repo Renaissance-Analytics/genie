@@ -301,6 +301,94 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             next.toolchainDefaults = tc.defaults.list();
             break;
         }
+        case 'toolchain.installNode': {
+            clearRefusal(next, 'node', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'node', `Genie installs nothing without your go-ahead; Node ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.node) {
+                refuse(next, 'node', 'no Node version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.node.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'node', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Node ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Node ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Node ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainNode = await tc.node.list();
+            break;
+        }
+        case 'toolchain.removeNode': {
+            {
+                const current = ports.toolchain?.defaults?.list()['node'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'node', action.version);
+                    refuse(next, 'node', `${LANG_LABEL['node']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'node', action.version);
+            if (!tc?.node) {
+                refuse(next, 'node', 'no Node version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.node.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'node', outcome.reason, action.version);
+            else next.toolchainResult = `Node ${outcome.version} was removed.`;
+            next.toolchainNode = await tc.node.list();
+            break;
+        }
+        case 'toolchain.installGo': {
+            clearRefusal(next, 'go', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'go', `Genie installs nothing without your go-ahead; Go ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.go) {
+                refuse(next, 'go', 'no Go version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.go.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'go', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Go ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Go ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Go ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainGo = await tc.go.list();
+            break;
+        }
+        case 'toolchain.removeGo': {
+            {
+                const current = ports.toolchain?.defaults?.list()['go'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'go', action.version);
+                    refuse(next, 'go', `${LANG_LABEL['go']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'go', action.version);
+            if (!tc?.go) {
+                refuse(next, 'go', 'no Go version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.go.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'go', outcome.reason, action.version);
+            else next.toolchainResult = `Go ${outcome.version} was removed.`;
+            next.toolchainGo = await tc.go.list();
+            break;
+        }
         default: return false;
     }
     return true;
