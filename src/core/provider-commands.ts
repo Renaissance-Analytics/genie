@@ -161,3 +161,8 @@ export function commandGroups(extensions: ProviderExtensions, options: { readonl
         .map(([key, g]) => ({ key, kind: g.kind, label: g.label, items: [...g.items].sort((a, b) => a.name.localeCompare(b.name)) }))
         .sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) || a.key.localeCompare(b.key));
 }
+
+/** The commands a provider's own documentation lists as built in; `[]` when none are documented. */
+export function documentedCommands(_provider: string): readonly string[] {
+    return [];
+}
