@@ -79,7 +79,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             });
         const base = deps.ports(flow);
         const ports: FlowPorts = {
-            promptAgent: (address, text) => watch(base.promptAgent(address, text)),
+            promptAgent: (address, text, hooks) => watch(base.promptAgent(address, text, hooks)),
             runCommand: (workspaceId, command, cwd) => watch(base.runCommand(workspaceId, command, cwd)),
             addKnowledge: (input) => watch(base.addKnowledge(input)),
             ...(base.moveFile ? { moveFile: (workspaceId: string, from: string, to: string) => watch(base.moveFile!(workspaceId, from, to)) } : {}),
@@ -228,6 +228,14 @@ export interface AgentSessionsPort {
     /** This run's ledger rows; their `event` is a stream event. */
     rows(agentId: string): readonly { readonly event: unknown }[];
     prompt(agentId: string, text: string, by: string): boolean | Promise<boolean>;
+    /**
+     * QUEUE a prompt in the agent's own queue (the one typed messages and mail wait in), to go as its own turn when the
+     * current one ends (Tynn #704). `replacing`: a prompt this flow queued earlier that is still waiting — discarded, so
+     * one waits, never two. Absent = this port cannot queue, and a busy agent holds the prompt back as before.
+     */
+    queue?(agentId: string, text: string, by: string, replacing: string | null): { readonly id: string } | null;
+    /** Whether a prompt `queue` returned is still waiting for its turn. */
+    isQueued?(agentId: string, promptId: string): boolean;
     subscribe(listener: (agentId: string) => void): () => void;
 }
 
@@ -270,7 +278,7 @@ export const FLOW_TURN_MAX_MS = 2 * 60 * 60_000;
  * did the round. So it waits — bounded (`FLOW_TURN_QUIET_MS`, `FLOW_TURN_MAX_MS`).
  */
 export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent'] {
-    return async (address, text) => {
+    return async (address, text, _hooks) => {
         const found = deps.resolve(address);
         if (found.kind === 'none') throw new Error(`no agent answers to ${address}`);
         if (found.kind === 'human') throw new Error(`${address} is the person, not an agent; a flow prompts an agent`);
