@@ -95,7 +95,46 @@ const bridgeOn = (port: LocalFramePort, old: PreloadBridge = preload()) => { vi.
 const agentFrames = (texts: readonly string[]) => texts.filter((t) => t.includes('"channel":"local-agent"'));
 
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-p4-9a-')); let n = 0; devices = await DeviceStore.open(dir, { now: Date.now, random: () => `r-${++n}` }); });
-afterEach(async () => { delete (globalThis as unknown as Record<symbol, unknown>)[AGENT_READ_TRACE]; for (const c of closers.splice(0)) c(); vi.unstubAllGlobals(); await settle(); await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { delete (globalThis as unknown as Record<symbol, unknown>)[AGENT_READ_TRACE]; for (const c of closers.splice(0)) c(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); await settle(); await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
+
+describe('no measurement flag can select the retired preload read/watch path', () => {
+    it('snapshot and detail reads use the real local connection even if an old preload flag is present', async () => {
+        const h = host(), d = serve(h.api).door(), old = preload();
+        h.ledgers.set('a1', rowsOf(2));
+        const snapshot = { agents: [{ id: 'a1' }], workspaces: [], deckItems: [], signals: {} };
+        h.pushSnapshot(snapshot);
+        vi.stubGlobal('window', { genieLocalProtocol: d.port, genieAgentReadsIpc: true });
+        const b = pageBridge(old);
+        expect(await b.snapshot()).toEqual(snapshot);
+        expect((await b.agentDetail('a1'))?.rows).toHaveLength(2);
+        expect(old.snapshot).not.toHaveBeenCalled();
+        expect(old.agentDetail).not.toHaveBeenCalled();
+    });
+
+    it('agent watches and snapshot subscriptions use the real connection despite an old preload flag', async () => {
+        const h = host(), d = serve(h.api).door(), old = preload();
+        h.ledgers.set('a1', rowsOf(2));
+        vi.stubGlobal('window', { genieLocalProtocol: d.port, genieAgentReadsIpc: true });
+        const b = pageBridge(old), agents: unknown[] = [], snapshots: unknown[] = [];
+        const offAgent = b.subscribeAgent('a1', detail => agents.push(detail));
+        const offSnapshot = b.subscribe(snapshot => snapshots.push(snapshot));
+        await vi.waitFor(() => expect(h.detailFor).toHaveBeenCalledWith('a1'));
+        expect(agents.length).toBeGreaterThan(0);
+        expect(snapshots.length).toBeGreaterThan(0);
+        expect(old.subscribe).not.toHaveBeenCalled();
+        expect((old as unknown as { subscribeAgentWire: unknown }).subscribeAgentWire).not.toHaveBeenCalled();
+        offAgent(); offSnapshot();
+    });
+
+    it('a missing local connection refuses the read without falling back to the old preload', async () => {
+        const old = preload();
+        vi.stubGlobal('window', { genieAgentReadsIpc: true });
+        const b = pageBridge(old);
+        await expect(b.snapshot()).rejects.toThrow('This Genie window has no local protocol connection.');
+        await expect(b.agentDetail('a1')).rejects.toThrow('This Genie window has no local protocol connection.');
+        expect(old.snapshot).not.toHaveBeenCalled(); expect(old.agentDetail).not.toHaveBeenCalled();
+    });
+});
 
 describe('M2: only the agents a view shows', () => {
     it('an agent no view shows is never built and never sent', async () => {
@@ -214,6 +253,19 @@ describe('M3: nothing reaches the frame cap', () => {
 });
 
 describe('the snapshot push', () => {
+    it('a retired forced-revision environment flag cannot replace a fitting snapshot with a read', async () => {
+        vi.stubEnv('GENIE_SNAPSHOT_PUSH', 'revision');
+        const h = host(), b = bridgeOn(serve(h.api).door().port), heard: unknown[] = [];
+        const off = b.subscribe(snapshot => heard.push(snapshot));
+        await vi.waitFor(() => expect(heard.length).toBeGreaterThan(0));
+        h.snapshot.mockClear();
+        const next = { agents: [{ id: 'fits' }], workspaces: [], deckItems: [], signals: {} };
+        h.pushSnapshot(next);
+        await vi.waitFor(() => expect(heard.at(-1)).toEqual(next));
+        expect(h.snapshot).not.toHaveBeenCalled();
+        off();
+    });
+
     it('inline when it fits: the listener has it with no read', async () => {
         const h = host();
         const b = bridgeOn(serve(h.api).door().port);
