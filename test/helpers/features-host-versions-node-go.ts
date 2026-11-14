@@ -20,7 +20,8 @@ type Lang = (typeof LANGUAGE_PAIR)[number]['lang'];
 export async function nodeGoVersionsFixture() {
     const base = await groupThreeFixture(), toolchainDir = join('/fixture', 'toolchain');
     const versions = { node: NODE_RECIPES[0]!.version, go: GO_RECIPES[0]!.version };
-    const otherVersions = { node: NODE_RECIPES[1]!.version, go: GO_RECIPES[1]!.version };
+    // An older installed version need not be offered by this release's installer catalog.
+    const otherVersions = { node: '22.23.2', go: '1.26.10' };
     const roots = { node: join(toolchainDir, 'node-versions'), go: join(toolchainDir, 'go-versions') };
     const archives = { node: nodeArchiveName(versions.node, 'linux', 'x64'), go: goArchiveName(versions.go, 'linux', 'x64') };
     const urls = { node: nodeDownloadSources(versions.node, 'linux', 'x64').zipUrl, go: goDownloadUrl(archives.go) };
