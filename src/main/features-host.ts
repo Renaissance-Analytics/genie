@@ -91,6 +91,8 @@ export interface HostFeaturesPorts {
     readonly machine?: HostFeatureMachinePorts;
     /** Resolved by trusted composition for this admitted connection only; no newest-window fallback. */
     readonly presentation?: (context: CallContext) => HostFeaturePresentation | null;
+    /** A Pilot's sign-in pages (Tynn #731): GitHub's pages and Tailscale's installer open on the PILOT's screen, over its own connection. */
+    readonly pilotPresentation?: (context: CallContext) => Pick<HostFeaturePresentation, 'githubOpen' | 'tailscaleInstall'> | null;
     readonly system?: Pick<FeaturePorts, 'safeMode' | 'hangNotice'>;
     readonly deck?: HostFeatureDeckPorts;
 }
@@ -210,7 +212,7 @@ export class HostFeatures {
     async #actInContext(action: FeatureAction, context: CallContext, caller: FeatureCaller, token: symbol): Promise<FeatureData> {
         const state = this.#toolFacts.toolStatuses === null ? caller.state : { ...caller.state, ...this.#toolFacts };
         const next = { ...state };
-        const ui = this.#presentation(context, needsPresentation(action));
+        const ui = this.#presentation(context, needsPresentation(action), action);
         if (action.kind.startsWith('browser.') && !ui?.browser) throw new Error(OWN_WINDOW);
         if (action.kind === 'remote.answerPair' && context.origin !== 'local-window') {
             throw new Error('a device is allowed on this machine’s own screen, never from another device');
@@ -330,8 +332,10 @@ export class HostFeatures {
 
     #changed(): void { if (!this.#closed && this.#listeners.size > 0) this.#push.request(); }
 
-    #presentation(context: CallContext, required = false): HostFeaturePresentation | undefined {
-        const ui = context.origin === 'local-window' ? this.ports.presentation?.(context) ?? undefined : undefined;
+    #presentation(context: CallContext, required = false, action?: FeatureAction): HostFeaturePresentation | undefined {
+        const pilot = context.origin !== 'local-window' && action !== undefined && opensSignInPage(action);
+        const ui = context.origin === 'local-window' ? this.ports.presentation?.(context) ?? undefined
+            : pilot ? this.ports.pilotPresentation?.(context) ?? undefined : undefined;
         if (required && !ui) throw new Error(OWN_WINDOW);
         return ui;
     }
@@ -365,6 +369,10 @@ export class HostFeatures {
 }
 
 const OWN_WINDOW = 'this feature action needs its caller’s own admitted local window; open Genie there and try again';
+function opensSignInPage(action: FeatureAction): boolean {
+    return action.kind === 'integrations.githubOpen' || action.kind === 'tailscale.install';
+}
+
 function needsPresentation(action: FeatureAction): boolean {
     // Site opening keeps the shared hosting handler's canonical no-browser refusal; it receives only this caller's port.
     return action.kind === 'flows.openEditor' || action.kind === 'flows.newFlow'

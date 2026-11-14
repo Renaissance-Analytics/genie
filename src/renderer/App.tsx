@@ -418,7 +418,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
                     const localBrowser = window.genie?.browserWindow;
                     // A drone older than this Pilot needs is said as such, never as its protocol words (Tynn #651).
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}), minBuild: DRONE_MIN_BUILD });
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true, openExternal: openOnThisScreen }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}), minBuild: DRONE_MIN_BUILD });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -452,7 +452,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
                 const transport = ipcRelayTransport(net, opened.channel);
                 const ticket = companionTicket.current;
-                const next = connectRemote(transport, auth, label || 'another screen', ticket ? { companion: ticket } : { drive: true });
+                const next = connectRemote(transport, auth, label || 'another screen', ticket ? { companion: ticket } : { drive: true, openExternal: openOnThisScreen });
                 // Dropped after it was up: the host's words, when it has some.
                 transport.onClose(() => { const why = transport.closedBecause(); if (why) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: why })); });
                 setClient(next);
@@ -648,6 +648,9 @@ export interface AppProps {
  * phone's shell; loaded from disk by the window (or handed a bridge by a test), it is the desktop.
  * Decided once, from the page's own location — not from anything the host says.
  */
+/** A sign-in link a drone sends this Pilot opens in THIS machine's browser, through the window's own link guard (https only; Tynn #731). */
+const openOnThisScreen = (url: string): void => { window.open(url, '_blank', 'noopener,noreferrer'); };
+
 export function App({ bridge }: AppProps) {
     const [entry] = useState<MobileEntry>(() =>
         typeof window === 'undefined' ? { kind: 'desktop' } : mobileEntry(window.location, (bridge ?? window.genie) !== undefined),

@@ -100,14 +100,15 @@ import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain } from './host-keychain.js';
-import { GithubAccount } from './github-account.js';
+import { GithubAccount, type GithubPage } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
 import { relayFetchOver } from './host-relay-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
-import { transportHub } from '../core/remote-protocol.js';
+import { transportHub, type CallContext } from '../core/remote-protocol.js';
+import { signInEffectsFor } from './pilot-sign-in.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { remoteListener } from './remote-listen.js';
@@ -1383,6 +1384,14 @@ async function main(): Promise<void> {
             own.attention.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
+    /** One caller's sign-in effects: its own window's opener, or its own Pilot connection; never another window, never this machine's browser for a Pilot. */
+    const signInFor = (context: CallContext) => signInEffectsFor(context, featureCallers.presentation(context)?.openExternal, (id, url) => remoteAccessHost.remote.openOnPilot(id, url), {
+        tynnStart: async () => (await tynnOpening).startSignIn(),
+        githubStart: async open => (await githubOpening).startSignIn(open),
+        githubOpenPage: async (target: GithubPage, open) => (await githubOpening).openPage(target, open),
+        tailscaleUp: () => featureEffects.tailscale!.up(),
+        tailscaleInstall: () => featureEffects.tailscale!.install(),
+    });
     hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
         roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
         mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
@@ -1399,16 +1408,17 @@ async function main(): Promise<void> {
                 integrations: () => { const status = mcp?.status(); return { mcp: { url: status?.endpoint?.url ?? null, verified: status?.verified ?? null, tools: status?.tools ?? [] }, agentFiles: featureFilesHealth.list() }; },
                 syncAgentDocs: featureFiles.syncAgentDocs, syncConfig: featureConfig,
             }, effects: featureEffects, onChange: machineEvents,
-            effectsFor: context => { const ui = featureCallers.presentation(context); return { ...featureEffects,
-                tynnAccount: { ...featureEffects.tynnAccount!, startSignIn: async () => { const answer = await (await tynnOpening).startSignIn(); if (ui?.openExternal) await ui.openExternal(answer.url); return answer; } },
-                githubAccount: { ...featureEffects.githubAccount!, startSignIn: async () => (await githubOpening).startSignIn(ui?.openExternal ?? null) },
-                tailscale: { ...featureEffects.tailscale!, up: async () => { const answer = await featureEffects.tailscale!.up(); if (answer.authUrl) { if (!ui?.openExternal) throw new Error('Tailscale needs a sign-in; open Genie on this machine and Connect there'); await ui.openExternal(answer.authUrl); } return answer; } },
+            effectsFor: context => { const sign = signInFor(context); return { ...featureEffects,
+                tynnAccount: { ...featureEffects.tynnAccount!, startSignIn: sign.tynnStart },
+                githubAccount: { ...featureEffects.githubAccount!, startSignIn: sign.githubStart },
+                tailscale: { ...featureEffects.tailscale!, up: sign.tailscaleUp },
             }; },
         },
-        presentation: context => { const ui = featureCallers.presentation(context); return ui ? { ...ui,
-            githubOpen: async target => (await githubOpening).openPage(target, async url => { if (!ui.openExternal) throw new Error('this window cannot open GitHub'); await ui.openExternal(url); }),
-            tailscaleInstall: async () => { const answer = await featureEffects.tailscale!.install(); if (answer.url) { if (!ui.openExternal) throw new Error('this window cannot open the installer page'); await ui.openExternal(answer.url); } return answer; },
-        } : null; },
+        presentation: context => { const ui = featureCallers.presentation(context); if (!ui) return null; const sign = signInFor(context); return { ...ui,
+            githubOpen: sign.githubOpen, tailscaleInstall: sign.tailscaleInstall,
+        }; },
+        // A remote Pilot's sign-in pages open on its own screen, over its own connection (Tynn #731); nothing opens here for it.
+        pilotPresentation: context => { if (context.origin === 'local-window') return null; const sign = signInFor(context); return { githubOpen: sign.githubOpen, tailscaleInstall: sign.tailscaleInstall }; },
         system: { safeMode: { leave: async () => { safeMode.leave(); return { ok: true }; } }, hangNotice: {
             dismiss: async () => { crashState.dismiss(); return { ok: true }; }, stopAll: async () => { await host.stopAll(); return { ok: true }; } } },
         deck: { attention: own.attention, approvals, inbox: own.inbox, deckItems: featureDeckItems,

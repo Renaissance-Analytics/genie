@@ -11,6 +11,7 @@ import type { FeatureAction, FeatureData } from './features.js';
 import { isFeaturesRevision } from '../core/remote-frame.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
+import { SIGN_IN_OPEN_EVENT, signInUrl } from '../core/sign-in-link.js';
 import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -107,6 +108,11 @@ export interface RemoteOptions {
      * has full control with no extra step. Someone else driving is never taken from silently: the window is told who.
      */
     readonly drive?: boolean;
+    /**
+     * THE PILOT'S OWN BROWSER (Tynn #731): a sign-in link the drone sends opens HERE, never on the drone. Only an https page is
+     * opened, whatever the drone sends. Absent = nothing opens (a phone, a Take Over window).
+     */
+    readonly openExternal?: (url: string) => unknown;
     /**
      * A TAKE OVER WINDOW (Tynn #529 part A): the ticket the driving window's Take over was answered with. This connection
      * types into that one terminal while that window drives, and is told why when it may not any more. Never `drive`.
@@ -220,6 +226,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 return;
             }
             case 'event':
+                if (m.channel === SIGN_IN_OPEN_EVENT) {
+                    const link = signInUrl((m.payload as { url?: unknown } | null)?.url);
+                    if (link && options.openExternal) { try { void Promise.resolve(options.openExternal(link)).catch(() => {}); } catch { /* The code and link stay on screen. */ } }
+                    return;
+                }
                 for (const l of events.get(m.channel) ?? []) l(m.payload);
                 return;
             default:

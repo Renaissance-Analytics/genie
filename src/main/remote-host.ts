@@ -1,4 +1,6 @@
 import { LatestPush } from '../core/latest-push.js';
+import { SIGN_IN_OPEN_EVENT, signInUrl } from '../core/sign-in-link.js';
+import { pilotRefusal } from './pilot-sign-in.js';
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
@@ -414,6 +416,22 @@ export class RemoteHost {
         }
         this.#changed();
         return true;
+    }
+
+    /**
+     * A SIGN-IN LINK FOR A PILOT (Tynn #731): sent over that one admitted connection, which opens it in its own browser.
+     * Never broadcast, never opened here; a guest, a read-only connection or a link that is not https is refused in words.
+     */
+    async openOnPilot(connectionId: string, url: string): Promise<void> {
+        const link = signInUrl(url);
+        if (!link) throw new Error('Only an https sign-in page can be opened on the Pilot’s screen.');
+        const connection = this.#connections.get(connectionId);
+        if (!connection || connection.auth === null) throw new Error('That screen is no longer connected, so the sign-in page could not be opened there. Connect again and retry.');
+        const context = this.#callContext(connection);
+        if (context.origin === 'local-window') throw new Error('This machine’s own window opens its own sign-in pages.');
+        const refusal = pilotRefusal(context);
+        if (refusal) throw new Error(refusal);
+        this.#send(connection, { kind: 'event', channel: SIGN_IN_OPEN_EVENT, payload: { url: link } });
     }
 
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }> {
