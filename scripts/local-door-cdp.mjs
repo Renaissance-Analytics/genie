@@ -99,14 +99,18 @@ function browserProbe() {
     const attach = () => {
         if (!window.genieLocalProtocol) return;
         clearInterval(timer);
-        const state = window.__doorCdp = { total: 0, frames: [], welcome: null, handle: null, next: 1_000_000 };
+        const state = window.__doorCdp = { total: 0, frames: [], welcome: null, handle: null, next: 1_000_000, connections: new Map(), probeCalls: [] };
         window.genieLocalProtocol.onFrame((action, handle, text) => {
             let frame = null;
             if (action === 'frame') { try { frame = JSON.parse(text); } catch { /* measured as a frame nonetheless */ } }
             state.total++;
             state.frames.push({ seq: state.total, action, handle, bytes: new TextEncoder().encode(text).length, frame, reason: action === 'closed' ? text : null });
             if (state.frames.length > 32) state.frames.shift();
-            if (frame?.kind === 'welcome') { state.welcome = frame; state.handle = handle; }
+            if (frame?.kind === 'welcome') {
+                state.welcome = frame; state.handle = handle;
+                state.connections.set(handle, frame.connectionId);
+                if (state.connections.size > 32) state.connections.delete(state.connections.keys().next().value);
+            }
         });
         state.wait = async (after, predicate) => {
             const end = Date.now() + 8_000;
@@ -118,9 +122,14 @@ function browserProbe() {
             throw new Error('native frame response did not arrive');
         };
         state.call = async (method, args) => {
-            const id = ++state.next, after = state.total;
-            window.genieLocalProtocol.send('frame', state.handle, JSON.stringify({ kind: 'call', id, method, args }));
-            return (await state.wait(after, (f) => f.frame?.kind === 'result' && f.frame.id === id)).frame;
+            const id = ++state.next, after = state.total, handle = state.handle;
+            // Only calls this probe itself sends are owned. A normal page-bridge read is never registered.
+            if (method === 'agentDetail') {
+                state.probeCalls.push({ connectionId: state.welcome?.connectionId ?? null, id, method, after });
+                if (state.probeCalls.length > 128) state.probeCalls.shift();
+            }
+            window.genieLocalProtocol.send('frame', handle, JSON.stringify({ kind: 'call', id, method, args }));
+            return (await state.wait(after, (f) => f.handle === handle && f.frame?.kind === 'result' && f.frame.id === id)).frame;
         };
     };
     const timer = setInterval(attach, 5);
@@ -213,18 +222,27 @@ async function observeDoor(refs) {
 }
 const nativeSummary = () => inspector.evaluate('globalThis.__doorNative.summary()');
 const frameMetadata = async (from, to) => {
-    const { connectionId, frames } = await main.evaluate(`({connectionId:window.__doorCdp.welcome?.connectionId??null,frames:window.__doorCdp.frames.filter(r=>r.seq>${from}&&r.seq<=${to}).map(r=>({seq:r.seq,action:r.action,kind:r.frame?.kind??null,channel:r.frame?.channel??null,id:r.frame?.kind==='result'?(r.frame.id??null):null}))})`);
-    const results = (await nativeSummary()).records.find(record => record.connectionId === connectionId)?.results ?? [];
-    const methods = new Map(results.map(result => [result.id, result.method]));
-    return frames.map(frame => ({ ...frame, method: frame.kind === 'result' ? methods.get(frame.id) ?? null : null }));
+    const frames = await main.evaluate(`window.__doorCdp.frames.filter(r=>r.seq>${from}&&r.seq<=${to}).map(r=>({seq:r.seq,action:r.action,kind:r.frame?.kind??null,channel:r.frame?.channel??null,id:r.frame?.kind==='result'?(r.frame.id??null):null,connectionId:window.__doorCdp.connections?.get(r.handle)??null}))`);
+    const methods = new Map((await nativeSummary()).records.map(record => [record.connectionId, new Map((record.results ?? []).map(result => [result.id, result.method]))]));
+    return frames.map(frame => ({ ...frame, method: frame.kind === 'result' ? methods.get(frame.connectionId)?.get(frame.id) ?? null : null }));
 };
 async function quietFrames(label, from, to, nativeDelta) {
     const frames = await frameMetadata(from, to);
     demand(frames.length===to-from,`${label}: metadata retained every observed frame`);
-    const unexpected = frames.filter(frame=>frame.action!=='frame'||frame.kind!=='event'||!['local-updates','local-headroom','local-snapshot'].includes(frame.channel));
+    // No probe calls run between capturing the end marker and this check. Inclusive issue markers also
+    // count a call that received no reply (and hence did not advance the received-frame counter).
+    const probeCalls = await main.evaluate(`(window.__doorCdp.probeCalls??[]).filter(call=>call.after>=${from}&&call.after<=${to})`);
+    const key = (value) => JSON.stringify([value.connectionId, value.id]);
+    const expected = new Map(probeCalls.map(call => [key(call), call]));
+    const excluded = frames.filter(frame => frame.action === 'frame' && frame.kind === 'result' && frame.method === 'agentDetail'
+        && typeof frame.connectionId === 'string' && Number.isSafeInteger(frame.id) && expected.get(key(frame))?.method === 'agentDetail');
+    const permitted = frames.filter(frame => !excluded.includes(frame));
+    const unexpected = permitted.filter(frame=>frame.action!=='frame'||frame.kind!=='event'||!['local-updates','local-headroom','local-snapshot'].includes(frame.channel));
     demand(unexpected.length===0,`${label}: zero agent/activity/snapshot/terminal or unknown frames; unexpected ${JSON.stringify(unexpected)}`);
-    demand(nativeDelta===frames.length,`${label}: actual native socket and page counts agree on the recorded update/headroom frames`);
-    return { channels: frames.map(frame=>frame.channel), page: to-from, native: nativeDelta };
+    demand(excluded.length === probeCalls.length && new Set(excluded.map(key)).size === probeCalls.length && expected.size === probeCalls.length,
+        `${label}: probe reply count ${excluded.length} must equal issued agentDetail call count ${probeCalls.length}, with one result per connection-scoped ID`);
+    demand(nativeDelta===frames.length,`${label}: actual native socket and page counts agree on the recorded pushes and exact probe replies`);
+    return { channels: permitted.map(frame=>frame.channel), excluded: excluded.length, probeCalls: probeCalls.length, page: to-from, native: nativeDelta };
 }
 const forceUpdateCheck = () => inspector.evaluate(`(() => {
     const { Menu, BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
@@ -578,7 +596,12 @@ try {
         await main.evaluate("location.hash='#genie://settings'; true");
         await until('streaming agent ready',()=>main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)}).then(d=>d?.session?.running===true)`),30_000);
         const prompt = await main.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
-        const ticks = async () => main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
+        // Use explicit probe IDs on the SAME app connection, so ownership never comes from the method name.
+        const ticks = async () => main.evaluate(`window.__doorCdp.call('agentDetail',[${JSON.stringify(added.id)}]).then(reply=>{
+            if(!reply.ok)throw new Error(reply.reason??'probe agentDetail refused');
+            if(reply.value?.jsonContent||!Array.isArray(reply.value?.rows))throw new Error('probe ticker verification requires an inline agentDetail rows result');
+            return JSON.stringify(reply.value.rows);
+        })`);
         const count = (text) => [...text.matchAll(/tick (\d+) pid (\d+)/g)].map(m=>{ providerPids.add(Number(m[2])); return Number(m[1]); });
         await until('at least four real provider ticks',async()=>count(await ticks()).length>=4,30_000);
         // Automatic update checks are independent of activity interest. Let the first check
@@ -588,6 +611,21 @@ try {
         const gaugeStart = await main.evaluate('window.__doorCdp.total');
         demand((await main.evaluate("window.genieTest.workspaces.settings('tynn')"))?.ok,'app bridge result positive control before absence');
         demand(await main.evaluate(`window.__doorCdp.total > ${gaugeStart}`),'the observer sees a result on the app connection');
+        // A real ordinary app read of the SAME method must fail this very classifier. It has no probe ID receipt.
+        const appReadStart = await main.evaluate('window.__doorCdp.total'), appReadNativeStart = await nativeSummary();
+        await main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)})`);
+        const appReadEnd = await main.evaluate('window.__doorCdp.total'), appReadNativeEnd = await nativeSummary();
+        const appReadConnection = (await welcome(main)).connectionId;
+        let appReadRefusal = null;
+        try {
+            await quietFrames('app-originated agentDetail positive control', appReadStart, appReadEnd,
+                appReadNativeEnd.records.find(r=>r.connectionId===appReadConnection).frames-appReadNativeStart.records.find(r=>r.connectionId===appReadConnection).frames);
+        } catch (error) {
+            if (error.message.includes('unexpected') && error.message.includes('"method":"agentDetail"')) appReadRefusal = error.message;
+            else throw error;
+        }
+        demand(appReadRefusal, 'ordinary app-originated agentDetail must fail the quiet check');
+        log(`CONTROL app-originated agentDetail remains forbidden: ${appReadRefusal}`);
         await sleep(500);
         const beforeTicks = Math.max(...count(await ticks()));
         const frameStart = await main.evaluate('window.__doorCdp.total');
@@ -626,7 +664,7 @@ try {
         const unwatchFrameEnd = await main.evaluate('window.__doorCdp.total');
         const afterWatch = await quietFrames('streaming after unwatch',unwatchStart,unwatchFrameEnd,unwatchEnd.records.find(r=>r.connectionId===w.connectionId).frames-unwatchNative.records.find(r=>r.connectionId===w.connectionId).frames);
         demand((await welcome(main)).connectionId===w.connectionId,'unwatch keeps the same app connection');
-        return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; forbidden frames=0 before/after watch; watched local-activity positive; permitted before=${JSON.stringify(beforeWatch)} after=${JSON.stringify(afterWatch)}`;
+        return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; forbidden frames=0 before/after watch; app-originated agentDetail refusal positive; watched local-activity positive; permitted before=${JSON.stringify(beforeWatch)} after=${JSON.stringify(afterWatch)}`;
     });
     await row(11, 'a forced update check reaches the same unwatched app connection', async () => {
         const w = await welcome(main);
