@@ -266,12 +266,13 @@ export interface HostApiDeps {
     };
     retryPausedAccount?(provider: string): void;
     features: {
-        snapshot(): Promise<FeatureData>;
+        /** The admitted caller, so view state can stay with the connection that requested it (Tynn #720). */
+        snapshot(context: CallContext): Promise<FeatureData>;
         act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
         /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
         soundData?(key: string): Promise<string | null>;
         /** What the host's own file picker picked, from this machine's window: the only host paths a send may attach (genie#1354). */
-        picked?(paths: unknown[]): void;
+        picked?(paths: unknown[], context: CallContext): void;
         onChange(listener: (data: FeatureData) => void): () => void;
     };
     updates: {
@@ -663,11 +664,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.terminals.list().filter((t) => t.workspaceId === workspaceId).map(({ id, pid, shell }) => ({ id, pid, shell }));
             }
             case 'features.snapshot':
-                return deps.features.snapshot();
+                if (!context.connectionId) throw new Error('features.snapshot needs an admitted caller before reading its state');
+                return deps.features.snapshot(context);
             case 'features.soundData':
                 return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
             case 'features.picked':
-                if (context.origin === 'local-window' && Array.isArray(args[0])) deps.features.picked?.(args[0] as unknown[]);
+                if (context.origin === 'local-window' && Array.isArray(args[0])) deps.features.picked?.(args[0] as unknown[], context);
                 return null;
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction, context);
