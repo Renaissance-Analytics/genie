@@ -92,7 +92,9 @@ class Cdp {
 }
 const targets = async (port = PORT) => (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3_000) })).json();
 async function pageFor(predicate) { return until('page target', async () => (await targets()).find((t) => t.webSocketDebuggerUrl && predicate(t)), 60_000); }
-const evaluateFn = (cdp, fn, arg) => cdp.evaluate(`(${fn.toString()})(${JSON.stringify(arg)})`);
+/** A value as a JavaScript literal for code sent to the page: JSON, with the characters that could end a script or a line escaped. */
+const jsLiteral = (value) => JSON.stringify(value).replace(/[<>\/\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const evaluateFn = (cdp, fn, arg) => cdp.evaluate(`(${fn.toString()})(${jsLiteral(arg)})`);
 
 // Observe the real preload after it is ready, before opening an explicit native probe connection.
 function browserProbe() {
@@ -352,7 +354,7 @@ try {
     await until('preload/door registration', () => main.evaluate('typeof window.genieLocalProtocol === "object" && typeof window.genie === "object"'), 60_000);
     await until('real composed services', () => main.evaluate('(window.genieTest ?? window.genie).features.snapshot().then(d=>!!d.remote)'), 60_000);
     const refs = await doorScopes(); await observeDoor(refs);
-    mainId = await inspector.evaluate(`(() => { const { BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron'); return BrowserWindow.getAllWindows().find((w) => new RegExp(${JSON.stringify(geniePageSource('index'))}).test(w.webContents.getURL())).webContents.id; })()`);
+    mainId = await inspector.evaluate(`(() => { const { BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron'); return BrowserWindow.getAllWindows().find((w) => new RegExp(${jsLiteral(geniePageSource('index'))}).test(w.webContents.getURL())).webContents.id; })()`);
     if (BREAK) await inspector.evaluate(`(() => { for (const wc of globalThis.__doorNative.admitted.keys()) if (wc.id === ${mainId}) globalThis.__doorNative.admitted.delete(wc); return true; })()`);
     await row(1, 'CONTROL actual main preload owner welcome without a token', async () => {
         await attachPage(main);

@@ -157,7 +157,8 @@ export function frontmatterMove(text: string, name: string): FrontmatterMove | n
     const fields = frontFields(m[1] ?? '');
     const body = text.slice(m[0].length).replace(/^(?:[^\S\r\n]*\r?\n)+/, '');
     const lines = body === '' ? [] : body.split(/\r?\n/);
-    const you = new RegExp(`^You are ${name.replace(/[-]/g, '\\-')}\\.\\s*`);
+    // The name is matched literally: every pattern character in it is escaped, the backslash first among them.
+    const you = new RegExp(`^You are ${name.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&')}\\.\\s*`);
     let purpose = fields.purpose !== undefined ? oneLine(fields.purpose) : '';
     if (purpose === '') {
         const first = lines.find((l) => l.trim() !== '' && !/^#/.test(l.trim()));
