@@ -154,6 +154,8 @@ export const ICON_NAMES: readonly string[] = [
     // A hosted site's row (genie#1393): stopped is an empty circle. Open, Restart, Retry, Stop, Start, Edit and its states
     // reuse names above (external-link, rotate-cw, rotate-ccw, square, play, pencil, loader-circle, circle-check, circle-x).
     'circle',
+    // The hosting rows' actions (Tynn #708; named in data, hosting-rows.ts): Pause / Enable schedule, Logs, Detach.
+    'calendar-check', 'scroll-text', 'unlink',
     // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
     ...Object.values(KIND_COPY).map((k) => k.icon),
     // The AgentInbox thread (owner 2026-11-01): its order toggle (named in data, `ORDER_ICON`), Load older / Newest, and
