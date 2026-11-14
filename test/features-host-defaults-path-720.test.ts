@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SHELL_BEGIN } from '../src/core/machine-path.js';
+import { SHELL_BEGIN, SHELL_END } from '../src/core/machine-path.js';
 import { DEFAULT_LANGS, LANG_LABEL, langPathEntries, versionDir } from '../src/core/toolchain-defaults.js';
 import type { FeatureAction, FeatureData } from '../src/renderer/features.js';
 import { defaultsPathFixture, type DefaultsPathFixture } from './helpers/features-host-defaults-path.js';
@@ -53,7 +53,10 @@ describe('host machine PATH uses the real planner over inert OS ports (Tynn #720
     });
     it('Linux PATH applies the actual marked block once and measures every existing startup target', async () => {
         await scan(); const data = await pathAction(true);
-        for (const path of f.originalText.keys()) expect(f.text.get(path)).toContain(SHELL_BEGIN);
+        const entries = f.pathPorts().entries.join(':');
+        expect(f.text.get(join(f.home, '.profile'))).toBe(`export FIXTURE=1\n${SHELL_BEGIN}\nexport PATH="${entries}:$PATH"\n${SHELL_END}\n`);
+        // The planner records a newline it adds, so Undo can restore the original text without it.
+        expect(f.text.get(join(f.home, '.bashrc'))).toBe(`alias fixture=true\n# >>> genie toolchain defaults (+newline) >>>\nexport PATH="${entries}:$PATH"\n${SHELL_END}\n`);
         expect(data.toolchain?.machinePath).toEqual({ applied: true, where: [...f.originalText.keys()], entries: f.pathPorts().entries, targets: [...f.originalText.keys()] });
         expect(f.writes).toHaveLength(2); await pathAction(true); expect(f.writes).toHaveLength(2);
     });
