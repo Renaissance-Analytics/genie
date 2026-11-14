@@ -1,6 +1,6 @@
 import { adoptWindowEnv } from './session-engine-server.js';
 import { runCliRepair } from './cli-repair.js';
-import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
+import { execFileRunner, probeToolLive, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
@@ -182,6 +182,12 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
             // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
             probe: async () => withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll()),
+            // Tynn #714: one tool, for the one-at-a-time "Check for updates".
+            probeTool: async (name) => {
+                const status = await probeToolLive(name, latestFor);
+                if (status === null) throw new Error('Genie does not manage this tool');
+                return withProviderHealth([status], await providerHealth.refreshAll())[0]!;
+            },
             update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
             // The row's in-progress state, pushed: which update, and its step (genie#1306).
             now: Date.now,

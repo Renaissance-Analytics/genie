@@ -14,12 +14,13 @@ import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePro
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
+import { patchWithinLine } from '../../core/toolchain-update.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, soundPickerList, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
-import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
+import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -1080,6 +1081,81 @@ export function ToolchainUpdateWarning({ warning, busy, onAction }: { warning: N
     );
 }
 
+/** The languages Genie installs side by side: each has its own section, never also a single-version row (Tynn #713). */
+const SIDE_BY_SIDE = ['php', 'node', 'python', 'java'] as const;
+type SideBySide = (typeof SIDE_BY_SIDE)[number];
+const LANG_TITLE: Record<SideBySide, string> = { php: 'PHP', node: 'Node', python: 'Python', java: 'Java' };
+const INSTALL_KIND = { php: 'toolchain.installPhp', node: 'toolchain.installNode', python: 'toolchain.installPython', java: 'toolchain.installJava' } as const;
+
+/**
+ * A SIDE-BY-SIDE LANGUAGE'S INSTALLED VERSIONS AS CHIPS (Tynn #713), the default marked, and a patch update PER version -
+ * the newest build on that version's own line (8.4.24 to 8.4.27). The patch is an Install beside the old version: it never
+ * switches the default, and a workspace pinned to the old one keeps it. Hook-free: what it renders is what is tested.
+ */
+export function LanguageVersionChips({ lang, managed, current, available, busy, onAction }: { lang: SideBySide; managed: readonly string[]; current: string | null; available: ReadonlyArray<{ readonly version: string; readonly installed: boolean }>; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    if (managed.length === 0) return null;
+    return (
+        <div data-version-chips={lang} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2">
+            {managed.map((v) => {
+                const isDefault = v === current;
+                const patch = patchWithinLine(lang, v, available);
+                return (
+                    <span key={v} data-version-chip={`${lang}:${v}`} data-default={isDefault ? 'true' : 'false'} className="inline-flex items-center gap-1">
+                        <Badge variant="soft" size="sm" {...(isDefault ? { color: 'blue' as const } : {})}>{isDefault ? <Icon name="star" size="xs" /> : null}{v}</Badge>
+                        {patch !== null ? (
+                            <Button size="xs" type="button" data-patch-update={`${lang}:${v}`} data-version={patch} disabled={busy} title={`Install ${LANG_TITLE[lang]} ${patch}, beside ${v}`} className="text-[12px]" onClick={() => onAction({ kind: INSTALL_KIND[lang], version: patch, consent: true })}>
+                                <Icon name="arrow-up" size="xs" />{patch}
+                            </Button>
+                        ) : null}
+                    </span>
+                );
+            })}
+        </div>
+    );
+}
+
+/** One row's state in a "Check for updates" run (Tynn #714): an icon and a word, the reason when it failed. */
+export function CheckStateMark({ tool, check }: { tool: string; check: ToolCheckState }) {
+    const look = {
+        waiting: { icon: 'circle', word: 'Waiting', tone: 'text-[var(--fg-4)]' },
+        checking: { icon: 'loader-circle', word: 'Checking', tone: 'text-[var(--fg-3)]' },
+        'up-to-date': { icon: 'circle-check', word: 'Up to date', tone: 'text-[var(--success)]' },
+        'update-available': { icon: 'circle-arrow-up', word: 'Update available', tone: 'text-[var(--warning)]' },
+        failed: { icon: 'circle-x', word: 'Failed', tone: 'text-[var(--danger)]' },
+    }[check.state];
+    return (
+        <span data-check-state={check.state} data-check-tool={tool} className={`inline-flex items-center gap-1 text-xs ${look.tone}`}>
+            <Icon name={look.icon} size="xs" {...(check.state === 'checking' ? { className: 'animate-spin' } : {})} />
+            {look.word}{check.state === 'failed' ? <span className="text-[var(--danger)]">: {check.reason}</span> : null}
+        </span>
+    );
+}
+
+/**
+ * THE CHECK'S CONTROLS (Tynn #714): "Check for updates" re-checks every row one at a time and installs nothing; while it
+ * runs the same place says Stop; and the last-checked time sits beside it. Opening the page never starts this.
+ */
+export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    const running = tc?.checkRun?.running === true;
+    const at = tc?.checkedAt ?? null;
+    return (
+        <>
+            <span data-toolchain-checked={at ?? ''} className="ml-auto text-xs text-[var(--fg-3)]" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
+                {at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`}
+            </span>
+            {running ? (
+                <Button size="xs" type="button" color="red" data-action="toolchain-check-stop" onClick={() => onAction({ kind: 'toolchain.stopCheck' })}>
+                    <Icon name="square" size="xs" />Stop
+                </Button>
+            ) : (
+                <Button size="xs" type="button" data-action="toolchain-check-updates" disabled={busy} onClick={() => onAction({ kind: 'toolchain.checkUpdates' })}>
+                    <Icon name="refresh-cw" size="xs" />Check for updates
+                </Button>
+            )}
+        </>
+    );
+}
+
 export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
     const tc = data.toolchain;
     const busy = tc?.busy ?? null;
@@ -1100,7 +1176,11 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
             onAction({ kind: 'toolchain.check' });
         }
     }, [tc, onAction]);
-    const missing = tc ? tc.tools.filter((t) => t.tone === 'not-installed') : [];
+    // A language Genie installs side by side has its own section below; it is not also a single-version row (Tynn #713).
+    const hasSection = (tool: string): boolean => (SIDE_BY_SIDE as readonly string[]).includes(tool) && tc?.[tool as SideBySide] !== undefined;
+    const singles = tc ? tc.tools.filter((t) => !hasSection(t.tool)) : [];
+    const checkRows = tc?.checkRun?.rows ?? {};
+    const missing = singles.filter((t) => t.tone === 'not-installed');
     // A refused or failed action, drawn on the row it was for (who or what is busy, verbatim); a PHP version's goes to
     // PHP versions, and one for a tool with no row (a prerequisite such as vcredist) is said above the rows, never dropped.
     const refusals = tc?.refusals ?? [];
@@ -1109,11 +1189,9 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
     return (
         <div data-surface="toolchain" className="flex h-full min-h-0 flex-col">
             <Header title="Toolchain">
-                <Button size="xs" type="button" disabled={busy !== null} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
+                <Button size="xs" type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
                     Check and repair
-                </Button>
-                <Button size="xs" type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.check' })}>
-                    Check again
                 </Button>
             </Header>
             {busy !== null ? <p data-toolchain-busy="" className="px-5 py-2 text-sm text-[var(--fg-2)]">{busy}</p> : null}
@@ -1138,14 +1216,14 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                 <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
             ))}
             {tc?.machinePath ? <MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /> : null}
-            {tc?.php ? <PhpVersions php={tc.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
-            {tc?.node ? <NodeVersions node={tc.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
+            {tc?.php ? <PhpVersions php={tc.php} check={checkRows.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
+            {tc?.node ? <NodeVersions node={tc.node} check={checkRows.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
             {tc?.go ? <GoVersions go={tc.go} current={tc.defaults?.go ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
-            {tc?.python ? <PythonVersions python={tc.python} current={tc.defaults?.python ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'python' && r.version !== undefined)} /> : null}
+            {tc?.python ? <PythonVersions python={tc.python} check={checkRows.python} current={tc.defaults?.python ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'python' && r.version !== undefined)} /> : null}
             {tc?.dotnet ? <DotnetVersions dotnet={tc.dotnet} current={tc.defaults?.dotnet ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'dotnet' && r.version !== undefined)} /> : null}
             {tc?.rust ? <RustVersions rust={tc.rust} current={tc.defaults?.rust ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'rust' && r.version !== undefined)} /> : null}
             {tc?.ruby ? <RubyVersions ruby={tc.ruby} current={tc.defaults?.ruby ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'ruby' && r.version !== undefined)} /> : null}
-            {tc?.java ? <JavaVersions java={tc.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
+            {tc?.java ? <JavaVersions java={tc.java} check={checkRows.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -1156,7 +1234,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                         </p>
                     ) : null}
                     {/* GROUPED BY TYPE (the owner, 2026-10-18): languages, package managers, version control, containers, agent CLIs. */}
-                    {groupTools(tc.tools).map((g) => (
+                    {groupTools(singles).map((g) => (
                     <section key={g.group} data-tool-group={g.group}>
                     <h3 className="px-5 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-[var(--fg-3)]">{g.label}</h3>
                     <ul className="divide-y divide-[var(--border-1)]">
@@ -1168,6 +1246,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                 <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                     <span className="font-medium">{t.tool}</span>
                                     {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
+                                    {checkRows[t.tool] ? <CheckStateMark tool={t.tool} check={checkRows[t.tool]!} /> : null}
                                     {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
                                     {t.tone === 'security-update' ? (
                                         <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
@@ -1210,11 +1289,15 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
  * button says why before it is pressed), the PATH PHP an unpinned site runs, and the versions this release can install —
  * each Install is the person's consent. Where Genie installs none (macOS/Linux) it says so instead of offering a button.
  */
-function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function PhpVersions({ php, current = null, busy, onAction, refusals = [], check }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = php.available.filter((a) => !a.installed);
     return (
         <section data-php-versions={php.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">PHP versions</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">PHP versions</h3>
+                {check ? <CheckStateMark tool="php" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="php" managed={php.managed.map((m) => m.version)} current={current} available={php.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`php` is PHP {current}, Genie's default.</span>
@@ -1262,11 +1345,15 @@ function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { p
  * PATH, and an Install per version this release offers — each Install is the person's consent. Where Genie installs none
  * it says so instead of offering a button.
  */
-function NodeVersions({ node, current = null, busy, onAction, refusals = [] }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function NodeVersions({ node, current = null, busy, onAction, refusals = [], check }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = node.available.filter((a) => !a.installed);
     return (
         <section data-node-versions={node.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Node versions</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Node versions</h3>
+                {check ? <CheckStateMark tool="node" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="node" managed={node.managed.map((m) => m.version)} current={current} available={node.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`node` is Node {current}, Genie's default.</span>
@@ -1354,11 +1441,15 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
  * GENIE'S OWN JAVA (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6d): the Temurin JDKs Genie manages, the java on
  * PATH, and an Install per LTS line (its release for this OS) — or, on macOS, why not.
  */
-function JavaVersions({ java, current = null, busy, onAction, refusals = [] }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function JavaVersions({ java, current = null, busy, onAction, refusals = [], check }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = java.available.filter((a) => !a.installed);
     return (
         <section data-java-versions={java.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Java (Temurin JDKs)</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Java (Temurin JDKs)</h3>
+                {check ? <CheckStateMark tool="java" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="java" managed={java.managed.map((m) => m.version)} current={current} available={java.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`java` and `javac` are Java {current}, Genie's default.</span>
@@ -1541,11 +1632,15 @@ function DotnetVersions({ dotnet, current = null, busy, onAction, refusals = [] 
  * and an Install per supported line on Windows — each Install is the person's consent. Where python.org publishes no
  * build Genie can install (macOS, Linux until TC4b), it says so instead of offering buttons.
  */
-function PythonVersions({ python, current = null, busy, onAction, refusals = [] }: { python: NonNullable<NonNullable<FeatureData['toolchain']>['python']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function PythonVersions({ python, current = null, busy, onAction, refusals = [], check }: { python: NonNullable<NonNullable<FeatureData['toolchain']>['python']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = python.available.filter((a) => !a.installed);
     return (
         <section data-python-versions={python.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Python versions</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Python versions</h3>
+                {check ? <CheckStateMark tool="python" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="python" managed={python.managed.map((m) => m.version)} current={current} available={python.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`python` and `pip` are Python {current}, Genie's default.</span>
