@@ -263,6 +263,7 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
         terminals: terminalsApi,
         takeOver: () => null,
+        settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         ...over,
     }) as unknown as HostAlonePorts;
     const gate = (alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}, more: Record<string, unknown> = {}) =>
