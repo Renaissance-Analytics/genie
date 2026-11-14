@@ -96,8 +96,8 @@ describe('the interrupt reaches the session as an interrupt, on every route', ()
 
     it('the chat\'s Interrupt and send asks for an interrupt; its Stop this turn asks for a stop', () => {
         const shell = read('src/renderer/Shell.tsx');
-        expect(shell).toMatch(/onInterruptAndSend=\{chatTurnStop && chatThread \? \(\) => onCancelTurn\?\.\(chatThread\.agentId, 'interrupt'\)/);
-        expect(shell).toMatch(/onStopTurn=\{chatTurnStop && chatThread \? \(\) => onCancelTurn\?\.\(chatThread\.agentId, 'stop'\)/);
+        expect(shell).toMatch(/onInterruptAndSend=\{chatTurnStop && chatThread && !readOnly \?\(\) => onCancelTurn\?\.\(chatThread\.agentId, 'interrupt'\)/);
+        expect(shell).toMatch(/onStopTurn=\{chatTurnStop && chatThread && !readOnly \?\(\) => onCancelTurn\?\.\(chatThread\.agentId, 'stop'\)/);
     });
 
     it('the renderer bridges and the host API hand the intent on (P4 family 9b: this window goes through the door too)', () => {
