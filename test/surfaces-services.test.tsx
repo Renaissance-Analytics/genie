@@ -60,7 +60,8 @@ describe('the Services tab', () => {
     it('the ACTIVE version is marked; a second version offers "Make active" with the data warning on the row BEFORE the click', () => {
         const html = render({ ...base, services: { instances: [{ instance: pg('16', true, 54301), status: 'running' }, { instance: pg('17', false, 54302), status: 'running' }], adding: null } });
         expect(html.match(/data-active="true"/g) ?? []).toHaveLength(1);
-        expect(html.match(/Make active/g) ?? []).toHaveLength(1);
+        // "Make active" waits in the row menu (hosting-rows-708.test.ts); the warning stays on the row.
+        expect(html.match(/aria-label="More actions"/g) ?? []).toHaveLength(2);
         expect(html).toContain('Switching postgres from 16 to 17: each version keeps its own data volume, so 17 starts EMPTY. Nothing in 16 is deleted; switch back any time.');
     });
 
@@ -81,26 +82,25 @@ describe('the Services tab: logs, the web inbox, deleting data (H6)', () => {
         const html = render({ ...base, services: { instances: [{ instance: mailpit, status: 'running' }, { instance: pg('17', true, 54301), status: 'running' }], adding: null } });
         // At its .gen name, which the Genie browser opens (core/mailpit-name.ts).
         expect(html.match(/data-open-inbox="([^"]+)"/g)).toEqual(['data-open-inbox="https://mail.gen/"']);
-        expect(html.match(/Open inbox/g)).toHaveLength(1);
+        expect(html.match(/aria-label="Open inbox"/g)).toHaveLength(1);
     });
 
-    it('every row offers Logs; the log the person opened is shown under ITS row only, with how much was read', () => {
+    it('every row has a menu holding Logs; the log the person opened is shown under ITS row only, with how much was read', () => {
         const instances = [{ instance: pg('17', true, 54301), status: 'running' as const }, { instance: mailpit, status: 'running' as const }];
         const closed = render({ ...base, services: { instances, adding: null } });
-        expect(closed.match(/data-service-logs-button=/g)).toHaveLength(2);
+        expect(closed.match(/aria-label="More actions"/g)).toHaveLength(2);
         expect(closed).not.toContain('data-service-log=');
         const open = render({ ...base, services: { instances, adding: null, logs: { serviceId: 'svc_m', text: 'smtp listening on [::]:1025', tail: 500 } } });
         expect(open.match(/data-service-log="([^"]+)"/g)).toEqual(['data-service-log="svc_m"']);
         expect(open).toContain('smtp listening on [::]:1025');
         expect(open).toContain('the last 500 lines');
         expect(open).toMatch(/Hide logs/);
-        expect(open).toMatch(/Refresh logs/);
     });
 
-    it('every row offers "Remove and delete data…" beside "Remove (keep data)"', () => {
+    it('every row holds "Remove and delete data…" and "Remove, keep data" in its menu, not on the line', () => {
         const html = render({ ...base, services: { instances: [{ instance: pg('17', true, 54301), status: 'running' }], adding: null } });
-        expect(html).toContain('data-delete-data="svc_17"');
-        expect(html).toMatch(/Remove \(keep data\)/);
+        expect(html.match(/aria-label="More actions"/g)).toHaveLength(1);
+        expect(html).not.toMatch(/Remove \(keep data\)|Remove and delete data/);
     });
 
     it('the confirmation names what is deleted — the volume and whose data — for the sole holder; another holder means NO delete button, only why, by name', () => {

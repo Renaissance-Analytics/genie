@@ -3,6 +3,7 @@ import type { ServiceInstance } from '../src/core/services.js';
 import { chooseEngines } from '../src/core/services.js';
 import { engineChoiceActions, processActions, scheduledActions, serviceActions, siteActions, type RowAction, type RowActions } from '../src/renderer/components/hosting-rows.js';
 import type { HostedSite } from '../src/renderer/features.js';
+import { ICON_NAMES } from '../src/renderer/icons.js';
 
 /**
  * HOSTING ROWS (Tynn #708): one line per row, the primary action as an icon button, everything else in a "⋯" menu with
@@ -127,6 +128,10 @@ describe('site rows', () => {
     it('failed with a process: Retry is primary', () => {
         expect(ids(siteActions(site({ state: 'failed', processIds: ['site_web'] }), { editing: false }).primary)).toEqual(['retry']);
     });
+    it('still starting past the first window: Retry beside Stop, both icon buttons', () => {
+        expect(ids(siteActions(site({ state: 'starting', step: 'slow' } as never), { editing: false }).primary)).toEqual(['retry', 'stop']);
+        expect(ids(siteActions(site({ state: 'starting', step: 'answering' } as never), { editing: false }).primary)).toEqual(['stop']);
+    });
     it('while its form is open there is no second Edit; an unservable site offers nothing', () => {
         expect(ids(siteActions(site({ state: 'running' }), { editing: true }).menu)).not.toContain('edit');
         const none = siteActions(site({ state: 'unservable', serve: null }), { editing: false });
@@ -151,5 +156,24 @@ describe('In use rows', () => {
         expect(engineChoiceActions(WS, c!, label).map((x) => x.label)).toEqual(['Use postgres 17 · shared']);
         const [d] = chooseEngines([shared(true)], WS);
         expect(engineChoiceActions(WS, d!, label).map((x) => x.label)).toEqual(['Attach postgres 17 · shared']);
+    });
+});
+
+describe('icons', () => {
+    it('every icon a row names is registered, or it draws as a blank gap (icons are named in data here, which test/icons.test.ts cannot scan)', () => {
+        const pg: ServiceInstance = { id: 'svc_pg', engine: 'postgres', version: '18', scope: { kind: 'dedicated', workspaceId: 'tynn' }, publishedPort: 1, credentials: {}, active: false };
+        const mailpit: ServiceInstance = { id: 'svc_m', engine: 'mailpit', version: '1', scope: { kind: 'shared' }, publishedPort: 1, credentials: {}, active: true, publishedPorts: { ui: 2 } };
+        const site = (state: string, extra: object = {}) => ({ id: 's', name: 'w', host: 'w.gen', workspaceId: 'a', repoPath: '/w', serve: { mode: 'proxy' }, port: 1, state, processIds: ['s'], problem: null, ...extra }) as HostedSite;
+        const sched = (enabled: boolean) => proc({ state: 'stopped', durable: true, schedule: { kind: 'command', cron: '0 3 * * *', enabled, nextRunAt: null } });
+        const all: RowActions[] = [
+            serviceActions(pg, 'running', { warning: true, logsOpen: true }), serviceActions(mailpit, 'exited', { warning: false, logsOpen: false }),
+            siteActions(site('running'), { editing: false }), siteActions(site('failed'), { editing: false }), siteActions(site('starting', { step: 'slow' }), { editing: false }), siteActions(site('stopped'), { editing: false }),
+            processActions(proc({ durable: true })), processActions(proc({ durable: true, state: 'stopped' })), processActions(proc({ state: 'exited' })),
+            scheduledActions(sched(true)), scheduledActions(sched(false)),
+            { primary: [], menu: engineChoiceActions('w', chooseEngines([{ ...mailpit, slices: { w: { identifier: 'w', password: 'p', active: true } } }, pg], 'w')[0]!, (i) => i.engine) },
+        ];
+        const named = new Set(all.flatMap((a) => [...a.primary, ...a.menu].map((x) => x.icon)));
+        expect(named.size).toBeGreaterThan(8);
+        expect([...named].filter((n) => !ICON_NAMES.includes(n))).toEqual([]);
     });
 });
