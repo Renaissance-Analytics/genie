@@ -137,7 +137,7 @@ try {
     // app-server behind GENIE2_CODEX_BINARY) through the same door a person uses, and wait for
     // the host to report its session running. The caller proves the other half afterwards:
     // no stub process survives the quit, and none is back after the relaunch.
-    const codexId = await cdp.evaluate('window.genie.snapshot().then((s) => (s.agents.find((a) => a.provider === "codex") ?? {}).id ?? null)');
+    const codexId = await cdp.evaluate('window.genieTest.snapshot().then((s) => (s.agents.find((a) => a.provider === "codex") ?? {}).id ?? null)');
     check(typeof codexId === 'string', '11b. the seed left a codex agent to run', String(codexId));
     if (typeof codexId === 'string') {
         // Start (the one restart): opening an agent starts nothing since q_04ce323c.
@@ -146,7 +146,7 @@ try {
         const end = Date.now() + 30_000;
         let running = null;
         while (Date.now() < end) {
-            running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);
+            running = await cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);
             if (running === true) break;
             await new Promise((r) => setTimeout(r, 500));
         }
@@ -159,7 +159,7 @@ try {
     // scan. One terminal is opened here and LEFT OPEN through install(); the helper is our own
     // child (excluded from the orphan kill by descent) and before-quit closes it. The caller
     // asserts 0 helpers after the relaunch.
-    const wsId = await cdp.evaluate('window.genie.snapshot().then((s) => s.workspaces?.[0]?.id ?? null)');
+    const wsId = await cdp.evaluate('window.genieTest.snapshot().then((s) => s.workspaces?.[0]?.id ?? null)');
     if (typeof wsId === 'string') {
         const term = await cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(wsId)}, { cols: 80, rows: 24 })`);
         check(term && term.pid > 0, '11d. a Workspace terminal is open when install is asked', `pid ${term?.pid}`);

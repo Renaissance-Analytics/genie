@@ -219,7 +219,7 @@ const idOf = async (cdp, path) => {
         await new Promise((r) => setTimeout(r, 200));
     }
 };
-const idOnce = async (cdp, path) => cdp.call('function (path) { return window.genie.snapshot().then((s) => s.workspaces.find((w) => w.path === path)?.id ?? null); }', path);
+const idOnce = async (cdp, path) => cdp.call('function (path) { return window.genieTest.snapshot().then((s) => s.workspaces.find((w) => w.path === path)?.id ?? null); }', path);
 
 console.log('\nTHE TRUST STEP — what a person sees, in the real app\n');
 const record = join(home, '.genie', 'runtime', 'workspace-trust.json');

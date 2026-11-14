@@ -134,7 +134,7 @@ say "step 2: is :9222 free before we start?"
 stage "STAGE 0 — before anything starts"
 
 say "step 3: launch Genie (window on :9222), marked GENIE_PTY_PROBE=$MARK"
-GENIE_PTY_PROBE="$MARK" setsid npx electron . --no-sandbox --ozone-platform=x11 --remote-debugging-port=9222 >"$OUT/electron.log" 2>&1 < /dev/null &
+GENIE_PTY_PROBE="$MARK" GENIE_PAGE_PROBE=1 setsid npx electron . --no-sandbox --ozone-platform=x11 --remote-debugging-port=9222 >"$OUT/electron.log" 2>&1 < /dev/null &
 EPID=$!
 
 cat > "$OUT/cdp.mjs" <<'EOF'
@@ -153,14 +153,14 @@ let id = 0; const pending = new Map();
 ws.onmessage = (e) => { const f = JSON.parse(e.data); pending.get(f.id)?.(f); pending.delete(f.id); };
 const evaluate = (expression, ms = 15_000) => deadline(ms, expression.slice(0, 60), new Promise((r) => { const n = ++id; pending.set(n, r); ws.send(JSON.stringify({ id: n, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } })); }))
     .then((f) => { if (f.result?.exceptionDetails) throw new Error(f.result.exceptionDetails.exception?.description ?? 'threw'); return f.result?.result?.value; });
-for (const end = Date.now() + 60_000; Date.now() < end;) { if (await evaluate('typeof window.genie === "object" && document.readyState === "complete"').catch(() => false)) break; await sleep(500); }
-const snap = await evaluate('window.genie.snapshot()');
+for (const end = Date.now() + 60_000; Date.now() < end;) { if (await evaluate('typeof window.genieTest?.snapshot === "function" && document.readyState === "complete"').catch(() => false)) break; await sleep(500); }
+const snap = await evaluate('window.genieTest.snapshot()');
 const workspaceId = snap?.workspaces?.[0]?.id;
 if (!workspaceId) { console.log('CDP: no workspace in the seed'); process.exit(1); }
-const opened = await evaluate(`window.genie.terminals.open(${JSON.stringify(workspaceId)}, { cols: 80, rows: 24 })`, 30_000);
+const opened = await evaluate(`window.genieTest.terminals.open(${JSON.stringify(workspaceId)}, { cols: 80, rows: 24 })`, 30_000);
 console.log(`CDP: terminal opened ${JSON.stringify(opened)}`);
 await sleep(3_000);
-await evaluate(`window.genie.terminals.write(${JSON.stringify(opened?.id)}, "echo pty-fd-probe $$\\r"); true`).catch((e) => console.log(`CDP: write: ${e.message}`));
+await evaluate(`window.genieTest.terminals.write(${JSON.stringify(opened?.id)}, "echo pty-fd-probe $$\\r"); true`).catch((e) => console.log(`CDP: write: ${e.message}`));
 await sleep(2_000);
 ws.close();
 process.exit(0);

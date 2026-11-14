@@ -90,7 +90,7 @@ function host() {
     };
 }
 const rowsOf = (n: number, size = 8): Row[] => Array.from({ length: n }, (_, i) => ({ id: `r${i}`, text: 'x'.repeat(size) }));
-const preload = () => ({ snapshot: vi.fn(async () => { throw new Error('old native path'); }), agentDetail: vi.fn(async () => { throw new Error('old native path'); }), subscribe: vi.fn(() => () => {}), subscribeAgentWire: vi.fn(() => () => {}), workspaces: {}, features: {} }) as unknown as PreloadBridge;
+const preload = () => Object.assign({} as PreloadBridge, { snapshot: vi.fn(async () => { throw new Error('old native path'); }), agentDetail: vi.fn(async () => { throw new Error('old native path'); }), subscribe: vi.fn(() => () => {}), subscribeAgentWire: vi.fn(() => () => {}), workspaces: {}, features: {} });
 const bridgeOn = (port: LocalFramePort, old: PreloadBridge = preload()) => { vi.stubGlobal('window', { genieLocalProtocol: port }); return pageBridge(old); };
 const agentFrames = (texts: readonly string[]) => texts.filter((t) => t.includes('"channel":"local-agent"'));
 

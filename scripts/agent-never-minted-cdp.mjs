@@ -206,7 +206,7 @@ try {
     const signedIn = await until('the account to be signed in', 45_000, () => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.tynn?.user?.name ?? null)'));
     check(signedIn === USER.name, '2-the-host-signed-in-over-real-tls-through-the-proxy', `${signedIn}; /me asked ${tynn.me} time(s); tunnels ${tunnels.length}`);
 
-    const snap = await cdp.evaluate('window.genie.snapshot()');
+    const snap = await cdp.evaluate('window.genieTest.snapshot()');
     const a = snap.agents.find((x) => x.provider === 'codex' && x.id !== B_ID && x.id !== C_ID);
     check(Boolean(a) && snap.agents.some((x) => x.id === B_ID), '3-the-seed-left-both-agents', a?.id ?? 'no agent A');
     say('starting A through the window');

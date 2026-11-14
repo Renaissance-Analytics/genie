@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentId } from '../src/core/identity.js';
 import { Registry } from '../src/main/registry.js';
 import { Store } from '../src/main/store.js';
+import { buildHostApi } from '../src/main/host-api.js';
+import { protocolContractDeps } from './support/protocol-contract-deps.js';
 
 /**
  * AN AGENT'S SETTINGS ARE LIVE (the owner, 2026-10-14: "I was not able to change your model … it was
@@ -69,8 +71,16 @@ describe('main pushes the agent detail when its record changes', () => {
         .map((line) => line.replace(/\/\/.*$/, ''))
         .join('\n');
 
-    it('the window: the registry\'s record changes feed pushAgent, the same push a session event makes', () => {
-        expect(main.match(/registry\.subscribeAgentRecords\(\s*pushAgent\s*\)/g) ?? []).toHaveLength(1);
+    it('the window: the local protocol source forwards record changes and session changes to the same watcher', () => {
+        const deps = protocolContractDeps(dir), heard: string[] = [];
+        let recordChanged = (_id: string) => {}, sessionChanged = (_id: string) => {};
+        deps.subscribeAgentRecords = listener => { recordChanged = listener; return () => { recordChanged = () => {}; }; };
+        deps.host.subscribe = listener => { sessionChanged = listener; return () => { sessionChanged = () => {}; }; };
+        const off = buildHostApi(deps).localAgents!.onChanged(id => heard.push(id));
+        recordChanged('record'); sessionChanged('session');
+        expect(heard).toEqual(['record', 'session']);
+        off(); recordChanged('gone'); sessionChanged('gone');
+        expect(heard).toEqual(['record', 'session']);
     });
 
     it('a remote connection: the host api is given the registry\'s record changes', () => {

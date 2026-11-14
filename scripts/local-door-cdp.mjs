@@ -324,9 +324,9 @@ try {
     await row(2, 'family1 settings crosses the door; old IPC removed', async () => {
         const r = await call(main, 'workspaces.settings', ['tynn']);
         demand(r.ok && r.value?.ok && typeof r.value.values.workspace_tabs === 'string', 'real settings response expected');
-        const handlers = await inspector.evaluate(`(() => { const h = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').ipcMain._invokeHandlers; return { available: typeof h?.has === 'function', control: h?.has('genie:snapshot'), removed: h?.has('genie:workspace-settings') }; })()`);
-        demand(handlers.available && handlers.control === true && handlers.removed === false, 'existing snapshot handler controls old-handler absence');
-        return 'settings result received; snapshot IPC present; workspace-settings IPC absent';
+        const handlers = await inspector.evaluate(`(() => { const h = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').ipcMain._invokeHandlers; return { available: typeof h?.has === 'function', control: h?.has('genie:window-overlay-colors-current'), removed: h?.has('genie:workspace-settings') }; })()`);
+        demand(handlers.available && handlers.control === true && handlers.removed === false, 'existing native window handler controls old-handler absence');
+        return 'settings result received; native window read present; workspace-settings IPC absent';
     });
 
     const windows = {};
@@ -342,7 +342,7 @@ try {
     });
 
     await row(3, 'take-over product window owner welcome, if available', async () => {
-        const snap = await main.evaluate('window.genie.snapshot()');
+        const snap = await main.evaluate('window.genieTest.snapshot()');
         const id = snap.agents.find((a) => a.provider === 'codex')?.id;
         if (!id) throw new Unmeasured('seed has no suitable take-over agent');
         const r = await main.evaluate(`window.genie.takeOver(${JSON.stringify(id)})`);
@@ -552,9 +552,9 @@ try {
         demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app owns a ready connection');
         // Off the workspace Dashboard: this view must have no activity subscription.
         await main.evaluate("location.hash='#genie://settings'; true");
-        await until('streaming agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>d?.session?.running===true)`),30_000);
+        await until('streaming agent ready',()=>main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)}).then(d=>d?.session?.running===true)`),30_000);
         const prompt = await main.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
-        const ticks = async () => main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
+        const ticks = async () => main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
         const count = (text) => [...text.matchAll(/tick (\d+) pid (\d+)/g)].map(m=>{ providerPids.add(Number(m[2])); return Number(m[1]); });
         await until('at least four real provider ticks',async()=>count(await ticks()).length>=4,30_000);
         // Automatic update checks are independent of activity interest. Let the first check
@@ -586,9 +586,9 @@ try {
             // new agent's first session changes the feed while the original ticker keeps going.
             const activityStart = await main.evaluate(`window.genieTest.agents.restart(${JSON.stringify(activityAgent.id)},'graceful')`);
             demand(activityStart?.ok,'own new agent started while its activity view watches');
-            await until('activity control agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>d?.session?.running===true)`),30_000);
+            await until('activity control agent ready',()=>main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>d?.session?.running===true)`),30_000);
             demand((await main.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(activityAgent.id)},'Stream ticks for the activity positive control.')`))?.ok,'activity control driver accepts its prompt');
-            await until('activity control provider has four real ticks',async()=>count(await main.evaluate(`window.genie.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>JSON.stringify(d?.rows??[]))`)).length>=4,30_000);
+            await until('activity control provider has four real ticks',async()=>count(await main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>JSON.stringify(d?.rows??[]))`)).length>=4,30_000);
             await until('watched activity callback',()=>main.evaluate('window.__doorActivitySeen>=1'),20_000);
             demand(await main.evaluate('window.__doorCdp.frames.some(r=>r.frame?.kind==="event"&&r.frame.channel==="local-activity")'),'watched activity traverses the actual app frame channel');
             const watched = await nativeSummary();

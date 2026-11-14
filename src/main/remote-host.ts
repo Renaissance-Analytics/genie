@@ -1028,7 +1028,7 @@ export class RemoteHost {
         const windows = [...this.#connections.values()].filter((c) => c.auth !== null && c.local);
         if (windows.length === 0) return;
         const revision = ++this.#snapshotRevision;
-        const inline = process.env.GENIE_SNAPSHOT_PUSH !== 'revision' && Buffer.byteLength(JSON.stringify(snapshot)) <= LOCAL_EVENT_MAX_BYTES;
+        const inline = Buffer.byteLength(JSON.stringify(snapshot)) <= LOCAL_EVENT_MAX_BYTES;
         for (const c of windows) this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.snapshot, payload: inline ? { revision, snapshot } : { revision } });
     }
 

@@ -143,7 +143,7 @@ try {
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
 
-    const snap = await cdp.evaluate('window.genie.snapshot()');
+    const snap = await cdp.evaluate('window.genieTest.snapshot()');
     const a = snap.agents.find((x) => x.provider === 'codex' && x.id !== B_ID);
     check(Boolean(a) && snap.agents.some((x) => x.id === B_ID), '1-the-seed-left-both-agents', a?.id ?? 'no agent A');
     check(!pgrep('stub-codex').length, '2-no-provider-before-anything-starts');

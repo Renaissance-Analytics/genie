@@ -40,7 +40,7 @@ import type { MarketplaceApi } from '../core/marketplace.js';
 import type { GAppsApi } from '../core/gapps.js';
 import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
-import { AgentDetailViews, type AgentWireSubscribe } from '../core/agent-push-wire.js';
+import { AgentDetailViews } from '../core/agent-push-wire.js';
 import type { MailLike } from '../core/chat-view.js';
 import type { TreeNode } from '../core/files-panel.js';
 import type { BytesResult, BytesWriteResult, FileOpResult, FilesState, OpenResult, WriteResult } from '../main/files-host.js';
@@ -664,18 +664,15 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
 };
 
 /**
- * WHAT THE PRELOAD EXPOSES: unmoved bridge families and an agent's live detail as main's PATCH
- * (`subscribeAgentWire`) and is rebuilt on the page's side by {@link pageBridge}. Whatever crosses `contextBridge` is
- * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
- * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
+ * WHAT THE PRELOAD EXPOSES: the remaining native window ports. Protocol reads and patch watches are assembled by
+ * {@link pageBridge}; an agent's ledger is rebuilt once in the page, never copied whole across contextBridge per event.
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
+export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
-    subscribeAgentWire: AgentWireSubscribe<Omit<AgentDetail, 'rows'>, TimedEvent>;
 };
 
 const pageBridges = new WeakMap<PreloadBridge, GenieBridge>();
@@ -734,11 +731,8 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const known = pageBridges.get(preload);
     if (known !== undefined) return known;
     const local = localSession(typeof window === 'undefined' ? undefined : window.genieLocalProtocol);
-    // MEASUREMENT ONLY (Tynn #564): the IPC baseline, on this same build; goes with the IPC path once the VM rows pass.
-    const baseline = typeof window !== 'undefined' && window.genieAgentReadsIpc === true;
-    const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(baseline ? preload.subscribeAgentWire : local.agentWire);
-    const { subscribeAgentWire: _wire, ...rest } = preload;
-    const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
+    const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(local.agentWire);
+    const bridge: GenieBridge = { ...preload, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
         marketplace: local.marketplace,
         gapps: local.gapps,
@@ -747,7 +741,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
         ...local.agentCommands,
-        ...(baseline ? {} : local.reads),
+        ...local.reads,
         terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features },
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
@@ -759,8 +753,6 @@ declare global {
     interface Window {
         /** Immutable preload value supplied by main's GENIE_PAGE_PROBE flag. */
         readonly genieTestMode?: boolean;
-        /** MEASUREMENT ONLY (Tynn #564): read through the old IPC path. */
-        readonly genieAgentReadsIpc?: boolean;
         /** The app's same local bridge, exposed only for a main-enabled native probe. */
         genieTest?: GenieBridge;
         /**

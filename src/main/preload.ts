@@ -1,27 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { LOCAL_FRAME_CHANNELS, type LocalFramePort } from '../core/local-frame.js';
-import { FEATURE_CHANNELS, type AgentDetail, type GenieSnapshot, type PreloadBridge } from '../renderer/bridge.js';
+import { FEATURE_CHANNELS, type PreloadBridge } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
-import type { AgentPushPayload } from '../core/agent-push-wire.js';
-import type { TimedEvent } from '../core/stream-view.js';
 import { browserStallEnv, watchRendererStalls } from './renderer-stalls.js';
 
-type AgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
-
 /**
- * The agents this window shows: one channel listener each, however many subscribe. Main pushes an agent only while it is
- * watched here, and only the rows that changed (main/agent-push.ts). The payload goes to the page AS IT ARRIVED — the
- * patch — and the page rebuilds the detail on its side (core/agent-push-wire.ts `AgentDetailViews`): whatever is handed
- * across `contextBridge` is copied into the page on the renderer's one thread, and a rebuilt detail is the whole ledger.
- */
-/** Each files view's own id (the host split, P2.2): a subscription is one view, unwatched on its own. */
-const watching = new Map<string, { subscribers: Set<(payload: AgentPayload) => void>; off: () => void }>();
-
-/**
- * THE PRELOAD — the entire surface the renderer is given.
+ * THE PRELOAD — native window capabilities; protocol frames use the separate port below.
  *
- * Nine methods, and nothing else. No `ipcRenderer`, no `require`, no `process`, no
+ * No `ipcRenderer`, no `require`, no `process`, no
  * filesystem. The renderer
  * receives exactly `GenieBridge` and can reach nothing else, which matters because a renderer
  * displays agent-authored text: a prompt injection that reaches `window.genie` can list
@@ -29,26 +16,13 @@ const watching = new Map<string, { subscribers: Set<(payload: AgentPayload) => v
  *
  * ## Nothing is normalised on the way through
  *
- * The snapshot crosses as-is. **No `?? 0`, no `|| []`, no "sensible default" anywhere in this
+ * Values cross as-is. **No `?? 0`, no `|| []`, no "sensible default" anywhere in this
  * file** — every `null` in it means *Genie cannot see this*, the surfaces render that as
  * nothing, and one helpful coalesce here would turn "we have not looked" into "we looked and
  * it was none" for every row at once, with nothing downstream able to tell.
  */
 
 const bridge: PreloadBridge = {
-    snapshot: () => ipcRenderer.invoke('genie:snapshot') as Promise<GenieSnapshot>,
-
-    subscribe: (onChange) => {
-        const listener = (_event: unknown, snapshot: GenieSnapshot): void => onChange(snapshot);
-        ipcRenderer.on('genie:changed', listener);
-        // Returning the unsubscribe is what lets the renderer's effect clean up. Without it a
-        // re-render leaks a listener per mount, and Electron starts warning about it long
-        // after whoever caused it has moved on.
-        return () => ipcRenderer.removeListener('genie:changed', listener);
-    },
-
-    agentDetail: (agentId) => ipcRenderer.invoke('genie:agent-detail', agentId) as Promise<AgentDetail | null>,
-
     // The host asks the window to go somewhere (the tray's Settings…). The renderer owns the route; this only carries the request.
     onNavigate: (onRoute) => {
         const listener = (_event: unknown, route: string): void => onRoute(route);
@@ -65,35 +39,6 @@ const bridge: PreloadBridge = {
         const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
         return () => ipcRenderer.removeListener('genie:action', listener);
-    },
-
-    subscribeAgentWire: (agentId, onPayload) => {
-        // Filtered in MAIN: the window says which agents it shows, and only those are pushed. A ledger is thousands of
-        // rows; the wire carries the one being looked at, and of it only what changed — and so does the bridge.
-        let watch = watching.get(agentId);
-        if (watch === undefined) {
-            const channel = `genie:agent-changed:${agentId}`;
-            const subscribers = new Set<(payload: AgentPayload) => void>();
-            const listener = (_event: unknown, payload: AgentPayload): void => {
-                for (const subscriber of subscribers) subscriber(payload);
-            };
-            ipcRenderer.on(channel, listener);
-            watch = { subscribers, off: () => ipcRenderer.removeListener(channel, listener) };
-            watching.set(agentId, watch);
-        }
-        const w = watch;
-        const subscriber = (payload: AgentPayload): void => onPayload(payload);
-        w.subscribers.add(subscriber);
-        // Watching (again) starts with the whole ledger, to every subscriber: one joining late holds no rows a patch could
-        // apply to, and a full ledger is what any receiver takes.
-        ipcRenderer.send('genie:agent-watch', agentId, true);
-        return () => {
-            w.subscribers.delete(subscriber);
-            if (w.subscribers.size > 0 || watching.get(agentId) !== w) return;
-            watching.delete(agentId);
-            w.off();
-            ipcRenderer.send('genie:agent-watch', agentId, false);
-        };
     },
 
     providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
@@ -220,9 +165,6 @@ const bridge: PreloadBridge = {
 contextBridge.exposeInMainWorld('genie', bridge);
 // contextBridge makes this main-supplied value immutable in the page, including when false.
 contextBridge.exposeInMainWorld('genieTestMode', process.argv.includes('--genie-page-probe'));
-// MEASUREMENT ONLY (Tynn #564): goes with the IPC path once the VM rows pass.
-contextBridge.exposeInMainWorld('genieAgentReadsIpc', process.argv.includes('--genie-agent-reads-ipc'));
-
 // One string frame pair, separate from the bridge families that have not moved yet. Admission belongs to main.
 contextBridge.exposeInMainWorld('genieLocalProtocol', {
     send: (action, connection, text) => {

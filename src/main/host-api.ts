@@ -94,6 +94,8 @@ export interface HostApiDeps {
     subscribeSnapshot(listener: (snapshot: GenieSnapshot) => void): () => void;
     /** Which agent's RECORD changed (a saved setting) — its detail is pushed, as for a session event. */
     subscribeAgentRecords(listener: (agentId: string) => void): () => void;
+    /** Inbox messages and receipts change the participants' chats without changing their session or saved record. */
+    subscribeAgentChat?(listener: (agentId: string) => void): () => void;
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
@@ -720,7 +722,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             detailFor: (agentId) => deps.detailFor(agentId),
             onChanged: (listener) => {
                 const offHost = deps.host.subscribe(listener), offRecords = deps.subscribeAgentRecords(listener);
-                return () => { offHost(); offRecords(); };
+                const offChat = deps.subscribeAgentChat?.(listener);
+                return () => { offHost(); offRecords(); offChat?.(); };
             },
         },
         invoke,

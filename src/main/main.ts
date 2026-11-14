@@ -40,10 +40,9 @@ import { FilesWindows } from './files-windows.js';
 import { availableParallelism, homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
+import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
-import type { TimedEvent } from '../core/stream-view.js';
-import { AGENT_PUSH_INTERVAL_MS, AgentPush, wireInboxChatUpdates } from './agent-push.js';
+import { AGENT_PUSH_INTERVAL_MS, wireInboxChatUpdates } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { LatestPush } from '../core/latest-push.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
@@ -1045,7 +1044,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
         webPreferences: {
             preload: join(here, 'preload.cjs'),
             // Expose the page's existing bridge to native harnesses; no product behavior changes.
-            additionalArguments: [...(process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : []), ...(process.env.GENIE_AGENT_READS === 'ipc' ? ['--genie-agent-reads-ipc'] : [])],
+            additionalArguments: process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : [],
             // The renderer gets `window.genie` and nothing else: no Node, no `require`, no
             // `ipcRenderer`. A renderer with Node integration is a renderer where a prompt
             // injection reaches the filesystem — and this one displays agent-authored text.
@@ -1254,29 +1253,6 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         providerSignedIn: (provider) => providerHealth.signedIn(provider),
         ...(services ? { mail: (id: AgentId, limit: number) => services!.inbox.involving(id, limit) } : {}),
     }, agentId);
-}
-
-/**
- * AN AGENT'S DETAIL TO THE WINDOW — only for the agents it shows, at most every AGENT_PUSH_INTERVAL_MS, and only the rows
- * that changed (main/agent-push.ts; the owner, 2026-10-20: "severe UI lag like 3 seconds to show any text at all").
- * One channel per agent, so a ledger is never broadcast to a renderer looking elsewhere.
- */
-const agentPush = new AgentPush<AgentDetail, TimedEvent>({
-    detailFor: (agentId) => detailFor(agentId as AgentId),
-    send: (agentId, payload) => { if (window && !window.isDestroyed()) window.webContents.send(`genie:agent-changed:${agentId}`, payload); },
-    schedule: realSchedule,
-    now: () => Date.now(),
-});
-
-function pushAgent(agentId: AgentId): void {
-    agentPush.changed(agentId);
-}
-
-/** Narrow an id from the renderer. A refusal, never a repair — see the note in `open-agent`. */
-function agentFromRenderer(raw: unknown): AgentRecord | null {
-    // A minted id, or the OS agent's name (the rail's `genie://agent/genie`); the registry resolves the name.
-    const id = typeof raw === 'string' ? asAgentRef(raw) : null;
-    return id ? registry?.find(id as AgentId) ?? null : null;
 }
 
 let services: WindowServices | null = null;
@@ -1843,20 +1819,6 @@ async function boot(): Promise<void> {
     });
     // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
     ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
-
-    ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
-
-    ipcMain.handle('genie:agent-detail', (_event, raw: unknown) => {
-        const record = agentFromRenderer(raw);
-        return record ? detailFor(record.id) : null;
-    });
-
-    // Which agents the window shows (its preload says, main/preload.ts `subscribeAgent`): only theirs are pushed.
-    ipcMain.on('genie:agent-watch', (event, raw: unknown, on: unknown) => {
-        if (!window || window.isDestroyed() || event.sender !== window.webContents) return;
-        if (typeof raw !== 'string' || typeof on !== 'boolean') return;
-        agentPush.watch(raw, on);
-    });
 
     /*
      * START ON FIRST MESSAGE (the owner, 2026-11-01, q_04ce323c: "opening an agent must NOT start it"). One rule for every
@@ -2481,6 +2443,8 @@ async function boot(): Promise<void> {
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
             subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
+            // Arrival and read receipts refresh both participants' watched chats over the same protocol source.
+            subscribeAgentChat: (cb) => wireInboxChatUpdates(composed.inbox, cb),
             find: (id) => registry?.find(id as AgentId) ?? null,
             detailFor: (id) => detailFor(id as AgentId),
             cwdFor,
@@ -3006,8 +2970,6 @@ async function boot(): Promise<void> {
     composed.inbox.onSend(() => { registry?.touch(); });
     // One agent writing to another is the sender's action, with its own sound row (Tynn #766 C2a).
     composed.inbox.onSend((_to, message) => { const action = mailAction(message); if (action) broadcast('genie:action', action); });
-    // The card is the notification: arrival, refusal and acceptance refresh both participants' watched chats.
-    wireInboxChatUpdates(composed.inbox, pushAgent);
     // THE TOOLCHAIN'S ACTIONS (toolchain-ops.ts): the real runner, process.env and the filesystem; progress is drawn as
     // the surface's busy line, pushed — nobody polls an install.
     const toolchainOps = (): ToolchainOpsPorts => ({
@@ -3345,16 +3307,12 @@ async function boot(): Promise<void> {
         return data;
     }
 
-    // PUSH, both ways. The registry says when the estate changed; the host says when one
-    // agent did. Nothing here is on a timer.
+    // The tray follows the same registry snapshots the protocol sends to windows.
     registry.subscribe((snapshot) => {
-        if (window && !window.isDestroyed()) window.webContents.send('genie:changed', snapshot);
         // The tray follows the Deck: the badge's own count (core/deck.ts needsYouCount), redrawn only when it changes.
         const waiting = needsYouCount(snapshot.deckItems ?? []);
         if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
     });
-    // Rare workspace visibility changes refresh all popped-out views; agent activity above stays main-window only.
-    registry.subscribeWorkspaceVisibility((snapshot) => broadcast('genie:changed', snapshot));
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -3367,7 +3325,6 @@ async function boot(): Promise<void> {
     activityFeeds = new ActivityFeeds({ host });
     host.subscribe((agentId) => {
         refreshTray();
-        pushAgent(agentId);
         // Which agents are started, for doctor mode — rewritten only when that set changes.
         const started = host?.startedIds().sort() ?? [];
         if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieRoot(), started); }
@@ -3375,8 +3332,6 @@ async function boot(): Promise<void> {
         settingApplier?.changed(agentId);
         estate.request('estate');
     });
-    // A saved setting changes the agent's RECORD, not its session: the Agent view reads it from the detail.
-    registry.subscribeAgentRecords(pushAgent);
 
     // TRAY-RESIDENT (core/tray-resident.ts): start minimised keeps the window in the tray at boot; closing it hides it
     // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.
