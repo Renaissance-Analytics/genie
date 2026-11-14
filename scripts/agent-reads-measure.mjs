@@ -8,6 +8,8 @@
  *
  * Then scripts/agent-reads-compare.mjs judges two of the files. All modes run the same build and the same stub transcript.
  * It launches Electron, so it refuses to run anywhere but CI or a test VM (CRASH_CDP_ALLOW=1 there).
+ * Historical comparison: accepted evidence is at d7fd97ea. After baseline retirement, every mode refuses before timed
+ * work; it never relabels the remaining protocol path as IPC. The existing failed receipt and owned cleanup still run.
  *
  *  M4  open an agent with a 5,000 and a 20,000 row ledger: subscribe to the first whole detail in the page, and the longest
  *      window gap meanwhile. Five times each; the medians. It measures delivery to the page, not the chat's own drawing.
@@ -195,6 +197,26 @@ async function main() {
     result.windowPid = session.windowPid;
     result.launchedPid = app.child.pid;
     if (!check(session.windowPid === app.child.pid, 'the window being measured is the one this run launched', `window ${session.windowPid}, launched ${app.child.pid}`)) throw new Error('debugging port belongs to another window');
+    const retired = 'Historical IPC comparison is unavailable on this build; use the accepted baseline at d7fd97ea.';
+    let baseline = null;
+    try {
+        baseline = await inspector.evaluate(`(() => {
+            const ipc = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').ipcMain;
+            const handlers = ipc._invokeHandlers;
+            return {
+                snapshot: typeof handlers?.has === 'function' && handlers.has('genie:snapshot'),
+                detail: typeof handlers?.has === 'function' && handlers.has('genie:agent-detail'),
+                watch: typeof ipc.listenerCount === 'function' && ipc.listenerCount('genie:agent-watch') > 0,
+            };
+        })()`, 5_000);
+    } catch (error) { result.baselineInspectionError = error instanceof Error ? error.message : String(error); }
+    result.baselineSupport = baseline;
+    if (!check(baseline?.snapshot === true && baseline?.detail === true && baseline?.watch === true, 'historical IPC baseline is available', retired)) throw new Error(retired);
+    let selected = false;
+    try { selected = await cdp.evaluate(`typeof window.genieAgentReadsIpc === 'boolean' && window.genieAgentReadsIpc === ${MODE === 'ipc'}`, 5_000); }
+    catch (error) { result.baselineSelectionError = error instanceof Error ? error.message : String(error); }
+    result.baselineSelected = selected === true;
+    if (!check(result.baselineSelected, 'requested historical read path is selected', retired)) throw new Error(retired);
     await cdp.evaluate(GAUGE, 5_000);
     // What the first reads really answered, kept in the result: a snapshot that is empty at first is a finding, not a wait.
     const firstReads = [];
