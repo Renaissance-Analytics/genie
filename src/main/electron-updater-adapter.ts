@@ -60,8 +60,9 @@ export function createElectronUpdaterPort(autoUpdater: ElectronUpdaterClient, co
             const info = result.updateInfo as typeof result.updateInfo & { genieHostHash?: unknown; genieEngineProtocol?: unknown };
             return {
                 version: result.updateInfo.version,
-                hostHash: typeof info.genieHostHash === 'string' ? info.genieHostHash : null,
-                engineProtocol: typeof info.genieEngineProtocol === 'number' ? info.genieEngineProtocol : null,
+                // Only what the feed says: a feed without the keys answers with the version alone (#670's contract).
+                ...(typeof info.genieHostHash === 'string' ? { hostHash: info.genieHostHash } : {}),
+                ...(typeof info.genieEngineProtocol === 'number' ? { engineProtocol: info.genieEngineProtocol } : {}),
             };
         },
         async download(onProgress) {

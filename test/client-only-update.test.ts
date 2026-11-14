@@ -161,7 +161,7 @@ describe('the release feed says which host it carries', () => {
     });
 
     it('the updater passes what the feed says on to the host', () => {
-        expect(readFileSync('src/main/electron-updater-port.ts', 'utf8')).toMatch(/hostHash: [^\n]*genieHostHash/);
+        expect(readFileSync('src/main/electron-updater-adapter.ts', 'utf8')).toMatch(/hostHash: [^\n]*genieHostHash/);
     });
 });
 
