@@ -41,10 +41,9 @@ import { FilesWindows } from './files-windows.js';
 import { availableParallelism, homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
+import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
-import type { TimedEvent } from '../core/stream-view.js';
-import { AGENT_PUSH_INTERVAL_MS, AgentPush, wireInboxChatUpdates } from './agent-push.js';
+import { AGENT_PUSH_INTERVAL_MS, wireInboxChatUpdates } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { LatestPush } from '../core/latest-push.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
@@ -101,6 +100,7 @@ import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { mkdir, readdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
+import { moveAgentFrontmatter, nodeAgentConfigFs } from './agent-config-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
@@ -212,7 +212,7 @@ import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycle
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteAccess } from './remote-access.js';
-import { ensureFirewallRule } from './remote-firewall.js';
+import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { uploadSender } from './uploads.js';
 import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
@@ -674,13 +674,30 @@ function tynnProjectFor(workspaceId: string): string | null {
  * THE NEW AGENT FORM ON THIS HOST (main/agent-create-host.ts): the local window's `genie:add-agent` and a remote window's
  * `addAgent` both land here — the AGENT.md written under the workspace, then the agent registered on it.
  */
+/** The workspace folders this run has already moved AGENT.md front matter out of (Tynn #694). */
+const agentConfigsMoved = new Set<string>();
+async function moveAgentConfigs(workspaces: readonly { id: string; path: string }[]): Promise<void> {
+    const fs = nodeAgentConfigFs();
+    for (const w of workspaces) {
+        if (agentConfigsMoved.has(w.path)) continue;
+        agentConfigsMoved.add(w.path);
+        try {
+            const moved = await moveAgentFrontmatter(fs, w.path);
+            if (!moved.ok) console.warn(`[genie] agent config for ${w.id}: ${moved.reason}`);
+            else if (moved.moved.length > 0) console.log(`[genie] agent config for ${w.id}: moved ${moved.moved.join(', ')} from AGENT.md front matter into project.json`);
+        } catch (error) {
+            console.warn(`[genie] agent config for ${w.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+}
 function agentCreatePorts(): AgentCreatePorts {
     return {
         workspace: (id) => registry?.workspace(id) ?? null,
         agentsOf: (id) => registry?.agentsOf(id) ?? [],
         exists: async (path) => existsSync(path),
         mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
-        writeText: async (path, text) => { await writeFileText(path, text, 'utf8'); },
+        // project.json (the agent's config, Tynn #694) and AGENT.md (its persona), each written whole: temp + rename.
+        ...nodeAgentConfigFs(),
         register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
         sacredName: async (workspaceId) => {
             const projectId = tynnProjectFor(workspaceId);
@@ -1259,29 +1276,6 @@ function detailFor(agentId: AgentId): AgentDetail | null {
     }, agentId);
 }
 
-/**
- * AN AGENT'S DETAIL TO THE WINDOW — only for the agents it shows, at most every AGENT_PUSH_INTERVAL_MS, and only the rows
- * that changed (main/agent-push.ts; the owner, 2026-10-20: "severe UI lag like 3 seconds to show any text at all").
- * One channel per agent, so a ledger is never broadcast to a renderer looking elsewhere.
- */
-const agentPush = new AgentPush<AgentDetail, TimedEvent>({
-    detailFor: (agentId) => detailFor(agentId as AgentId),
-    send: (agentId, payload) => { if (window && !window.isDestroyed()) window.webContents.send(`genie:agent-changed:${agentId}`, payload); },
-    schedule: realSchedule,
-    now: () => Date.now(),
-});
-
-function pushAgent(agentId: AgentId): void {
-    agentPush.changed(agentId);
-}
-
-/** Narrow an id from the renderer. A refusal, never a repair — see the note in `open-agent`. */
-function agentFromRenderer(raw: unknown): AgentRecord | null {
-    // A minted id, or the OS agent's name (the rail's `genie://agent/genie`); the registry resolves the name.
-    const id = typeof raw === 'string' ? asAgentRef(raw) : null;
-    return id ? registry?.find(id as AgentId) ?? null : null;
-}
-
 let services: WindowServices | null = null;
 /** Settles when the services are composed: an agent's launch asks them about its workspace first. */
 let servicesComposed: (value: WindowServices) => void = () => {};
@@ -1443,7 +1437,12 @@ async function boot(): Promise<void> {
             // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
             const current = theRegistry.snapshot().workspaces ?? [];
             const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
-            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path }))).catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`));
+            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path })))
+                .catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`))
+                // AGENT CONFIG INTO project.json (Tynn #694): the first time this Genie reads a workspace, any AGENT.md front
+                // matter is moved into its project.json `agents` and stripped from the file. After the colour pass, so the
+                // two never write one project.json at once; once per folder per run (a later move is a no-op anyway).
+                .then(() => moveAgentConfigs(current.filter((w) => theRegistry.workspaceStates().find((s) => s.path === w.path)?.asleep !== true)));
         }, 0);
     });
     // AN AUTOMATED AGENT WITH AN OPEN PLAN DOES NOT JUST STOP (the owner, 2026-10-21; core/plan-keepalive.ts): a turn that
@@ -1847,20 +1846,6 @@ async function boot(): Promise<void> {
     // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
     ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
 
-    ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
-
-    ipcMain.handle('genie:agent-detail', (_event, raw: unknown) => {
-        const record = agentFromRenderer(raw);
-        return record ? detailFor(record.id) : null;
-    });
-
-    // Which agents the window shows (its preload says, main/preload.ts `subscribeAgent`): only theirs are pushed.
-    ipcMain.on('genie:agent-watch', (event, raw: unknown, on: unknown) => {
-        if (!window || window.isDestroyed() || event.sender !== window.webContents) return;
-        if (typeof raw !== 'string' || typeof on !== 'boolean') return;
-        agentPush.watch(raw, on);
-    });
-
     /*
      * START ON FIRST MESSAGE (the owner, 2026-11-01, q_04ce323c: "opening an agent must NOT start it"). One rule for every
      * sender of work — the composer, a remote window's prompt, a flow (main/start-on-demand.ts): a session here is used as
@@ -2253,7 +2238,21 @@ async function boot(): Promise<void> {
     void refreshTailscale();
     // Set once the feature push exists (below): Docker answering after a snapshot stopped waiting for it pushes again.
     let requestFeaturePush = (): void => {};
-    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    // GENIE'S FIREWALL RULE (Windows; Tynn #685): read from Windows at start and after every Allow or Remove, so Settings →
+    // Remote access shows whether the rule is there, never a button that assumes it is not.
+    // Opening the page re-reads it (debounced: 5 s), so a rule changed outside Genie shows without a restart.
+    const firewallRule = firewallReader(() => readFirewallRule(REMOTE_PORT), { minIntervalMs: 5000 });
+    const firewallPort: FeaturePorts['firewall'] = process.platform === 'win32'
+        ? {
+            rule: () => firewallRule.rule(),
+            refresh: () => firewallRule.refresh(),
+            reread: () => firewallRule.reread(),
+            allow: () => ensureFirewallRule(REMOTE_PORT),
+            remove: () => removeFirewallRule(),
+        }
+        : undefined;
+    if (firewallPort) void firewallPort.refresh().then(() => requestFeaturePush());
+    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(firewallPort ? { firewall: firewallPort } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     /*
      * REMOTE ACCESS IS GENIE-HOST'S (Tynn #409, host split P5d.1): with genie-host linked, IT listens on the tailnet, pairs,
@@ -2484,6 +2483,8 @@ async function boot(): Promise<void> {
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
             subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
+            // Arrival and read receipts refresh both participants' watched chats over the same protocol source.
+            subscribeAgentChat: (cb) => wireInboxChatUpdates(composed.inbox, cb),
             find: (id) => registry?.find(id as AgentId) ?? null,
             detailFor: (id) => detailFor(id as AgentId),
             cwdFor,
@@ -3009,8 +3010,6 @@ async function boot(): Promise<void> {
     composed.inbox.onSend(() => { registry?.touch(); });
     // One agent writing to another is the sender's action, with its own sound row (Tynn #766 C2a).
     composed.inbox.onSend((_to, message) => { const action = mailAction(message); if (action) broadcast('genie:action', action); });
-    // The card is the notification: arrival, refusal and acceptance refresh both participants' watched chats.
-    wireInboxChatUpdates(composed.inbox, pushAgent);
     // THE TOOLCHAIN'S ACTIONS (toolchain-ops.ts): the real runner, process.env and the filesystem; progress is drawn as
     // the surface's busy line, pushed — nobody polls an install.
     const toolchainOps = (): ToolchainOpsPorts => ({
@@ -3348,16 +3347,12 @@ async function boot(): Promise<void> {
         return data;
     }
 
-    // PUSH, both ways. The registry says when the estate changed; the host says when one
-    // agent did. Nothing here is on a timer.
+    // The tray follows the same registry snapshots the protocol sends to windows.
     registry.subscribe((snapshot) => {
-        if (window && !window.isDestroyed()) window.webContents.send('genie:changed', snapshot);
         // The tray follows the Deck: the badge's own count (core/deck.ts needsYouCount), redrawn only when it changes.
         const waiting = needsYouCount(snapshot.deckItems ?? []);
         if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
     });
-    // Rare workspace visibility changes refresh all popped-out views; agent activity above stays main-window only.
-    registry.subscribeWorkspaceVisibility((snapshot) => broadcast('genie:changed', snapshot));
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -3370,7 +3365,6 @@ async function boot(): Promise<void> {
     activityFeeds = new ActivityFeeds({ host });
     host.subscribe((agentId) => {
         refreshTray();
-        pushAgent(agentId);
         // Which agents are started, for doctor mode — rewritten only when that set changes.
         const started = host?.startedIds().sort() ?? [];
         if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieRoot(), started); }
@@ -3378,8 +3372,6 @@ async function boot(): Promise<void> {
         settingApplier?.changed(agentId);
         estate.request('estate');
     });
-    // A saved setting changes the agent's RECORD, not its session: the Agent view reads it from the detail.
-    registry.subscribeAgentRecords(pushAgent);
 
     // TRAY-RESIDENT (core/tray-resident.ts): start minimised keeps the window in the tray at boot; closing it hides it
     // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.

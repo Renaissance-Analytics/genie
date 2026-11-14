@@ -251,7 +251,7 @@ try {
     await sleep(5_000);
     const tokensLast = tokensOf(project.id);
     check(tokensLast.length === tokensMinted.length, 'S6.2-no-replacement-was-minted', `${tokensMinted.length} -> ${tokensLast.length}`);
-    const detail = await again.evaluate(`window.genie.agentDetail(${JSON.stringify(B_ID)}).then((d) => JSON.stringify(d?.rows ?? []).slice(-4000))`);
+    const detail = await again.evaluate(`window.genieTest.agentDetail(${JSON.stringify(B_ID)}).then((d) => JSON.stringify(d?.rows ?? []).slice(-4000))`);
     check(/Tynn/.test(String(detail)), 'S6.3-B-says-so', String(detail).match(/[^"]{0,60}Tynn[^"]{0,100}/)?.[0] ?? 'nothing about Tynn in its rows');
     again.close();
 } catch (error) {

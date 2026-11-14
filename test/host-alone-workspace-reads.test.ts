@@ -12,7 +12,7 @@ import { Store } from '../src/main/store.js';
 /*
  * A WORKSPACE'S SETTINGS AND REPOSITORIES WITH EVERY WINDOW CLOSED (Tynn #553, host split P5d.5d). genie-host reads and writes
  * them from what it owns: the settings store, the workspace's folder. A Pilot's Settings and repo chips answer as a window's
- * would. With a window connected the window answers, as it always has.
+ * would. The five read/settings methods stay on the host with a window connected too (Tynn #666).
  */
 
 let dir = '';
@@ -26,6 +26,7 @@ function settings() {
     return {
         snapshotFor: (id: string) => ({ theme: 'dark', ...own.get(id) }),
         workspaceValues: (id: string) => ({ ...own.get(id) }),
+        onChange: () => () => {},
         setFor: async (id: string, key: string, value: unknown) => {
             if (key === 'not_a_setting') throw new Error('no setting not_a_setting');
             own.set(id, { ...own.get(id), [key]: value });
@@ -109,14 +110,14 @@ describe('repositories with no window', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected the window answers, and genie-host is not asked (CONTROL)', async () => {
+    it('with a window connected genie-host still answers and writes its own store (Tynn #666)', async () => {
         const store = settings();
         const alone = hostAloneApi(ports({ settings: store }));
         const invoke = vi.spyOn(alone, 'invoke');
         const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('workspaces.setSetting', ['tynn', 'terminals', 4])).toBe('window answered workspaces.setSetting');
-        expect(invoke).not.toHaveBeenCalled();
-        expect(store.workspaceValues('tynn')).toEqual({});
+        expect(await api.invoke('workspaces.setSetting', ['tynn', 'terminals', 4])).toEqual({ ok: true });
+        expect(invoke).toHaveBeenCalledTimes(1);
+        expect(store.workspaceValues('tynn')).toEqual({ terminals: 4 });
     });
 
     it('a family not moved yet still says to open a window (CONTROL)', async () => {

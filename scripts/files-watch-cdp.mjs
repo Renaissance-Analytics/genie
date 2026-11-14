@@ -61,8 +61,8 @@ try {
         s.timer=setInterval(()=>{const now=performance.now();s.gap=Math.max(s.gap,now-s.last);s.last=now;s.ticks++;s.rss=Math.max(s.rss,process.memoryUsage().rss);},16);
         s.listener=(_event,action,_handle,text)=>{if(action==='frame'){const m=JSON.parse(text);if(m.method)s.methods[m.method]=(s.methods[m.method]??0)+1;}};
         ipc.on('genie:local-frame',s.listener);s.stop=()=>{clearInterval(s.timer);ipc.removeListener('genie:local-frame',s.listener);};
-        return {watch:ipc._invokeHandlers.has('genie:files-watch'),unwatch:ipc._invokeHandlers.has('genie:files-unwatch'),snapshot:ipc._invokeHandlers.has('genie:snapshot')}; })()`);
-    demand(handlers.watch === BASELINE && handlers.unwatch === BASELINE && handlers.snapshot, 'native-handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
+        return {watch:ipc._invokeHandlers.has('genie:files-watch'),unwatch:ipc._invokeHandlers.has('genie:files-unwatch'),windowRead:ipc._invokeHandlers.has('genie:window-overlay-colors-current')}; })()`);
+    demand(handlers.watch === BASELINE && handlers.unwatch === BASELINE && handlers.windowRead, 'native-handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
     await page.evaluate(`(() => { const s=window.__watchWire={files:0,refetch:0,maxBytes:0,forbidden:0};
         window.genieLocalProtocol.onFrame((action,_handle,text)=>{if(action!=='frame')return;const m=JSON.parse(text);s.maxBytes=Math.max(s.maxBytes,new TextEncoder().encode(text).length);
         if(m.kind==='event'&&m.channel==='local-files'){s.files++;if(m.payload?.changed==='refetch')s.refetch++;}

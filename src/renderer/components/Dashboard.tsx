@@ -1,7 +1,7 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
 import { ActivityLight, Button, Icon, Popover } from '@particle-academy/react-fancy';
-import { Fragment, useEffect, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
@@ -9,6 +9,7 @@ import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
+import { agentStatusStyle } from '../agent-status-color.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import {
     commsOf,
@@ -72,11 +73,8 @@ const GRID =
 
 /** Dot colour carries STATE. Shape (below) carries what Genie can see. */
 /** One status colour for the whole row, fidelity dot and census chip. */
-const STATE_COLOR: Record<AgentState, string> = {
-    working: 'var(--success)', cooling: 'var(--sky-400)', waiting: 'var(--warning)', broken: 'var(--danger)',
-    idle: 'var(--zinc-400)', sleeping: 'var(--fg-4)', stopped: 'var(--danger)', remote: 'var(--fg-4)',
-};
-const stateStyle = (state: AgentState): CSSProperties => ({ '--agent-status': STATE_COLOR[state] } as CSSProperties);
+/** The map lives in `agent-status-color.ts`: the sidebar's agent list draws the same colours (Tynn #687). */
+const stateStyle = agentStatusStyle;
 
 const STATUS_TONE = {
     ok: 'text-[var(--success)]',

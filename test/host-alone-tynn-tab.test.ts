@@ -39,7 +39,7 @@ function ports(tab: Record<string, unknown> = {}): HostAlonePorts {
         models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
-        settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {} },
+        settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         headroom: { view: () => ({}), subscribe: () => () => {} },
         attention: { finished: () => [], answer: async () => true, lists: { done: async () => true } },
         approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [], involving: () => [] }, deliverToAgent: async () => true,

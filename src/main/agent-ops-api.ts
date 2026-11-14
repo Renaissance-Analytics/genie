@@ -1,4 +1,4 @@
-import { readFile, realpath, rm } from 'node:fs/promises';
+import { realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
@@ -62,15 +62,6 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
         ...(wiring.models ? { models: wiring.models } : {}),
         cwdFor: wiring.cwdFor,
         workspacePathFor: workspaceOf,
-        readManifest: async (record) => {
-            const workspace = workspaceOf(record);
-            if (!workspace) return null;
-            try {
-                return await readFile(join(workspace, record.instructions ?? join('.agents', record.name, 'AGENT.md')), 'utf8');
-            } catch {
-                return null;
-            }
-        },
         // What a provider switch carries (Tynn story #380): the agent's rows, asked of the agent host, which reads its own store.
         history: async (record) => (await wiring.engine()?.historyRows(record.id, { limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES }))?.rows ?? [],
         removeDir: (path) => rm(path, { recursive: true, force: true }),

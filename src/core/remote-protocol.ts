@@ -181,7 +181,7 @@ export const COMPANION_EVENT = 'remote-companion';
 export interface CompanionEvent { readonly revoked: string }
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 

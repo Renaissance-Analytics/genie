@@ -108,18 +108,18 @@ describe('family4 update/activity reads and actions', () => {
     it.each(rows)('pageBridge routes $method through the shared client, preserving stable identity and unmoved calls', async (row) => {
         const deps = protocolContractDeps(dir), operation = operationFor(deps, row), source = serve(deps);
         vi.stubGlobal('window', { genieLocalProtocol: source.framePort() });
-        const oldInvoke = vi.fn(async () => row.result), snapshot = vi.fn(async () => ({ agents: [] }));
-        const preload = { ...oldFamily(oldInvoke), snapshot, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge;
+        const oldInvoke = vi.fn(async () => row.result), takeOver = vi.fn(async () => ({ ok: false, reason: 'still on its window port' }));
+        const preload = { ...oldFamily(oldInvoke), takeOver, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge;
         const bridge = pageBridge(preload); expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge, row)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args); expect(oldInvoke).not.toHaveBeenCalled();
-        expect(await bridge.snapshot()).toEqual({ agents: [] }); expect(snapshot).toHaveBeenCalledTimes(1);
+        expect(await bridge.takeOver('work')).toEqual({ ok: false, reason: 'still on its window port' }); expect(takeOver).toHaveBeenCalledTimes(1);
     });
-    it.each(rows)('$method removes native handler/preload/table rows while snapshot stays native', (row) => {
+    it.each(rows)('$method removes native handler/preload/table rows while Take over stays a window port', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
-        expect(main.includes("ipcMain.handle('genie:snapshot'")).toBe(true);
-        expect(preload.includes("ipcRenderer.invoke('genie:snapshot'")).toBe(true);
+        expect(main.includes("ipcMain.handle('genie:take-over'")).toBe(true);
+        expect(preload.includes("'genie:take-over'")).toBe(true);
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);

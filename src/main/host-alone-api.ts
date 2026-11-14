@@ -17,6 +17,7 @@ import type { Registry } from './registry.js';
 import type { HostApi } from './remote-host.js';
 import type { SessionHost } from './session-host.js';
 import { startForWork, startForYourMessage } from './start-on-demand.js';
+import type { SettingsStore } from './settings-store.js';
 
 /**
  * THE PHONE'S METHODS, ANSWERED BY GENIE-HOST WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2).
@@ -27,8 +28,8 @@ import { startForWork, startForYourMessage } from './start-on-demand.js';
  * window's own builders (agent-detail.ts, deck-answer.ts). Its events (the snapshot, an agent's detail, coalesced as the
  * window's) come from the same code.
  *
- * The remote host uses this only for the phone's methods, and only while no window is connected (remote-access-host.ts):
- * with a window open, the window answers as before. Anything outside the phone's set is refused with what to do.
+ * The remote host uses this while no window is connected, plus the five workspace read/settings methods and their
+ * change signal even with a window (remote-access-host.ts, Tynn #666). Other families still prefer a connected window.
  */
 export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
     'snapshot', 'agentDetail', 'prompt', 'answerApproval', 'agents.restart', 'resumeLimit', 'features.act',
@@ -51,7 +52,7 @@ export const HOST_FEED_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
 /** A Pilot's Take Over window's own terminal (Tynn #553, P5d.5c). Opening and listing terminals stay the window's. */
 export const HOST_TERMINAL_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close']);
 
-/** A workspace's settings and repositories, read (Tynn #553, P5d.5d). Changing the repositories stays the window's. */
+/** A workspace's settings and repo reads, always the host's (Tynn #666). Changing repos keeps its existing fallback. */
 export const HOST_WORKSPACE_READ_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.listRepos', 'workspaces.commitsSince']);
 
 /** Adding, sleeping and changing a workspace (Tynn #553, P5d.5e). The Tynn tab stays the window's for now. */
@@ -103,7 +104,7 @@ export interface HostAlonePorts {
     /** What is known of this agent's Take Over TUI: its Observed row. */
     readonly takeOver: NonNullable<Parameters<typeof agentDetailFor>[0]['takeOver']>;
     /** genie-host's own settings store. */
-    readonly settings: Parameters<typeof workspaceSettingsOps>[0] extends () => infer S ? S : never;
+    readonly settings: (Parameters<typeof workspaceSettingsOps>[0] extends () => infer S ? S : never) & Pick<SettingsStore, 'onChange'>;
     /** What genie-host holds for a workspace's lifecycle: its supervisor, engines, trust, accounts. */
     readonly workspaceLifecycle: Omit<WorkspaceLifecycleWiring, 'registry' | 'engine' | 'finished'>;
     /** A workspace's colour, written to its project.json. */
@@ -197,9 +198,8 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         uploads: windowOnly<HostApiDeps['uploads']>('inbox.sendFile'),
         files: ports.files,
         serviceEnvFor: () => ({}),
-        // Its settings-changed subscription is wired with the events: a no-op here, nothing else of it answers.
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
-            onSettingsChanged: () => () => {},
+            onSettingsChanged: (listener) => ports.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
             ...workspaceSettingsOps(() => ports.settings),
             ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor),
             ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),

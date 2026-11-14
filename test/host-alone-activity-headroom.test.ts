@@ -71,6 +71,7 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
+        settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         ...over,
     } as unknown as HostAlonePorts;
 }

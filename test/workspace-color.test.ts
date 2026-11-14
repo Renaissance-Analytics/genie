@@ -141,8 +141,8 @@ describe('colorWrite — through project.json, Genie\'s writer (no side file)', 
         const r = colorWrite(v02, '#0891b2');
         expect(r.ok).toBe(true);
         if (!r.ok) return;
-        expect(SCHEMA_REVISION).toBe('0.3.0');
-        expect(JSON.parse(r.text)).toEqual({ $schema: SCHEMA('0.3.0'), name: 'Tynn', repos: [], appearance: { color: '#0891b2' } });
+        expect(SCHEMA_REVISION).toBe('0.4.0');
+        expect(JSON.parse(r.text)).toEqual({ $schema: SCHEMA('0.4.0'), name: 'Tynn', repos: [], appearance: { color: '#0891b2' } });
         expect(r.text).toContain('\n    "name": "Tynn"');
         expect(r.text.endsWith('}\n')).toBe(true);
         expect(r.backup).toBeNull();
@@ -152,7 +152,7 @@ describe('colorWrite — through project.json, Genie\'s writer (no side file)', 
     it('an unstamped (legacy) file gets the MIGRATIONS backup of its original text', () => {
         const legacy = '{\n  "name": "Old"\n}\n';
         const r = colorWrite(legacy, '#0891b2');
-        expect(r.ok && r.backup).toEqual({ name: 'project.json.pre-schema-0.3.0.bak', text: legacy });
+        expect(r.ok && r.backup).toEqual({ name: 'project.json.pre-schema-0.4.0.bak', text: legacy });
     });
 
     it('the same colour again changes nothing', () => {
