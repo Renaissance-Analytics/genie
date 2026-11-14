@@ -109,7 +109,7 @@ export function serviceActions(i: ServiceInstance, status: string, o: { warning:
     menu.push({
         id: 'remove', label: 'Remove, keep data', icon: 'trash-2', danger: true,
         acts: [{ kind: 'services.remove', serviceId: i.id, deleteData: false }],
-        confirm: { title: `Remove ${engineName(i)}?`, body: 'The engine is removed and its data volume is kept, so adding it again picks the data back up.', confirmLabel: 'Remove, keep data' },
+        confirm: { title: `Remove ${engineName(i)}?`, body: 'This removes the engine but keeps its data volume. Nothing is deleted, and adding the engine again picks the data back up.', confirmLabel: 'Remove, keep data' },
     });
     menu.push({ id: 'delete-data', label: 'Remove and delete data…', icon: 'trash-2', danger: true, acts: [], confirm: 'inline' });
     return { primary, menu: dangerLast(menu) };

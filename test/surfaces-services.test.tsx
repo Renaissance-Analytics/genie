@@ -61,7 +61,9 @@ describe('the Services tab', () => {
         const html = render({ ...base, services: { instances: [{ instance: pg('16', true, 54301), status: 'running' }, { instance: pg('17', false, 54302), status: 'running' }], adding: null } });
         expect(html.match(/data-active="true"/g) ?? []).toHaveLength(1);
         // "Make active" waits in the row menu (hosting-rows-708.test.ts); the warning stays on the row.
-        expect(html.match(/aria-label="More actions"/g) ?? []).toHaveLength(2);
+        // Three menus: one per engine row, and one on the "In use" row (two postgres versions are a choice for the workspace).
+        expect(html.match(/aria-label="More actions"/g) ?? []).toHaveLength(3);
+        expect(html.match(/<li[^>]*data-service="/g) ?? []).toHaveLength(2);
         expect(html).toContain('Switching postgres from 16 to 17: each version keeps its own data volume, so 17 starts EMPTY. Nothing in 16 is deleted; switch back any time.');
     });
 
@@ -88,7 +90,9 @@ describe('the Services tab: logs, the web inbox, deleting data (H6)', () => {
     it('every row has a menu holding Logs; the log the person opened is shown under ITS row only, with how much was read', () => {
         const instances = [{ instance: pg('17', true, 54301), status: 'running' as const }, { instance: mailpit, status: 'running' as const }];
         const closed = render({ ...base, services: { instances, adding: null } });
-        expect(closed.match(/aria-label="More actions"/g)).toHaveLength(2);
+        // One menu per engine row (2), plus the "In use" row's: the shared Mailpit is a choice the workspace can detach from.
+        expect(closed.match(/aria-label="More actions"/g)).toHaveLength(3);
+        expect(closed.match(/<li[^>]*data-service="/g)).toHaveLength(2);
         expect(closed).not.toContain('data-service-log=');
         const open = render({ ...base, services: { instances, adding: null, logs: { serviceId: 'svc_m', text: 'smtp listening on [::]:1025', tail: 500 } } });
         expect(open.match(/data-service-log="([^"]+)"/g)).toEqual(['data-service-log="svc_m"']);
