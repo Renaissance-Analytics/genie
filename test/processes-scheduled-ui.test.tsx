@@ -4,7 +4,8 @@ import type { HostedProcess } from '../src/main/process-book.js';
 import { ProcessesPanel } from '../src/renderer/components/FeatureSurfaces.js';
 import type { FeatureAction } from '../src/renderer/features.js';
 import { Button } from '@particle-academy/react-fancy';
-import { buttonTexts } from './helpers/control-markup.js';
+import { AddProcessForm } from '../src/renderer/components/AddForms.js';
+import { RowIconButton, RowMenu } from '../src/renderer/components/RowMenu.js';
 
 
 /**
@@ -23,10 +24,12 @@ const nudge: HostedProcess = { ...base, id: 'p3', name: 'standup', state: 'stopp
 const queue: HostedProcess = { ...base, id: 'p4', name: 'queue', state: 'running', command: 'php artisan queue:work' };
 const workspaces = [{ id: 'tynn', path: '/w/tynn' }];
 
+/** A row's buttons by accessible name: its icon buttons, then "More actions" when the row has a menu (Tynn #708). */
+const names = (html: string) => [...html.matchAll(/<button\b[^>]*>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[0])?.[1] ?? '');
 const rowOf = (html: string, id: string) => { const s = html.indexOf(`data-process="${id}"`); const e = html.indexOf('data-process="', s + 1); return html.slice(s, e === -1 ? undefined : e); };
 
 describe('a scheduled task in Processes', () => {
-    it('shows it is scheduled, its schedule in words, the next and the last run, and offers Run now, Pause schedule, Remove', () => {
+    it('shows it is scheduled, its schedule in words, the next and the last run, and offers Run now, with Pause schedule and Remove in the menu', () => {
         const html = renderToStaticMarkup(<ProcessesPanel processes={[nightly, paused, nudge, queue]} workspaces={workspaces} onAction={() => {}} now={NOW} />);
         const row = rowOf(html, 'p1');
         expect(row).toContain('scheduled');
@@ -34,7 +37,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Daily at 03:00');
         expect(row).toMatch(/Next run: in 1 hr/);
         expect(row).toMatch(/Last run: Failed 1 hr ago/);
-        expect(buttonTexts(row)).toEqual(['Run now', 'Pause schedule', 'Remove']);
+        expect(names(row)).toEqual(['Run now', 'More actions']);
     });
 
     it('a paused one says so and offers Enable schedule', () => {
@@ -42,7 +45,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Paused — not firing');
         expect(row).toContain('Next run: Not scheduled');
         expect(row).toContain('Last run: Never run');
-        expect(buttonTexts(row)).toEqual(['Run now', 'Enable schedule', 'Remove']);
+        expect(names(row)).toEqual(['Run now', 'More actions']);
     });
 
     it('a nudge shows whom it prompts and with what, and no command', () => {
@@ -51,10 +54,10 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('post the standup');
     });
 
-    it('CONTROL: a process kept running is not scheduled — Stop and Restart as before', () => {
+    it('CONTROL: a process kept running is not scheduled — Stop, with Restart in the menu', () => {
         const row = rowOf(renderToStaticMarkup(<ProcessesPanel processes={[queue]} workspaces={workspaces} onAction={() => {}} now={NOW} />), 'p4');
         expect(row).not.toContain('scheduled');
-        expect(buttonTexts(row)).toEqual(['Stop', 'Restart']);
+        expect(names(row)).toEqual(['Stop', 'More actions']);
     });
 
     it('its buttons send Run now, Pause / Enable schedule', () => {
@@ -63,7 +66,9 @@ describe('a scheduled task in Processes', () => {
             if (n === null || typeof n !== 'object') return;
             if (Array.isArray(n)) { n.forEach(walk); return; }
             const el = n as { type?: unknown; props?: Record<string, unknown> };
-            if (el.type === Button && typeof el.props?.onClick === 'function' && ['Run now', 'Pause schedule', 'Enable schedule'].includes(String(el.props.children))) (el.props.onClick as () => void)();
+            // The icon button is Run now; the menu holds Pause / Enable (Remove is not pressed here).
+            if (el.type === RowIconButton) (el.props!.onRun as (a: unknown) => void)(el.props!.action);
+            if (el.type === RowMenu) for (const item of el.props!.items as { id: string }[]) if (item.id === 'pause' || item.id === 'enable') (el.props!.onRun as (a: unknown) => void)(item);
             walk(el.props?.children);
         };
         walk(ProcessesPanel({ processes: [nightly, paused], workspaces, onAction: (a) => { sent.push(a); }, now: NOW }));
@@ -76,7 +81,7 @@ describe('a scheduled task in Processes', () => {
     });
 
     it('the add form offers a schedule, from Genie 1’s presets — none by default', () => {
-        const html = renderToStaticMarkup(<ProcessesPanel processes={[]} workspaces={workspaces} onAction={() => {}} now={NOW} />);
+        const html = renderToStaticMarkup(<AddProcessForm workspaces={workspaces} onSubmit={() => {}} onCancel={() => {}} />);
         expect(html).toMatch(/<select[^>]*name="schedule"/);
         for (const label of ['No schedule (run as a service)', 'Every 5 minutes', 'Hourly, on the hour', 'Daily at 03:00', 'Weekdays at 09:00', 'Monthly, the 1st at 03:00']) expect(html).toContain(label);
     });

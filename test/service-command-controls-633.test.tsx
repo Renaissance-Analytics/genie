@@ -9,7 +9,9 @@ import type { FeatureAction } from '../src/renderer/features.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
 import { SupervisorService } from '../src/main/supervisor-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
-import { buttonTexts } from './helpers/control-markup.js';
+
+/** A row's buttons by accessible name: its icon buttons, then "More actions" when it has a menu (Tynn #708). */
+const buttonTexts = (html: string) => [...html.matchAll(/<button\b[^>]*>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[0])?.[1] ?? '');
 
 const NOW = 1_760_000_000_000;
 const running: HostedProcess = { id: 'command-633', workspaceId: 'work', name: 'fixture · services exec', command: 'php artisan test', commandRun: true, state: 'running', pid: 123, exitCode: null, restarts: 0, since: NOW - 65_000, startedAt: NOW - 65_000, log: { text: 'live output', lines: 1, dropped: 0 } };
@@ -61,7 +63,7 @@ describe('service commands in the existing Processes surface (#633)', () => {
         expect(host.querySelector('[data-process="command-633"]')?.textContent).toContain('No output yet');
         act(() => root.render(<ProcessesPanel processes={[running]} workspaces={workspaces} onAction={() => {}} now={NOW} />));
         expect(host.querySelector('[data-process-log="command-633"] pre')?.textContent).toBe('live output');
-        expect([...host.querySelectorAll<HTMLButtonElement>('[data-process="command-633"] button')].some((button) => button.textContent?.trim() === 'Stop')).toBe(true);
+        expect([...host.querySelectorAll<HTMLButtonElement>('[data-process="command-633"] button')].some((button) => button.getAttribute('aria-label') === 'Stop')).toBe(true);
     });
 
     it('retains the actual command start in the host/replica snapshot after completion', () => {
@@ -78,7 +80,7 @@ describe('service commands in the existing Processes surface (#633)', () => {
     it('CONTROL: Stop is an actual Fancy button that sends the existing stopProcess action for exactly this run', () => {
         const actions: FeatureAction[] = [];
         act(() => root.render(<ProcessesPanel processes={[running]} workspaces={workspaces} onAction={(action) => { actions.push(action); }} now={NOW} />));
-        const stop = [...host.querySelectorAll<HTMLButtonElement>('[data-process="command-633"] button')].find((button) => button.textContent?.trim() === 'Stop');
+        const stop = [...host.querySelectorAll<HTMLButtonElement>('[data-process="command-633"] button')].find((button) => button.getAttribute('aria-label') === 'Stop');
         expect(stop?.hasAttribute('data-react-fancy-button')).toBe(true);
         act(() => { stop!.click(); });
         expect(actions).toEqual([{ kind: 'hosting.stopProcess', processId: 'command-633' }]);
@@ -93,6 +95,6 @@ describe('service commands in the existing Processes surface (#633)', () => {
     it.each(['running', 'stopped'] as const)('CONTROL: ordinary kept %s process retains its existing actions', (state) => {
         const { commandRun: _commandRun, startedAt: _startedAt, ...ordinary } = running;
         const html = row(markup({ ...ordinary, state, durable: true }));
-        expect(buttonTexts(html)).toEqual(state === 'running' ? ['Stop', 'Restart'] : ['Start', 'Remove']);
+        expect(buttonTexts(html)).toEqual(state === 'running' ? ['Stop', 'More actions'] : ['Start', 'More actions']);
     });
 });
