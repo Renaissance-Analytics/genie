@@ -11,7 +11,7 @@ import type { FeatureAction, FeatureData } from './features.js';
 import { isFeaturesRevision } from '../core/remote-frame.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
-import { SIGN_IN_OPEN_EVENT, signInUrl } from '../core/sign-in-link.js';
+import { SIGN_IN_LINK_TTL_MS, SIGN_IN_OPEN_EVENT, isSignInAction, signInUrl } from '../core/sign-in-link.js';
 import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -113,6 +113,8 @@ export interface RemoteOptions {
      * opened, whatever the drone sends. Absent = nothing opens (a phone, a Take Over window).
      */
     readonly openExternal?: (url: string) => unknown;
+    /** The clock the sign-in requests expire by; tests set it. */
+    readonly now?: () => number;
     /**
      * A TAKE OVER WINDOW (Tynn #529 part A): the ticket the driving window's Take over was answered with. This connection
      * types into that one terminal while that window drives, and is told why when it may not any more. Never `drive`.
@@ -169,6 +171,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
 
     const pending = new Map<number, (r: Result) => void>();
     let nextId = 0;
+    /** The sign-ins THIS window started, by call id, until they expire or open their one link (Tynn #731). */
+    const signIns = new Map<number, number>();
+    const clock = options.now ?? Date.now;
     let closed = false;
     const events = new Map<string, Set<(payload: unknown) => void>>();
     const on = (channel: string, listener: (payload: unknown) => void): (() => void) => {
@@ -227,7 +232,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             }
             case 'event':
                 if (m.channel === SIGN_IN_OPEN_EVENT) {
-                    const link = signInUrl((m.payload as { url?: unknown } | null)?.url);
+                    const body = (m.payload ?? {}) as { url?: unknown; request?: unknown };
+                    const until = typeof body.request === 'number' ? signIns.get(body.request) : undefined;
+                    // Only the answer to a sign-in this window started, once, and soon: the host never pops a page unprompted.
+                    if (typeof body.request === 'number') signIns.delete(body.request);
+                    if (until === undefined || until <= clock()) { try { console.warn('[genie] a sign-in link nobody here asked for was ignored'); } catch { /* Logging must not break the link. */ } return; }
+                    const link = signInUrl(body.url);
                     if (link && options.openExternal) { try { void Promise.resolve(options.openExternal(link)).catch(() => {}); } catch { /* The code and link stay on screen. */ } }
                     return;
                 }
@@ -257,6 +267,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             // A closed transport may silently drop writes. Never leave a new call waiting on it (#636).
             if (closed) { resolve({ ok: false, reason: 'the connection closed' }); return; }
             const id = ++nextId;
+            if (method === 'features.act' && isSignInAction(args[0])) {
+                const now = clock();
+                for (const [request, until] of signIns) if (until <= now) signIns.delete(request);
+                signIns.set(id, now + SIGN_IN_LINK_TTL_MS);
+            }
             const frame = JSON.stringify({ kind: 'call', id, method, args });
             pending.set(id, resolve);
             try { transport.send(frame); }

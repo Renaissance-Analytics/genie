@@ -2,6 +2,7 @@ import { LatestPush } from '../core/latest-push.js';
 import { SIGN_IN_OPEN_EVENT, signInUrl } from '../core/sign-in-link.js';
 import { pilotRefusal } from './pilot-sign-in.js';
 import { randomBytes } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
 import { AgentPush } from './agent-push.js';
@@ -248,6 +249,8 @@ export class RemoteHost {
     /** Re-pair: the device the PIN on screen was issued to replace, if any. */
     #pinReplaces: string | null = null;
     readonly #connections = new Map<string, Connection>();
+    /** The call this code is answering, so a sign-in link can name the Pilot's own request (Tynn #731). */
+    readonly #answering = new AsyncLocalStorage<{ connectionId: string; request: number }>();
     readonly #marketplaces = new WeakMap<Connection, MarketplaceSession>();
     #localTerminals: LocalTerminalServer | null = null;
     readonly #transport: ServerTransport;
@@ -419,8 +422,9 @@ export class RemoteHost {
     }
 
     /**
-     * A SIGN-IN LINK FOR A PILOT (Tynn #731): sent over that one admitted connection, which opens it in its own browser.
-     * Never broadcast, never opened here; a guest, a read-only connection or a link that is not https is refused in words.
+     * A SIGN-IN LINK FOR A PILOT (Tynn #731): sent over that one admitted connection, which opens it in its own browser, and
+     * ONLY while this host is answering a call from that connection: the link names that call's id, and the Pilot opens it
+     * only for a sign-in it started. Never broadcast, never unprompted, never opened here; a guest, a read-only connection or a link that is not https is refused in words.
      */
     async openOnPilot(connectionId: string, url: string): Promise<void> {
         const link = signInUrl(url);
@@ -431,7 +435,9 @@ export class RemoteHost {
         if (context.origin === 'local-window') throw new Error('This machine’s own window opens its own sign-in pages.');
         const refusal = pilotRefusal(context);
         if (refusal) throw new Error(refusal);
-        this.#send(connection, { kind: 'event', channel: SIGN_IN_OPEN_EVENT, payload: { url: link } });
+        const answering = this.#answering.getStore();
+        if (!answering || answering.connectionId !== connectionId) throw new Error('A sign-in page opens on a screen only in answer to a sign-in that screen started.');
+        this.#send(connection, { kind: 'event', channel: SIGN_IN_OPEN_EVENT, payload: { url: link, request: answering.request } });
     }
 
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }> {
@@ -592,7 +598,7 @@ export class RemoteHost {
         }
         if (message.kind === 'hello') return this.#refuse(connection, 'this connection has already said hello', false);
         if (message.kind !== 'call') return; // A client sends calls; anything else is noise, not an error worth a frame.
-        this.#send(connection, await this.#call(connection, message.id, message.method, message.args));
+        this.#send(connection, await this.#answering.run({ connectionId: connection.id, request: message.id }, () => this.#call(connection, message.id, message.method, message.args)));
     }
 
     async #hello(connection: Connection, message: Extract<WireMessage, { kind: 'hello' }>): Promise<void> {
