@@ -115,6 +115,29 @@ export const RELAY_HOST_ELEMENT: ElementDefinition = {
     payload: { start: 'relayHost.start', stop: 'relayHost.stop', health: 'relayHost.health', settingsSection: 'workstation' },
 };
 
+/** The existing Tynn tab, not a second UI: its local window draws the page and the host answers its calls (Tynn #561). */
+export const TYNN_PAGE_ELEMENT: ElementDefinition = {
+    id: 'genie.tynn',
+    kind: 'page',
+    version: BUILTIN_VERSION,
+    packageId: BUILTIN_PACKAGE_ID,
+    source: 'builtin',
+    docs: { name: 'Tynn', description: 'The workspace\'s Tynn board, pages and issues, with live signals only for the views this window follows.' },
+    reach: {
+        scopes: ['workspace'], side: 'both', requiresWindow: true, remote: 'local',
+        link: {
+            calls: [
+                'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction',
+                'workspaces.tynnBoardChanges', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnIssueChanges',
+                'tynn.watch', 'tynn.unwatch',
+            ],
+            events: ['local-tynn'],
+        },
+    },
+    permissions: { capabilities: [], network: [] },
+    payload: {},
+};
+
 export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclaration {
     return {
         id: BUILTIN_PACKAGE_ID,
@@ -134,7 +157,7 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
                 // GApps v2 decision 3: a tool that acts as the person, or waits on their approval, is never granted to an app.
                 ...(PERSON_ONLY_TOOLS.has(t.name) ? { grantable: false } : {}),
             },
-        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT, RELAY_MEMBER_ELEMENT, RELAY_HOST_ELEMENT]),
+        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT, RELAY_MEMBER_ELEMENT, RELAY_HOST_ELEMENT, TYNN_PAGE_ELEMENT]),
     };
 }
 
