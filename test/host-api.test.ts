@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
-import { capabilityOf } from '../src/core/remote-protocol.js';
+import { capabilityOf, type CallContext } from '../src/core/remote-protocol.js';
 import type { GenieSnapshot, UpdateState } from '../src/renderer/bridge.js';
 import type { FeatureData } from '../src/renderer/features.js';
 
@@ -244,7 +244,8 @@ describe('invoke', () => {
     it('features and updates pass through; without an updater the update methods answer the local bridge’s nulls', async () => {
         const f = fakes();
         const api = buildHostApi(f.deps);
-        expect(await api.invoke('features.snapshot', [])).toEqual({ knowledge: { hits: null } });
+        const context: CallContext = { connectionId: 'snapshot-reader', origin: 'device', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'snapshot reader' };
+        expect(await api.invoke('features.snapshot', [], context)).toEqual({ knowledge: { hits: null } });
         expect(await api.invoke('features.act', [{ kind: 'knowledge.search', query: 'x' }])).toEqual({ knowledge: { hits: [] } });
         // A phone's upload (§6.8): base64 on the wire, bytes to the sender.
         expect(await api.invoke('inbox.sendFile', ['kai', 'hi', 'a.txt', Buffer.from('xyz').toString('base64')])).toEqual({ ok: true, messageId: 'msg_u' });

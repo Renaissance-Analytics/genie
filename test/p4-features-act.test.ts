@@ -137,7 +137,10 @@ describe('what the host\'s file picker picked', () => {
         const bridge = bridgeOn(serve(h.api).framePort().port, { picked: old });
         await bridge.features.picked!(['/w/picked.txt']);
         expect(old).not.toHaveBeenCalled();
-        expect(h.picked).toHaveBeenCalledExactlyOnceWith(['/w/picked.txt']);
+        expect(h.picked).toHaveBeenCalledExactlyOnceWith(['/w/picked.txt'], expect.objectContaining({
+            connectionId: expect.stringMatching(/\S/), origin: 'local-window', profile: 'desktop',
+            isOwner: true, workspaceId: null, readonly: false,
+        }));
     });
 
     it('a window driving another machine reports nothing that counts', async () => {
