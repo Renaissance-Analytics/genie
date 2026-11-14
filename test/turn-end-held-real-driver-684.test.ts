@@ -109,11 +109,14 @@ describe('the real ClaudeDriver, after a prompt Claude folded into a turn', () =
         await vi.waitFor(async () => expect((await ledger()).filter((e) => e.kind === 'finished').map((e) => e.n)).toEqual([1, 2]), { timeout: 15_000 });
         expect(session.turnState).toBe('idle');
         expect(session.promptable).toBe(true);
+        // #692: the actual driver's settled turn reaches Cooling too, rather than remaining Working.
+        expect(session.cooling).toBe(true);
 
         // An inbox notice after it: its own turn, ended too.
         session.deliver('AgentInbox delivery: 1 message (from an app)', 'genie');
         await vi.waitFor(async () => expect((await ledger()).filter((e) => e.kind === 'finished').map((e) => e.n)).toEqual([1, 2, 3]), { timeout: 15_000 });
         expect(session.turnState).toBe('idle');
+        expect(session.cooling).toBe(true);
         expect((await ledger()).filter((e) => e.kind === 'turn').map((e) => `${e.n}:${e.by}`)).toEqual(['1:genie', '2:flow "hourly round"', '3:genie']);
     }, 60_000);
 });
