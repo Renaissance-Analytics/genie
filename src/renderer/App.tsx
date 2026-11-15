@@ -59,6 +59,7 @@ import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
+import { limitAlertSound } from '../core/limit-alerts.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { redialer } from './remote-redial.js';
 import { droneReconnect, type DroneHold } from './drone-reconnect.js';
@@ -1125,6 +1126,12 @@ function DesktopApp({ bridge }: AppProps) {
     const [rateLimits, setRateLimits] = useState<Readonly<Record<string, Headroom>>>({});
     useEffect(() => resolvedBridge?.onHeadroom?.(setRateLimits), [resolvedBridge]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {
+        // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
+        if (action.kind === 'limit-alert' && action.title && action.body) {
+            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}));
+            showAlert({ title: action.title, body: action.body });
+            return;
+        }
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
         const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
         if (emoji && action.agentId) {
@@ -1132,7 +1139,7 @@ function DesktopApp({ bridge }: AppProps) {
             setRowEmoji((prev) => ({ ...prev, [id]: emoji }));
             setTimeout(() => setRowEmoji((prev) => { if (prev[id] !== emoji) return prev; const next = { ...prev }; delete next[id]; return next; }), ROW_EMOJI_MS);
         }
-    }), [resolvedBridge]);
+    }), [resolvedBridge, showAlert]);
     // MAIL BETWEEN AGENTS ON THE BOARD (genie#1209): a send starts a signal, a read marks it, a tick lets it go.
     const [mailSignalList, setMailSignalList] = useState<readonly MailSignal[]>([]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {

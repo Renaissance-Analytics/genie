@@ -46,6 +46,7 @@ import { providerBinary, realListModels, SessionHost } from './session-host.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
+import { LIMIT_ALERTS_SETTING, LimitAlertService, parseLimitAlerts } from '../core/limit-alerts.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -1179,6 +1180,17 @@ async function main(): Promise<void> {
     const engineHostOptions = engine.hostOptions();
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
+    // RATE-LIMIT ALERTS (Tynn #748, core/limit-alerts.ts): the person's thresholds are read at each reading; what fired is kept
+    // on disk so a restart does not tell a crossing twice. The window plays the sound the alert names and shows the notice.
+    const limitAlertsFile = join(home, 'limit-alerts-armed.json');
+    const limitAlerts = new LimitAlertService({
+        load: () => { try { return JSON.parse(readFileSync(limitAlertsFile, 'utf8')); } catch { return {}; } },
+        accounts: () => headroomFeed.accounts(),
+        alerts: () => parseLimitAlerts(settings.snapshot()[LIMIT_ALERTS_SETTING]),
+        nameOf: (accountId, provider) => accounts.get(accountId)?.label ?? provider,
+        save: (state) => { try { writeFileSync(limitAlertsFile, JSON.stringify(state)); } catch (error) { say(`rate-limit alerts: could not save what is armed: ${error instanceof Error ? error.message : String(error)}`); } },
+        emit: (signal) => engine.callback({ name: 'toolSignal', signal }),
+    });
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
     bootStep('lock identity', stepAt);
@@ -1215,7 +1227,7 @@ async function main(): Promise<void> {
             },
         },
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
-        onHeadroom: (provider, room, stamp) => { headroomFeed.offer(provider, room, stamp); engineHostOptions.onHeadroom(provider, room, stamp); },
+        onHeadroom: (provider, room, stamp) => { headroomFeed.offer(provider, room, stamp); limitAlerts.check(); engineHostOptions.onHeadroom(provider, room, stamp); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);

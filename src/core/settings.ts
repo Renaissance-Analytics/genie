@@ -33,6 +33,9 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'dnd_question_sound', group: 'general', scope: 'host', label: 'Still chime for questions in Do not disturb', description: 'While Do not disturb is on, every alert is silent — except an agent asking you something, when this is on.', type: 'boolean', default: false },
     { key: 'dnd_reply', group: 'general', scope: 'host', label: 'Do-not-disturb reply', description: 'What an agent is told when it asks while you are away.', type: 'string', default: 'Away from the desk — I will answer when I am back.' },
     { key: 'notification_sounds', group: 'general', scope: 'device', label: 'Notification sounds', description: 'Play a sound for each alert kind.', type: 'boolean', default: true },
+    // RATE-LIMIT ALERTS (Tynn #748): the person's own thresholds, each with its own sound, as JSON (core/limit-alerts.ts). Host
+    // scope: genie-host fires them. Hidden: Settings → Notifications and sounds draws it as a list. None by default.
+    { key: 'rate_limit_alerts', group: 'general', scope: 'host', label: 'Rate-limit alerts', description: 'Alerts you add at the thresholds you choose, each with its own sound.', type: 'string', default: '[]', hidden: true },
     // TRAY-RESIDENT (core/tray-resident.ts): closing the window hides Genie; these two decide how it comes up.
     { key: 'start_minimized', group: 'general', scope: 'host', label: 'Start minimized to tray', description: 'Genie starts without opening its window; open it from the tray icon.', type: 'boolean', default: false },
     { key: 'launch_at_login', group: 'general', scope: 'host', label: 'Launch at sign-in', description: 'Start Genie when you sign in to this computer.', type: 'boolean', default: false },
