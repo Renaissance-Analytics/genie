@@ -74,9 +74,9 @@ describe('every reported window is kept', () => {
 
     it('the header keeps a window a later reading did not repeat, and takes the newer figure for one it did', () => {
         const board = new HeadroomBoard();
-        board.offer('claude', headroomFromMeta(claude)!, 0, 60_000);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, headroomFromMeta(claude)!, 0, 60_000);
         const later = headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 0.7, resetsAtMs: at(27, 16) } } })!;
-        expect(board.offer('claude', later, 60_000, 60_000)).toBe(true);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, later, 60_000, 60_000)).toBe(true);
         const shown = board.view()['claude']!;
         expect(shown.leftPct).toBe(30);
         expect(shown.windows.map((w) => [w.window, w.leftPct])).toEqual([['5h', 30], ['7d', 8], ['7d opus', 60]]);
@@ -126,9 +126,9 @@ describe('the sidebar alert', () => {
 
     it('clears once every window is back above 30%', () => {
         const board = new HeadroomBoard();
-        board.offer('claude', room(8, '7d'), 0, 60_000);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, room(8, '7d'), 0, 60_000);
         expect(rateLimitAlert(board.view())).toMatchObject({ level: 'danger' });
-        board.offer('claude', room(95, '7d'), 60_000, 60_000);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, room(95, '7d'), 60_000, 60_000);
         expect(rateLimitAlert(board.view())).toBeNull();
     });
 });

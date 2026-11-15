@@ -1,4 +1,17 @@
-import type { Headroom } from './headroom.js';
+import { readLimitWindow, type Headroom, type ReadingStamp, type WindowReading } from './headroom.js';
+
+/** Whose reading it is: the provider, and the account the agent was launched on. */
+export interface HeadroomSource {
+    readonly provider: string;
+    readonly accountId: string;
+}
+
+/** One account's reading, as the host serves it. */
+export interface AccountHeadroom extends HeadroomSource {
+    readonly runId: string;
+    readonly room: Headroom;
+    readonly windows: readonly WindowReading[];
+}
 
 /**
  * THE DASHBOARD HEADER'S RATE LIMITS, ONE PER PROVIDER (the owner, 2026-10-26: "I need a rate limit indicator in the
@@ -7,20 +20,26 @@ import type { Headroom } from './headroom.js';
  * its provider's buffer costs one comparison and reaches nothing — no push, no render, nothing that slows an agent.
  */
 export class HeadroomBoard {
-    readonly #shown = new Map<string, { room: Headroom; at: number }>();
+    readonly #shown = new Map<string, { room: Headroom; at: number; source: HeadroomSource; runId: string }>();
 
     /**
      * A provider's reading: shown (true) unless that provider's last shown reading is younger than `bufferMs`. A shown
      * reading KEEPS every window an earlier one reported that it did not repeat (genie#1268: every reported limit, not
      * only the latest frame's); a window it does repeat takes the new figure.
      */
-    offer(provider: string, room: Headroom, nowMs: number, bufferMs: number): boolean {
+    offer(source: HeadroomSource, room: Headroom, nowMs: number, bufferMs: number, stamp?: ReadingStamp): boolean {
+        const provider = source.provider;
         const last = this.#shown.get(provider);
         if (last && nowMs < last.at + bufferMs) return false;
         const named = new Set(room.windows.map((w) => w.window));
         const kept = last ? last.room.windows.filter((w) => !named.has(w.window)) : [];
-        this.#shown.set(provider, { room: kept.length === 0 ? room : { ...room, windows: [...room.windows, ...kept] }, at: nowMs });
+        this.#shown.set(provider, { room: kept.length === 0 ? room : { ...room, windows: [...room.windows, ...kept] }, at: nowMs, source, runId: stamp?.runId ?? '' });
         return true;
+    }
+
+    /** STUB (RED): every account's reading — still one per provider. */
+    accounts(nowMs: number): AccountHeadroom[] {
+        return [...this.#shown.values()].map((s) => ({ ...s.source, runId: s.runId, room: s.room, windows: s.room.windows.map((w) => readLimitWindow(w, nowMs)) }));
     }
 
     /** What the header shows: each provider's last shown reading. */
@@ -45,8 +64,8 @@ export class HeadroomFeed {
         this.#now = now;
     }
 
-    offer(provider: string, room: Headroom): void {
-        if (!this.#board.offer(provider, room, this.#now(), this.#bufferMs())) return;
+    offer(provider: string, room: Headroom, stamp?: ReadingStamp): void {
+        if (!this.#board.offer({ provider, accountId: stamp?.accountId ?? '' }, room, this.#now(), this.#bufferMs(), stamp)) return;
         const view = this.#board.view();
         for (const listener of this.#listeners) listener(view);
     }

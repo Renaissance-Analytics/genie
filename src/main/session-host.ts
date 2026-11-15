@@ -11,7 +11,7 @@ import { LiveReadings, planStepsOf } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
-import { resetsIn, type Headroom } from '../core/headroom.js';
+import { resetsIn, type Headroom, type ReadingStamp } from '../core/headroom.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
 import { supervisorFailureWords } from '../core/supervisor-failure.js';
@@ -570,7 +570,7 @@ export class SessionHost {
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
-    readonly #onHeadroom: ((provider: string, headroom: Headroom) => void) | undefined;
+    readonly #onHeadroom: ((provider: string, headroom: Headroom, stamp?: ReadingStamp) => void) | undefined;
     readonly #onMcpServers: ((agentId: AgentId, reports: readonly McpServerReport[]) => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
@@ -694,7 +694,7 @@ export class SessionHost {
          */
         onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
-        onHeadroom?: (provider: string, headroom: Headroom) => void;
+        onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
         /** Each MCP server's state as an agent's provider reports it (genie#1202): main decides whether one is missing. */
         onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
         serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -961,7 +961,7 @@ export class SessionHost {
     }
 
     /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */
-    resumeLimit(provider: string): void {
+    resumeLimit(provider: string, _accountId?: string): void {
         this.#gate.resumeNow(this.#loginOf(provider));
         this.#resumeHeld(provider);
         this.#wake();

@@ -39,6 +39,25 @@ export interface LimitWindow {
     readonly over: boolean;
 }
 
+/**
+ * WHICH ACCOUNT, AND WHICH RUN, A READING CAME FROM (Tynn #478): stamped when the agent LAUNCHES, so a reading that
+ * arrives after the agent was moved to another account still belongs to the account it was read on.
+ */
+export interface ReadingStamp {
+    readonly accountId: string;
+    readonly runId: string;
+}
+
+/** A window as it reads at a moment: a window past its reset time is `Refreshed`, and carries no figure at all. */
+export type WindowReading =
+    | { readonly refreshed: true; readonly window: string }
+    | { readonly refreshed: false; readonly window: string; readonly leftPct: number; readonly over: boolean; readonly resetsAtMs: number };
+
+/** STUB (RED): reads every window as its last figure, even one past its reset. */
+export function readLimitWindow(w: LimitWindow, _nowMs: number): WindowReading {
+    return { refreshed: false, window: w.window, leftPct: w.leftPct, over: w.over, resetsAtMs: w.resetsAtMs };
+}
+
 export const RATE_LIMIT_META = 'particle.academy/rate_limit';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);

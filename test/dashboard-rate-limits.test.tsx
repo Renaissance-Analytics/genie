@@ -31,17 +31,17 @@ const MIN = 60_000;
 describe('the buffer', () => {
     it('the first reading shows; any other within the buffer is IGNORED; after it, the next shows', () => {
         const board = new HeadroomBoard();
-        expect(board.offer('claude', h(80), T0, MIN)).toBe(true);
-        expect(board.offer('claude', h(40), T0 + MIN - 1, MIN)).toBe(false);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(80), T0, MIN)).toBe(true);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(40), T0 + MIN - 1, MIN)).toBe(false);
         expect(board.view()).toEqual({ claude: h(80) });
-        expect(board.offer('claude', h(40), T0 + MIN, MIN)).toBe(true);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(40), T0 + MIN, MIN)).toBe(true);
         expect(board.view()).toEqual({ claude: h(40) });
     });
 
     it('one buffer per provider: codex is not held by claude’s', () => {
         const board = new HeadroomBoard();
-        board.offer('claude', h(80), T0, MIN);
-        expect(board.offer('codex', h(97, '7d'), T0 + 1, MIN)).toBe(true);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(80), T0, MIN);
+        expect(board.offer({ provider: 'codex', accountId: 'account_legacy_codex' }, h(97, '7d'), T0 + 1, MIN)).toBe(true);
         expect(board.view()).toEqual({ claude: h(80), codex: h(97, '7d') });
     });
 
