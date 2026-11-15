@@ -392,14 +392,18 @@ export type TimelineEvent =
     | { kind: 'reply'; version: number; at: string; text: string; by?: string };
 
 /** PURE. Everything that happened to an item, oldest first: each version posted, each verdict, each reply. */
-export function trailTimeline(post: BoardPost): TimelineEvent[] {
+export function timelineOf(versions: readonly { n: number; createdAt: string; by?: string | undefined; note?: string | undefined }[], trail: readonly TrailEntry[]): TimelineEvent[] {
     const events: TimelineEvent[] = [
-        ...versionsOf(post).map((v): TimelineEvent => ({ kind: 'version', version: v.n, at: v.createdAt, ...(v.agentName ? { by: v.agentName } : {}), ...(v.note ? { note: v.note } : {}) })),
-        ...(post.trail ?? []).map((e): TimelineEvent => e.type === 'verdict'
+        ...versions.map((v): TimelineEvent => ({ kind: 'version', version: v.n, at: v.createdAt, ...(v.by ? { by: v.by } : {}), ...(v.note ? { note: v.note } : {}) })),
+        ...trail.map((e): TimelineEvent => e.type === 'verdict'
             ? { kind: 'verdict', version: e.version, at: e.at, verdict: e.verdict, ...(e.comment ? { comment: e.comment } : {}), ...(e.by ? { by: e.by } : {}) }
             : { kind: 'reply', version: e.version, at: e.at, text: e.text, ...(e.agentName ? { by: e.agentName } : {}) }),
     ];
-    return events.map((e, i) => ({ e, i })).sort((a, b) => a.e.at.localeCompare(b.e.at) || a.i - b.i).map(({ e }) => e);
+    return events.map((e, i) => ({ e, i })).sort((x, y) => x.e.at.localeCompare(y.e.at) || x.i - y.i).map(({ e }) => e);
+}
+
+export function trailTimeline(post: BoardPost): TimelineEvent[] {
+    return timelineOf(versionsOf(post).map((v) => ({ n: v.n, createdAt: v.createdAt, by: v.agentName, note: v.note })), post.trail ?? []);
 }
 
 /** PURE. What an agent is told when it reads an item's trail: its status, the last verdict (with its comment), and the whole history. */
