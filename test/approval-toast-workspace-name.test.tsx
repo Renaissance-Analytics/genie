@@ -25,18 +25,18 @@ const workspaces = [{ id: 'ws_docs', path: '/work/docs.example', name: 'docs.exa
 describe('the workspace a toast names', () => {
     it('an item with a workspaceId and no name takes the name from the known workspaces', () => {
         const out = html(item(), { workspaces });
-        expect(out).toMatch(/data-approval-toast-workspace="">docs\.example</);
+        expect(out).toMatch(/data-approval-toast-workspace=""[^>]*>docs\.example</);
         expect(out).not.toContain('not known here');
     });
 
     it('an item with no name falls back to the workspace folder when the workspace has no name', () => {
         const out = html(item(), { workspaces: [{ id: 'ws_docs', path: '/work/docs.example' }] });
-        expect(out).toMatch(/data-approval-toast-workspace="">docs\.example</);
+        expect(out).toMatch(/data-approval-toast-workspace=""[^>]*>docs\.example</);
     });
 
     it('an item with no workspaceId resolves through its agent', () => {
         const out = html(item({ workspaceId: null }), { workspaces, agents: [{ id: 'a_1', workspaceId: 'ws_docs' }] });
-        expect(out).toMatch(/data-approval-toast-workspace="">docs\.example</);
+        expect(out).toMatch(/data-approval-toast-workspace=""[^>]*>docs\.example</);
     });
 
     it('CONTROL: a workspace nobody knows still says so', () => {
@@ -44,6 +44,6 @@ describe('the workspace a toast names', () => {
     });
 
     it('CONTROL: the item\'s own name wins', () => {
-        expect(html(item({ workspaceName: 'own.example' }), { workspaces })).toMatch(/data-approval-toast-workspace="">own\.example</);
+        expect(html(item({ workspaceName: 'own.example' }), { workspaces })).toMatch(/data-approval-toast-workspace=""[^>]*>own\.example</);
     });
 });
