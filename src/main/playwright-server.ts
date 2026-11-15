@@ -21,6 +21,13 @@ export interface PlaywrightServerPorts {
     /** Established connections to the port, or `null` when the OS would not say. */
     readonly connections: (port: number) => Promise<number | null>;
     readonly idleMs: number;
+    /** Whether a pid still runs. Absent = a stop is not verified. */
+    readonly pidAlive?: (pid: number) => boolean;
+    /** Ends a pid and everything it started, by the process tree rules (end-child-trees.ts), never `taskkill /T`. */
+    readonly forceEnd?: (pid: number) => Promise<void>;
+    readonly sleep?: (ms: number) => Promise<void>;
+    /** How long a stopped server may take to exit before it is forced; absent = 5000. */
+    readonly forceAfterMs?: number;
 }
 
 export interface RunningPlaywrightServer {
@@ -68,7 +75,7 @@ export class PlaywrightServer {
         return 'kept';
     }
 
-    stop(): void {
+    stop(): Promise<'ended' | 'forced'> | void {
         if (!this.#current) return;
         this.#ports.supervisor.stop(PLAYWRIGHT_SERVER_PROCESS_ID);
         this.#current = null;

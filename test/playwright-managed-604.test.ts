@@ -338,3 +338,70 @@ describe('what agents are told', () => {
         expect(text).toMatch(/not .*install/i);
     });
 });
+
+describe('stopping the server ends it, and a stop that does not exit is forced', () => {
+    const PID = 4242;
+    function rig(alive: () => boolean, forceEnd: (pid: number) => Promise<void>) {
+        const forced: number[] = [];
+        const slept: number[] = [];
+        let state: 'running' | 'stopped' = 'stopped';
+        const ports: PlaywrightServerPorts = {
+            supervisor: {
+                start: (spec) => { state = 'running'; return { id: spec.id, workspaceId: spec.workspaceId, name: spec.name, state: 'running', pid: PID, exitCode: null, restarts: 0, since: 0 }; },
+                stop: () => { state = 'stopped'; return true; },
+                status: (id) => ({ id, workspaceId: 'w', name: 'n', state, pid: state === 'running' ? PID : null, exitCode: null, restarts: 0, since: 0 }),
+            },
+            workspaceId: 'genie', cwd: TC, cliDir: (v) => join(TC, 'playwright', 'cli', v),
+            allocatePort: () => 4001, mintToken: () => 'q'.repeat(32), now: () => 1, connections: async () => 0, idleMs: 600_000,
+            pidAlive: () => alive(),
+            forceEnd: async (pid) => { forced.push(pid); await forceEnd(pid); },
+            sleep: async (ms) => { slept.push(ms); },
+            forceAfterMs: 5_000,
+        };
+        return { server: new PlaywrightServer(ports), forced, slept };
+    }
+
+    it('says ended, and forces nothing, when the process is gone', async () => {
+        const r = rig(() => false, async () => {});
+        r.server.acquire('1.57.0');
+        expect(await r.server.stop()).toBe('ended');
+        expect(r.forced).toEqual([]);
+    });
+
+    it('waits for a process that exits shortly after, and still forces nothing', async () => {
+        let polls = 0;
+        const r = rig(() => ++polls < 3, async () => {});
+        r.server.acquire('1.57.0');
+        expect(await r.server.stop()).toBe('ended');
+        expect(r.forced).toEqual([]);
+        expect(r.slept.length).toBeGreaterThan(0);
+    });
+
+    it('forces the process, with its whole tree, when it is still there after the grace', async () => {
+        const r = rig(() => true, async () => {});
+        r.server.acquire('1.57.0');
+        expect(await r.server.stop()).toBe('forced');
+        expect(r.forced).toEqual([PID]);
+    });
+
+    it('never hangs on a forced end that itself does not return', async () => {
+        const r = rig(() => true, () => new Promise<void>(() => {}));
+        r.server.acquire('1.57.0');
+        expect(await r.server.stop()).toBe('forced');
+    });
+
+    it('never hangs on a forced end that fails', async () => {
+        const r = rig(() => true, async () => { throw new Error('access denied'); });
+        r.server.acquire('1.57.0');
+        expect(await r.server.stop()).toBe('forced');
+    });
+
+    it('is not blocked by a stop in flight: the next ask starts a fresh server', async () => {
+        const r = rig(() => true, () => new Promise<void>(() => {}));
+        const first = r.server.acquire('1.57.0');
+        void r.server.stop();
+        const second = r.server.acquire('1.57.0');
+        expect(second.port).toBe(first.port);
+        expect(r.server.running()).not.toBeNull();
+    });
+});
