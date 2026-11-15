@@ -57,7 +57,7 @@ export function deferredDriverFactory(prepare: (signal: AbortSignal) => Promise<
             },
             prompt(content) {
                 if (!inner || controller.signal.aborted) throw new Error('The agent is still preparing its connection.');
-                inner.prompt(content);
+                return inner.prompt(content);
             },
             kill(signal) { abort(); inner?.kill(signal); },
             stop: async () => { abort(); },

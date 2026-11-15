@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { OS_AGENT_NAME } from './os-agent.js';
-import type { AcpProvider } from './engine.js';
+import { isAcpProvider, type AcpProvider } from './engine.js';
+import { accountIdIsValid, accountThreadKey, legacyAccountId } from './accounts.js';
 import type { IssueWatchSetting } from './issue-watch.js';
 import type { CarryOver } from './carry-over.js';
 
@@ -89,6 +90,8 @@ export interface AgentRecord {
     readonly id: AgentId;
     readonly workspaceId: string;
     readonly provider: AcpProvider;
+    /** Accounts S2: explicit after construction/load. Optional only for older serialized records at the read boundary. */
+    readonly accountId?: string;
     /** The human-facing name. Identity is the NAME, never the provider or a session id. */
     readonly name: string;
     /** Path to the committed persona, e.g. `.agents/atlas/AGENT.md`. */
@@ -187,13 +190,13 @@ export interface AgentRecord {
      */
     readonly plan?: readonly PlanStepRecord[];
     /**
-     * EACH PROVIDER'S OWN SESSION (Tynn story #380): the native session the agent left on another provider, by provider,
+     * EACH PROVIDER ACCOUNT'S OWN SESSION (Tynn stories #380/#475): the native session the agent left, by provider:account,
      * resumed when it switches back. `threadId` stays the CURRENT provider's; a record from before this field has none
      * parked, which is what it had. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
-    readonly threadIds?: Readonly<Partial<Record<AcpProvider, string>>>;
-    /** When the agent last LEFT each provider (ISO): switching back carries only what happened since. OPTIONAL. */
-    readonly leftAt?: Readonly<Partial<Record<AcpProvider, string>>>;
+    readonly threadIds?: Readonly<Record<string, string>>;
+    /** When the agent last LEFT each provider:account (ISO): returning carries only what happened since. OPTIONAL. */
+    readonly leftAt?: Readonly<Record<string, string>>;
     /**
      * THE CONVERSATION A SWITCH CARRIES (Tynn story #380, core/carry-over.ts): held here and attached once to the next
      * prompt that goes; cleared when it went. Absent = nothing pending.
@@ -245,7 +248,7 @@ export function threadIdIsResumable(value: string): boolean {
 
 /** The record's own field list, so a test can assert the shape rather than trusting prose. */
 export const AGENT_RECORD_FIELDS = [
-    'id', 'workspaceId', 'provider', 'name', 'instructions',
+    'id', 'workspaceId', 'provider', 'accountId', 'name', 'instructions',
     'threadId', 'createdAt', 'lastUsedAt', 'mode', 'accessScope',
 ] as const satisfies readonly (keyof AgentRecord)[];
 
@@ -267,6 +270,7 @@ export function agentRecord(input: NewAgent): AgentRecord {
         id: input.id,
         workspaceId: input.workspaceId,
         provider: input.provider,
+        accountId: legacyAccountId(input.provider),
         name: input.name,
         instructions: input.instructions ?? null,
         threadId: null,
@@ -275,4 +279,37 @@ export function agentRecord(input: NewAgent): AgentRecord {
         mode: input.mode ?? 'manual',
         accessScope: input.accessScope ?? 'self',
     };
+}
+
+/** Old provider-only slots belong ONLY to the old default home, never to a managed account. */
+function accountSlots(value: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Invalid account thread slots');
+    const entries = Object.entries(value);
+    const slots: Record<string, string> = {};
+    let migrated = false;
+    for (const [key, text] of entries) {
+        if (typeof text !== 'string') throw new Error('Invalid account thread slot');
+        if (isAcpProvider(key)) {
+            slots[accountThreadKey(key, legacyAccountId(key))] = text;
+            migrated = true;
+        } else {
+            const [provider, accountId, extra] = key.split(':');
+            if (!isAcpProvider(provider) || !accountIdIsValid(provider, accountId) || extra !== undefined) throw new Error('Invalid account thread namespace');
+        }
+    }
+    // A slot already written in the new format is authoritative over an older duplicate legacy slot.
+    for (const [key, text] of entries) if (!isAcpProvider(key)) slots[key] = text;
+    return migrated ? slots : value;
+}
+
+/** The sole read-boundary migration. Current native thread and every unrelated agent field stay as written. */
+export function withAgentAccount(record: AgentRecord): AgentRecord {
+    if (!isAcpProvider(record.provider)) throw new Error('Invalid account provider');
+    const accountId = record.accountId === undefined ? legacyAccountId(record.provider) : record.accountId;
+    if (!accountIdIsValid(record.provider, accountId)) throw new Error('Invalid account id');
+    const threadIds = accountSlots(record.threadIds);
+    const leftAt = accountSlots(record.leftAt);
+    if (record.accountId === accountId && record.threadIds === threadIds && record.leftAt === leftAt) return record;
+    return { ...record, accountId, ...(threadIds !== undefined ? { threadIds } : {}), ...(leftAt !== undefined ? { leftAt } : {}) };
 }

@@ -1,6 +1,11 @@
 import { adoptWindowEnv } from './session-engine-server.js';
+<<<<<<< HEAD
 import { runCliRepair } from './cli-repair.js';
 import { execFileRunner, probeToolLive, probeToolsLive, execFileText } from './toolchain-runner.js';
+=======
+import { runCliRepair, runCliUpdate } from './cli-repair.js';
+import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
+>>>>>>> origin/next/host-split-tms
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
@@ -168,20 +173,24 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             progress: (step) => { busyLine(step); if (step) row?.(step); },
         };
     };
+    const cliPorts = (progress: (step: string | null) => void) => ({
+        platform: process.platform,
+        env: processEnv,
+        isFile: (path: string) => { try { return statSync(path).isFile(); } catch { return false; } },
+        run: (binary: string, args: readonly string[], options: { readonly timeoutMs: number }) => execFileRunner(binary, args, { timeoutMs: options.timeoutMs }),
+        refreshPath: () => refreshPersistedPath({ platform: process.platform as Platform, run: execFileRunner, env: processEnv }),
+        check: (p: string) => providerHealth.refresh(p),
+        progress,
+    });
+    // An agent CLI's row Update (Tynn #734) updates the program the agents run, read again from the same resolution.
+    const AGENT_CLI_PROVIDER: Readonly<Record<string, string>> = { 'claude-code': 'claude', codex: 'codex' };
     return {
             // A Broken agent CLI's Repair (Tynn #698): the vendor's installer, step by step, judged by checking it again.
-            repairCli: (provider, progress) => runCliRepair(provider, {
-                platform: process.platform,
-                env: processEnv,
-                isFile: (path) => { try { return statSync(path).isFile(); } catch { return false; } },
-                run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: options.timeoutMs }),
-                refreshPath: () => refreshPersistedPath({ platform: process.platform as Platform, run: execFileRunner, env: processEnv }),
-                check: (p) => providerHealth.refresh(p),
-                progress,
-            }),
+            repairCli: (provider, progress) => runCliRepair(provider, cliPorts(progress)),
             // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
             // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
             probe: async () => withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll()),
+<<<<<<< HEAD
             // Tynn #714: one tool, for the one-at-a-time "Check for updates".
             probeTool: async (name) => {
                 const status = await probeToolLive(name, latestFor);
@@ -189,6 +198,11 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
                 return withProviderHealth([status], await providerHealth.refreshAll())[0]!;
             },
             update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
+=======
+            update: async (tool, version, progress) => AGENT_CLI_PROVIDER[tool] !== undefined
+                ? runCliUpdate(AGENT_CLI_PROVIDER[tool]!, cliPorts((step) => { busyLine(step); if (step) progress?.(step); }))
+                : runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
+>>>>>>> origin/next/host-split-tms
             // The row's in-progress state, pushed: which update, and its step (genie#1306).
             now: Date.now,
             // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run

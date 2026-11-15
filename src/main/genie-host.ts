@@ -26,7 +26,8 @@ import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
-import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir } from './paths.js';
+import { AccountsHost } from './accounts-host.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { readTynnPage } from './tynn-page-client.js';
@@ -359,6 +360,8 @@ async function main(): Promise<void> {
     const bootStep = (name: string, since: number): void => { const at = Date.now(); lifecycleLog(`boot step=${name} ms=${at - since} at=${at - bootStarted}`); stepAt = at; };
     const settings = await SettingsStore.open(home);
     bootStep('settings', stepAt);
+    // The host's account book (S1). Existing provider homes remain references, never read or moved.
+    const accounts = await AccountsHost.open({ root: home, legacyHomes: legacyProviderHomes() });
     const own = await openAgentStores(home, () => new Date().toISOString(), (id) => sessionsForInbox?.probe(id) ?? null, () => attentionLimitsFrom(settings.snapshot()));
     const drafts = await ChatDraftStore.open(home);
     bootStep('agent stores', stepAt);
@@ -1259,7 +1262,7 @@ async function main(): Promise<void> {
     let githubNow: GithubAccount | null = null;
     void githubOpening.then((account) => { githubNow = account; }, () => {});
     const hostScratch = scratchArea(home);
-    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }), { accountById: (id) => accounts.get(id) });
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));

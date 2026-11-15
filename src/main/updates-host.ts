@@ -36,7 +36,7 @@ export interface InstallWait {
     readonly boundMs: number;
 }
 
-export type UpdaterOp = 'check' | 'download' | 'prepare' | 'install';
+export type UpdaterOp = 'check' | 'download' | 'prepare' | 'release' | 'install';
 
 /** Host → helper, on `updater.event`. */
 export type UpdaterEvent =
@@ -191,6 +191,8 @@ export class UpdatesService {
             check: async () => (await this.#request('check')) as { version: string } | null,
             download: async (onProgress) => { await this.#request('download', onProgress); },
             prepareInstall: async () => { await this.#request('prepare'); },
+            // Only a helper that is linked holds a lease; one that is gone has nothing to give back (and is not started for it).
+            releaseInstall: async () => { if (this.#helper) await this.#request('release'); },
             quitAndInstall: () => this.#handOver(),
         };
         this.#host = new UpdateHost({

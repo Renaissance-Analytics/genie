@@ -119,7 +119,9 @@ describe('a command typed to a Codex agent', () => {
         await tick();
         expect(fake.commands).toEqual(['compact']);
         expect(fake.prompts).toEqual([]);
-        expect(rows(record).some((e) => e.kind === 'message' && e.speaker === 'you' && e.text === '/compact')).toBe(true);
+        // A small row that it ran, not your message (Tynn #702).
+        expect(rows(record).some((e) => e.kind === 'notice' && e.message.includes('/compact'))).toBe(true);
+        expect(rows(record).some((e) => e.kind === 'message' && e.speaker === 'you')).toBe(false);
         expect(host.inTurn(record.id)).toBe(true);
         // Its completion arrives as the turn's end, as prism-acp says.
         fake.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
