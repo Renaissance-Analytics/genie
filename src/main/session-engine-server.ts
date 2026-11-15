@@ -377,7 +377,7 @@ export class SessionEngineServer {
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
             onAction: (agentId, kind) => this.callback({ name: 'action', agentId, kind }),
-            onHeadroom: (provider, headroom) => this.callback({ name: 'headroom', provider, headroom }),
+            onHeadroom: (provider, headroom, stamp) => this.callback({ name: 'headroom', provider, headroom, ...(stamp ? { stamp } : {}) }),
             onMcpServers: (agentId, reports) => this.callback({ name: 'mcpServers', agentId, reports }),
         };
     }

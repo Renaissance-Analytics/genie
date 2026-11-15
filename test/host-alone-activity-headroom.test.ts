@@ -208,7 +208,7 @@ describe('the wiring', () => {
 
     it('genie-host keeps every reading itself, and still tells a connected window', () => {
         const host = src('src/main/genie-host.ts');
-        expect(host).toMatch(/onHeadroom: \(provider, room\) => \{ headroomFeed\.offer\(provider, room\); engineHostOptions\.onHeadroom\(provider, room\); \}/);
+        expect(host).toMatch(/onHeadroom: \(provider, room, stamp\) => \{ headroomFeed\.offer\(provider, room, stamp\); engineHostOptions\.onHeadroom\(provider, room, stamp\); \}/);
         expect(host).toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null/);
         expect(host).toMatch(/headroom: headroomFeed/);
     });

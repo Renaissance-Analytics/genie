@@ -53,8 +53,9 @@ export type WindowReading =
     | { readonly refreshed: true; readonly window: string }
     | { readonly refreshed: false; readonly window: string; readonly leftPct: number; readonly over: boolean; readonly resetsAtMs: number };
 
-/** STUB (RED): reads every window as its last figure, even one past its reset. */
-export function readLimitWindow(w: LimitWindow, _nowMs: number): WindowReading {
+/** A window whose reset time has come reads Refreshed: its last figure is not the account's figure any more. */
+export function readLimitWindow(w: LimitWindow, nowMs: number): WindowReading {
+    if (w.resetsAtMs <= nowMs) return { refreshed: true, window: w.window };
     return { refreshed: false, window: w.window, leftPct: w.leftPct, over: w.over, resetsAtMs: w.resetsAtMs };
 }
 

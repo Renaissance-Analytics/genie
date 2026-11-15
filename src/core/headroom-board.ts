@@ -14,37 +14,43 @@ export interface AccountHeadroom extends HeadroomSource {
 }
 
 /**
- * THE DASHBOARD HEADER'S RATE LIMITS, ONE PER PROVIDER (the owner, 2026-10-26: "I need a rate limit indicator in the
+ * THE RATE LIMITS, ONE PER ACCOUNT (Tynn #478; the owner, 2026-10-26: "I need a rate limit indicator in the
  * dashboard header, 1 per provider ... with a 1 min buffer to prevent ui spam if multiple agents are running ... if the
- * 1min buffer is active any other rate update is just ignored until the buffer clears"). Kept in MAIN: a reading inside
- * its provider's buffer costs one comparison and reaches nothing — no push, no render, nothing that slows an agent.
+ * 1min buffer is active any other rate update is just ignored until the buffer clears"). Kept in genie-host: a reading
+ * inside its account's buffer costs one comparison and reaches nothing — no push, no render, nothing that slows an agent.
+ * Two accounts of one provider are two limits: A's reading never overwrites B's and never waits out B's buffer.
  */
 export class HeadroomBoard {
     readonly #shown = new Map<string, { room: Headroom; at: number; source: HeadroomSource; runId: string }>();
 
     /**
-     * A provider's reading: shown (true) unless that provider's last shown reading is younger than `bufferMs`. A shown
+     * An account's reading: shown (true) unless that account's last shown reading is younger than `bufferMs`. A shown
      * reading KEEPS every window an earlier one reported that it did not repeat (genie#1268: every reported limit, not
      * only the latest frame's); a window it does repeat takes the new figure.
      */
     offer(source: HeadroomSource, room: Headroom, nowMs: number, bufferMs: number, stamp?: ReadingStamp): boolean {
-        const provider = source.provider;
-        const last = this.#shown.get(provider);
+        const key = `${source.provider}:${source.accountId}`;
+        const last = this.#shown.get(key);
         if (last && nowMs < last.at + bufferMs) return false;
         const named = new Set(room.windows.map((w) => w.window));
         const kept = last ? last.room.windows.filter((w) => !named.has(w.window)) : [];
-        this.#shown.set(provider, { room: kept.length === 0 ? room : { ...room, windows: [...room.windows, ...kept] }, at: nowMs, source, runId: stamp?.runId ?? '' });
+        this.#shown.set(key, { room: kept.length === 0 ? room : { ...room, windows: [...room.windows, ...kept] }, at: nowMs, source, runId: stamp?.runId ?? '' });
         return true;
     }
 
-    /** STUB (RED): every account's reading — still one per provider. */
+    /** Every account's last shown reading, each window read at `nowMs`: one past its reset time is Refreshed. */
     accounts(nowMs: number): AccountHeadroom[] {
         return [...this.#shown.values()].map((s) => ({ ...s.source, runId: s.runId, room: s.room, windows: s.room.windows.map((w) => readLimitWindow(w, nowMs)) }));
     }
 
-    /** What the header shows: each provider's last shown reading. */
+    /** What the header shows until it lists accounts (S10): each provider's most recently shown reading. */
     view(): Record<string, Headroom> {
-        return Object.fromEntries([...this.#shown].map(([provider, s]) => [provider, s.room]));
+        const latest = new Map<string, { room: Headroom; at: number }>();
+        for (const s of this.#shown.values()) {
+            const seen = latest.get(s.source.provider);
+            if (!seen || s.at >= seen.at) latest.set(s.source.provider, s);
+        }
+        return Object.fromEntries([...latest].map(([provider, s]) => [provider, s.room]));
     }
 }
 
@@ -65,13 +71,18 @@ export class HeadroomFeed {
     }
 
     offer(provider: string, room: Headroom, stamp?: ReadingStamp): void {
-        if (!this.#board.offer({ provider, accountId: stamp?.accountId ?? '' }, room, this.#now(), this.#bufferMs(), stamp)) return;
+        if (!this.#board.offer({ provider, accountId: stamp?.accountId ?? `account_legacy_${provider}` }, room, this.#now(), this.#bufferMs(), stamp)) return;
         const view = this.#board.view();
         for (const listener of this.#listeners) listener(view);
     }
 
     view(): Record<string, Headroom> {
         return this.#board.view();
+    }
+
+    /** Every account's reading, each window read now (a window past its reset is Refreshed). */
+    accounts(): AccountHeadroom[] {
+        return this.#board.accounts(this.#now());
     }
 
     subscribe(listener: (room: Readonly<Record<string, Headroom>>) => void): () => void {
