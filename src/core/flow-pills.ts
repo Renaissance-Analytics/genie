@@ -38,10 +38,13 @@ function label(flowId: string, name: string): string {
 
 /** How long a failed or held end stays in the header. */
 export const PILL_LINGER_MS = 6000;
-/** Pills drawn before the rest collapse to "+N". */
+/** Pills drawn before the rest collapse to "+N" (a narrow window draws fewer: NARROW_PILLS_SHOWN). */
 export const PILLS_SHOWN = 2;
+/** The window width under which the title bar has no room for a second pill. */
+export const NARROW_BAR_PX = 1280;
+export const NARROW_PILLS_SHOWN = 1;
 
-export function flowPills(input: { live: readonly LiveFlow[]; ended: readonly EndedFlow[]; now: number; workspaceId?: string | null | undefined }): { shown: FlowPill[]; more: FlowPill[] } {
+export function flowPills(input: { live: readonly LiveFlow[]; ended: readonly EndedFlow[]; now: number; workspaceId?: string | null | undefined; max?: number | undefined }): { shown: FlowPill[]; more: FlowPill[] } {
     const mine = (w: { workspaceId: string }): boolean => input.workspaceId == null || w.workspaceId === input.workspaceId;
     const running = input.live.filter(mine).map((f): FlowPill => ({ flowId: f.flowId, name: label(f.flowId, f.name), workspaceId: f.workspaceId, state: 'running' }));
     const runningIds = new Set(running.map((p) => p.flowId));
@@ -49,5 +52,6 @@ export function flowPills(input: { live: readonly LiveFlow[]; ended: readonly En
         .filter((e) => mine(e) && !runningIds.has(e.flowId) && input.now - Date.parse(e.endedAt) <= PILL_LINGER_MS)
         .map((e): FlowPill => ({ flowId: e.flowId, name: label(e.flowId, e.name), workspaceId: e.workspaceId, state: e.outcome }));
     const all = [...running, ...recent];
-    return { shown: all.slice(0, PILLS_SHOWN), more: all.slice(PILLS_SHOWN) };
+    const max = input.max ?? PILLS_SHOWN;
+    return { shown: all.slice(0, max), more: all.slice(max) };
 }

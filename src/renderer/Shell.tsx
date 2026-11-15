@@ -1079,6 +1079,8 @@ export function Shell({
                     onAnswer={(item, optionId, note) => { toasts.pressed(item); onAnswerDeckItem(item, optionId, note); }}
                     onExpand={toasts.expand}
                     onOpenAgent={(item) => { if (item.agentId) onChatAgent(item.agentId); }}
+                    workspaces={snapshot.workspaces}
+                    agents={snapshot.agents}
                     onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
                 />
                 </ErrorBoundary>}

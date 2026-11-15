@@ -329,7 +329,7 @@ export function TitleBar(props: TitleBarProps) {
             ) : null}
             {workspace?.color ? <span aria-hidden="true" data-title-edge="" style={wsStyle(workspace.color)} className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[var(--ws)]" /> : null}
 
-            <span data-route className="truncate font-mono text-[11px] text-[var(--fg-4)]">
+            <span data-route className="min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">
                 {route}
             </span>
 
