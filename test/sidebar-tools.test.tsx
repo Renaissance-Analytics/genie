@@ -62,7 +62,8 @@ describe('collapsed', () => {
         expect(html).toContain('data-rail-tool="add-workspace"');
         // the labels are not drawn — the rail is narrow — but each control is still named for a screen reader
         expect(html).not.toContain('>Dashboard</span>');
-        expect(html).toMatch(/aria-label="Dashboard"/);
+        // Named for a screen reader, with what waits when something does ("Dashboard, 3 waiting").
+        expect(html).toMatch(/aria-label="Dashboard/);
     });
 
     it('CONTROL: expanded draws the labels and no expand tool', () => {

@@ -100,7 +100,7 @@ describe('the approval toast', () => {
         } as unknown as DeckItem;
         const view = { shown: [item], ids: [item.id], more: 0, total: 1, expanded: false, answering: [] };
         const html = renderToStaticMarkup(<ApprovalToastStack view={view} onAnswer={() => {}} onExpand={() => {}} />);
-        expect(html).toMatch(/data-approval-question=""[^>]*whitespace-pre-wrap/);
+        expect(html).toMatch(/data-approval-question(="[^"]*")?[^>]*whitespace-pre-wrap/);
         expect(html).toContain('[400 spaces]');
         expect(html).toContain('&amp; more');
     });

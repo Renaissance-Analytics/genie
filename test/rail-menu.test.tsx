@@ -88,7 +88,7 @@ for (const collapsed of [false, true]) {
         });
 
         it('every attention mark is the item’s dot, in colour and in words', () => {
-            expect(dotOf(html, 'data-nav="genie://deck"')).toEqual({ color: 'amber', words: '3 waiting' });
+            // The Dashboard's dot is the rate limit; the waiting count rides it as a number (Tynn #730) and is its dot when there is no limit alert.
             expect(dotOf(html, 'data-nav="genie://dashboard"')).toEqual({ color: 'amber', words: 'Claude Code: 30% left in the 5-hour window' });
             expect(dotOf(html, 'data-nav="genie://settings"')).toEqual({ color: 'amber', words: 'Sign in to Tynn' });
             expect(dotOf(html, 'data-workspace="tynn"')).toEqual({ color: 'amber', words: 'needs you' });

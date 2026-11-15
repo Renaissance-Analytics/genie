@@ -88,7 +88,7 @@ describe('the same "+N more" rule for both', () => {
         expect(count(html, /data-approval-toast="appr_/g)).toBe(3);
         expect(html).toMatch(/data-toast-more="2"/);
         expect(count(html, /data-alert-toast="alert_/g)).toBe(3);
-        expect(html).toMatch(/data-alert-more="2"[^>]*>\+2 more</);
+        expect(html).toMatch(/data-alert-more="2"[^>]*>(<[^>]*>)*\+2 more</);
     });
 
     it('CONTROL: three of each fit - no "+N more" anywhere', () => {

@@ -51,8 +51,8 @@ const noop = () => {};
 function waiting(over: Partial<DashboardWaiting> = {}): DashboardWaiting {
     return { items: ITEMS, signals: QUIET, answering: null, onAnswer: noop, onOpenItem: noop, now: NOW, ...over };
 }
-const ssr = (w: DashboardWaiting | undefined = waiting()): string => renderToStaticMarkup(
-    <Dashboard rows={ROWS} workspaces={WORKSPACES} onOpenAgent={noop} onAddAgent={noop} {...(w ? { waiting: w } : {})} />,
+const ssr = (w: DashboardWaiting | null = waiting()): string => renderToStaticMarkup(
+    <Dashboard rows={ROWS} workspaces={WORKSPACES} onOpenAgent={noop} onAddAgent={noop} {...(w !== null ? { waiting: w } : {})} />,
 );
 const count = (s: string, re: RegExp): number => s.match(re)?.length ?? 0;
 /** One agent row's markup, so an assertion cannot read a sibling's. */
@@ -82,7 +82,7 @@ describe('the badges on each agent’s row', () => {
     });
 
     it('no Deck handed in, no badges, no chip, no Genie row — the board as it was', () => {
-        const html = ssr(undefined);
+        const html = ssr(null);
         expect(html).not.toContain('data-waiting-badge');
         expect(html).not.toContain('data-dashboard-filter="needsYou"');
         expect(html).not.toContain('data-waiting-genie');

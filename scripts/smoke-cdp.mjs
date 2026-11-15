@@ -506,34 +506,34 @@ if (typeof agentRow === 'string') {
 }
 
 /*
- * THE DECK IS REACHABLE.
+ * WHAT WAITS ON YOU IS REACHABLE (Tynn #730: the Deck merged into the Dashboard).
  *
- * Not "the Deck renders" — that is a unit test. **Reachable**, by clicking the thing a person
- * would click, which is the check §0.4 is about: a finished surface that nothing navigates to
- * is a surface nobody has.
+ * Not "the waiting rows render" - that is a unit test. **Reachable**, by clicking the thing a person would click, which is
+ * the check section 0.4 is about: a finished surface that nothing navigates to is a surface nobody has. There is no Deck row
+ * in the rail any more; the Dashboard offers a "Needs you" chip beside its status chips.
  *
- * Its band is empty here, because a parked approval needs a provider that sends permission
- * requests and there is none in this container. That is stated rather than faked: the empty
- * state is what an honest Deck shows when nothing needs you.
+ * Nothing waits here, because a parked approval needs a provider that sends permission requests and there is none in this
+ * container. That is stated rather than faked: the empty state is what an honest "Needs you" view shows.
  */
-const deckRow = await cdp.evaluate(`Boolean(document.querySelector('[data-nav="genie://deck"]'))`);
-check(deckRow === true, '25. the rail offers the Deck');
+const noDeckRow = await cdp.evaluate(`!document.querySelector('[data-nav="genie://deck"]')`);
+const chip = await cdp.evaluate(`Boolean(document.querySelector('[data-surface="dashboard"] [data-dashboard-filter="needsYou"]'))`);
+check(noDeckRow === true && chip === true, '25. the rail has no Deck row, and the Dashboard offers "Needs you"', JSON.stringify({ noDeckRow, chip }));
 
-if (deckRow) {
-    await cdp.evaluate(`document.querySelector('[data-nav="genie://deck"]').click(); true`);
-    const onDeck = await waitFor(
+if (chip) {
+    await cdp.evaluate(`document.querySelector('[data-dashboard-filter="needsYou"]').click(); true`);
+    const pressed = await waitFor(
         cdp,
-        `Boolean(document.querySelector('[data-surface="deck"]'))`,
-        'the Deck after clicking its rail row',
+        `document.querySelector('[data-dashboard-filter="needsYou"]')?.getAttribute('aria-pressed') === 'true'`,
+        'the Needs you filter after clicking its chip',
     );
-    check(onDeck, '26. clicking it opens the Deck');
+    check(pressed && (await cdp.evaluate(`Boolean(document.querySelector('[data-surface="dashboard"]'))`)), '26. clicking it filters the Dashboard in place (no page change)');
 
-    const empty = await cdp.evaluate(`document.querySelector('[data-deck]')?.getAttribute('data-deck') ?? null`);
+    const empty = await cdp.evaluate(`document.querySelector('[data-needs-you]')?.getAttribute('data-needs-you') ?? null`);
     check(empty === 'empty', '27. and it says nothing needs you, rather than showing a blank', String(empty));
 
-    // Back to the Dashboard, so the screenshot at the end is still of the board.
-    await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
-    await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard again');
+    // Off again, so the screenshot at the end is still of the whole board.
+    await cdp.evaluate(`document.querySelector('[data-dashboard-filter="needsYou"]').click(); true`);
+    await waitFor(cdp, `document.querySelector('[data-dashboard-filter="needsYou"]')?.getAttribute('aria-pressed') === 'false'`, 'the whole board again');
 }
 
 /*

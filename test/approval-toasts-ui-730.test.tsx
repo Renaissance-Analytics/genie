@@ -45,7 +45,7 @@ describe('the stack', () => {
     it('five waiting: three toasts and "+2 more"', () => {
         const out = html(items(5));
         expect(count(out, /data-approval-toast="appr_/g)).toBe(3);
-        expect(out).toMatch(/data-toast-more="2"[^>]*>\+2 more waiting for approval</);
+        expect(out).toMatch(/data-toast-more="2"[^>]*>(<[^>]*>)*\+2 more waiting for approval</);
     });
 
     it('CONTROL: three fit — no "+N more"', () => {

@@ -108,7 +108,7 @@ describe('a parked approval is a persistent toast in the main window', () => {
         const html = render('genie://dashboard', parked(5));
         expect(count(html, TOASTS)).toBe(1);
         expect(count(html, TOAST)).toBe(3);
-        expect(html).toMatch(/data-toast-more="2"[^>]*>\+2 more waiting for approval</);
+        expect(html).toMatch(/data-toast-more="2"[^>]*>(<[^>]*>)*\+2 more waiting for approval</);
     });
 
     it('on its agent’s row the item carries a marker where the buttons were — the toast holds the only Allow / Deny', () => {

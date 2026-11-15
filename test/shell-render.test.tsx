@@ -130,7 +130,7 @@ describe('a surface this build cannot serve', () => {
     it('renders an empty body rather than a frame pretending to be a surface', () => {
         // `App` redirects it; the Shell's job is to not invent a screen. Asserted because the
         // alternative — a header over nothing — reads as a load that failed.
-        const html = render({ route: 'genie://deck', servable: ['dashboard'] });
+        const html = render({ route: 'genie://hosting', servable: ['dashboard'] });
 
         expect(html).not.toContain('data-surface="dashboard"');
         expect(html).not.toContain('data-agent=');
