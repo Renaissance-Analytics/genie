@@ -58,7 +58,7 @@ export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues', 'releases', 'ho
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
 export const WIP_DATA_API = { method: 'GET', path: '/wip' } as const;
-export const WIP_QUERY = ['view', 'story', 'product'] as const;
+export const WIP_QUERY = ['view', 'story', 'product', 'version'] as const;
 export const WIP_LENSES = {
     active: ['in_progress', 'backlog'],
     attention: ['blocked', 'qa'],
@@ -91,6 +91,30 @@ export const WIP_LIVE = {
 } as const;
 export const WIP_STATES = ['loading', 'no-active-version', 'lens', 'empty-lens', 'story-selected', 'no-tasks', 'done-summary', 'claim-start', 'claimed', 'transition-refused', 'live', 'reconnecting', 'not-linked', 'signed-out'] as const;
 
+/** How often WIP reads Tynn while its live channel is not live and the tab is visible. */
+export const WIP_POLL_MS = 15_000;
+
+/** When something last changed, as a person says it; null for no time or one that is not a time. Older than a week is the date. */
+export function wipWhen(iso: string | null, now: number): string | null {
+    if (iso === null) return null;
+    const at = Date.parse(iso);
+    if (!Number.isFinite(at)) return null;
+    const s = Math.max(0, Math.round((now - at) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86_400) return `${Math.floor(s / 3600)} h ago`;
+    if (s < 7 * 86_400) return `${Math.floor(s / 86_400)} d ago`;
+    return new Date(at).toISOString().slice(0, 10);
+}
+
+/** A PR or commit from Tynn as a chip: a web link when Tynn stored an https URL, else its text (never a dead link). */
+export function wipRef(value: string | null): { readonly label: string; readonly href: string | null } | null {
+    if (value === null) return null;
+    if (!/^https:[/][/]\S+$/.test(value)) return { label: value, href: null };
+    const last = (value.split(/[?#]/)[0] ?? value).split('/').filter(Boolean).pop() ?? value;
+    return { label: /^\d+$/.test(last) ? `#${last}` : last.length > 12 ? last.slice(0, 7) : last, href: value };
+}
+
 /** Each task step as the web page words it, with its icon and why it is held back. */
 const WIP_STEP: Readonly<Record<string, { icon: string; label: string; why?: string }>> = {
     start: { icon: 'play', label: 'Start', why: 'Story must be in progress first' },
@@ -111,6 +135,13 @@ export interface WipStory {
     readonly tasksDone: number;
     /** `done/total`, or null for a story with no tasks. */
     readonly progress: string | null;
+    /** The story's acceptance criteria, as Tynn lists them (empty from an older Tynn). */
+    readonly criteria: readonly string[];
+    /** The PR and commit as Tynn stores them: a URL, or text (`#88`, a sha). */
+    readonly pr: string | null;
+    readonly commit: string | null;
+    /** Tynn's `updated_at` (ISO). It is the only time the page gives: there are no started / QA / finished times. */
+    readonly updatedAt: string | null;
 }
 export interface WipTask {
     readonly id: string;
@@ -120,10 +151,15 @@ export interface WipTask {
     readonly claim: BoardClaim | null;
     readonly features: readonly string[];
     readonly step: WipStep | null;
+    readonly updatedAt: string | null;
 }
+/** An active version the person can choose; `served` is the one Tynn's WIP answer is about. */
+export interface WipVersionRef { readonly id: string; readonly number: string | null; readonly title: string; readonly served: boolean }
 export interface WipView {
     readonly lens: WipLens;
     readonly version: { readonly id: string; readonly number: string | null; readonly title: string } | null;
+    /** Every active version, the served one included (Tynn's `available_versions`, its active ones). */
+    readonly versions: readonly WipVersionRef[];
     readonly counts: Readonly<Record<(typeof WIP_COUNTS)[number], number>>;
     /** The banner's: stories done of all the version's stories. */
     readonly progress: { readonly done: number; readonly total: number; readonly percent: number };
@@ -158,7 +194,17 @@ function wipStory(row: Row): WipStory | null {
         taskCount: total,
         tasksDone: done,
         progress: total > 0 ? `${done}/${total}` : null,
+        criteria: wipCriteria(row.acceptance_criteria),
+        pr: str(row.pr_id),
+        commit: str(row.commit_id),
+        updatedAt: str(row.updated_at),
     };
+}
+
+/** Criteria are text; one that arrives as a row names its text (`text` / `title` / `criterion`). */
+function wipCriteria(v: unknown): string[] {
+    if (!Array.isArray(v)) return [];
+    return v.map((c) => (isRow(c) ? (str(c.text) ?? str(c.title) ?? str(c.criterion)) : str(c))).filter((t): t is string => t !== null);
 }
 
 function wipStep(status: string, row: Row): WipStep | null {
@@ -188,6 +234,7 @@ function wipTask(row: Row): WipTask | null {
             : null,
         features: rows(row.features).map((f) => str(f.title)).filter((t): t is string => t !== null),
         step: wipStep(status, row),
+        updatedAt: str(row.updated_at),
     };
 }
 
@@ -207,9 +254,15 @@ export function parseWip(json: unknown): WipView | null {
     const tasks = rows(json.tasks).map(wipTask).filter((t): t is WipTask => t !== null);
     // Stable: equal ranks keep Tynn's order.
     const ordered = tasks.map((t, i) => ({ t, i })).sort((a, b) => rank(a.t.status) - rank(b.t.status) || a.i - b.i).map(({ t }) => t);
+    const version = v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '' } : null;
+    const versions: WipVersionRef[] = rows(json.available_versions)
+        .filter((r) => r.status === 'active')
+        .flatMap((r): WipVersionRef[] => { const id = str(r.id); return id === null ? [] : [{ id, number: str(r.number), title: str(r.title) ?? '', served: id === versionId }]; });
+    if (version !== null && !versions.some((x) => x.id === version.id)) versions.unshift({ ...version, served: true });
     return {
         lens: json.view as WipLens,
-        version: v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '' } : null,
+        version,
+        versions,
         counts,
         progress: { done: counts.done, total, percent: total > 0 ? Math.round((counts.done / total) * 100) : 0 },
         stories: rows(json.stories).map(wipStory).filter((s): s is WipStory => s !== null),
@@ -585,6 +638,7 @@ export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQ
         if (view !== undefined && Object.hasOwn(WIP_LENSES, view)) q.append('view', view);
         if (query.story !== undefined && query.story !== '') q.append('story', query.story);
         if (query.product !== undefined && query.product !== '') q.append('product', query.product);
+        if (query.version !== undefined && query.version !== '') q.append('version', query.version);
     }
     const s = q.toString();
     return `/api/v1/projects/${encodeURIComponent(projectId)}${WIP_DATA_API.path}${s === '' ? '' : `?${s}`}`;
