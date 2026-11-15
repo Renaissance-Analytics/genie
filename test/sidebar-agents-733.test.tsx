@@ -53,7 +53,7 @@ afterEach(() => {
 const sidebar = (withOpeners = true) => (
     <Sidebar
         route="genie://dashboard" deckCount={0} workspaces={[ws('tynn'), ws('fancy')]}
-        available={['deck', 'dashboard', 'genie', 'workspace', 'settings']}
+        available={['dashboard', 'genie', 'workspace', 'settings']}
         onNavigate={(r) => navigated.push(r)} railStorage={memory()} agents={AGENTS} onChatAgent={() => {}}
         {...(withOpeners ? { onOpenAgentTerminal: (id: string) => terminals.push(id), onOpenWorkspaceFiles: (id: string) => files.push(id) } : {})}
     />

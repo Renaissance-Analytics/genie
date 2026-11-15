@@ -13,7 +13,7 @@
 #   2. bump to $Next (2.0.1), package again → release\ now holds it + latest.yml; package.json goes back as it was at the end
 #   3. serve release\ on 127.0.0.1:8099; point the installed app's app-update.yml at it
 #   4. launch the installed 0.0.0 with CDP; update-cdp.mjs drives check → download → install,
-#      visiting the Deck so the signal strip is seen doing each phase
+#      visiting the Dashboard so the signal strip is seen doing each phase
 #   5. the app quits, the installer runs, the app relaunches: assert Genie.exe is $Next,
 #      a Genie process is running, genie-host is a new process (§4.3: until P6 a host update always restarts the host),
 #      and the §7.2 report was printed; tear down; uninstall

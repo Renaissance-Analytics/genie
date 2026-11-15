@@ -116,7 +116,7 @@ describe('Dashboard shows active workspaces only', () => {
 
     it('the full snapshot reaches Dashboard without removing hibernated workspace navigation from the rail', () => {
         const html = renderToStaticMarkup(<Shell route="genie://dashboard?group=workspace" snapshot={snapshot}
-            servable={['dashboard', 'deck', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
+            servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
             selectedRowId={null} chatThread={null} pinned={null} onNavigate={() => {}} onOpenAgent={() => {}}
             onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}}
             onSend={() => {}} onCloseChat={() => {}} answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}}

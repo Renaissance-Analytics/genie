@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import type { SignalState } from '../src/core/deck.js';
 import { updateChip } from '../src/core/update-chip.js';
 
@@ -11,7 +11,7 @@ import { updateChip } from '../src/core/update-chip.js';
  */
 const base: SignalState = { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false };
 const render = (signals: SignalState) =>
-    renderToStaticMarkup(<Deck items={[]} signals={signals} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onSignalAction={() => {}} />);
+    renderToStaticMarkup(<DeckOnDashboard items={[]} signals={signals} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onSignalAction={() => {}} />);
 
 describe('an upgrade on the Deck', () => {
     it('ready, then Installing — no roster, no waiting on agents, no Cancel', () => {

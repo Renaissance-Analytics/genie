@@ -228,6 +228,8 @@ export interface AgentViewProps {
     cost: number | null;
     /** The agent the chat flyout is open on, from the route. Decides where an approval acts. */
     chatSubject?: string | null | undefined;
+    /** A toast carries this agent's approval (Tynn #730): it is answered THERE, and the stream shows a marker (`approvalPlacement`). */
+    approvalInToast?: boolean | undefined;
     /** The option id in flight for THIS agent's parked approval (core/approval-answering.ts); `null` = none. */
     answeringApproval?: string | null | undefined;
     /** The host's refusal of the last answer to THIS approval, in words, for the card. */
@@ -368,7 +370,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
-    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
+    chatSubject, approvalInToast = false, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
@@ -549,7 +551,7 @@ function AgentViewBody({
      */
 
     const approval = session?.pendingApproval ?? null;
-    const placement = approvalPlacement(agent.id, chatSubject ?? null);
+    const placement = approvalPlacement(agent.id, chatSubject ?? null, approvalInToast);
 
     /*
      * `E` — the next edit (§4.2). One `keydown` listener; every decision is made by the pure
@@ -595,11 +597,11 @@ function AgentViewBody({
                     // In a field, Esc means "stop typing" and nothing more: blur, and let the
                     // rest of the map stay out of it.
                     if (typing) { target?.blur(); return; }
-                    // Otherwise: the Inspector FIRST, and only then the Deck (§4.2). Two
+                    // Otherwise: the Inspector FIRST, and only then the Dashboard (§4.2). Two
                     // presses to leave, so one stray Esc never throws the reader off the agent.
                     e.preventDefault();
                     if (selectedId !== null) { onSelect(null); return; }
-                    onNavigate('genie://deck');
+                    onNavigate('genie://dashboard');
                     return;
                 }
                 case 'toggle-lanes': {
@@ -1079,6 +1081,7 @@ function AgentViewBody({
                             ) : null}
 
                             {approval && placement === 'chat' ? <ApprovalMarker where="the chat" /> : null}
+                            {approval && placement === 'toast' ? <ApprovalMarker where="the toast at the bottom left" /> : null}
                         </>
                     ) : null}
 

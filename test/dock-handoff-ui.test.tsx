@@ -11,7 +11,7 @@ import { EMPTY_SNAPSHOT, type GenieSnapshot } from '../src/renderer/bridge.js';
 const snapshot: GenieSnapshot = { ...EMPTY_SNAPSHOT, workspaces: [{ id: 'tynn', path: 'C:/_Projects/tynn.ai', agentsKnown: true }], workstation: { name: 'alphar', healthy: true } };
 const render = (props: Partial<Parameters<typeof Shell>[0]> = {}) =>
     renderToStaticMarkup(
-        <Shell route="genie://dashboard?group=workspace" snapshot={snapshot} servable={['dashboard', 'deck', 'agent', 'workspace']} agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null}
+        <Shell route="genie://dashboard?group=workspace" snapshot={snapshot} servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null}
             onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}} onSend={() => {}} onCloseChat={() => {}} answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}} {...props} />,
     );
 

@@ -54,7 +54,7 @@ describe('navigating to ANOTHER workspace moves the chat to an agent of that wor
 
 
     it('a chat named by its agent’s NAME (a link’s `chat=atlas`) is recognised and moved too', () => {
-        expect(chatOf(carryChat('genie://workspace/ws_beta', parseRoute('genie://deck?chat=atlas'), agents, []))).toBe('a_lark');
+        expect(chatOf(carryChat('genie://workspace/ws_beta', parseRoute('genie://flows?chat=atlas'), agents, []))).toBe('a_lark');
     });
 
     it('a route that names its own chat is still left alone', () => {
@@ -70,7 +70,7 @@ describe('the composer on screen', () => {
             <Shell
                 route={route}
                 snapshot={snapshot}
-                servable={['dashboard', 'deck', 'agent', 'workspace']}
+                servable={['dashboard', 'agent', 'workspace']}
                 agentDetail={null}
                 agentResolved={false}
                 selectedRowId={null}
@@ -114,7 +114,7 @@ describe('the composer on screen', () => {
     });
 
     it('CONTROL: on its own workspace, its own agent, or a surface of no workspace, the composer is the plain one', () => {
-        for (const route of ['genie://workspace/ws_beta?chat=a_lark', 'genie://agent/a_rook?tab=stream&chat=a_lark', 'genie://deck?chat=a_lark']) {
+        for (const route of ['genie://workspace/ws_beta?chat=a_lark', 'genie://agent/a_rook?tab=stream&chat=a_lark', 'genie://flows?chat=a_lark']) {
             const html = render(route);
             expect(count(html, 'placeholder="Message lark"')).toBe(1);
             expect(count(html, 'data-chat-scope=')).toBe(0);

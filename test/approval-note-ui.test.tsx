@@ -1,4 +1,4 @@
-import { isValidElement, type ReactNode } from 'react';
+import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DeckItem } from '../src/core/deck.js';
@@ -17,6 +17,14 @@ function findAll(node: ReactNode, match: (p: Props) => boolean, out: Props[] = [
     const p = node.props as Props;
     if (match(p)) out.push(p);
     findAll(p.children, match, out);
+    return out;
+}
+function findElements(node: ReactNode, match: (p: Props) => boolean, out: ReactElement<Props>[] = []): ReactElement<Props>[] {
+    if (Array.isArray(node)) { for (const n of node) findElements(n, match, out); return out; }
+    if (!isValidElement(node)) return out;
+    const el = node as ReactElement<Props>;
+    if (match(el.props)) out.push(el);
+    findElements(el.props.children, match, out);
     return out;
 }
 const approval = { question: 'Edit src/config.ts', tool: null, options: [{ id: 'allow', label: 'Allow', tone: 'ok' as const }, { id: 'deny', label: 'Reject', tone: 'bad' as const }] };
@@ -43,17 +51,18 @@ describe('the approval toast', () => {
         id: 'appr_1_1', source: 'agent-question', agentId: 'agent_compass', agentName: 'compass', workspaceId: 'tynn', title: 'compass wants to open a terminal: npm test',
         blocking: true, priority: 'high', at: 1, answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] }, forwardedFrom: null,
     } as DeckItem;
-    const view = { ring: [item], front: 0, position: 1, total: 1, answering: [] } as never;
+    const view = { shown: [item], ids: [item.id], more: 0, total: 1, expanded: false, answering: [] };
 
-    it('has a note field per request, and Allow / Deny send the note typed on THAT request', () => {
+    it('has a note field per request, and an option sends the note typed on THAT request', () => {
+        expect(renderToStaticMarkup(<ApprovalToastStack view={view} onAnswer={() => {}} onExpand={() => {}} />)).toContain('data-approval-note');
         const answered: unknown[][] = [];
-        const tree = ApprovalToastStack({ view, notes: { appr_1_1: 'run it in the background' }, onNote: () => {}, onAnswer: (i, o, n) => answered.push([i.id, o, n]), onLater: () => {}, onFront: () => {}, onEngage: () => {} });
-        const [stack] = findAll(tree, (p) => typeof p['renderItem'] === 'function');
-        const front = (stack!.renderItem as (i: DeckItem, s: { isFront: boolean }) => ReactNode)(item, { isFront: true });
-        expect(renderToStaticMarkup(<>{front}</>)).toContain('data-toast-note="appr_1_1"');
-        // FrontCard is a component: render its element's function to reach the buttons.
-        const el = front as { type: (p: unknown) => ReactNode; props: unknown };
-        for (const b of findAll(el.type(el.props), (p) => p['data-toast-option'] !== undefined)) (b.onClick as () => void)();
+        const tree = ApprovalToastStack({ view, onAnswer: (i, o, n) => answered.push([i.id, o, n]), onExpand: () => {} });
+        // The toast's card is a component holding no hooks: render it to reach the ApprovalCard it draws, then press as it does.
+        const [card] = findElements(tree, (p) => typeof p['item'] === 'object' && 'busy' in p);
+        const drawn = (card!.type as (p: unknown) => ReactNode)(card!.props);
+        const [approvalCard] = findAll(drawn, (p) => typeof p['onAnswer'] === 'function' && 'approval' in p);
+        (approvalCard!['onAnswer'] as (o: string, n: string) => void)('allow', 'run it in the background');
+        (approvalCard!['onAnswer'] as (o: string, n: string) => void)('deny', 'run it in the background');
         expect(answered).toEqual([['appr_1_1', 'allow', 'run it in the background'], ['appr_1_1', 'deny', 'run it in the background']]);
     });
 });

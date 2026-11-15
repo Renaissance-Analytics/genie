@@ -29,7 +29,7 @@ const key = (el: Element, k: string) => act(() => { el.dispatchEvent(new Keyboar
 describe('the rail’s keyboard', () => {
     it('one Tab stop, the current item; ArrowDown and End move focus along the items', () => {
         act(() => root.render(
-            <Sidebar route="genie://dashboard" deckCount={0} workspaces={[]} available={['deck', 'dashboard', 'genie', 'hosting', 'settings']} onNavigate={() => {}} railStorage={memory} />,
+            <Sidebar route="genie://dashboard" deckCount={0} workspaces={[]} available={['dashboard', 'genie', 'hosting', 'browser', 'settings']} onNavigate={() => {}} railStorage={memory} />,
         ));
         const all = items();
         expect(all.length).toBeGreaterThanOrEqual(5);

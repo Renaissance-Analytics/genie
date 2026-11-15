@@ -45,21 +45,21 @@ describe('the chat follows the view', () => {
         expect(chatOf(carryChat('genie://workspace/ws_beta', onAtlas, agents, ['a_wren', 'a_rook']))).toBe('a_rook');
         expect(chatOf(carryChat('genie://workspace/ws_beta', onAtlas, agents, []))).toBe('a_lark');
         // From Genie's chat into a workspace: that workspace's agent — Genie is not kept over a workspace's agents.
-        expect(chatOf(carryChat('genie://workspace/ws_beta', parseRoute('genie://deck?chat=a_genie'), agents, []))).toBe('a_lark');
+        expect(chatOf(carryChat('genie://workspace/ws_beta', parseRoute('genie://flows?chat=a_genie'), agents, []))).toBe('a_lark');
     });
 
     it('any other view: Genie (COUNTED: every non-workspace surface)', () => {
-        const surfaces = ['genie://dashboard?group=workspace', 'genie://deck', 'genie://settings', 'genie://hosting', 'genie://toolchain', 'genie://knowledge'];
+        const surfaces = ['genie://dashboard?group=workspace', 'genie://flows', 'genie://settings', 'genie://hosting', 'genie://toolchain', 'genie://knowledge'];
         expect(surfaces.map((s) => chatOf(carryChat(s, onAtlas, agents, [])))).toEqual(surfaces.map(() => 'a_genie'));
     });
 
     it('pinned stays pinned; a closed chat stays closed', () => {
-        expect(carryChat('genie://deck', parseRoute('genie://agent/a_atlas?tab=stream&chat=a_atlas&pin=right'), agents, [])).toBe('genie://deck?chat=a_genie&pin=right');
-        expect(carryChat('genie://deck', parseRoute('genie://agent/a_atlas?tab=stream'), agents, [])).toBe('genie://deck');
+        expect(carryChat('genie://flows', parseRoute('genie://agent/a_atlas?tab=stream&chat=a_atlas&pin=right'), agents, [])).toBe('genie://flows?chat=a_genie&pin=right');
+        expect(carryChat('genie://flows', parseRoute('genie://agent/a_atlas?tab=stream'), agents, [])).toBe('genie://flows');
     });
 
     it('CONTROL: a route that names its own chat is left alone', () => {
-        expect(carryChat('genie://deck?chat=a_atlas', onAtlas, agents, [])).toBe('genie://deck?chat=a_atlas');
+        expect(carryChat('genie://flows?chat=a_atlas', onAtlas, agents, [])).toBe('genie://flows?chat=a_atlas');
     });
 });
 
@@ -83,7 +83,7 @@ describe('no chat tabs', () => {
             <Shell
                 route="genie://dashboard?group=workspace"
                 snapshot={snapshot}
-                servable={['dashboard', 'deck', 'agent', 'workspace']}
+                servable={['dashboard', 'agent', 'workspace']}
                 agentDetail={null}
                 agentResolved={false}
                 selectedRowId={null}

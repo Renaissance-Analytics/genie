@@ -112,7 +112,7 @@ describe('the window draws none of the workstation (positive control: a workstat
                 windowScope={windowScope}
                 snapshot={snapshot}
                 features={features}
-                servable={['dashboard', 'deck', 'agent', 'workspace', 'flows', 'knowledge', 'settings', 'hosting', 'browser']}
+                servable={['dashboard', 'agent', 'workspace', 'flows', 'knowledge', 'settings', 'hosting', 'browser']}
                 agentDetail={null}
                 agentResolved={false}
                 selectedRowId={null}
@@ -161,7 +161,6 @@ describe('the window draws none of the workstation (positive control: a workstat
     /** Each surface of the workstation, reached by its own route (as a deep link would). */
     const SURFACES: Array<[string, string]> = [
         ['genie://dashboard', '[data-surface="dashboard"]'],
-        ['genie://deck', '[data-surface="deck"]'],
         ['genie://settings', '[data-surface="settings"]'],
         ['genie://hosting?tab=processes', '[data-surface="hosting"]'],
         ['genie://hosting?tab=sites', '[data-surface="hosting"]'],

@@ -185,10 +185,10 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
 ];
 
 /** Every surface a route can name. */
-export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'files' | 'flow' | 'knowledge' | 'flows' | 'hosting' | 'settings' | 'browser';
+export type Surface = 'dashboard' | 'agent' | 'workspace' | 'takeover' | 'files' | 'flow' | 'knowledge' | 'flows' | 'hosting' | 'settings' | 'browser';
 
 /** The rail's fixed rows. */
-export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'hosting' | 'browser' | 'workspace' | 'settings';
+export type RailSurface = 'dashboard' | 'genie' | 'hosting' | 'browser' | 'workspace' | 'settings';
 
 /**
  * Which rail rows a build can offer, DERIVED from which surfaces it can serve.
@@ -202,7 +202,6 @@ export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'hosting' | 'browser'
  */
 export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurface[] {
     const rows: RailSurface[] = [];
-    if (servable.includes('deck')) rows.push('deck');
     if (servable.includes('dashboard')) rows.push('dashboard');
     if (servable.includes('agent')) rows.push('genie');
     // Labelled rows, not palette-only (the owner, 2026-10-14: "WTF happened to all of our genie sites and bg processes

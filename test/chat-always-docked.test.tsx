@@ -55,7 +55,7 @@ describe('the chat is a column beside the page, never over it', () => {
             <Shell
                 route="genie://dashboard"
                 snapshot={snapshot}
-                servable={['dashboard', 'deck', 'agent', 'workspace']}
+                servable={['dashboard', 'agent', 'workspace']}
                 agentDetail={null}
                 agentResolved={false}
                 selectedRowId={null}
@@ -114,7 +114,7 @@ describe('the chat is a column beside the page, never over it', () => {
 describe('the sidebar', () => {
     const asleep = railWorkspaces([{ id: 'w1', path: '/w/1', asleep: true }, { id: 'w2', path: '/w/2' }] as never, []);
     const html = renderToStaticMarkup(
-        <Sidebar route="genie://dashboard" deckCount={0} workspaces={asleep} available={railSurfacesFor(['dashboard', 'deck', 'workspace', 'settings'])} onNavigate={() => {}} onAddWorkspace={() => {}} />,
+        <Sidebar route="genie://dashboard" deckCount={0} workspaces={asleep} available={railSurfacesFor(['dashboard', 'workspace', 'settings'])} onNavigate={() => {}} onAddWorkspace={() => {}} />,
     );
 
     it('the hibernated and + tools sit in the TOP row, beside collapse', () => {

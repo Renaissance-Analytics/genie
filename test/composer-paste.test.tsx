@@ -62,7 +62,7 @@ const renderShell = (chatSession: LiveSession | null) => {
         <Shell
             route="genie://dashboard?chat=a_lark"
             snapshot={{ ...EMPTY_SNAPSHOT, agents: [row], workspaces: [{ id: 'ws_example', path: '/srv/example.test', agentsKnown: true }] }}
-            servable={['dashboard', 'deck', 'agent', 'workspace']}
+            servable={['dashboard', 'agent', 'workspace']}
             agentDetail={null}
             agentResolved={false}
             selectedRowId={null}

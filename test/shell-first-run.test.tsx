@@ -15,7 +15,7 @@ const render = (snap: GenieSnapshot) =>
         <Shell
             route="genie://dashboard?group=workspace"
             snapshot={snap}
-            servable={['dashboard', 'deck', 'agent', 'workspace']}
+            servable={['dashboard', 'agent', 'workspace']}
             agentDetail={null}
             agentResolved={false}
             selectedRowId={null}

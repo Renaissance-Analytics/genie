@@ -72,7 +72,7 @@ describe('addressOf — an internal route as the address', () => {
         expect(addressOf('genie://agent/agent_genie?tab=stream', ctx)).toBe('genie://alphar/genie');
         expect(addressOf('genie://dashboard?group=workspace', ctx)).toBe('genie://alphar/dashboard');
         expect(addressOf('genie://dashboard?group=status', ctx)).toBe('genie://alphar/dashboard');
-        expect(addressOf('genie://deck?item=q1', ctx)).toBe('genie://alphar/deck?item=q1');
+        expect(addressOf('genie://deck?item=q1', ctx)).toBe('genie://alphar/dashboard?item=q1');
         expect(addressOf('genie://hosting?tab=processes', ctx)).toBe('genie://alphar/hosting?tab=processes');
         expect(addressOf('genie://settings/providers', ctx)).toBe('genie://alphar/settings/providers');
     });

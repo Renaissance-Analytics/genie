@@ -2,13 +2,13 @@
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
- * `window.genieTest.updates` on the same page bridge the Deck's signal strip uses.
+ * `window.genieTest.updates` on the same page bridge the Dashboard signal strip uses.
  *
  *   EXPECT_VERSION=0.0.1 node scripts/update-cdp.mjs
  *
  * Runs against an INSTALLED app launched with `--remote-debugging-port=9222`, whose
  * `resources/app-update.yml` points at `serve-feed.mjs`. Every claim is checked against the
- * state the main process reports, and the Deck is visited so the signal strip's rendering of
+ * state the main process reports, and the Dashboard is visited so the signal strip's rendering of
  * each phase is seen in a real window, not only its model in a unit test.
  *
  * The last step quits the app to apply the update, so the socket dropping at the end is the
@@ -107,10 +107,10 @@ try {
     const still = await state(cdp);
     check(still.phase === 'available', '5. CONTROL: nothing downloads without being asked', still.phase);
 
-    await cdp.evaluate('location.hash = "#genie://deck"; true');
+    await cdp.evaluate('location.hash = "#genie://dashboard"; true');
     await new Promise((r) => setTimeout(r, 400));
     const shown = await cdp.evaluate('(() => { const b = document.querySelector("[data-signal=update]"); return b ? { text: b.textContent, action: b.dataset.action } : null; })()');
-    check(shown !== null && shown.action === 'update-download', '6. the Deck shows the update as a signal whose door is download', JSON.stringify(shown));
+    check(shown !== null && shown.action === 'update-download', '6. the Dashboard shows the update as a signal whose door is download', JSON.stringify(shown));
     check(shown !== null && shown.text.includes(EXPECT), '7. the signal names the version', shown?.text ?? '');
     await cdp.screenshot(`${process.cwd()}/update-available.png`);
     if (auto) {

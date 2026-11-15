@@ -26,6 +26,10 @@ export interface RunOptions {
     readonly env?: Readonly<Record<string, string>>;
     /** Run `binary` as a command line through the platform's shell (a provider's own status command). */
     readonly shell?: boolean;
+    /** Written to the child's input (a JSON-RPC conversation, Tynn #477); without it the input ends at once. */
+    readonly input?: string;
+    /** With `input`: the input ends when the child's output first matches this pattern (a regular expression's source). */
+    readonly endInputOnOutput?: string;
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
@@ -80,7 +84,17 @@ export function execInProcess(binary: string, args: readonly string[], options: 
             },
         );
         // Nothing is ever written to a command Genie runs: its input ends now.
-        child.stdin?.end();
+        if (options.input === undefined) child.stdin?.end();
+        else {
+            child.stdin?.on('error', () => {});
+            child.stdin?.write(options.input);
+            if (options.endInputOnOutput === undefined) child.stdin?.end();
+            else {
+                const reply = new RegExp(options.endInputOnOutput);
+                let seen = '';
+                child.stdout?.on('data', (chunk: Buffer | string) => { seen = (seen + String(chunk)).slice(-65_536); if (reply.test(seen)) child.stdin?.end(); });
+            }
+        }
         const timer = setTimeout(() => {
             timedOut = true;
             void endChildTrees([child], systemProcessTree).catch(() => { child.kill(); });

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { QuestionForm, type QuestionDraft } from '../src/renderer/components/QuestionForm.js';
 import { control } from './helpers/control-markup.js';
 
@@ -25,7 +25,7 @@ const questions = [
 ];
 const item: DeckItem = { id: 'q_1', source: 'agent-question', agentId: 'a1', agentName: 'lark', workspaceId: 'moic', title: 'Workers + 1 more', blocking: true, priority: 'normal', at: 1, answer: { kind: 'form', fields: 2, questions }, forwardedFrom: null };
 const render = () =>
-    renderToStaticMarkup(<Deck items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} />);
+    renderToStaticMarkup(<DeckOnDashboard items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} />);
 const form = (initial?: QuestionDraft, refusal: string | null = null) =>
     renderToStaticMarkup(<QuestionForm item={item} answering={null} refusal={refusal} onSubmit={() => {}} onCancel={() => {}} {...(initial ? { initial } : {})} />);
 const submitTag = (html: string) => html.match(/<button[^>]*data-action="deck-submit"[^>]*>/)?.[0] ?? '';
@@ -58,16 +58,16 @@ describe('the in-place form', () => {
 
     it('an item that did not carry its questions draws no form — its door opens the agent', () => {
         const bare: DeckItem = { ...item, answer: { kind: 'form', fields: 2 } };
-        const html = renderToStaticMarkup(<Deck items={[bare]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[bare]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} />);
         expect(html).not.toContain('data-deck-form');
         expect(html).toContain('data-deck-expand="q_1"');
     });
 
     it('a refused answer is said beside THAT item’s Answer button in the Deck — not only in the console', () => {
-        const refused = renderToStaticMarkup(<Deck items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} formRefusal={{ itemId: 'q_1', reason: 'Scope needs an option or a note' }} />);
+        const refused = renderToStaticMarkup(<DeckOnDashboard items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} formRefusal={{ itemId: 'q_1', reason: 'Scope needs an option or a note' }} />);
         expect(refused).toMatch(/data-action="deck-submit"[^]*role="alert"[^>]*>Scope needs an option or a note</);
         // Control: a refusal about another item is not said on this one.
-        const other = renderToStaticMarkup(<Deck items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} formRefusal={{ itemId: 'q_9', reason: 'elsewhere' }} />);
+        const other = renderToStaticMarkup(<DeckOnDashboard items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} formRefusal={{ itemId: 'q_9', reason: 'elsewhere' }} />);
         expect(other).not.toContain('elsewhere');
     });
 });

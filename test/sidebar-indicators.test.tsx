@@ -17,7 +17,7 @@ const memory = (collapsed: boolean): Pick<Storage, 'getItem' | 'setItem'> => {
     return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => { data.set(k, v); } };
 };
 const sidebar = (items: RailItem[], collapsed = false) => renderToStaticMarkup(
-    <Sidebar route="genie://dashboard" deckCount={0} workspaces={items} available={['deck', 'dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} onOpenProcesses={() => {}} onOpenSites={() => {}} />,
+    <Sidebar route="genie://dashboard" deckCount={0} workspaces={items} available={['dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} onOpenProcesses={() => {}} onOpenSites={() => {}} />,
 );
 const rowHtml = (html: string, id: string) => html.match(new RegExp(`<button[^>]*data-workspace="${id}"[\\s\\S]*?</button>`))?.[0] ?? '';
 

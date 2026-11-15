@@ -85,8 +85,8 @@ describe('the approval card, on every screen that uses it', () => {
         expect(card({ question: 'x', command: FAR })).toMatch(/data-approval-named=""[^>]*>\[400 spaces\]/);
     });
 
-    it('the Deck, the phone and the chat all draw this card, so a fix here is a fix there', () => {
-        for (const file of ['Deck', 'MobileShell', 'ChatFlyout', 'AgentView']) {
+    it('the waiting row, the phone and the chat all draw this card, so a fix here is a fix there', () => {
+        for (const file of ['DeckRow', 'MobileShell', 'ChatFlyout', 'AgentView']) {
             expect(readFileSync(`src/renderer/components/${file}.tsx`, 'utf8'), file).toMatch(/<ApprovalCard\b/);
         }
     });
@@ -98,15 +98,9 @@ describe('the approval toast', () => {
             id: 'appr_1_1', source: 'agent-question', agentId: 'a', agentName: 'compass', workspaceId: 'tynn', title: `compass wants to open a terminal: ${FAR}`,
             blocking: true, priority: 'high', at: 1, answer: { kind: 'inline', options: OPTIONS }, forwardedFrom: null,
         } as unknown as DeckItem;
-        const tree = ApprovalToastStack({ view: { ring: [item], front: 0, position: 1, total: 1, answering: [] } as never, notes: {}, onNote: () => {}, onAnswer: () => {}, onLater: () => {}, onFront: () => {}, onEngage: () => {} });
-        const stack = (function find(node: ReactNode): Record<string, unknown> | null {
-            if (Array.isArray(node)) { for (const n of node) { const hit = find(n); if (hit) return hit; } return null; }
-            if (!isValidElement(node)) return null;
-            const p = node.props as Record<string, unknown> & { children?: ReactNode };
-            return typeof p['renderItem'] === 'function' ? p : find(p.children);
-        })(tree);
-        const html = renderToStaticMarkup(<>{(stack!['renderItem'] as (i: DeckItem, s: { isFront: boolean }) => ReactNode)(item, { isFront: true })}</>);
-        expect(html).toMatch(/data-approval-toast-title=""[^>]*whitespace-pre-wrap/);
+        const view = { shown: [item], ids: [item.id], more: 0, total: 1, expanded: false, answering: [] };
+        const html = renderToStaticMarkup(<ApprovalToastStack view={view} onAnswer={() => {}} onExpand={() => {}} />);
+        expect(html).toMatch(/data-approval-question(="[^"]*")?[^>]*whitespace-pre-wrap/);
         expect(html).toContain('[400 spaces]');
         expect(html).toContain('&amp; more');
     });

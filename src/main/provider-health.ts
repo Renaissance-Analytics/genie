@@ -32,7 +32,7 @@ export interface ProviderHealthPorts {
     /** The program the person chose for this provider (Tynn #577), or `null`. */
     readonly chosen: (provider: string) => string | null;
     readonly now: () => number;
-    readonly run: (binary: string, args: readonly string[], options?: { readonly timeoutMs?: number; readonly env?: Readonly<Record<string, string>> }) => Promise<{ readonly exitCode: number; readonly stdout: string; readonly streams?: { readonly stdout: string; readonly stderr: string } }>;
+    readonly run: (binary: string, args: readonly string[], options?: { readonly timeoutMs?: number; readonly env?: Readonly<Record<string, string>>; readonly input?: string; readonly endInputOnOutput?: string }) => Promise<{ readonly exitCode: number; readonly stdout: string; readonly streams?: { readonly stdout: string; readonly stderr: string } }>;
 }
 
 const VERSION_TIMEOUT_MS = 20_000;
@@ -113,7 +113,7 @@ async function answer(ports: ProviderHealthPorts, binary: string, args: readonly
 }
 
 /** How to run the located program with `args`: a native program directly; an npm shim through cmd.exe, as a person's would. */
-function argvFor(provider: string, program: ProgramFile, args: readonly string[], ports: ProviderHealthPorts): [string, string[]] {
+export function argvFor(provider: string, program: ProgramFile, args: readonly string[], ports: ProviderHealthPorts): [string, string[]] {
     if (ports.platform !== 'win32') return [program.via ?? program.path, [...args]];
     if (RUNS_DIRECTLY.test(program.path)) return [program.path, [...args]];
     return platformArgv(provider, args, 'win32' as Platform, { platform: 'win32', env: ports.env as NodeJS.ProcessEnv, isFile: ports.isFile });

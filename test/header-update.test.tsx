@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { signalStrip, type SignalState } from '../src/core/deck.js';
 import { updateChip } from '../src/core/update-chip.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { TitleBar } from '../src/renderer/components/TitleBar.js';
 
 /**
@@ -54,7 +54,7 @@ describe('the Deck', () => {
     it('no longer carries the update — even when one is available', () => {
         const signals = { ...quiet, update: { phase: 'available', version: '2.0.0-beta.20', percent: null } } as SignalState;
         expect(signalStrip(signals).filter((s) => (s.kind as string) === 'update')).toEqual([]);
-        const html = renderToStaticMarkup(<Deck items={[]} signals={signals} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onSignalAction={() => {}} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[]} signals={signals} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onSignalAction={() => {}} />);
         expect(html).not.toMatch(/is available — download/);
     });
 });

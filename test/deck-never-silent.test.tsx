@@ -12,7 +12,7 @@ import { answerDeck } from '../src/main/deck-answer.js';
 import { handleFeatureAction } from '../src/main/feature-ipc.js';
 import type { ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { composeServices } from './helpers/compose-alone.js';
 
 /**
@@ -70,20 +70,20 @@ describe('the lifecycle line', () => {
 
 describe('the person sees the reason on that item', () => {
     it('a stale row, its form folded, shows the refusal under it', () => {
-        const html = renderToStaticMarkup(<Deck items={[item({ stale: 'session-ended' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_dd6bedde-0000', reason: 'This question is no longer waiting.' }} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[item({ stale: 'session-ended' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_dd6bedde-0000', reason: 'This question is no longer waiting.' }} />);
         expect(html).toMatch(/data-deck-refusal="q_dd6bedde-0000"[^>]*>[^<]*This question is no longer waiting\./);
     });
 
     it('CONTROL: another item’s refusal is not drawn here', () => {
-        const html = renderToStaticMarkup(<Deck items={[item({ stale: 'session-ended' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_other', reason: 'nope' }} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[item({ stale: 'session-ended' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_other', reason: 'nope' }} />);
         expect(html).not.toContain('data-deck-refusal');
     });
 
     it('the window keeps every Deck refusal for its item: dismiss, dismiss all and the one-click answer included', () => {
         const shell = readFileSync('src/renderer/Shell.tsx', 'utf8');
-        expect(shell).toMatch(/onDismiss=\{\(item, notes\) => deckAct\(item\.id, \{ kind: 'deck\.dismiss', item, notes \}\)\}/);
-        expect(shell).toMatch(/onDismissStale=\{\(ids\) => deckAct\('deck:stale', \{ kind: 'deck\.dismissStale', ids \}\)\}/);
-        expect(shell).toMatch(/onDismissOlder=\{\(olderThanMs\) => deckAct\('deck:older', \{ kind: 'deck\.dismissOlder', olderThanMs \}\)\}/);
+        expect(shell).toMatch(/onDismiss: \(item, notes\) => deckAct\(item\.id, \{ kind: 'deck\.dismiss', item, notes \}\),/);
+        expect(shell).toMatch(/onDismissStale: \(ids\) => deckAct\('deck:stale', \{ kind: 'deck\.dismissStale', ids \}\),/);
+        expect(shell).toMatch(/onDismissOlder: \(olderThanMs\) => deckAct\('deck:older', \{ kind: 'deck\.dismissOlder', olderThanMs \}\),/);
         const app = readFileSync('src/renderer/App.tsx', 'utf8');
         expect(app).toMatch(/console\.error\('\[genie\] deck answer refused:', reason\);\s*setDeckFormRefusal\(\{ itemId: item\.id, reason \}\);/);
     });

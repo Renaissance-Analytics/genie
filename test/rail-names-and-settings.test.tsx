@@ -13,7 +13,7 @@ describe('rail', () => {
         const html = renderToStaticMarkup(
             <Sidebar
                 route="genie://dashboard"
-                available={['deck', 'dashboard', 'genie', 'workspace', 'settings']}
+                available={['dashboard', 'genie', 'workspace', 'settings']}
                 workspaces={[
                     { id: '01k95ewyzkvkbxtpdt8b3qvyqk', name: 'Tynn.ai', path: 'C:\\_Projects\\tynn.ai', count: 3, alert: false },
                     { id: '01kex8dep28vm4awnsv3h8avd3', path: 'C:\\_Projects\\_packages\\fancy.agi', count: 0, alert: false },
@@ -38,14 +38,14 @@ describe('rail', () => {
 
     it('offers a Settings row when the settings surface can be served', () => {
         const html = renderToStaticMarkup(
-            <Sidebar route="genie://dashboard" available={['deck', 'dashboard', 'genie', 'workspace', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} />,
+            <Sidebar route="genie://dashboard" available={['dashboard', 'genie', 'workspace', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} />,
         );
         expect(html).toContain('data-nav="genie://settings"');
         expect(html).toMatch(/>Settings</);
     });
 
     it('railSurfacesFor derives the settings row from the settings surface — CONTROL: absent without it', () => {
-        expect(railSurfacesFor(['deck', 'dashboard', 'agent', 'workspace', 'settings'])).toContain('settings');
-        expect(railSurfacesFor(['deck', 'dashboard'])).not.toContain('settings');
+        expect(railSurfacesFor(['dashboard', 'agent', 'workspace', 'settings'])).toContain('settings');
+        expect(railSurfacesFor(['dashboard'])).not.toContain('settings');
     });
 });

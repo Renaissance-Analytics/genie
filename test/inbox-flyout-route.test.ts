@@ -20,7 +20,7 @@ describe('the route', () => {
             'genie://dashboard?inbox=',
             'genie://workspace/ws_tynn?inbox=human%7Cagent_atlas',
             'genie://agent/agent_atlas?tab=stream&inbox=msg_123',
-            'genie://deck?inbox=',
+            'genie://dashboard?item=q_1&inbox=',
             'genie://settings?inbox=',
         ]) {
             const route = parseRoute(text);
@@ -31,8 +31,9 @@ describe('the route', () => {
 
     it('closed: no `inbox` at all, and a route without it reads exactly as before (positive control: with it, it is there)', () => {
         expect(parseRoute('genie://dashboard?group=workspace')).toEqual({ surface: 'dashboard', chat: null, pin: null });
-        expect(formatRoute({ ...parseRoute('genie://deck?inbox='), inbox: null })).toBe('genie://deck');
-        expect(parseRoute('genie://deck?inbox=')).toHaveProperty('inbox', '');
+        // The Deck's route is the Dashboard's now (Tynn #730): the flyout rides it all the same.
+        expect(formatRoute({ ...parseRoute('genie://deck?inbox='), inbox: null })).toBe('genie://dashboard');
+        expect(parseRoute('genie://deck?inbox=')).toMatchObject({ surface: 'dashboard', inbox: '' });
     });
 
     it('the old page `genie://inbox` opens the flyout over the Dashboard — there is no inbox page any more', () => {

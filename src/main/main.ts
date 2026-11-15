@@ -1952,6 +1952,7 @@ async function boot(): Promise<void> {
         onSignedIn: (provider) => {
             // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698).
             void providerHealth.refresh(provider);
+            void agentEngineLink?.client.refreshAccountIdentity(provider);
             afterSignedIn(provider, {
                 signedOutAgents: (p) => host?.signedOutAgents(p) ?? [],
                 restart: (id) => { void restartAgent(agentOps, id as AgentId, 'graceful').then((r) => { if (r.ok) host?.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch()); },

@@ -29,11 +29,11 @@ describe('where it shows', () => {
         expect(alertDelivery(false)).toBe('os');
     });
 
-    it('Genie’s own toasts sit bottom-LEFT, each with its title and body and a way to dismiss it', () => {
+    it('Genie’s own toasts sit in the bottom-LEFT toast column (placed once, shared with the approvals), each with its title and body and a way to dismiss it', () => {
         const html = renderToStaticMarkup(<AlertToasts toasts={[{ id: 't1', title: 'prism-slave@prism', body: 'Finished: done' }]} onDismiss={() => {}} />);
         expect(html).toContain('data-alert-toasts');
-        expect(html).toMatch(/data-alert-toasts[^>]*class="[^"]*\bleft-4\b/);
-        expect(html).not.toMatch(/data-alert-toasts[^>]*class="[^"]*\bright-/);
+        // Placed by ToastColumn (test/toast-column-730.test.tsx): no position of its own to overlap the approvals.
+        expect(html).not.toMatch(/data-alert-toasts[^>]*class="[^"]*\b(fixed|absolute|left-|right-|bottom-)/);
         expect(html).toContain('prism-slave@prism');
         expect(html).toContain('Finished: done');
         expect(html).toContain('data-alert-toast-dismiss="t1"');
