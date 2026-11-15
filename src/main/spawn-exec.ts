@@ -26,6 +26,10 @@ export interface RunOptions {
     readonly env?: Readonly<Record<string, string>>;
     /** Run `binary` as a command line through the platform's shell (a provider's own status command). */
     readonly shell?: boolean;
+    /** Written to the child's input (a JSON-RPC conversation, Tynn #477); without it the input ends at once. */
+    readonly input?: string;
+    /** With `input`: the input ends when the child's output first matches this pattern (a regular expression's source). */
+    readonly endInputOnOutput?: string;
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
