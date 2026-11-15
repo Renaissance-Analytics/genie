@@ -1,7 +1,7 @@
 import { renameOver } from '../core/atomic-rename.js';
 import { chmod, lstat, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
+import { AGENT_RECORD_FIELDS, asAgentId, withAgentAccount, type AgentRecord } from '../core/identity.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { runtimeDir } from './paths.js';
 import { restrictPrivateFile } from './private-credentials.js';
@@ -201,7 +201,8 @@ function parseRecord(value: unknown, onDrop: (why: string) => void): AgentRecord
     }
 
     const raw = value as Record<string, unknown>;
-    const missing = AGENT_RECORD_FIELDS.filter((f) => !(f in raw));
+    // accountId alone has a documented legacy migration; other missing fields still mean a broken record.
+    const missing = AGENT_RECORD_FIELDS.filter((f) => f !== 'accountId' && !(f in raw));
     if (missing.length > 0) {
         onDrop(`missing ${missing.join(', ')}`);
         return null;
@@ -213,7 +214,34 @@ function parseRecord(value: unknown, onDrop: (why: string) => void): AgentRecord
         return null;
     }
 
-    return { ...(raw as unknown as AgentRecord), id };
+    try {
+        return withAgentAccount({ ...(raw as unknown as AgentRecord), id });
+    } catch {
+        onDrop('invalid account binding or thread namespace');
+        return null;
+    }
+}
+
+const accountUpgrades = new Map<string, Promise<void>>();
+
+/** The host's first read/write durably binds older rows before any session can use them. Preserve unparseable rows. */
+function migrateAgentAccounts(directory: string): Promise<void> {
+    const pending = accountUpgrades.get(directory);
+    if (pending) return pending;
+    const ready = (async () => {
+        const file = join(directory, 'agents.json');
+        const rows = await readJson<unknown[]>(file, []);
+        let changed = false;
+        const migrated = rows.map(raw => {
+            const parsed = parseRecord(raw, () => {});
+            if (!parsed) return raw;
+            if (JSON.stringify(parsed) !== JSON.stringify(raw)) changed = true;
+            return parsed;
+        });
+        if (changed) await writeJsonAtomic(file, migrated);
+    })().finally(() => { accountUpgrades.delete(directory); });
+    accountUpgrades.set(directory, ready);
+    return ready;
 }
 
 const inboxAccessUpgrades = new Map<string, Promise<void>>();
@@ -261,6 +289,7 @@ async function upgradeAgentInboxAccess(directory: string): Promise<void> {
 export class Store {
     readonly #dir: string;
     #inboxAccessReady: Promise<void> | undefined;
+    #accountsReady: Promise<void> | undefined;
     /** Records that failed to parse, kept so a boot fault is reportable rather than silent. */
     readonly dropped: string[] = [];
 
@@ -319,6 +348,7 @@ export class Store {
     }
 
     async readAgents(): Promise<readonly AgentRecord[]> {
+        await (this.#accountsReady ??= migrateAgentAccounts(this.#dir));
         await (this.#inboxAccessReady ??= migrateAgentInboxAccess(this.#dir));
         const raw = await readJson<unknown[]>(this.agentsFile, []);
         this.dropped.length = 0;
@@ -330,6 +360,7 @@ export class Store {
     }
 
     async writeAgents(records: readonly AgentRecord[]): Promise<void> {
+        await (this.#accountsReady ??= migrateAgentAccounts(this.#dir));
         await (this.#inboxAccessReady ??= migrateAgentInboxAccess(this.#dir));
         await writeJsonAtomic(this.agentsFile, records);
     }

@@ -1,4 +1,5 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
+import { accountThreadKey, legacyAccountId } from '../core/accounts.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
@@ -305,7 +306,8 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     ports.host.stop(record.id);
     // Answered once the old provider has ended: its last rows are in the ledger the carry-over is built from.
     await ports.host.ended(record.id);
-    const since = record.leftAt?.[to] !== undefined ? Date.parse(record.leftAt[to]!) : null;
+    const left = record.leftAt?.[accountThreadKey(to, legacyAccountId(to))] ?? record.leftAt?.[to];
+    const since = left !== undefined ? Date.parse(left) : null;
     const rows = ports.history ? await ports.history(record).catch(() => []) : [];
     const carryOver = buildCarryOver({ from: record.provider, to, agentName: record.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
     const switched = await ports.registry.setProvider(record.id, to, { keepModel, carryOver });

@@ -1262,7 +1262,7 @@ async function main(): Promise<void> {
     let githubNow: GithubAccount | null = null;
     void githubOpening.then((account) => { githubNow = account; }, () => {});
     const hostScratch = scratchArea(home);
-    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }), { accountById: (id) => accounts.get(id) });
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));

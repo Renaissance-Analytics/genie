@@ -43,3 +43,28 @@ field stays null; Genie never guesses a plan or derives identity from a token.
 
 S1 introduces no UI, login, account switch or agent reassignment. Real account
 isolation remains unmeasured until the owner-arranged VM sign-ins.
+
+## Agent bindings and native threads (Accounts S2)
+
+New and loaded `AgentRecord`s have an explicit `accountId`. Older records bind
+to their provider's stable legacy account; their current `threadId` and other
+settings stay unchanged. The store persists that migration before exposing its
+first read/write. Invalid bindings are reported through the existing dropped
+record diagnostics rather than assigned to a different account.
+
+`threadIds` and `leftAt` use `accountThreadKey(provider, accountId)` from the
+pure model (`provider:accountId`). Old provider-only entries become entries for
+that provider's legacy account, including on an already-bound managed record.
+An entry already in the new format takes precedence over an older duplicate.
+
+`Registry` accepts a trusted optional `accountById` port; genie-host supplies its
+account book. Its internal `setProvider` primitive accepts an optional explicit
+`accountId`. A managed assignment requires a matching account in that book.
+Without an explicit account, keeping a provider keeps its current binding;
+changing provider selects the destination's legacy default. Leaving parks the
+native thread under its exact namespace; returning resumes only that slot.
+Provider-switch carry-over uses that destination account's departure time.
+
+These are data/model primitives. No account-switch tool, UI action or guided
+login flow is introduced by S2. Launching with the bound home belongs to S3;
+person-confirmed switching belongs to the later switch story.
