@@ -1,195 +1,116 @@
-import { Button, Icon, Input, Toast } from '@particle-academy/react-fancy';
-import { useEffect, useReducer, useState } from 'react';
-import type { OptionTone } from '../../core/approval.js';
-import { ApprovalText } from './ApprovalCard.js';
+import { Button } from '@particle-academy/react-fancy';
+import { useEffect, useReducer } from 'react';
+import { personText } from '../../core/person-text.js';
 import type { DeckItem } from '../../core/deck.js';
-import { EMPTY_TOASTS, TOAST_DEPTH, toastReducer, toastView, type ToastStackView } from '../../core/approval-toasts.js';
+import { EMPTY_TOASTS, toastReducer, toastView, type ToastStackView } from '../../core/approval-toasts.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
+import { ApprovalCard } from './ApprovalCard.js';
 
 /**
- * THE APPROVAL TOASTS — an agent's gated Genie workflow (a site, a database, a background process, a terminal) answered
- * from whatever screen is open, without going to the Deck. The rules are `core/approval-toasts.ts`; this draws them.
+ * THE APPROVAL TOASTS (Tynn #730; the owner, 2026-11-14) — everything waiting in the Deck for an approval, answered from
+ * whatever page is open. The rules are `core/approval-toasts.ts`; this draws them.
  *
- * ## One request, one answer path
+ * ## Where
  *
- * A toast is the Deck's own item, and Allow / Deny call the Deck's own `onAnswer` (Shell's `onAnswerDeckItem` →
- * `deckAnswerRoute` → `deck.answer` → `ApprovalQueue.resolve`). Answered in either place, the request leaves the
- * snapshot, and so leaves both.
+ * BOTTOM-LEFT of the PAGE COLUMN (Shell: the content beside the rail, before the chat dock). Inside that column it is over
+ * the content, clear of the sidebar nav on its left, and the chat — with its input — is a column after the page, so a
+ * toast cannot cover the chat input at any width (`toastBox`; Genie's own alert toasts are bottom-left too, genie#1211).
  *
- * ## The stack (the owner: "stack behind each other with slight top offset … hovering over the stack the user can
- * scroll the mouse to review each request")
+ * ## What
  *
- * Fancy's `Toast.Stack` (react-fancy 5.41, built at Genie's request — react-fancy#33): the front request is a whole card
- * with live buttons; two more peek out ABOVE it, each a few pixels higher and slightly smaller; beyond that a "+N". The
- * wheel over it, or the arrow keys with focus in it, bring the next request to the FRONT, round the ring. It is a VIEW of
- * Genie's list: nothing in it can drop a request, and Genie owns which one is in front (`frontIndex`), so while the
- * pointer or focus is on it a new request joins behind — never in front of the one being read. The card under the
- * pointer is the whole request; "2 of 5" says where in the ring you are.
+ * A toast is an ApprovalCard — the card an agent's page and chat used to carry — with the asking agent and workspace above
+ * it: the exact command, the optional note, the item's own options (Allow / Deny, or whatever it offers), and "Trust this
+ * workspace" where the card offers it. Answering calls the Deck's own `onAnswer`, the one resolution path
+ * (`deckAnswerRoute`), so an approval answered here, in the chat or on another device leaves the snapshot, and so leaves
+ * every one of them. It stays until then; there is no Later and no timeout.
  */
-
-/** Pixels each card behind sits above the one in front of it. */
-const OFFSET = 8;
-/** How much smaller each card behind is. */
-const SCALE_STEP = 0.04;
-
-/** The colours come from the option's tone, never from its words — ApprovalCard's rule. */
-const TONE: Record<OptionTone, string> = {
-    ok: 'border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10',
-    bad: 'border-[var(--danger)]/40 text-[var(--danger)] hover:bg-[var(--danger)]/10',
-    neutral: 'border-[var(--border-2)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]',
-};
 
 export interface ApprovalToastStackProps {
     view: ToastStackView;
-    /** Allow / Deny — the Deck's own answer — with the note typed on this request ('' = none; beta.33 item 16). */
+    /** Allow / Deny / the item's own option — the Deck's answer — with the note typed on this request ('' = none). */
     onAnswer: (item: DeckItem, optionId: string, note: string) => void;
-    /** The note typed per request, by its id; absent = none typed. */
-    notes?: Readonly<Record<string, string>> | undefined;
-    onNote?: ((itemId: string, note: string) => void) | undefined;
-    /** Later: off the toasts, kept in the Deck. */
-    onLater: (item: DeckItem) => void;
-    /** Fancy turned the stack (wheel or arrow): the new front's index in the ring. */
-    onFront: (index: number) => void;
-    /** The pointer or focus arrived at (true) or left (false) the stack. */
-    onEngage: (on: boolean) => void;
-    /** Open the Deck at this request. */
-    onOpenDeck?: ((item: DeckItem) => void) | undefined;
-    /** Distance from the right edge of the content row (clear of the chat strip, a docked panel or an open flyout). */
-    right?: number | undefined;
+    /** "+N more" opened (true) or folded back (false). */
+    onExpand: (on: boolean) => void;
+    /** Open the asking agent's chat. Absent = the toast offers no door. */
+    onOpenAgent?: ((item: DeckItem) => void) | undefined;
+    /** Trust the item's workspace from its card (Tynn #618). Absent = not offered. */
+    onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
 }
 
 function workspaceOf(item: DeckItem): string {
     return item.workspaceName?.trim() || 'a workspace not known here';
 }
 
-/** The front request: who, where, what, and its answers. */
-function FrontCard({ item, view, onAnswer, onLater, onOpenDeck, notes, onNote }: { item: DeckItem; view: ToastStackView } & Pick<ApprovalToastStackProps, 'onAnswer' | 'onLater' | 'onOpenDeck' | 'notes' | 'onNote'>) {
-    const note = notes?.[item.id] ?? '';
-    const busy = view.answering.includes(item.id);
+function ToastCard({ item, busy, onAnswer, onOpenAgent, onTrustWorkspace }: { item: DeckItem; busy: boolean } & Pick<ApprovalToastStackProps, 'onAnswer' | 'onOpenAgent' | 'onTrustWorkspace'>) {
     const options = item.answer.kind === 'inline' ? item.answer.options : [];
     return (
-        <div data-approval-toast={item.id} className="text-[13px]">
-            <div className="mb-1.5 flex items-center gap-2 text-[11px] text-[var(--fg-3)]">
-                <Icon name="circle-help" size="xs" className="shrink-0 text-[var(--warning)]" />
+        <div data-approval-toast={item.id} className="rounded-lg border border-[var(--warning)]/40 bg-[var(--bg-1)] p-3 text-[13px] shadow-lg">
+            <div className="mb-2 flex items-center gap-2 text-[11px] text-[var(--fg-3)]">
                 <span data-approval-toast-agent="" className="font-semibold text-[var(--fg-1)]">{item.agentName ?? 'An agent'}</span>
                 <span aria-hidden="true">·</span>
                 {/* The workspace's colour beside its name (genie#1300). */}
                 <WorkspaceSwatch color={item.workspaceColor} />
                 <span data-approval-toast-workspace="" className="min-w-0 flex-1 truncate">{workspaceOf(item)}</span>
-                {view.total > 1 ? <span data-approval-toast-position="" className="shrink-0 font-mono">{`${view.position} of ${view.total}`}</span> : null}
-            </div>
-            <p data-approval-toast-title="" className="mb-2.5 whitespace-pre-wrap leading-[18px] text-[var(--fg-1)] [overflow-wrap:anywhere]"><ApprovalText text={item.title} /></p>
-            {/* Asked although the agent is Autonomous (Tynn #439): why, in words. */}
-            {item.why ? <p data-approval-why="" className="mb-2 text-[12px] text-[var(--fg-2)]">{item.why}</p> : null}
-            {/* An optional note, sent with Allow or Deny: the agent is told what you said (beta.33 item 16). */}
-            {onNote ? <Input data-toast-note={item.id} value={note} onValueChange={(v) => onNote(item.id, v)} size="sm" placeholder={`Note for ${item.agentName ?? 'the agent'} (optional)`} aria-label="Note with your answer" className="mb-2" /> : null}
-            <div className="flex items-center gap-2">
-                {options.map((option) => (
-                    <Button
-                        key={option.id}
-                        type="button"
-                        size="sm"
-                        data-toast-option={option.id}
-                        data-tone={option.tone}
-                        disabled={busy}
-                        onClick={() => onAnswer(item, option.id, note)}
-                        className={`border ${TONE[option.tone]}`}
-                    >
-                        {option.label}
-                    </Button>
-                ))}
-                <span className="flex-1" />
-                {onOpenDeck ? (
-                    <Button type="button" size="sm" variant="ghost" data-toast-deck="" onClick={() => onOpenDeck(item)} title="Open this request in the Deck">
-                        Deck
-                    </Button>
+                {onOpenAgent && item.agentId ? (
+                    <Button type="button" size="xs" variant="ghost" data-toast-open={item.id} onClick={() => onOpenAgent(item)} title="Open this agent's chat">Open</Button>
                 ) : null}
-                <Button type="button" size="sm" variant="ghost" data-toast-later="" disabled={busy} onClick={() => onLater(item)} title="Put it off: it stays in the Deck">
-                    Later
-                </Button>
             </div>
-        </div>
-    );
-}
-
-/** The stack itself: a pure function of its view — no state, so a test can read it and press its buttons. */
-export function ApprovalToastStack({ view, onAnswer, onLater, onFront, onEngage, onOpenDeck, notes, onNote, right = 16 }: ApprovalToastStackProps) {
-    if (view.total === 0) return null;
-    const front = view.ring[view.front]!;
-    return (
-        <div
-            data-approval-toasts=""
-            data-front={front.id}
-            data-position={view.position}
-            data-total={view.total}
-            onMouseEnter={() => onEngage(true)}
-            onMouseLeave={() => onEngage(false)}
-            onFocus={() => onEngage(true)}
-            onBlur={(e) => {
-                const to = e.relatedTarget as Node | null;
-                if (!to || !e.currentTarget.contains(to)) onEngage(false);
-            }}
-            className="absolute bottom-4 z-30 w-[360px] overscroll-contain"
-            style={{ right }}
-        >
-            <Toast.Stack
-                items={view.ring}
-                getKey={(item) => item.id}
-                frontIndex={view.front}
-                onFrontIndexChange={onFront}
-                depth={TOAST_DEPTH - 1}
-                offset={OFFSET}
-                scaleStep={SCALE_STEP}
-                position="inline"
-                label={`Approval requests: ${view.total} waiting. Arrow keys or the mouse wheel move through them.`}
-                className="w-full"
-                cardClassName="border-[var(--warning)]/40 bg-[var(--bg-1)]"
-                renderItem={(item, { isFront }) =>
-                    isFront ? (
-                        <FrontCard item={item} view={view} onAnswer={onAnswer} onLater={onLater} onOpenDeck={onOpenDeck} notes={notes} onNote={onNote} />
-                    ) : (
-                        // The ones behind are inert (Fancy's): only the front one is answered.
-                        <span data-approval-toast-behind={item.id} className="text-[12px] text-[var(--fg-3)]">{item.title}</span>
-                    )
-                }
+            <ApprovalCard
+                flat
+                approval={{ question: personText(item.title), options, why: item.why ?? null }}
+                agentName={item.agentName ?? undefined}
+                // '' = an answer in flight: every option refuses a second press until the request leaves.
+                answering={busy ? '' : null}
+                onAnswer={(optionId, note) => onAnswer(item, optionId, note)}
+                onTrustWorkspace={onTrustWorkspace && item.workspaceId ? () => onTrustWorkspace(item.workspaceId!) : undefined}
             />
         </div>
     );
 }
 
-export interface ApprovalToastsProps {
-    /** The Deck's items — the same list the Deck shows. */
-    items: readonly DeckItem[];
-    /** Do Not Disturb (Settings → General): nothing pops; arrivals wait in the Deck. */
-    dnd: boolean;
-    /** Drawn nowhere (the Deck itself is on screen: it shows these with the same buttons). The rules keep running. */
-    hidden?: boolean | undefined;
-    onAnswer: (item: DeckItem, optionId: string, note: string) => void;
-    onOpenDeck?: ((item: DeckItem) => void) | undefined;
-    right?: number | undefined;
+/** The stack itself: a pure function of its view — no state, so a test can render it and read its handlers. */
+export function ApprovalToastStack({ view, onAnswer, onExpand, onOpenAgent, onTrustWorkspace }: ApprovalToastStackProps) {
+    if (view.total === 0) return null;
+    return (
+        <div
+            data-approval-toasts=""
+            data-total={view.total}
+            data-expanded={view.expanded ? 'true' : 'false'}
+            role="region"
+            aria-label={`Approvals waiting: ${view.total}`}
+            // The first toast is the one most worth answering: it sits in the corner, the rest stack above it, "+N more" on top.
+            className={`pointer-events-none absolute bottom-4 left-4 z-30 flex w-[372px] max-w-[calc(100%-2rem)] flex-col-reverse gap-2 ${view.expanded ? 'max-h-[calc(100%-2rem)] overflow-y-auto' : ''}`}
+        >
+            {view.shown.map((item) => (
+                <div key={item.id} className="pointer-events-auto">
+                    <ToastCard item={item} busy={view.answering.includes(item.id)} onAnswer={onAnswer} onOpenAgent={onOpenAgent} onTrustWorkspace={onTrustWorkspace} />
+                </div>
+            ))}
+            {view.more > 0 ? (
+                <Button type="button" size="xs" data-toast-more={view.more} className="pointer-events-auto self-start rounded-full border border-[var(--warning)]/40 bg-[var(--bg-1)] px-3 shadow-lg" onClick={() => onExpand(true)}>
+                    {`+${view.more} more waiting for approval`}
+                </Button>
+            ) : view.expanded ? (
+                <Button type="button" size="xs" data-toast-fewer="" className="pointer-events-auto self-start rounded-full border border-[var(--border-1)] bg-[var(--bg-1)] px-3 shadow-lg" onClick={() => onExpand(false)}>
+                    Show fewer
+                </Button>
+            ) : null}
+        </div>
+    );
 }
 
-/** The stack with its rules: what arrived, what was put off, which one is in front. */
-export function ApprovalToasts({ items, dnd, hidden = false, onAnswer, onOpenDeck, right }: ApprovalToastsProps) {
-    // The first render already knows what is parked (and what arrived under DND), so nothing flashes on boot.
+/**
+ * The stack's rules, as state: what arrived, what waits under Do Not Disturb, whether "+N more" is open. HELD BY THE SHELL
+ * (not by the stack), because the agent's page and its chat need to know which approvals a toast carries — they show a
+ * marker for those and no second set of buttons (agent-view.ts `approvalPlacement`).
+ */
+export function useApprovalToasts(items: readonly DeckItem[], dnd: boolean): { view: ToastStackView; pressed: (item: DeckItem) => void; expand: (on: boolean) => void } {
+    // The first render already knows what arrived under DND, so nothing flashes on boot.
     const [state, dispatch] = useReducer(toastReducer, null, () => toastReducer(EMPTY_TOASTS, { kind: 'items', items, dnd }));
     useEffect(() => { dispatch({ kind: 'items', items, dnd }); }, [items, dnd]);
-    const [notes, setNotes] = useState<Readonly<Record<string, string>>>({});
-    if (hidden) return null;
-    return (
-        <ApprovalToastStack
-            view={toastView(state, items)}
-            onAnswer={(item, optionId, note) => {
-                dispatch({ kind: 'answering', id: item.id });
-                onAnswer(item, optionId, note);
-            }}
-            notes={notes}
-            onNote={(id, note) => setNotes((n) => ({ ...n, [id]: note }))}
-            onLater={(item) => dispatch({ kind: 'later', id: item.id })}
-            onFront={(index) => dispatch({ kind: 'front', index })}
-            onEngage={(on) => dispatch({ kind: 'engage', on })}
-            onOpenDeck={onOpenDeck}
-            right={right}
-        />
-    );
+    return {
+        view: toastView(state, items),
+        pressed: (item) => dispatch({ kind: 'answering', id: item.id }),
+        expand: (on) => dispatch({ kind: 'expand', on }),
+    };
 }
