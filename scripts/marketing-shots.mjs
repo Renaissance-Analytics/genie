@@ -110,7 +110,7 @@ writeFileSync(join(runtime, 'agents.json'), JSON.stringify(AGENTS.map((a) => ({
     ...(a.plan ? { plan: a.plan.map(([content, status]) => ({ content, status })) } : {}),
 })), null, 2));
 // The theme setting is a top-level key of settings.json (main/settings-store.ts); dark first, light is set by the run.
-writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: 'dark' }, null, 2));
+writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: 'dark', whats_new_seen_version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version }, null, 2));
 
 // The provider is the stub codex the CI rows use; Genie finds it the way it finds any install (GENIE2_CODEX_BINARY).
 const stub = join(ROOT, 'scripts', 'stub-codex.mjs');
@@ -194,7 +194,16 @@ async function sizeWindow() {
     const w = await browser.send('Browser.getWindowForTarget', { targetId: page.id });
     if (w.result?.windowId) await browser.send('Browser.setWindowBounds', { windowId: w.result.windowId, bounds: { windowState: 'normal', left: 0, top: 0, width: WIDTH, height: HEIGHT } });
     browser.close();
-    await sleep(1500);
+    // A tiling session keeps the window at the size it chose, and a page drawn at another size than its window is drawn wrongly.
+    // So the window is floated and sized by the session itself (hyprctl), and the page's metrics are only the last resort.
+    const hypr = (...args) => spawnSync('hyprctl', args, { encoding: 'utf8', env: process.env });
+    const active = hypr('activewindow', '-j');
+    if (active.status === 0) {
+        try { if (JSON.parse(active.stdout).floating === false) hypr('dispatch', 'togglefloating'); } catch { /* not json */ }
+        hypr('dispatch', 'resizeactive', 'exact', String(WIDTH), String(HEIGHT));
+        hypr('dispatch', 'moveactive', 'exact', '0', '0');
+    } else note('hyprctl did not answer; the window was not floated');
+    await sleep(2500);
     const inner = JSON.parse(await ev('JSON.stringify({ w: window.innerWidth, h: window.innerHeight })'));
     if (inner.w !== WIDTH || inner.h !== HEIGHT) {
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
@@ -202,9 +211,26 @@ async function sizeWindow() {
     }
 }
 
+const OVERLAYS = '[role="dialog"], [role="alertdialog"], [data-toast]';
+/** Nothing a first run puts over the page may be in a shot: What's new is closed the way its Close does, then whatever dialog or toast is left is pressed away, and said. */
+async function clearOverlays() {
+    try {
+        const open = JSON.parse(await ev(`(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify(d.whatsNew ?? null))`) ?? 'null');
+        if (open?.version) await act({ kind: 'whatsNew.close', version: open.version });
+    } catch (e) { note(`whatsNew: ${e}`); }
+    for (let i = 0; i < 3; i += 1) {
+        if (!await ev(`document.querySelectorAll(${JSON.stringify(OVERLAYS)}).length`)) return;
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+        await sleep(600);
+    }
+    note(`an overlay was still on screen: ${await ev(`[...document.querySelectorAll(${JSON.stringify(OVERLAYS)})].map((n) => n.textContent.trim().slice(0, 80)).join(' | ')`)}`);
+}
+
 async function shot(name, what, clip) {
+    await clearOverlays();
     await sleep(2500); // a render and its transitions settle; a fixed wait is a guess, so each shot also records what it held
-    const held = await ev(`JSON.stringify({ route: document.querySelector('[data-route]')?.textContent ?? null, dark: document.documentElement.classList.contains('dark'),
+    const held = await ev(`JSON.stringify({ route: document.querySelector('[data-route]')?.textContent ?? null, dark: document.documentElement.classList.contains('dark'), dpr: window.devicePixelRatio, inner: innerWidth + 'x' + innerHeight, overlays: document.querySelectorAll('[role="dialog"]').length,
         agentRows: document.querySelectorAll('[data-agent]').length, states: [...document.querySelectorAll('[data-agent][data-state]')].map((r) => (r.querySelector('span.font-medium')?.textContent ?? r.getAttribute('data-agent')).trim() + ':' + r.getAttribute('data-state')),
         signals: [...document.querySelectorAll('[data-signal]')].map((s) => s.textContent.trim()), deckItems: document.querySelectorAll('[data-deck-item]').length })`);
     const params = { format: 'png', ...(clip ? { clip: { ...clip, scale: 1 } } : {}) };
@@ -235,9 +261,10 @@ async function approveAndFinish(agent) {
     await go(`genie://agent/${agent.id}?tab=stream`);
     if (!await waitFor(`${agent.key}'s approval card`, `Boolean(document.querySelector('[data-approval-option][data-tone="ok"]'))`, 60_000)) { note(`${agent.key}: ${JSON.stringify(await detail(agent.id))}`); return false; }
     await ev(`document.querySelector('[data-approval-option][data-tone="ok"]').click(); true`);
-    await sleep(2500);
-    writeFileSync(RELEASE, '');
+    // The stub removes the release file when its reply starts and waits for it after: written again and again until the turn ends, so the order of the two cannot matter.
+    const releasing = setInterval(() => writeFileSync(RELEASE, ''), 700);
     const idle = await waitFor(`${agent.key} to finish its turn`, `window.genieTest.agentDetail(${JSON.stringify(agent.id)}).then((d) => d?.session?.turnState === 'idle')`, 90_000);
+    clearInterval(releasing);
     rmSync(RELEASE, { force: true });
     if (!idle) note(`${agent.key}: ${JSON.stringify(await detail(agent.id))}`);
     return idle;
