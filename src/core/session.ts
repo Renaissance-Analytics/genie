@@ -1644,6 +1644,19 @@ export class AgentSession {
         return null;
     }
 
+    /**
+     * A PROVIDER COMMAND FOR A CLI THAT RUNS IT FROM THE PROMPT (Claude, Tynn #702): handed over ALONE, with nothing of
+     * Genie's ahead of it, and shown as a small row. `false` = not now (a turn running, work held, still starting): the
+     * caller sends it the ordinary way.
+     */
+    promptCommand(text: string, by: string | null): boolean {
+        if (!this.#driver || !this.running) return false;
+        if (this.#inTurn || this.#held || this.#starting || this.#afterTurn.length > 0 || this.#needsNewDriver || this.#options.mayTakeWork?.() === false) return false;
+        if (by === 'you') this.resumeAfterStop();
+        this.#send(text, by, null, true, {}, true);
+        return true;
+    }
+
     /** Whether this agent's provider runs its commands as commands (`SessionDriver.runCommand`), not as prompt text. */
     get runsCommands(): boolean {
         return typeof this.#driver?.runCommand === 'function';
@@ -1674,7 +1687,7 @@ export class AgentSession {
         void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
         this.#inTurn = true;
         this.#limitThisTurn = false;
-        void this.#emitRow(promptRow(text, by, null, {}));
+        void this.#emitRow(commandRow(text)); // A small row that the command ran, not your message (Tynn #702).
         this.#turnState = 'working';
         this.#stopCooling();
         this.#changed();
@@ -1729,22 +1742,24 @@ export class AgentSession {
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
-    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false, context: PromptContext = {}): void {
+    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false, context: PromptContext = {}, command = false): void {
         if (!this.#driver) throw new Error('session is not started');
         // The provider takes it FIRST: a prompt it refuses (Codex while a turn runs, a driver that throws) writes nothing
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
         // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
-        const carry = this.#carryOver;
-        const redockAt = this.#inTurn ? null : this.#redockAt;
+        // A PROVIDER COMMAND GOES ALONE (Tynn #702): the CLI runs /compact only at the start of the prompt, so nothing of
+        // Genie's goes ahead of it; all of it waits, still pending, for the next ordinary prompt.
+        const carry = command ? null : this.#carryOver;
+        const redockAt = this.#inTurn || command ? null : this.#redockAt;
         const redock = redockAt === null ? null : redockReorientation(redockAt);
         // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
-        const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
+        const rateWarning = this.#rateWarningPending && !command ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
         const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
-        const held = this.#inTurn ? null : this.#heldForNextWork;
+        const held = this.#inTurn || command ? null : this.#heldForNextWork;
         const heldShownAs = held === null ? null : this.#heldShownAs;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
@@ -1755,7 +1770,7 @@ export class AgentSession {
             this.#redockAt = null;
             this.#options.onRedockSent?.(redockAt);
         }
-        this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
+        if (!command) this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;
@@ -1784,7 +1799,8 @@ export class AgentSession {
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
         // Instruction text is never drawn: one line says it was sent (Tynn #615).
         if (held !== null) void this.#emitRow(heldShownAs !== null ? { kind: 'notice', level: 'info', message: heldShownAs } : promptRow(held, 'genie', null, {}));
-        if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
+        if (record && command) void this.#emitRow(commandRow(text));
+        else if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
         // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
         this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
@@ -2870,6 +2886,11 @@ function replayOf(update: Record<string, unknown>): { summary: string | null } |
     const count = (n: unknown, one: string) => `${typeof n === 'number' ? n : '?'} ${one}${n === 1 ? '' : 's'}`;
     const ended = complete === false ? '; it stopped before the end' : '';
     return { summary: `Resumed the thread: the provider replayed ${count(turns, 'turn')} (${count(items, 'item')}) of its history${ended}; not recorded again (already in this history).` };
+}
+
+/** The small row that a provider command ran (Tynn #702): a notice, not a message of yours. */
+function commandRow(text: string): StreamEvent {
+    return { kind: 'notice', level: 'info', message: `Ran ${text.trim()}` };
 }
 
 function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext, kept: readonly AttachmentRef[] = []): StreamEvent {

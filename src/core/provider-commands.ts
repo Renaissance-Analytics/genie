@@ -162,7 +162,25 @@ export function commandGroups(extensions: ProviderExtensions, options: { readonl
         .sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) || a.key.localeCompare(b.key));
 }
 
-/** The commands a provider's own documentation lists as built in; `[]` when none are documented. */
-export function documentedCommands(_provider: string): readonly string[] {
-    return [];
+/**
+ * THE COMMANDS A PROVIDER'S OWN DOCUMENTATION LISTS AS BUILT IN (Tynn #702): what a typed `/name` is checked against
+ * before the agent has reported its own list. Claude reports its commands only at the `system/init` of its first turn,
+ * so before that the documentation is all there is. `[]` for a provider with none documented (Codex reports its own).
+ */
+const DOCUMENTED: Readonly<Record<string, readonly string[]>> = {
+    claude: ['clear', 'compact', 'context', 'cost', 'init', 'model', 'review'],
+};
+
+export function documentedCommands(provider: string): readonly string[] {
+    return DOCUMENTED[provider] ?? [];
+}
+
+/**
+ * A TYPED `/name` THAT IS ONE OF THE PROVIDER'S COMMANDS (Tynn #702): in the list the agent reported, or, before it has
+ * reported, in the provider's documented list. Anything else is text.
+ */
+export function isProviderCommand(text: string, extensions: ProviderExtensions | null, provider: string): boolean {
+    const command = slashCommandOf(text);
+    if (!command) return false;
+    return extensions === null ? documentedCommands(provider).includes(command.name) : extensions.commands.some((c) => c.name === command.name);
 }
