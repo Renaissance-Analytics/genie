@@ -1,6 +1,6 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
-import { ActivityLight, Button, Icon, Popover } from '@particle-academy/react-fancy';
+import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
 import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
@@ -19,6 +19,8 @@ import {
     dashboardRows,
     shownState,
     statusOf,
+    windowEntriesFor,
+    WINDOW_ENTRIES,
     type FixRoute,
     summaryChips,
     targetOf,
@@ -68,9 +70,9 @@ import {
  * anywhere: a census that hides members is not a census.
  */
 
-/** One shared template: Agent · Workspace · Status · Target · Delivery · Comms · Context. */
+/** One shared template: Agent · Workspace · Status · Target · Delivery · Comms · Context · Windows. */
 const GRID =
-    'grid grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px] gap-4 pl-7 pr-5';
+    'grid grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px_36px] gap-4 pl-7 pr-5';
 
 /** Dot colour carries STATE. Shape (below) carries what Genie can see. */
 /** One status colour for the whole row, fidelity dot and census chip. */
@@ -207,7 +209,7 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
     );
 }
 
-function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji, windows }: {
     row: AgentRow;
     workspaceName: string;
     workspaceColor?: string | undefined;
@@ -224,6 +226,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     lanes?: readonly LaneSegment[] | undefined;
     /** Hovering the comms cell reveals this row's collaborators; leaving it ends the reveal. */
     onReveal?: ((id: string | null) => void) | undefined;
+    /** The windows column (Tynn #706): absent = this row has none (Genie's own, or a workspace this window may not open). */
+    windows?: { onTerminal?: (() => void) | undefined; onFiles?: (() => void) | undefined } | undefined;
 }) {
     const role = reveal ? (reveal.focus === row.id ? 'focus' : reveal.peers[row.id] ? 'peer' : 'dim') : null;
     const peerLink = role === 'peer' ? reveal!.peers[row.id]! : null;
@@ -240,7 +244,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
             data-state={shownState(row)}
             {...(focused ? { 'data-focused': 'true' } : {})}
             {...(role ? { 'data-reveal': role } : {})}
-            onClick={() => onOpen(row.id)}
+            // The windows column's button and its menu (portalled, still React children of this row) open windows, not the agent.
+            onClick={(event) => { if (event.target instanceof Element && event.target.closest('[data-column="windows"],[data-react-fancy-dropdown]')) return; onOpen(row.id); }}
             className={`${GRID} relative h-8 cursor-pointer items-center border-b border-[var(--border-1)] text-[13px] transition-opacity border-l-2 border-l-[var(--agent-status)] bg-[color-mix(in_srgb,var(--agent-status)_9%,transparent)] hover:bg-[color-mix(in_srgb,var(--agent-status)_15%,transparent)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
             // The reveal: the rest dims to .32; the row and its peers carry a 2px violet left border (the board).
             style={{ ...stateStyle(shownState(row)), ...(shownState(row) === 'sleeping' ? { opacity: 0.5 } : {}), ...(role === 'dim' ? { opacity: 0.32 } : role ? { boxShadow: 'inset 2px 0 0 var(--violet-400)' } : {}) }}
@@ -358,6 +363,27 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                     </>
                 ) : null}
             </div>
+
+            {/* The windows column (Tynn #706): an icon Button and a menu of Terminal / Files, each in a NEW window; this one stays. */}
+            <div data-column="windows" className="flex items-center justify-end">
+                {windows ? (
+                    <Dropdown placement="bottom-end">
+                        <Dropdown.Trigger>
+                            <Button type="button" variant="ghost" size="xs" icon="app-window" data-windows-menu={row.id} aria-label={`Open ${row.name} in a new window`} title="Open in a new window" disabled={!windows.onTerminal && !windows.onFiles} className="px-1 text-[var(--fg-3)]" />
+                        </Dropdown.Trigger>
+                        <Dropdown.Items>
+                            {WINDOW_ENTRIES.map((entry) => {
+                                const open = entry.kind === 'terminal' ? windows.onTerminal : windows.onFiles;
+                                return (
+                                    <Dropdown.Item key={entry.kind} disabled={!open} onClick={() => open?.()}>
+                                        <span data-windows-entry={entry.kind} className="flex items-center gap-2 text-xs"><Icon name={entry.icon} size="xs" />{entry.label}</span>
+                                    </Dropdown.Item>
+                                );
+                            })}
+                        </Dropdown.Items>
+                    </Dropdown>
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -408,9 +434,14 @@ export interface DashboardProps {
     mailSignals?: readonly MailSignal[] | undefined;
     /** Workspaces an agent acted in that the person has not visited since: their Workspace cells pulse. */
     pulsing?: ReadonlySet<string> | undefined;
+    /** The windows column's openers (Tynn #706): a workspace's terminals view, or its Files, in a NEW window. Absent = disabled. */
+    onOpenTerminalWindow?: ((workspaceId: string) => void) | undefined;
+    onOpenFilesWindow?: ((workspaceId: string) => void) | undefined;
+    /** A workspace-share window's workspace (Tynn #690/#691): the column offers that workspace only. Absent = a workstation window. */
+    scopeWorkspaceId?: string | null | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
@@ -531,10 +562,12 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div> : null}
             <div className={`${GRID} h-7 items-center border-b border-[var(--border-1)] text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]`}>
                 {['Agent', 'Workspace', 'Status', 'Current target', 'Latest delivery', 'Comms', 'Context'].map((label) => <span key={label} className="truncate">{label}</span>)}
+                {/* Icon only (Tynn #706): the tooltip says what the column is. */}
+                <div data-column-header="windows" title="Open in a new window" aria-label="Open in a new window" className="flex items-center justify-end"><Icon name="app-window" size="xs" /></div>
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                    <AgentRowView row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} windows={row.id === genie?.id || windowEntriesFor(row.workspaceId, scopeWorkspaceId).length === 0 ? undefined : { onTerminal: onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined, onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined }} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
                 </Fragment>)}
             </div>

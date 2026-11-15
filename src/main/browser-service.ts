@@ -13,6 +13,8 @@ export interface BrowserFacts {
     readonly hosts: readonly string[];
     /** Each site's workspace: its logins are in that workspace's store. */
     readonly workspaceOf: Readonly<Record<string, string>>;
+    /** Each host's label: its workspace's name (core/browser-sites.ts), so a chip never reads an id. Absent from an older host. */
+    readonly siteLabels?: Readonly<Record<string, string>>;
     /** How to start the browser's process: the window knows the install; the host may run from a copy of it (P6). */
     readonly launch: { readonly file: string; readonly args: readonly string[] };
 }

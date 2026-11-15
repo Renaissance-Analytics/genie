@@ -144,7 +144,7 @@ describe('a provider’s model list is asked of genie-host, which has the superv
         expect(main).toMatch(/const hostModels = agentEngineLink\.client;/);
         expect(main).toMatch(/models: \{ get: \(provider, options\) => hostModels\.providerModels\(provider, options\) \}/);
         const host = readFileSync('src/main/genie-host.ts', 'utf8');
-        expect(host.match(/new ProviderModelCache\(realListModels\)/g)).toHaveLength(1);
+        expect(host.match(/new ProviderModelCache\(provider => realListModels\(provider, accounts\.defaultFor\(provider\) \?\? undefined\)\)/g)).toHaveLength(1);
         expect(host).toMatch(/providerModels: \(provider, refresh\) => providerModels\.get\(provider, \{ refresh \}\)/);
     });
 });

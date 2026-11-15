@@ -1,3 +1,4 @@
+import type { AccountRecord } from '../core/accounts.js';
 import { decodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
@@ -1279,6 +1280,11 @@ export class SessionEngineClient {
 
     async drained(exitWithinMs: number): Promise<void> {
         await this.#value('engine.drained', [exitWithinMs], false);
+    }
+
+    /** The persisted legacy account home, or unknown while the host/book cannot answer. */
+    async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null> {
+        return this.#value('engine.providerAccount', [provider], null);
     }
 
     /**

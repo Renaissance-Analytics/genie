@@ -36,7 +36,7 @@ const bridge: PreloadBridge = {
         return () => ipcRenderer.removeListener('genie:workspace-pulse', listener);
     },
     onAction: (onAction) => {
-        const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }): void => onAction(action);
+        const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
         return () => ipcRenderer.removeListener('genie:action', listener);
     },
@@ -69,6 +69,8 @@ const bridge: PreloadBridge = {
 
     chooseProviderProgram: (provider) =>
         ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
+
+    popOutTerminals: (workspaceId) => ipcRenderer.invoke('genie:terminals-popout', workspaceId) as Promise<void>,
 
     scratchTerminal: (workspaceId) =>
         ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<

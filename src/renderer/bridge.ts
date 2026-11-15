@@ -249,7 +249,7 @@ export interface GenieBridge {
      */
     onWorkspacePulse?(onPulse: (pulse: WorkspacePulse) => void): () => void;
     /** What an agent just did (Tynn #766 C), for its sound. Absent on a remote bridge for now: the host's own window plays it. */
-    onAction?(onAction: (action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }) => void): () => void;
+    onAction?(onAction: (action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string }) => void): () => void;
     /** Each provider's rate limit for the Dashboard header, buffered in main; the current ones at once, then each change. */
     onHeadroom?(onHeadroom: (limits: Readonly<Record<string, Headroom>>) => void): () => void;
 
@@ -321,6 +321,8 @@ export interface GenieBridge {
     /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). This machine's own window only. */
     chooseProviderProgram?(provider: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
     scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+    /** A workspace's terminals view in a NEW window (Tynn #706, the Dashboard's windows column). Absent = this window cannot open one (a remote window). */
+    popOutTerminals?(workspaceId: string): Promise<void>;
 
     /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
     workspaces: {
@@ -585,7 +587,7 @@ export interface GenieBridge {
     } | undefined;
     artboard?: {
         read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
-        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
+        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
     } | undefined;
 
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */

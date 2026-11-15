@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DESIGN_LOGIN } from '../core/design-login.js';
+import { providerAccountEnv, type ProviderAccountHome } from '../core/accounts.js';
 import { providerLogin } from '../core/provider-login.js';
 import type { TerminalHost } from './terminal-host.js';
 
@@ -37,7 +38,9 @@ export interface LoginHostOptions {
     terminals: Pick<TerminalHost, 'open' | 'onExit'>;
     openWindow: (route: string) => void;
     /** Run a status command in `cwd` through the shell; resolves with its exit code. */
-    runStatus: (command: string, cwd: string) => Promise<number>;
+    runStatus: (command: string, cwd: string, env?: Readonly<Record<string, string>>) => Promise<number>;
+    /** The host book's account. Provider-only UI login remains legacy scoped until S6. */
+    accountFor?: (provider: string) => ProviderAccountHome | null;
     onSignedIn: (provider: string) => void;
     /** The Claude Design login window ended (there is no status to ask): the agents that waited are told to retry. */
     onDesignLoginEnded?: (() => void) | undefined;
@@ -53,6 +56,8 @@ interface Live {
     provider: string;
     terminalId: string;
     scratch: string;
+    /** Captured before opening, so status reads exactly the home the person signed in to. */
+    env?: Readonly<Record<string, string>>;
 }
 
 const OS_WORKSPACE = '__genie__';
@@ -100,6 +105,13 @@ export class LoginHost {
         if (!design && !PLAIN_NAME.test(provider)) return { ok: false, reason: 'That provider’s login could not start: its name is not one Genie can run.' };
         // Claude Design's login runs in Claude Code's own CLI.
         const cli = design ? 'claude' : provider;
+        let env: Readonly<Record<string, string>> | undefined;
+        if (this.#options.accountFor) {
+            const account = this.#options.accountFor(cli);
+            if (!account || account.provider !== cli) return { ok: false, reason: 'The provider account is unavailable; reconnect Genie’s host before logging in.' };
+            try { env = providerAccountEnv(account, process.env); }
+            catch { return { ok: false, reason: 'The provider account home is invalid; repair the account before logging in.' }; }
+        }
         const binary = this.#options.binaryFor?.(cli) ?? null;
         if (binary !== null && !quotable(binary)) return { ok: false, reason: `The ${known?.name ?? provider} login could not start: the path set for it has a character Genie will not put in a command.` };
         const program = binary === null ? cli : `"${binary}"`;
@@ -113,12 +125,12 @@ export class LoginHost {
         }
         let opened: { id: string };
         try {
-            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false });
+            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false, ...(env ? { env } : {}) });
         } catch (error) {
             rmSync(scratch, { recursive: true, force: true });
             return { ok: false, reason: `The ${known?.name ?? provider} login could not start: ${(error as Error).message}` };
         }
-        const live: Live = { provider, terminalId: opened.id, scratch };
+        const live: Live = { provider, terminalId: opened.id, scratch, ...(env ? { env } : {}) };
         this.#live.set(provider, live);
         this.#options.openWindow(this.#route(live));
         return { ok: true, terminalId: opened.id };
@@ -138,7 +150,7 @@ export class LoginHost {
             if (known) {
                 const binary = this.#options.binaryFor?.(live.provider) ?? null;
                 const status = binary === null ? known.status : `"${binary}"${known.status.slice(known.status.indexOf(' '))}`;
-                const code = await this.#options.runStatus(status, live.scratch).catch(() => 1);
+                const code = await (live.env ? this.#options.runStatus(status, live.scratch, live.env) : this.#options.runStatus(status, live.scratch)).catch(() => 1);
                 if (code === 0) this.#options.onSignedIn(live.provider);
             }
         } finally {

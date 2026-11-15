@@ -28,6 +28,8 @@ import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir } from './paths.js';
 import { AccountsHost } from './accounts-host.js';
+import { providerAccountEnv } from '../core/accounts.js';
+import { isAcpProvider } from '../core/engine.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { readTynnPage } from './tynn-page-client.js';
@@ -527,6 +529,7 @@ async function main(): Promise<void> {
     const terminalsService = new TerminalsService(terminalHost);
     // TAKE OVER'S ONE OWNER (Tynn #553, P5d.5c): who has a TUI open. This host opens no window; whoever clicked opens its own.
     const takeOverHost = new TakeOverHost({
+        accountFor: record => accounts.get(record.accountId ?? `account_legacy_${record.provider}`),
         terminals: terminalHost,
         openWindow: () => {},
         mcp: () => { const e = mcp?.endpoint() ?? null; return e ? { mcpUrl: e.url, token: e.token } : null; },
@@ -1022,10 +1025,13 @@ async function main(): Promise<void> {
     };
     const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
     // ONE cache of each provider's models (core/provider-models.ts): a window's ask and a phone's read the same answer.
-    const providerModels = new ProviderModelCache(realListModels);
+    const providerModels = new ProviderModelCache(provider => realListModels(provider, accounts.defaultFor(provider) ?? undefined));
     // Tynn #698: each provider CLI MEASURED (the file the agent runs, its version, its own status call), when the host starts:
     // what "installed" and "signed in" read. A CLI that cannot run is said in the log by name.
-    const providerHealth = new ProviderHealthBook((provider) => checkProviderHealth(provider, realProviderHealthPorts(execFileRunner)));
+    const providerHealth = new ProviderHealthBook(async provider => {
+        if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
+        return checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.defaultFor(provider) ?? undefined);
+    });
     void providerHealth.refreshAll().then((all) => {
         for (const health of all) if (health?.fault) console.warn(`[provider-health] ${health.provider}: ${health.fault}: ${health.words}`);
     });
@@ -1042,6 +1048,7 @@ async function main(): Promise<void> {
         features: featureCallers,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
+        providerAccount: provider => isAcpProvider(provider) ? accounts.defaultFor(provider) : null,
         token,
         build,
         pid: process.pid,
@@ -1164,6 +1171,7 @@ async function main(): Promise<void> {
     await lockIdentity;
     bootStep('lock identity', stepAt);
     const host = new SessionHost({
+        accountById: id => accounts.get(id),
         userData: home,
         ...engineHostOptions,
         // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
@@ -1185,9 +1193,12 @@ async function main(): Promise<void> {
         // different account releases the agents held on it. Nothing to tell it by = no change.
         rateLimit: {
             accountOf: async (provider) => {
+                if (!isAcpProvider(provider)) return null;
                 const command = statusCommandFor(provider, providerBinary(provider as AgentRecord['provider']) ?? null);
                 if (command === null) return null;
-                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000 });
+                const account = accounts.defaultFor(provider);
+                if (!account) return null;
+                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000, env: providerAccountEnv(account, process.env) });
                 return r.exitCode === 0 ? accountIdentityFrom(r.streams.stdout) : null;
             },
         },
@@ -1634,7 +1645,7 @@ async function main(): Promise<void> {
         },
         forwardedCalls,
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
-        terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), scrollbackCap: 1_000_000 },
+        terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), onData: (listener) => terminalHost.onData((id, data) => listener(id, data)), scrollbackCap: 1_000_000 },
         // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.
         terminalEnv: (workspaceId) => {
             const endpoint = mcp?.endpoint() ?? null;

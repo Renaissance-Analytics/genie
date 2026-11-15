@@ -235,7 +235,7 @@ export interface IntegrationsSection {
     readonly gated: readonly AnnotatedRow[];
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
     /** Genie's own MCP server (§6.9): where it listens, and whether a real server/discover answered at boot (§6.4). */
-    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly { name: string; description: string }[] };
+    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly import('../core/mcp-tool-summaries.js').McpToolRow[] };
     /** What the sync last did to each workspace's agent files: current, upgraded, or failed (absent before the first sync). */
     readonly agentFiles?: readonly AgentFilesReport[];
     /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
@@ -281,6 +281,17 @@ export interface ToolchainRefusal {
     readonly retry?: string;
 }
 
+/** One row's state in a "Check for updates" run (Tynn #714). `failed` carries its reason. */
+export type ToolCheckState =
+    | { readonly state: 'waiting' | 'checking' | 'up-to-date' | 'update-available' }
+    | { readonly state: 'failed'; readonly reason: string };
+
+/** A "Check for updates" run: each tool checked one at a time, each row's own state. Absent = no run has been shown. */
+export interface ToolchainCheckRun {
+    readonly running: boolean;
+    readonly rows: Readonly<Record<string, ToolCheckState>>;
+}
+
 export interface ToolchainSection {
     readonly tools: readonly ToolStatus[];
     readonly checkedAt: number | null;
@@ -295,6 +306,8 @@ export interface ToolchainSection {
     /** The last update that took: its row says so, with the version now answering. */
     readonly updated?: { readonly tool: string; readonly version: string };
     readonly result?: string;
+    /** The last or current "Check for updates" run (Tynn #714). */
+    readonly checkRun?: ToolchainCheckRun;
     /** Each refused or failed action, one per row, until that row's next action. Absent when there is none. */
     readonly refusals?: readonly ToolchainRefusal[];
     /** T4: Genie-managed PHP versions (with the sites pinned to each), the PATH PHP, and what can be installed. */
@@ -495,6 +508,9 @@ export type FeatureAction =
     | { kind: 'services.logs'; serviceId: string; tail?: number }
     | { kind: 'services.hideLogs' }
     | { kind: 'toolchain.check'; force?: boolean }
+    /** Tynn #714: re-check every installed tool one at a time (installs nothing); and stop it after the tool in flight. */
+    | { kind: 'toolchain.checkUpdates' }
+    | { kind: 'toolchain.stopCheck' }
     /**
      * `confirmed`: the person read the warning (Docker's restart, what runs on the old PHP) and chose to go ahead. A
      * REFUSAL is never confirmable. `version` (genie#1306): the version the button names — a language's patch or another

@@ -26,7 +26,7 @@ import type { SupervisorApi } from './process-supervisor.js';
 import { applyHostingFeatureAction, hostingFeatureSnapshot, type HostingFeaturePorts, type HostingFeatureServices } from './feature-hosting.js';
 import { trustSteps } from './hosting-trust.js';
 import { applyMachineFeatureAction, machineFeatureSnapshot, type MachineFeaturePorts, type MachineFeatureServices } from './feature-machine.js';
-import { applyToolchainCoreFeatureAction, toolchainSection } from './feature-toolchain.js';
+import { applyToolchainCoreFeatureAction, toolchainSection, type ToolchainCheckControl } from './feature-toolchain.js';
 
 /** Owned machine contributors. Supplying these ports never constructs another service graph. */
 export interface HostFeatureMachinePorts {
@@ -123,6 +123,9 @@ export class HostFeatures {
     readonly #offs: Array<() => void>;
     readonly #push: LatestPush<FeatureData>;
     readonly #repairingCli = new Set<string>();
+    /** Tynn #714: the "Check for updates" run's control (Stop reaches the run through it) and its live rows, pushed as it moves. */
+    readonly #checkControl: ToolchainCheckControl = { running: false, stop: false };
+    readonly #checkRuns = new Map<symbol, NonNullable<FeatureState['toolchainCheckRun']>>();
     readonly #work = new Map<symbol, NonNullable<FeatureState['toolchainUpdating']>>();
     #toolFacts: Pick<FeatureState, 'toolStatuses' | 'toolchainCheckedAt'> = { toolStatuses: null };
     #progressProbe: Promise<void> | null = null;
@@ -186,6 +189,8 @@ export class HostFeatures {
             if (caller.pending >= CALLER_PENDING_LIMIT) throw new Error('this feature caller has too many pending actions; wait for them to finish');
             caller.pending++;
             // Same-caller actions see the last committed view, including after a refusal. Other callers never wait here.
+            // A Stop cannot queue behind the run it stops: it is answered at once, outside the caller's queue.
+            if (action.kind === 'toolchain.stopCheck') return await this.#act(action, context, caller);
             const work = caller.tail.then(async () => {
                 try {
                     this.#check(context);
@@ -219,6 +224,12 @@ export class HostFeatures {
         const tc = machine?.toolchain;
         const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,
             login: async provider => ui?.login ? ui.login(provider) : { ok: false, reason: 'no login is wired into this Genie' },
+            checking: run => {
+                if (this.#closed) return;
+                if (run) this.#checkRuns.set(token, run); else this.#checkRuns.delete(token);
+                this.#changed();
+                tc.checking?.(run);
+            },
             updating: row => {
                 if (!this.#closed) {
                     if (row) this.#work.set(token, row); else this.#work.delete(token);
@@ -235,7 +246,7 @@ export class HostFeatures {
                 || (this.#hosting ? await applyHostingFeatureAction(this.#hosting, action, state, next,
                     { ...this.#hostingPorts, ...(ui?.openInBrowser ? { openInBrowser: url => ui.openInBrowser!(url) } : {}) }) : false)
                 || (this.#machine ? await applyMachineFeatureAction(this.#machine, action, state, next, effects) : false)
-                || (this.#hosting ? await applyToolchainCoreFeatureAction(this.#hosting, action, state, next, effects, this.#repairingCli) : false)
+                || (this.#hosting ? await applyToolchainCoreFeatureAction(this.#hosting, action, state, next, effects, this.#repairingCli, this.#checkControl) : false)
                 || (deck ? await applyDeckFeatureAction({ ...deck, ...(ui?.mainErrors ? { mainErrors: ui.mainErrors } : {}) }, action) : false)
                 || await applyFeatureControlAction({ ...(this.#machine ? { pairing: this.#machine.pairing } : {}), routes: () => this.#hosting?.routes() ?? [] }, action, next,
                     { ...effects, ...this.ports.system, ...(ui?.rendererNotice ? { rendererNotice: ui.rendererNotice } : {}),
@@ -247,7 +258,9 @@ export class HostFeatures {
                     });
             if (!handled) throw new Error(`the host feature service does not answer ${action.kind} yet`);
         } finally {
-            const changed = this.#work.delete(token);
+            const changedWork = this.#work.delete(token);
+            const changedRun = this.#checkRuns.delete(token);
+            const changed = changedWork || changedRun;
             if (this.#busy.delete(token) || changed) this.#changed();
         }
         this.#check(context);
@@ -297,7 +310,7 @@ export class HostFeatures {
         for (const off of this.#offs.splice(0)) off();
         for (const connectionId of this.#callers.keys()) this.#release(connectionId);
         this.#listeners.clear(); this.#callers.clear();
-        this.#work.clear(); this.#busy.clear(); this.#activeWork.clear(); this.#repairingCli.clear();
+        this.#work.clear(); this.#checkRuns.clear(); this.#busy.clear(); this.#activeWork.clear(); this.#repairingCli.clear();
     }
 
     #check(context: CallContext): void {
@@ -358,7 +371,8 @@ export class HostFeatures {
         }
         const toolchain = toolchainSection({ ...state, toolchainBusy: [...this.#busy.values()].at(-1) ?? state.toolchainBusy ?? null, toolStatuses: this.#toolFacts.toolStatuses ?? state.toolStatuses,
             toolchainCheckedAt: this.#toolFacts.toolchainCheckedAt ?? state.toolchainCheckedAt ?? null,
-            toolchainUpdating: [...this.#work.values()].at(-1) ?? null });
+            toolchainUpdating: [...this.#work.values()].at(-1) ?? null,
+            toolchainCheckRun: [...this.#checkRuns.values()].at(-1) ?? state.toolchainCheckRun ?? null });
         const browser = context ? this.#presentation(context)?.browser?.snapshot() : undefined;
         return { seq, ...personal, ...hosting, ...machine, ...(browser ? { browser: { ...hosting.browser, ...browser } } : {}), toolchain };
     }

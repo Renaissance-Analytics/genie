@@ -13,6 +13,8 @@ export interface AlertToast {
     readonly body: string;
     /** The alerting agent's workspace colour (genie#1300), beside its address. Absent = none (Genie's own, or not known). */
     readonly color?: string | undefined;
+    /** One click that does the thing the toast is about (Tynn #722: Show terminal). Absent = the toast only informs. */
+    readonly action?: { readonly label: string; readonly run: () => void } | undefined;
 }
 
 export function AlertToasts({ toasts, onDismiss }: { toasts: readonly AlertToast[]; onDismiss: (id: string) => void }) {
@@ -24,6 +26,7 @@ export function AlertToasts({ toasts, onDismiss }: { toasts: readonly AlertToast
                     <div className="min-w-0 flex-1">
                         <p className="flex items-center gap-1.5 truncate font-medium"><WorkspaceSwatch color={t.color} /><span className="truncate">{personText(t.title)}</span></p>
                         <p className="line-clamp-3 text-[var(--fg-3)]">{personText(t.body)}</p>
+                        {t.action ? <Button size="xs" type="button" data-alert-toast-action={t.id} className="mt-1" onClick={() => { t.action?.run(); onDismiss(t.id); }}>{t.action.label}</Button> : null}
                     </div>
                     <Button size="xs" type="button" data-alert-toast-dismiss={t.id} aria-label="Dismiss" className="shrink-0 text-[var(--fg-4)] hover:text-[var(--fg-2)]" onClick={() => onDismiss(t.id)}>×</Button>
                 </div>

@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('genieQuestion', {
     // Genie 1's file drawer: which named files are there, one file's text, and the window widening for it.
     files: (id: string, paths: string[]) => ipcRenderer.invoke('question:files', id, paths),
     file: (id: string, path: string) => ipcRenderer.invoke('question:file', id, path),
+    openInFiles: (id: string, path: string) => ipcRenderer.invoke('question:open-in-files', id, path),
     drawer: (open: boolean) => ipcRenderer.invoke('question:drawer', open),
     onShow: (listener: (view: unknown) => void) => {
         const handler = (_e: unknown, view: unknown) => listener(view);

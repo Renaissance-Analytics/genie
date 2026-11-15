@@ -62,6 +62,8 @@ export type StripItem =
     | { readonly kind: 'tynn' }
     /** The workspace's files, a tab of their own (beta.35 #41): the tree and the editor take the whole tab. */
     | { readonly kind: 'files' }
+    /** The ArtBoard, a tab of its own beside Files (Tynn #739): what agents made, and every verdict on it. Always there. */
+    | { readonly kind: 'artboard' }
     | { readonly kind: 'add' }
     | { readonly kind: 'settings' };
 
@@ -74,6 +76,8 @@ export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: strin
         { kind: 'dashboard' },
         // FILES, ITS OWN TAB (the owner, 2026-10-21: the panel docked beside the dashboard was "garbage"): always there.
         { kind: 'files' },
+        // THE ARTBOARD, BESIDE FILES (the owner, 2026-11-15: "a dedicated tab like we did for files"): always there, not something to add to a grid.
+        { kind: 'artboard' },
         ...openAgents.map((a) => ({ kind: 'agent' as const, id: a.id, name: a.name })),
         ...state.tabs.map((t) => ({ kind: 'designed' as const, id: t.id, name: t.name })),
         // THE TYNN TAB (genie#1295): only for a workspace linked to a Tynn project — the tab IS that project, no picker.

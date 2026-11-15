@@ -12,10 +12,13 @@ import { sendKeyFrom } from '../core/send-key.js';
 import { setSendKey } from './send-key-store.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import { TERMINAL_NEEDS_YOU, showTerminalRoute } from '../core/terminal-surface.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
+/** A toast with a button (Show terminal) waits longer: a person fetching a 2FA code is not at the screen for 8 seconds. */
+const ALERT_ACTION_TOAST_MS = 60_000;
 const noLocalState = () => null;
 const noLocalSubscription = () => () => {};
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
@@ -1092,16 +1095,23 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's toast (genie#1211): Genie in front → its own, bottom-left, clear of the chat; behind → the OS notification.
     const [alertToasts, setAlertToasts] = useState<readonly AlertToast[]>([]);
     const dismissAlert = useCallback((id: string) => setAlertToasts((prev) => prev.filter((t) => t.id !== id)), []);
-    const showAlert = useCallback((toast: { title: string; body: string; color?: string }) => {
+    const showAlert = useCallback((toast: { title: string; body: string; color?: string; action?: AlertToast['action'] }) => {
         if (alertDelivery(typeof document !== 'undefined' && document.hasFocus()) === 'in-app') {
             const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             setAlertToasts((prev) => [...prev.slice(-3), { id, ...toast }]);
-            setTimeout(() => dismissAlert(id), ALERT_TOAST_MS);
+            setTimeout(() => dismissAlert(id), toast.action ? ALERT_ACTION_TOAST_MS : ALERT_TOAST_MS);
         } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
             try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
         }
     }, [dismissAlert]);
     useAlerts(snapshot, features.settings.values, showAlert);
+    // A TERMINAL AN AGENT STARTED NEEDS THE PERSON (Tynn #722): main sends it to the window in use. A one-click Show terminal
+    // opens that workspace's Terminals tab; nothing moves on its own (core/view-requests.ts).
+    useEffect(() => resolvedBridge?.onAction?.((action) => {
+        if (action.kind !== TERMINAL_NEEDS_YOU || !action.workspaceId) return;
+        const route = showTerminalRoute(action.workspaceId);
+        showAlert({ title: `${action.agentName ?? 'An agent'} needs you in a terminal`, body: 'A terminal is waiting for you: a login, a code or a question.', action: { label: 'Show terminal', run: () => { window.location.hash = `#${route}`; } } });
+    }), [resolvedBridge, showAlert]);
     useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     // The send key, to every open composer, the moment the setting changes (Tynn issue #697).
@@ -2183,6 +2193,7 @@ function DesktopApp({ bridge }: AppProps) {
                 // The route says where the panel is: on this workspace, `?files=detached`.
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address) : undefined}
+            onPopOutTerminals={resolvedBridge?.popOutTerminals ? (id) => { void resolvedBridge.popOutTerminals!(id); } : undefined}
             onBringBackFiles={(id) => moveFilePanel(() => filesWindows?.bringBack(id), () => {
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address)}

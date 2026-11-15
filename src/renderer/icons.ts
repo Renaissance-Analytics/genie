@@ -33,6 +33,8 @@ import { ORDER_ICON } from '../core/inbox-view.js';
  * drifts from the components silently.
  */
 export const ICON_NAMES: readonly string[] = [
+    // The Toolchain version picker (Tynn #713): the default version, a newer patch available.
+    'star', 'arrow-up',
     // chrome
     'search', 'inbox', 'layout-list', 'sparkles',
     // The Tynn tab's board (genie#1295): each card's next step, delete, its claimant.
@@ -56,6 +58,8 @@ export const ICON_NAMES: readonly string[] = [
     'cpu',
     // Connect to another machine (the title bar's button, Genie 1's Hosts), and a Tynn workstation's desktop / cloud.
     'monitor', 'cloud',
+    // The Dashboard's windows column (Tynn #706): open a workspace's Terminal or Files in a new window.
+    'app-window',
     // Do not disturb in the title bar (Tynn #655): off, on.
     'bell', 'bell-off',
     // Share a workspace or the workstation through Tynn (Tynn #587).

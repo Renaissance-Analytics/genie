@@ -67,3 +67,14 @@ export function updateChoices(tool: LanguageTool, installed: string, available: 
         upgrade: candidates.find((v) => languageLine(tool, v) !== line) ?? null,
     };
 }
+
+/**
+ * A SIDE-BY-SIDE LANGUAGE's patch for ONE installed version (Tynn #713): the newest version offered, not yet installed, on
+ * the SAME line and newer than it — 8.4.24 → 8.4.27, never 8.5.12 (that is another line, an Install of its own). Java's
+ * line is its major (21.0.5 → 21.0.9).
+ */
+export function patchWithinLine(lang: 'php' | 'node' | 'python' | 'java', installed: string, offered: ReadonlyArray<{ readonly version: string; readonly installed: boolean }>): string | null {
+    const line = (v: string) => (lang === 'java' ? v.split(/[.+]/)[0]! : languageLine(lang, v));
+    const candidates = offered.filter((o) => !o.installed && line(o.version) === line(installed) && newer(o.version, installed)).map((o) => o.version).sort(compareVersionsDesc);
+    return candidates[0] ?? null;
+}

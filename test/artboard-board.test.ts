@@ -116,12 +116,12 @@ describe('addPost', () => {
 
     it('caps the board so a looping agent cannot grow it without bound', () => {
         let board: BoardPost[] = [];
-        for (let i = 0; i < 200; i++) board = addPost(board, post({ id: 'p' + i }));
+        for (let i = 0; i < 600; i++) board = addPost(board, post({ id: 'p' + i }));
 
-        expect(board.length).toBeLessThanOrEqual(100);
+        expect(board.length).toBeLessThanOrEqual(500);
         // The newest survive — an agent posting in a loop should push out its own
         // old drafts, not the first thing it ever showed you.
-        expect(board[0]!.id).toBe('p199');
+        expect(board[0]!.id).toBe('p599');
     });
 });
 

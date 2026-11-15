@@ -1,4 +1,4 @@
-import type { DeckItem } from './deck.js';
+import { PRIORITIES, type DeckItem } from './deck.js';
 
 /**
  * WHICH QUESTIONS THE FORCETHEQUESTION WINDOW HOLDS (the owner, 2026-10-14: "the FTQ window is a window that opens on top
@@ -16,6 +16,8 @@ import type { DeckItem } from './deck.js';
  *   renderer/pages/ask.tsx), carried over;
  * - the one SELECTED stays while it is still asked, even if an older one arrives — the window never changes under a
  *   person who is answering it; with nothing selected, the oldest not put off is;
+ * - with nothing selected, the HIGHEST PRIORITY not put off is next, the oldest of those first (Tynn #721: Do Not Disturb
+ *   turned off opens what waited in that order);
  * - one put off with Later (or a closed window) does not bring the window back on its own; it stays in the queue and in
  *   Pending Questions, answerable from either.
  */
@@ -34,7 +36,9 @@ export function nextQuestion(items: readonly DeckItem[], dismissed: ReadonlySet<
         const still = askable.find((i) => i.id === current);
         if (still) return still;
     }
-    return askable.find((i) => !dismissed.has(i.id)) ?? null;
+    // The sort is stable, so equal priorities stay oldest first.
+    const rank = (i: DeckItem): number => PRIORITIES.indexOf(i.priority);
+    return askable.filter((i) => !dismissed.has(i.id)).sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
 
 /** How many more wait behind the one shown (not counting ones put off this session). */
