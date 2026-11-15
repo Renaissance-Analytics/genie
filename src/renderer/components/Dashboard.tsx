@@ -244,7 +244,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
             data-state={shownState(row)}
             {...(focused ? { 'data-focused': 'true' } : {})}
             {...(role ? { 'data-reveal': role } : {})}
-            onClick={() => onOpen(row.id)}
+            // The windows column's button and its menu (portalled, still React children of this row) open windows, not the agent.
+            onClick={(event) => { if (event.target instanceof Element && event.target.closest('[data-column="windows"],[data-react-fancy-dropdown]')) return; onOpen(row.id); }}
             className={`${GRID} relative h-8 cursor-pointer items-center border-b border-[var(--border-1)] text-[13px] transition-opacity border-l-2 border-l-[var(--agent-status)] bg-[color-mix(in_srgb,var(--agent-status)_9%,transparent)] hover:bg-[color-mix(in_srgb,var(--agent-status)_15%,transparent)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
             // The reveal: the rest dims to .32; the row and its peers carry a 2px violet left border (the board).
             style={{ ...stateStyle(shownState(row)), ...(shownState(row) === 'sleeping' ? { opacity: 0.5 } : {}), ...(role === 'dim' ? { opacity: 0.32 } : role ? { boxShadow: 'inset 2px 0 0 var(--violet-400)' } : {}) }}
@@ -364,7 +365,7 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
             </div>
 
             {/* The windows column (Tynn #706): an icon Button and a menu of Terminal / Files, each in a NEW window; this one stays. */}
-            <div data-column="windows" className="flex items-center justify-end" onClick={(event) => event.stopPropagation()}>
+            <div data-column="windows" className="flex items-center justify-end">
                 {windows ? (
                     <Dropdown placement="bottom-end">
                         <Dropdown.Trigger>
