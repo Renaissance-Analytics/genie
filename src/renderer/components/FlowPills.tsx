@@ -9,7 +9,7 @@ export interface FlowPillsProps {
     /** The clock the lingering failed/held pills are measured against. */
     readonly now: number;
     /** A workspace-share window: only this workspace's flows. `null` = every flow. */
-    readonly workspaceId: string | null;
+    readonly workspaceId?: string | null | undefined;
     /** Opens the flow (and its run). */
     readonly onOpen: (flowId: string) => void;
 }
