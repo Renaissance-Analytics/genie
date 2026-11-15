@@ -1283,7 +1283,7 @@ export class SessionEngineClient {
     }
 
     /** The persisted legacy account home, or unknown while the host/book cannot answer. */
-    async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home'> | null> {
+    async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null> {
         return this.#value('engine.providerAccount', [provider], null);
     }
 

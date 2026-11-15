@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DESIGN_LOGIN } from '../core/design-login.js';
-import { providerAccountEnv, type AccountRecord } from '../core/accounts.js';
+import { providerAccountEnv, type ProviderAccountHome } from '../core/accounts.js';
 import { providerLogin } from '../core/provider-login.js';
 import type { TerminalHost } from './terminal-host.js';
 
@@ -40,7 +40,7 @@ export interface LoginHostOptions {
     /** Run a status command in `cwd` through the shell; resolves with its exit code. */
     runStatus: (command: string, cwd: string, env?: Readonly<Record<string, string>>) => Promise<number>;
     /** The host book's account. Provider-only UI login remains legacy scoped until S6. */
-    accountFor?: (provider: string) => Pick<AccountRecord, 'provider' | 'home'> | null;
+    accountFor?: (provider: string) => ProviderAccountHome | null;
     onSignedIn: (provider: string) => void;
     /** The Claude Design login window ended (there is no status to ask): the agents that waited are told to retry. */
     onDesignLoginEnded?: (() => void) | undefined;

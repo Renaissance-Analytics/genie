@@ -1,7 +1,7 @@
 import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { posix, win32 } from 'node:path';
 import { ACP_PROVIDERS } from '../core/engine.js';
-import { providerAccountEnv, type AccountRecord } from '../core/accounts.js';
+import { providerAccountEnv, type ProviderAccountHome } from '../core/accounts.js';
 import { judgeProviderHealth, type CommandAnswer, type ProgramFile, type ProviderHealth } from '../core/provider-health.js';
 import { providerLogin } from '../core/provider-login.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
@@ -101,7 +101,7 @@ export function locateProviderProgram(provider: string, ports: ProviderHealthPor
     return null;
 }
 
-async function answer(ports: ProviderHealthPorts, binary: string, args: readonly string[], timeoutMs: number, account?: Pick<AccountRecord, 'provider' | 'home'>): Promise<CommandAnswer> {
+async function answer(ports: ProviderHealthPorts, binary: string, args: readonly string[], timeoutMs: number, account?: ProviderAccountHome): Promise<CommandAnswer> {
     try {
         const r = await ports.run(binary, args, { timeoutMs, ...(account ? { env: providerAccountEnv(account, ports.env) } : {}) });
         const output = r.streams ? [r.streams.stdout, r.streams.stderr].filter(Boolean).join('\n') : r.stdout;
@@ -120,7 +120,7 @@ function argvFor(provider: string, program: ProgramFile, args: readonly string[]
 }
 
 /** Provider command failures are measurements; a mismatched account is refused before running. */
-export async function checkProviderHealth(provider: string, ports: ProviderHealthPorts, account?: Pick<AccountRecord, 'provider' | 'home'>): Promise<ProviderHealth> {
+export async function checkProviderHealth(provider: string, ports: ProviderHealthPorts, account?: ProviderAccountHome): Promise<ProviderHealth> {
     if (account && account.provider !== provider) throw new Error('The status probe needs an account of its provider');
     const base = { provider, arch: ports.arch, checkedAt: ports.now() };
     const program = locateProviderProgram(provider, ports);

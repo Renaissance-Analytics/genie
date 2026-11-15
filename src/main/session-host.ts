@@ -1,5 +1,5 @@
 import { isOsAgent } from '../core/os-agent.js';
-import { legacyAccountId, providerAccountEnv, type AccountRecord } from '../core/accounts.js';
+import { legacyAccountId, providerAccountEnv, type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
 import { isAcpProvider } from '../core/engine.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
@@ -194,7 +194,7 @@ export function providerLaunchOptions(
     configured: string | undefined,
     serviceEnv: Readonly<Record<string, string>>,
     runtime: { readonly execPath: string; readonly electron: boolean },
-    account?: Pick<AccountRecord, 'provider' | 'home'>,
+    account?: ProviderAccountHome,
 ): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
     let service = serviceEnvDriverOptions(serviceEnv);
     // A provider starts through a shell, and its environment is an allow-list: what hardenProcess set goes with it.
@@ -416,17 +416,17 @@ export function listModelsOptionsFor(
     env: Record<string, string | undefined>,
     runtime: { readonly execPath: string; readonly electron: boolean },
     ports?: ProviderProgramPorts,
-    account?: Pick<AccountRecord, 'provider' | 'home'>,
+    account?: ProviderAccountHome,
 ): ListModelsOptions {
     if (account && account.provider !== provider) throw new Error('The model probe needs an account of its provider');
     return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
-export const realListModels = (provider: Parameters<ListProviderModels>[0], account?: Pick<AccountRecord, 'provider' | 'home'>): ReturnType<ListProviderModels> => {
+export const realListModels = (provider: Parameters<ListProviderModels>[0], account?: ProviderAccountHome): ReturnType<ListProviderModels> => {
     const problem = providerStartProblem(provider);
     if (problem !== null) return Promise.reject(new Error(problem));
-    const bound = account ?? { provider, home: legacyProviderHomes()[provider] };
+    const bound = account ?? { provider, home: legacyProviderHomes()[provider], legacy: true };
     return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, undefined, bound));
 };
 
@@ -498,7 +498,7 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     // a managed binding without its book must never silently use a different login.
     if (isAcpProvider(record.provider) && record.accountId && record.accountId !== legacyAccountId(record.provider) && !extras?.account)
         return () => { throw new Error('The agent account is unavailable; reconnect its account book before starting.'); };
-    const account = extras?.account ?? (isAcpProvider(record.provider) ? { provider: record.provider, home: legacyProviderHomes()[record.provider] } : undefined);
+    const account = extras?.account ?? (isAcpProvider(record.provider) ? { provider: record.provider, home: legacyProviderHomes()[record.provider], legacy: true } : undefined);
     const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, account);
 
     switch (record.provider) {

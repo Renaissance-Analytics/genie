@@ -1,4 +1,4 @@
-import { providerAccountEnv, type AccountRecord } from '../core/accounts.js';
+import { providerAccountEnv, type ProviderAccountHome } from '../core/accounts.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { type Burst, type TakeOverProbe } from '../core/observed.js';
 import { randomUUID } from 'node:crypto';
@@ -34,7 +34,7 @@ import type { TerminalsApi } from './terminals-host.js';
 
 export interface TakeOverOptions {
     /** The account already bound to this agent, resolved by the host's book. */
-    accountFor?: (record: AgentRecord) => Pick<AccountRecord, 'provider' | 'home'> | null;
+    accountFor?: (record: AgentRecord) => ProviderAccountHome | null;
     terminals: Pick<TerminalsApi, 'open' | 'close' | 'onData' | 'onExit'>;
     /** Open (or re-open — the opener decides whether that means focus) a window on a route. */
     openWindow: (route: string) => void;

@@ -129,7 +129,7 @@ export interface EngineServerOptions {
     /** A provider's model list, from the host's one cache (core/provider-models.ts); `refresh` asks the CLI again. */
     readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
     /** The host book's persisted legacy account; only this machine's window may ask. */
-    readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home'> | null;
+    readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
     readonly onShutdown?: () => void;
     /** The number of authenticated windows changed (the host's idle exit watches it). */
@@ -632,7 +632,7 @@ export class SessionEngineServer {
             if (!conn.local || !conn.window) throw new Error('Provider account homes need this machine’s own window.');
             if (!this.#options.providerAccount) throw new Error('The provider account book is unavailable.');
             const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
-            return account ? { id: account.id, provider: account.provider, home: account.home } : null;
+            return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
         }
         if (method === 'engine.features') {
             if (!conn.local || !conn.window) throw new Error('features need this machine’s own window connection');

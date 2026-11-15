@@ -1911,7 +1911,7 @@ async function boot(): Promise<void> {
     const scratch = scratchArea(genieRoot());
     scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
     // Provider-only login stays on the persisted legacy account until S6. A window never opens the book or a credential.
-    const loginAccounts = new Map<string, Pick<AccountRecord, 'id' | 'provider' | 'home'>>();
+    const loginAccounts = new Map<string, Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'>>();
     refreshLoginAccounts = async client => {
         loginAccounts.clear();
         for (const provider of ['claude', 'codex']) {

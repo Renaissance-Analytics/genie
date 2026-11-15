@@ -5,7 +5,7 @@ import { childEnv } from '@particle-academy/prism-acp';
 import type { SessionStore } from '@particle-academy/prism-harness';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as accountsModel from '../src/core/accounts.js';
-import type { AccountRecord } from '../src/core/accounts.js';
+import type { AccountRecord, ProviderAccountHome } from '../src/core/accounts.js';
 import { DESIGN_LOGIN } from '../src/core/design-login.js';
 import type { AcpProvider } from '../src/core/engine.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
@@ -18,7 +18,7 @@ import { listModelsOptionsFor, providerLaunchOptions, serviceEnvDriverOptions, S
 // S3's proposed pure env seam. Until implemented it is deliberately inert, so the
 // existing tree fails on the home assertions, never a missing export/import.
 type Env = Readonly<Record<string, string | undefined>>;
-type AccountEnv = (account: Pick<AccountRecord, 'provider' | 'home'>, inherited: Env) => Env;
+type AccountEnv = (account: ProviderAccountHome, inherited: Env) => Env;
 const accountEnv: AccountEnv = (accountsModel as unknown as { providerAccountEnv?: AccountEnv }).providerAccountEnv
     ?? ((_account, inherited) => ({ ...inherited }));
 const account = (provider: AcpProvider, suffix = 'a'): AccountRecord => ({
@@ -97,7 +97,7 @@ describe('S3: one account home environment', () => {
         expect(accountEnv(a, parent)).toEqual(parent);
     });
     it('an invalid home is refused instead of falling back to the process account', () => {
-        for (const home of ['', 'relative/home', '/home/with\0nul']) expect(() => accountEnv({ provider: 'claude', home }, {})).toThrow(/home/i);
+        for (const home of ['', 'relative/home', '/home/with\0nul']) expect(() => accountEnv({ provider: 'claude', home, legacy: false }, {})).toThrow(/home/i);
     });
     it('CONTROL: constructing an environment keeps unrelated variables and never mutates its input', () => {
         const parent = Object.freeze({ PATH: '/bin', DB_PORT: '4312' });
