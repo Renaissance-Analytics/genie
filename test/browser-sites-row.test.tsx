@@ -24,7 +24,7 @@ describe('sitesThatFit: how many chips the row holds', () => {
     });
     it('CONTROL: the exact fit of every chip with no "»" is all of them', () => {
         expect(sitesThatFit({ widths: [60, 60], available: 126, moreWidth: 28, gap: 6 })).toBe(2);
-        expect(sitesThatFit({ widths: [60, 60], available: 125, moreWidth: 28, gap: 6 })).toBe(0);
+        expect(sitesThatFit({ widths: [60, 60], available: 125, moreWidth: 28, gap: 6 })).toBe(1);
     });
 });
 

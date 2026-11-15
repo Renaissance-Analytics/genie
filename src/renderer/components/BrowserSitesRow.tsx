@@ -70,15 +70,17 @@ export function BrowserSitesRow(p: BrowserSitesRowProps) {
     return (
         <div ref={row} data-browser-sites="" className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-hidden whitespace-nowrap border-b border-[var(--border-1)] px-2 py-1">
             {shown.map((host) => (
-                <Button variant="ghost" size="xs" key={host} type="button" data-browser-site={host} title={label(host)} aria-current={p.current === host ? 'page' : undefined} onClick={() => p.onOpen(`https://${host}/`)} className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] hover:bg-[var(--bg-2)] ${p.current === host ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
-                    <span>{label(host)}</span>
-                </Button>
+                <span key={host} data-browser-site={host} aria-current={p.current === host ? 'page' : undefined} className="shrink-0">
+                    <Button variant="ghost" size="xs" type="button" title={label(host)} onClick={() => p.onOpen(`https://${host}/`)} className={`rounded-md px-2 py-0.5 text-[11px] hover:bg-[var(--bg-2)] ${p.current === host ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
+                        <span>{label(host)}</span>
+                    </Button>
+                </span>
             ))}
             {hidden.length > 0 ? (
-                <span className="ml-auto shrink-0">
+                <span data-browser-sites-more="" {...(behind ? { 'data-current': 'true' } : {})} role="group" aria-label={`${hidden.length} more site${hidden.length === 1 ? '' : 's'}`} className="ml-auto shrink-0">
                     <Dropdown placement="bottom-end">
                         <Dropdown.Trigger>
-                            <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-browser-sites-more="" {...(behind ? { 'data-current': 'true' } : {})} aria-label={`${hidden.length} more site${hidden.length === 1 ? '' : 's'}`} title={`${hidden.length} more`} className={`flex w-8 items-center justify-center rounded-md px-1 py-0.5 text-[13px] hover:bg-[var(--bg-2)] ${behind ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
+                            <Button variant="ghost" size="xs" labelClassName="contents" type="button" aria-label={`${hidden.length} more site${hidden.length === 1 ? '' : 's'}`} title={`${hidden.length} more`} className={`flex w-8 items-center justify-center rounded-md px-1 py-0.5 text-[13px] hover:bg-[var(--bg-2)] ${behind ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
                                 <span aria-hidden="true">»</span>
                             </Button>
                         </Dropdown.Trigger>

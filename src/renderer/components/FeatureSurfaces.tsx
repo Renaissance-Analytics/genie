@@ -1809,7 +1809,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'agent-mcp' ? (
                                 <>
                                     <SetSection title="Genie’s MCP server" desc="What every agent session is given." data-settings-mcp=""><McpServerBlock integrations={data.integrations} /></SetSection>
-                                    <SetSection title="Agent files in workspaces" desc="Which harness configs Genie writes into every workspace when it starts and when one is added. Each workspace’s status, and a Sync now, are in that workspace’s Settings." data-workspace-files-note="">{rows('agent-mcp')}</SetSection>
+                                    <SetSection title="Agent files in workspaces" desc="Which harness configs Genie writes into every workspace when it starts and when one is added. Each workspace’s status, and a Sync now for it, are in each workspace’s own Settings." data-workspace-files-note="">{rows('agent-mcp')}</SetSection>
                                 </>
                             ) : null}
                             {active === 'plugins' ? (

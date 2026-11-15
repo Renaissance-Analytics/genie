@@ -24,7 +24,7 @@ describe('browserSiteLabels', () => {
     it('a service host named by the workspace id is the workspace name and the service', () => {
         const labels = browserSiteLabels([`${ULID}.mail.gen`], [], names);
         expect(labels[`${ULID}.mail.gen`]).toBe('Atlas · mail');
-        expect(JSON.stringify(labels)).not.toContain(ULID);
+        expect(Object.values(labels).join('|')).not.toContain(ULID);
     });
     it('an id-like host with no known workspace is never shown as the id', () => {
         const labels = browserSiteLabels([`${ULID}.mail.gen`, `${ULID}.gen`], [], {});
