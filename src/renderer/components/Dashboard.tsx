@@ -10,6 +10,7 @@ import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 import { agentStatusStyle } from '../agent-status-color.js';
+import { useDashboardFilter } from '../dashboard-filter.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import {
     commsOf,
@@ -409,24 +410,14 @@ export interface DashboardProps {
     pulsing?: ReadonlySet<string> | undefined;
 }
 
-function readShown(kind: 'sleeping' | 'stopped'): boolean {
-    try { return typeof window !== 'undefined' && window.localStorage.getItem(`genie.dashboard.show.${kind}`) === '1'; }
-    catch { return false; }
-}
-
 export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
     const all = genie ? [genie, ...rows] : rows;
-    const [showSleeping, setShowSleeping] = useState(() => readShown('sleeping'));
-    const [showStopped, setShowStopped] = useState(() => readShown('stopped'));
-    const shown = dashboardRows(all, { sleeping: showSleeping, stopped: showStopped });
-    const toggle = (kind: 'sleeping' | 'stopped') => {
-        const next = kind === 'sleeping' ? !showSleeping : !showStopped;
-        if (kind === 'sleeping') setShowSleeping(next); else setShowStopped(next);
-        try { window.localStorage.setItem(`genie.dashboard.show.${kind}`, next ? '1' : '0'); } catch { /* Applies in this window even when storage is unavailable. */ }
-    };
+    const { filter, toggle } = useDashboardFilter();
+    const { sleeping: showSleeping, stopped: showStopped } = filter;
+    const shown = dashboardRows(all, filter);
     const [ownFocus, setOwnFocus] = useState<string | null>(null);
     const focused = focusedId ?? ownFocus;
     const [ownReveal, setOwnReveal] = useState<string | null>(null);

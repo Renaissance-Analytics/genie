@@ -29,8 +29,8 @@ import { agentPrompter, type AgentSessionsPort } from '../src/main/flow-runner.j
  * its `result` is mapped (the usage row) and its outcome is kept. Genie took a turn's end ONLY from `onTurnEnd`, so the
  * next prompt after any folded one, whoever sent it, never ended. Flows were simply the next prompt most often.
  *
- * The driver here models exactly that: a `result` frame sends its `usage_update` first (prism-acp's `#resultFrame`, with
- * the turn-scoped usage in `_meta`), then outcomes go out in submission order only.
+ * The regression now uses the published 0.42 contract: a result's explicit covered-prompt list settles folded input
+ * with `foldedInto`, in submission order. The behavior assertions stay; usage is no longer an inferred turn end.
  */
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -45,7 +45,7 @@ function orderedClaudeDriver() {
     let written = 0;
     const factory: SessionDriverFactory = (options) => {
         events = options.events;
-        return { start: () => {}, prompt: () => { pending.push({ id: written, outcome: null }); written += 1; }, kill: () => {}, get running() { return true; }, get cliSessionId() { return null; } };
+        return { start: () => {}, prompt: () => { const id = written++; pending.push({ id, outcome: null }); return `prompt-${id}`; }, kill: () => {}, get running() { return true; }, get cliSessionId() { return null; } };
     };
     const flush = (): void => {
         while (pending.length > 0 && pending[0]!.outcome !== null) events.onTurnEnd?.(pending.shift()!.outcome!);
@@ -54,18 +54,18 @@ function orderedClaudeDriver() {
         factory,
         say: (text: string) => events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }),
         /** Prompt `id`'s `result` frame: its usage first (mapped from the same frame), then whatever outcomes may go. */
-        result: (id: number, outcome: TurnOutcomeLike = END) => {
+        result: (id: number, outcome: TurnOutcomeLike = END, folded: readonly number[] = []) => {
+            const p = pending.find((x) => x.id === id);
+            if (!p) return; // An unknown result settles nothing, as in the real driver.
             events.onUpdate?.({ sessionUpdate: 'usage_update', used: 1200, size: 1_000_000, _meta: { 'particle.academy/usage': { scope: 'turn', inputTokens: 10, outputTokens: 20 } } });
-            const p = pending.find((x) => x.id === id);
-            if (p) p.outcome = outcome;
+            p.outcome = { ...outcome, turnId: `prompt-${id}` };
+            for (const joined of pending.filter((x) => folded.includes(x.id))) {
+                joined.outcome = { ...outcome, turnId: `prompt-${joined.id}`, foldedInto: `prompt-${id}` };
+            }
             flush();
         },
-        /** A prompt settled with NO result frame (prism-acp's own: dropped by a cancel, an accounting mismatch). */
-        settleWithoutResult: (id: number, outcome: TurnOutcomeLike) => {
-            const p = pending.find((x) => x.id === id);
-            if (p) p.outcome = outcome;
-            flush();
-        },
+        /** A late copy of a joined outcome must have no new effect in Genie either. */
+        folded: (id: number, into: number) => events.onTurnEnd?.({ ...END, turnId: `prompt-${id}`, foldedInto: `prompt-${into}` }),
     };
 }
 
@@ -108,7 +108,7 @@ function turnWithAFoldedNotice(s: ReturnType<typeof open>) {
     s.d.say('reading it');
     s.session.deliver('AgentInbox delivery: 1 more message', 'genie'); // prompt 1: folded, never a result of its own
     s.d.say('answered both');
-    s.d.result(0);
+    s.d.result(0, END, [1]);
 }
 
 describe('CONTROL: the ordered driver ends a turn exactly as before when nothing was folded', () => {
@@ -139,7 +139,7 @@ describe('the owner\'s turn 69: the turn after a folded prompt', () => {
         s.session.deliver('Hourly round', FLOW); // prompt 2
         expect(s.session.turnState).toBe('working');
         s.d.say('Round done with two reads.');
-        s.d.result(2); // its usage row lands; prism-acp keeps its outcome behind prompt 1
+        s.d.result(2); // its actual outcome ends the new turn; prompt 1 was already settled as joined
         await tick();
         expect(s.session.turnState).toBe('idle');
         expect(s.session.promptable).toBe(true);
@@ -196,7 +196,7 @@ describe('never stuck Working: an ended turn is closed, and what comes after it 
         expect(await s.finished()).toEqual([1, 2, 3, 4]);
     });
 
-    it('the held ends, released later all at once (a cancel settles the folded prompt), close nothing twice and open nothing', async () => {
+    it('a late copy of an already-folded outcome closes nothing twice and opens nothing', async () => {
         const s = open();
         turnWithAFoldedNotice(s);
         s.session.deliver('Hourly round', FLOW); // 2
@@ -208,8 +208,8 @@ describe('never stuck Working: an ended turn is closed, and what comes after it 
         s.d.result(3);
         await tick();
         const before = await s.ledger();
-        // prism-acp releases prompt 1 (no result: it was folded) and with it the ends it held, 2 and 3.
-        s.d.settleWithoutResult(1, { stopReason: 'cancelled', isError: false, raw: 'cancel accounting mismatch' });
+        // Its parent and later turns already ended. A folded outcome is never another finish or a cancellation.
+        s.d.folded(1, 0);
         await tick();
         expect(s.session.turnState).toBe('idle');
         expect(s.session.turns).toBe(3);

@@ -736,6 +736,10 @@ export function Shell({
                     // click picks the chat, as a Dashboard row does, without leaving the page on screen.
                     agents={snapshot.agents.filter((agent) => !hiddenWorkspaces.has(agent.workspaceId))}
                     onChatAgent={onChatAgent}
+                    // The row's terminal and folder buttons open WINDOWS, never navigate (Tynn #733): the agent's Take Over window and the
+                    // workspace's popped-out Files panel — the same openers the Agent and Files pages use.
+                    onOpenAgentTerminal={onTakeOver}
+                    onOpenWorkspaceFiles={onPopOutFiles}
                 />
                 </ErrorBoundary>
                 {/* "Pair this device?" — on every page, never focused (q_8c07b142). A remote window's snapshot carries none. */}
