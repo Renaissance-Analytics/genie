@@ -153,7 +153,7 @@ describe('the contract file', () => {
             repository: 'Renaissance-Analytics/tynn.ai',
             contract: 'workspace-ux',
             version: '0.12.0',
-            commit: '8adf9d9159bdd50166b043344c3872386bc3dbcd',
+            commit: '7ae7dc15253381119b410ce99483b003ab8f67e2',
             path: 'contracts/workspace-ux/0.12.0/workspace-ux.json',
             sha256: '7b4758748779564b7381283b3674e62f045216b61948e5caf79b09acd56967fb',
         });
