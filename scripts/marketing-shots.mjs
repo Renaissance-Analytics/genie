@@ -19,9 +19,11 @@
  *   quill, cobalt     sleeping  (a turn finished and five minutes of idle passed: core/agent-status.ts SLEEPING_AFTER_IDLE_MS)
  * and one flow running (a Wait step), which is the Deck's "1 flow running" signal.
  *
- * SHOTS, 1600x1000: 01-dashboard-dark, 02-dashboard-light, 03-deck-questions-dark, 04-header-flow-pill-dark (the header and
- * signal strip, cropped), 05-hosting-dark, 06-toolchain-dark, 07-workspace-chat-dark. Written to the out dir, with
- * shots.json: what each view held when it was taken, so a shot of an empty view is said and not mistaken for a good one.
+ * SHOTS, 1600x1000: 01-dashboard-dark, 02-dashboard-light, 03-dashboard-waiting-dark (ember's row expanded to its question, the
+ * approval toast on the left: Tynn #730; on a line without #730 the Deck is shot instead and a note says so), 04-header-flow-pill-dark
+ * (the header and signal strip, cropped), 05-hosting-dark, 06-toolchain-dark, 07-workspace-chat-dark, 08-artboard-tab-dark (Tynn #739,
+ * three seeded items). Written to the out dir, with shots.json: what each view held when it was taken, so a shot of an empty view is
+ * said and not mistaken for a good one. A step that fails is noted and the rest still run.
  *
  * Exit 0 when every shot was written; 1 when one could not be; 2 cannot run here. The run takes about nine minutes, five of
  * them the wait that makes two agents sleep.
@@ -113,6 +115,14 @@ writeFileSync(join(runtime, 'agents.json'), JSON.stringify(AGENTS.map((a) => ({
 writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: 'dark', whats_new_seen_version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version }, null, 2));
 
 // The provider is the stub codex the CI rows use; Genie finds it the way it finds any install (GENIE2_CODEX_BINARY).
+// The ArtBoard tab's items (Tynn #739): atlas-web's .artboard folder, as the board reads it. Three mockups from agents; the last asks for a verdict.
+const boardDir = join(wsPaths.atlasweb, '.artboard');
+mkdirSync(boardDir, { recursive: true });
+const mock = (title, accent) => `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="margin:0;font-family:system-ui;background:#0f1115;color:#e8eaf0;width:640px;height:400px"><div style="padding:28px"><div style="font-size:12px;letter-spacing:.08em;color:${accent}">ATLAS</div><h1 style="margin:8px 0 16px;font-size:28px">${title}</h1><div style="display:flex;gap:12px"><div style="flex:1;height:150px;border-radius:12px;background:${accent}22;border:1px solid ${accent}66"></div><div style="flex:1;height:150px;border-radius:12px;background:#ffffff0d;border:1px solid #ffffff22"></div></div><div style="margin-top:18px;width:160px;padding:10px 0;text-align:center;border-radius:8px;background:${accent};color:#0f1115;font-weight:600">Shop the drop</div></div></body>`;
+const boards = [['hero-v1', 'Storefront hero, first pass', '#7c9cff', false], ['cart-drawer', 'Cart drawer with free-shipping bar', '#3ecf8e', false], ['hero-v2', 'Storefront hero, second pass', '#ffb454', true]];
+for (const [id, title, accent] of boards) writeFileSync(join(boardDir, `${id}.html`), mock(title, accent));
+writeFileSync(join(boardDir, 'index.json'), JSON.stringify({ posts: boards.map(([id, title, , ask], n) => ({ id, title, kind: 'html', file: `${id}.html`, createdAt: new Date(Date.now() - (boards.length - n) * 3_600_000).toISOString(), agentId: by('quill').id, agentName: 'quill', askVerdict: ask })) }, null, 2));
+
 const stub = join(ROOT, 'scripts', 'stub-codex.mjs');
 chmodSync(stub, 0o755);
 // Stub-codex reads these in the temp dir: the ticker marker (a LIVE pid) makes a spawned stub stream for ever, the release file lets
@@ -121,6 +131,9 @@ const TICKER = join(tmpdir(), 'genie-stub-codex-ticker');
 const RELEASE = join(tmpdir(), 'genie-stub-codex-stream-release');
 rmSync(TICKER, { force: true });
 rmSync(RELEASE, { force: true });
+// Demo mode (scripts/stub-codex.mjs): the reply arrives whole and the turn ends, so an answered agent reads Idle, not Broken. Names this live pid.
+const DEMO = join(tmpdir(), 'genie-stub-codex-demo');
+writeFileSync(DEMO, String(process.pid));
 
 // ---- the app ------------------------------------------------------------------------------------------------------------
 
@@ -160,6 +173,7 @@ const app = spawn(electron, ['.', '--no-sandbox', '--password-store=basic', `--r
 const processes = () => (spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).stdout ?? '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(' '); return { pid: Number(l.slice(0, i)), args: l.slice(i + 1) }; });
 function endEverything() {
     rmSync(TICKER, { force: true });
+    rmSync(DEMO, { force: true });
     let hostPid = null;
     try { hostPid = JSON.parse(readFileSync(join(runtime, 'host.json'), 'utf8')).pid; } catch { /* none */ }
     for (const p of processes()) if (p.args.includes(data) || p.args.includes(genieHome) || p.pid === hostPid) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
@@ -213,13 +227,14 @@ async function sizeWindow() {
 
 const OVERLAYS = '[role="dialog"], [role="alertdialog"], [data-toast]';
 /** Nothing a first run puts over the page may be in a shot: What's new is closed the way its Close does, then whatever dialog or toast is left is pressed away, and said. */
-async function clearOverlays() {
+async function clearOverlays(keepToasts = false) {
     try {
         const open = JSON.parse(await ev(`(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify(d.whatsNew ?? null))`) ?? 'null');
         if (open?.version) await act({ kind: 'whatsNew.close', version: open.version });
     } catch (e) { note(`whatsNew: ${e}`); }
+    const selector = keepToasts ? '[role="dialog"], [role="alertdialog"]' : OVERLAYS;
     for (let i = 0; i < 3; i += 1) {
-        if (!await ev(`document.querySelectorAll(${JSON.stringify(OVERLAYS)}).length`)) return;
+        if (!await ev(`document.querySelectorAll(${JSON.stringify(selector)}).length`)) return;
         await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
         await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
         await sleep(600);
@@ -227,8 +242,8 @@ async function clearOverlays() {
     note(`an overlay was still on screen: ${await ev(`[...document.querySelectorAll(${JSON.stringify(OVERLAYS)})].map((n) => n.textContent.trim().slice(0, 80)).join(' | ')`)}`);
 }
 
-async function shot(name, what, clip) {
-    await clearOverlays();
+async function shot(name, what, clip, { keepToasts = false } = {}) {
+    await clearOverlays(keepToasts);
     await sleep(2500); // a render and its transitions settle; a fixed wait is a guess, so each shot also records what it held
     const held = await ev(`JSON.stringify({ route: document.querySelector('[data-route]')?.textContent ?? null, dark: document.documentElement.classList.contains('dark'), dpr: window.devicePixelRatio, inner: innerWidth + 'x' + innerHeight, overlays: document.querySelectorAll('[role="dialog"]').length,
         agentRows: document.querySelectorAll('[data-agent]').length, states: [...document.querySelectorAll('[data-agent][data-state]')].map((r) => (r.querySelector('span.font-medium')?.textContent ?? r.getAttribute('data-agent')).trim() + ':' + r.getAttribute('data-state')),
@@ -330,37 +345,74 @@ try {
     await sleep(20_000); // past the 15 s "cooling" after a clean turn: Idle, not Cooling
 
     // ---- the shots ----------------------------------------------------------------------------------------------------
-    await go('genie://dashboard');
-    await waitFor('the Dashboard', `document.querySelectorAll('[data-surface="dashboard"] [data-agent]').length >= 4`, 30_000);
-    await shot('01-dashboard-dark', 'The Genie Dashboard: three workspaces, six agents working, waiting, idle and sleeping');
+    // A step that cannot finish is said and the next one runs: seven good shots are worth more than eight and a crash.
+    const step = async (name, fn) => { try { await fn(); } catch (error) { note(`${name}: ${error?.message ?? error}`); report.shots.push({ name, ok: false, what: 'the step threw' }); } };
+    const ember = by('ember');
+    const dashboardUp = async () => {
+        await go('genie://dashboard');
+        await waitFor('the Dashboard', `document.querySelectorAll('[data-surface="dashboard"] [data-agent]').length >= 4`, 30_000);
+    };
 
-    await setTheme('light');
-    await shot('02-dashboard-light', 'The same Dashboard in the light theme');
-    await setTheme('dark');
+    // 03 and 04 FIRST, while ember's approval toast is still on the left: after them every toast is put off ("Later"), so the other shots are clean.
+    await step('03-dashboard-waiting-dark', async () => {
+        await dashboardUp();
+        const badge = `[data-waiting-badges="${ember.id}"] [data-waiting-badge], [data-waiting-badge]`;
+        if (await waitFor('the waiting badge on ember\'s row (Tynn #730)', `Boolean(document.querySelector(${JSON.stringify(badge)}))`, 30_000)) {
+            await ev(`(document.querySelector(${JSON.stringify(`[data-waiting-badges="${ember.id}"] [data-waiting-badge]`)}) ?? document.querySelector('[data-waiting-badge]'))?.click(); true`);
+            await waitFor('ember\'s waiting question under its row', `Boolean(document.querySelector('[data-waiting-items]'))`, 15_000);
+        } else {
+            note('#730 is not on this line (no waiting badges): the Deck is shot in its place');
+            await go('genie://deck');
+            await waitFor('the Deck', `Boolean(document.querySelector('[data-surface="deck"]'))`, 30_000);
+        }
+        const toast = await waitFor('the approval toast', `Boolean(document.querySelector('[data-approval-toast]'))`, 15_000);
+        if (!toast) note('no approval toast was on screen for shot 03');
+        await shot('03-dashboard-waiting-dark', 'The Dashboard with ember\'s row expanded to its waiting question, and the approval toast on the left', undefined, { keepToasts: true });
+    });
+    await step('04-header-flow-pill-dark', async () => {
+        await shot('04-header-flow-pill-dark', 'The header and signal strip with the running-flow pill (cropped to the top)', { x: 0, y: 0, width: WIDTH, height: 180 }, { keepToasts: true });
+    });
+    await ev(`document.querySelectorAll('[data-toast-later]').forEach((b) => b.click()); true`);
+    await ev(`document.querySelectorAll('[data-waiting-items]').length > 0 && document.querySelector('[data-waiting-badge]')?.click(); true`); // fold ember's row again
 
-    await go('genie://deck');
-    await waitFor('the Deck', `Boolean(document.querySelector('[data-surface="deck"]'))`, 30_000);
-    await shot('03-deck-questions-dark', 'The Deck: the agent\'s pending question to answer, and the running-flow signal');
-    await shot('04-header-flow-pill-dark', 'The header and signal strip with the running-flow pill (cropped to the top)', { x: 0, y: 0, width: WIDTH, height: 180 });
-
-    await go('genie://hosting');
-    await waitFor('Hosting', `Boolean(document.querySelector('[data-surface="hosting"]'))`, 30_000);
-    await sleep(3000);
-    await shot('05-hosting-dark', 'Hosting: the three workspaces\' sites');
-
-    await go('genie://settings/toolchain');
-    await waitFor('Toolchain settings', `Boolean(document.querySelector('[data-surface="settings"]'))`, 30_000);
-    await sleep(4000);
-    await shot('06-toolchain-dark', 'Settings, Toolchain: the language toolchains');
-
+    await step('01-dashboard-dark', async () => {
+        await dashboardUp();
+        await shot('01-dashboard-dark', 'The Genie Dashboard: three workspaces, six agents working, waiting, idle and sleeping');
+    });
+    await step('02-dashboard-light', async () => {
+        await setTheme('light');
+        await shot('02-dashboard-light', 'The same Dashboard in the light theme');
+        await setTheme('dark');
+    });
+    await step('05-hosting-dark', async () => {
+        await go('genie://hosting');
+        await waitFor('Hosting', `Boolean(document.querySelector('[data-surface="hosting"]'))`, 30_000);
+        await sleep(3000);
+        await shot('05-hosting-dark', 'Hosting: the three workspaces\' sites');
+    });
+    await step('06-toolchain-dark', async () => {
+        await go('genie://settings/toolchain');
+        await waitFor('Toolchain settings', `Boolean(document.querySelector('[data-surface="settings"]'))`, 30_000);
+        await sleep(4000);
+        await shot('06-toolchain-dark', 'Settings, Toolchain: the language toolchains');
+    });
+    // 08: the ArtBoard tab of atlas-web, with the three items seeded in its .artboard folder (one asks for a verdict).
+    await step('08-artboard-tab-dark', async () => {
+        await go('genie://workspace/atlasweb');
+        if (!await waitFor('the ArtBoard tab (Tynn #739)', `Boolean(document.querySelector('[data-workspace-tab="artboard"]'))`, 30_000)) throw new Error('the workspace has no ArtBoard tab on this line');
+        await ev(`document.querySelector('[data-workspace-tab="artboard"]').click(); true`);
+        await sleep(4000);
+        await shot('08-artboard-tab-dark', 'The ArtBoard tab of atlas-web: three items from agents, one waiting for a verdict');
+    });
     // The chat last: a row click pins the agent's chat beside the page and it stays (genie#1209, #639).
-    await go('genie://dashboard');
-    await waitFor('the Dashboard', `Boolean(document.querySelector('[data-surface="dashboard"] [data-agent="${by('vesper').id}"]'))`, 30_000);
-    await ev(`document.querySelector('[data-surface="dashboard"] [data-agent="${by('vesper').id}"]')?.click(); true`);
-    await waitFor('vesper\'s chat', `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${by('vesper').id}"]'))`, 30_000);
-    await go('genie://workspace/lumendocs');
-    await waitFor('the workspace dashboard', `Boolean(document.querySelector('[data-surface="workspace"], [data-surface="dashboard"]')) && Boolean(document.querySelector('[data-chat-subject="${by('vesper').id}"]'))`, 30_000);
-    await shot('07-workspace-chat-dark', 'A workspace dashboard (lumen-docs) with its agent\'s chat: a reply with a code block, a table and a result card');
+    await step('07-workspace-chat-dark', async () => {
+        await dashboardUp();
+        await ev(`document.querySelector('[data-surface="dashboard"] [data-agent="${by('vesper').id}"]')?.click(); true`);
+        await waitFor('vesper\'s chat', `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${by('vesper').id}"]'))`, 30_000);
+        await go('genie://workspace/lumendocs');
+        await waitFor('the workspace dashboard', `Boolean(document.querySelector('[data-chat-subject="${by('vesper').id}"]'))`, 30_000);
+        await shot('07-workspace-chat-dark', 'A workspace dashboard (lumen-docs) with its agent\'s chat: one reply with a code block, a table and a result card');
+    });
 } catch (error) {
     failed = true;
     say(`FAIL ${error?.stack ?? error}`);
@@ -369,5 +421,5 @@ try {
 
 writeFileSync(join(OUT, 'shots.json'), `${JSON.stringify(report, null, 2)}\n`);
 const written = report.shots.filter((s) => s.ok).length;
-say(`${written} of 7 shots written to ${OUT}`);
-finish(failed || written < 7 ? 1 : 0);
+say(`${written} of 8 shots written to ${OUT}`);
+finish(failed || written < 8 ? 1 : 0);

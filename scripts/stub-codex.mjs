@@ -151,7 +151,26 @@ function delta(text) {
     send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { threadId, turnId: TURN_ID, itemId: MESSAGE_ID, delta: text } });
 }
 
+/**
+ * DEMO MODE (scripts/marketing-shots.mjs, Tynn #737): while `<tmpdir>/genie-stub-codex-demo` names a LIVE pid, the reply after the
+ * approval arrives whole, as one completed message, and the turn ENDS. The smoke's path above streams the reply in two pieces and
+ * never completes the turn (its rows look at the card mid-stream), so a turn left like that sits "Working" until prism-acp's
+ * inactivity deadline marks the agent Broken, and the half-streamed row shows beside the whole one. Without the file nothing changes.
+ */
+function demoMode() {
+    const marker = join(tmpdir(), 'genie-stub-codex-demo');
+    if (!existsSync(marker)) return false;
+    const owner = Number(readFileSync(marker, 'utf8').trim());
+    if (!Number.isInteger(owner) || owner <= 0) return false;
+    try { process.kill(owner, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
 function streamReply() {
+    if (demoMode()) {
+        send({ jsonrpc: '2.0', method: 'item/completed', params: { threadId, turnId: TURN_ID, item: { type: 'agentMessage', id: MESSAGE_ID, text: STUB_REPLY } } });
+        send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
+        return;
+    }
     rmSync(STREAM_RELEASE, { force: true });
     const head = STUB_REPLY.slice(0, STREAM_CUT);
     // Two chunks, cut mid-table, as a model's tokens arrive: the renderer sees the text grow.
