@@ -63,7 +63,8 @@ describe('the drawer shows media (Tynn #726)', () => {
     it('an image is an <img> scaled to fit, with a click-to-zoom control', () => {
         const html = open('shots/a.png', { kind: 'image', src: SRC, size: 2048 });
         expect(html).toMatch(/<img[^>]*src="data:image\/png;base64,iVBORw0KGgo="/);
-        expect(html).toMatch(/<img[^>]*class="[^"]*object-contain[^"]*max-h-full[^"]*max-w-full/);
+        // All three fit classes on the <img>, in any order.
+        expect(html).toMatch(/<img(?=[^>]*class="[^"]*\bobject-contain\b)(?=[^>]*class="[^"]*\bmax-h-full\b)(?=[^>]*class="[^"]*\bmax-w-full\b)/);
         expect(html).toContain('data-action="question-drawer-zoom"');
         expect(html).not.toContain('not a text file');
     });
