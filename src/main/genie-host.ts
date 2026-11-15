@@ -15,7 +15,7 @@ import type { MachineFeaturePorts } from './feature-machine.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -138,6 +138,8 @@ import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
+import { PlaywrightHost, osConnections } from './playwright-host.js';
+import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
 import { statusCommandFor } from './login-host.js';
@@ -1177,6 +1179,26 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    // GENIE'S PLAYWRIGHT (Tynn #604): the browsers path is Genie's own environment; the server and a workspace's endpoint are made here, on demand.
+    const playwrightHost = new PlaywrightHost({
+        toolchainDir: join(home, 'genie2-toolchain'),
+        server: {
+            supervisor: processSupervisor, workspaceId: 'genie', cwd: home,
+            cliDir: (version) => join(home, 'genie2-toolchain', 'playwright', 'cli', version),
+            allocatePort: () => 20_000 + (randomBytes(2).readUInt16BE(0) % 20_000),
+            mintToken: () => randomBytes(32).toString('base64url'),
+            now: () => Date.now(),
+            connections: (port) => osConnections(port, process.platform, async (binary, args) => { const r = await execFileRunner(binary, args, { timeoutMs: 10_000 }); return { exitCode: r.exitCode, stdout: r.streams.stdout }; }),
+            idleMs: 10 * 60_000,
+        },
+        workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null,
+        optIn: (id) => settings.snapshotFor(id).playwright_server !== false,
+        fs: nodePhpVersionsFs(),
+        platform: process.platform as 'win32' | 'linux' | 'darwin',
+        link: (target, path, kind) => { symlinkSync(target, path, kind); },
+    });
+    const playwrightSweep = setInterval(() => { void playwrightHost.server.sweep().catch(() => {}); }, 60_000);
+    playwrightSweep.unref();
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     bootStep('remote and genie 1 imports', stepAt);
@@ -1186,6 +1208,7 @@ async function main(): Promise<void> {
         accountById: id => accounts.get(id),
         userData: home,
         ...engineHostOptions,
+        serviceEnvFor: (workspaceId) => ({ ...engineHostOptions.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId) }),
         // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
         endToolCalls: (agentId, intent) => toolCalls.end(agentId, intent),
         // What the agent's workspace has off by default (Tynn #628), read from the registry at each launch.
@@ -1729,7 +1752,7 @@ async function main(): Promise<void> {
         // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.
         terminalEnv: (workspaceId) => {
             const endpoint = mcp?.endpoint() ?? null;
-            return { ...engine.serviceEnvFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
+            return { ...engine.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
         },
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
         // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.

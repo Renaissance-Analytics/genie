@@ -55,6 +55,9 @@ export const SETTINGS: readonly SettingDef[] = [
     // APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner's D2: on by default): this workspace's sites, background
     // processes and script keys may post into its own agents' AgentInbox. Off: none of them holds a key.
     { key: 'app_inbox', group: 'agents', scope: 'workspace', label: 'Apps and scripts may message agents here', description: 'This workspace’s sites, background processes and script keys may report to its own agents, marked as an app’s message. Off: none of them gets a key.', type: 'boolean', default: true },
+    // GENIE'S PLAYWRIGHT SERVER (Tynn #604): agents and terminals here are handed the endpoint of Genie's local Playwright server
+    // (PW_TEST_CONNECT_WS_ENDPOINT) when the project's @playwright/test version matches it. Off: they use the managed browsers directly.
+    { key: 'playwright_server', group: 'agents', scope: 'workspace', label: 'Use Genie’s Playwright server', description: 'Agents and terminals here are given the address of Genie’s local Playwright browser server, so browser tests run without launching their own browsers. Only when the project’s Playwright version matches the server’s.', type: 'boolean', default: true },
     // SAVED PROMPTS (Tynn #758; Genie 1's `saved_prompts`): the Command Window's library and each prompt's hotkey, as JSON
     // (core/prompt-library.ts reads it forgivingly). Hidden: Settings → Agents draws it as a list, not a JSON box.
     { key: 'saved_prompts', group: 'agents', scope: 'host', label: 'Saved prompts', description: 'Prompts you send from the Command Window or with their own hotkey.', type: 'string', default: '[]', hidden: true },

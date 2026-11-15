@@ -201,7 +201,7 @@ export function providerLaunchOptions(
     if (process.env[PROGRAM_LOOKUP_VARIABLE]) service = { ...service, parentEnv: { ...(service.parentEnv ?? process.env), [PROGRAM_LOOKUP_VARIABLE]: process.env[PROGRAM_LOOKUP_VARIABLE] }, allowEnv: [...(service.allowEnv ?? []), PROGRAM_LOOKUP_VARIABLE] };
     // Check and repair sets these beside PATH (already in the SDK's base allow-list). Keep only these explicit
     // toolchain overrides, including for model-list probes; an ambient env passthrough would expose credentials.
-    const toolchain = ['NPM_CONFIG_PREFIX', 'PHP_INI_SCAN_DIR'].flatMap((name) => {
+    const toolchain = ['NPM_CONFIG_PREFIX', 'PHP_INI_SCAN_DIR', 'PLAYWRIGHT_BROWSERS_PATH'].flatMap((name) => {
         const value = process.env[name];
         return value?.trim() ? [[name, value] as const] : [];
     });

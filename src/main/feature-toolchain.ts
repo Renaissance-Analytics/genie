@@ -35,6 +35,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainRust ? { rust: state.toolchainRust } : {}),
         ...(state.toolchainRuby ? { ruby: state.toolchainRuby } : {}),
         ...(state.toolchainJava ? { java: state.toolchainJava } : {}),
+        ...(state.toolchainPlaywright ? { playwright: state.toolchainPlaywright } : {}),
         ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
         ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
     };
@@ -62,6 +63,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainRust: section?.rust ?? null,
         toolchainRuby: section?.ruby ?? null,
         toolchainJava: section?.java ?? null,
+        toolchainPlaywright: section?.playwright ?? null,
         toolchainDefaults: section?.defaults ?? null,
         toolchainMachinePath: section?.machinePath ?? null,
     };
@@ -79,6 +81,7 @@ export async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pin
     if (tc.rust) next.toolchainRust = await tc.rust.list();
     if (tc.ruby) next.toolchainRuby = await tc.ruby.list();
     if (tc.java) next.toolchainJava = await tc.java.list();
+    if (tc.playwright) next.toolchainPlaywright = await tc.playwright.list();
     if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
     if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
     const tools = await tc.probe();
@@ -722,6 +725,28 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             if (outcome.kind === 'refused') refuse(next, 'ruby', outcome.reason, action.version);
             else next.toolchainResult = `Ruby ${outcome.version} was removed.`;
             next.toolchainRuby = await tc.ruby.list();
+            break;
+        }
+        case 'toolchain.installPlaywright': {
+            const key = action.version ?? 'latest';
+            clearRefusal(next, 'playwright', key);
+            if (action.consent !== true) {
+                refuse(next, 'playwright', 'Genie installs nothing without your go-ahead; no Playwright browsers were installed', key);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.playwright) {
+                refuse(next, 'playwright', 'no Playwright manager is wired into this Genie; nothing was installed', key);
+                break;
+            }
+            const outcome = await tc.playwright.install(action.version, action.browsers ?? [], true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'playwright', outcome.reason, key);
+            else {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Playwright ${outcome.version}'s browsers (${outcome.browsers.join(', ')}) are installed in Genie's toolchain.`
+                    : `Playwright ${outcome.version}'s browsers were already installed; nothing was downloaded.`;
+            }
+            next.toolchainPlaywright = await tc.playwright.list();
             break;
         }
         case 'toolchain.installJava': {
