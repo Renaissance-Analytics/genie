@@ -13,7 +13,7 @@ import type { PendingQuestion } from '../src/main/attention-store.js';
 import { composeServices } from './helpers/compose-alone.js';
 import { type ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { control } from './helpers/control-markup.js';
 
 /**
@@ -43,8 +43,8 @@ const pending = (over: Partial<PendingQuestion> = {}): PendingQuestion => ({
 });
 const itemsOf = (qs: PendingQuestion[]) =>
     deckItemsFrom({ questions: qs, userList: [], unreadDms: [], agents: {}, workspaceNames: { [WS_ID]: 'Tynn.ai' } });
-const render = (items: readonly DeckItem[], extra: Partial<Parameters<typeof Deck>[0]> = {}) =>
-    renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} {...extra} />);
+const render = (items: readonly DeckItem[], extra: Partial<Parameters<typeof DeckOnDashboard>[0]> = {}) =>
+    renderToStaticMarkup(<DeckOnDashboard items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} {...extra} />);
 const titleOf = (html: string, id: string) => html.match(new RegExp(`data-deck-title="${id}"[^>]*>([^<]*)<`))?.[1] ?? null;
 
 describe('the title is the header, as plain text', () => {
@@ -82,7 +82,7 @@ describe('who asked, where, and how long ago', () => {
         const html = render(itemsOf([pending()]));
         expect(control(html, 'data-deck-agent="agent_a"')).toMatchObject({ tag: 'button', fancy: true });
         expect(control(html, 'data-deck-agent="agent_a"')!.text).toMatch(/^atlas(?![\w])/);
-        expect(html).toMatch(new RegExp(`data-deck-workspace="${WS_ID}"[^>]*>Tynn\\.ai<`));
+        expect(html).toMatch(new RegExp(`data-column="workspace" data-workspace="${WS_ID}"[\\s\\S]*?Tynn\\.ai`));
         // The id rides as an attribute; it is never text a person reads.
         expect(html).not.toContain(`>${WS_ID}<`);
         expect(html).toMatch(/data-deck-age="q_1"[^>]*>2 h ago</);

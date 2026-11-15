@@ -142,8 +142,8 @@ describe('the rail’s rows are DERIVED from what the shell can serve', () => {
          */
         expect(railSurfacesFor(['dashboard'])).toEqual(['dashboard']);
         expect(railSurfacesFor(['dashboard', 'agent'])).toEqual(['dashboard', 'genie']);
-        expect(railSurfacesFor(['dashboard', 'deck', 'agent', 'workspace']))
-            .toEqual(['deck', 'dashboard', 'genie', 'workspace']);
+        expect(railSurfacesFor(['dashboard', 'agent', 'workspace']))
+            .toEqual(['dashboard', 'genie', 'workspace']);
     });
 
     it('rides the genie row on the AGENT surface, because that is what it navigates to', () => {
@@ -162,8 +162,8 @@ describe('the rail’s rows are DERIVED from what the shell can serve', () => {
     it('keeps the rail’s own order regardless of the order it is told', () => {
         // The rail reads top to bottom in a fixed order. Deriving it from the caller's array
         // order would let a refactor reshuffle somebody's navigation.
-        expect(railSurfacesFor(['workspace', 'agent', 'dashboard', 'deck']))
-            .toEqual(['deck', 'dashboard', 'genie', 'workspace']);
+        expect(railSurfacesFor(['workspace', 'agent', 'dashboard']))
+            .toEqual(['dashboard', 'genie', 'workspace']);
     });
 });
 

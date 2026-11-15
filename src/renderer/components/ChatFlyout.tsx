@@ -16,7 +16,7 @@ import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
 import { ChatProse } from './ChatProse.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
-import { ApprovalCard } from './ApprovalCard.js';
+import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
 import { personText } from '../../core/person-text.js';
@@ -231,6 +231,8 @@ export interface ChatFlyoutProps {
      * decision (`approvalPlacement`) and not a property of the conversation.
      */
     approval?: Approval | null | undefined;
+    /** A toast carries this approval (Tynn #730): it is answered THERE, and the chat shows a marker, not a second set of buttons. */
+    approvalInToast?: boolean | undefined;
     /**
      * Open a file the chat names, in the agent's workspace (core/chat-file-links.ts). Absent = nowhere to open it (genie's
      * own chat), and file references stay plain text.
@@ -371,7 +373,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
 function ChatFlyoutBody({
     onChooseProviderProgram,
-    thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
+    thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
     onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
@@ -792,7 +794,11 @@ function ChatFlyoutBody({
              * approval renders wherever the composer is — one actionable rendering, and a
              * marker everywhere else.
              */}
-            {approval ? (
+            {approval && approvalInToast ? (
+                <div className="shrink-0 border-t border-[var(--border-1)]">
+                    <ApprovalMarker where="the toast at the bottom left" />
+                </div>
+            ) : approval ? (
                 <div className="shrink-0 border-t border-[var(--border-1)]">
                     <ApprovalCard
                         approval={approval}

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { deckSections, needsYouCount, type DeckItem } from '../src/core/deck.js';
+import { earlierRuns, needsYouCount, type DeckItem } from '../src/core/deck.js';
 import { QuestionWindow, type QuestionView } from '../src/main/question-window.js';
 import { QuestionApp } from '../src/renderer/components/QuestionApp.js';
 import { control } from './helpers/control-markup.js';
@@ -166,9 +166,9 @@ describe('only LIVE questions take the window (stale ones stay in the Deck, mark
         h.ctl.changed();
         // COUNTED: one window, the live question, +0 (stale ones are not "waiting behind").
         expect(h.log).toEqual(['open', 'show live +0']);
-        // The Deck counts them: one waiting on you, two stale — kept, in the workspace's section.
+        // The Dashboard counts them: one waiting on you, two stale — kept, badged on their agents' rows.
         expect(needsYouCount(items)).toBe(1);
-        expect(deckSections(items).map((s) => [s.live, s.stale])).toEqual([[1, 2]]);
+        expect(earlierRuns(items).map((i) => i.id)).toEqual(['old1', 'old2']);
     });
 
     it('only stale questions: no window at all — they are in the Deck', () => {

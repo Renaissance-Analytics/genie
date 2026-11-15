@@ -50,7 +50,6 @@ describe('routes are the application’s state, so they parse exactly', () => {
         const routes = [
             'genie://dashboard',
             'genie://dashboard?chat=wren&pin=right',
-            'genie://deck',
             'genie://agent/kai?tab=stream',
             'genie://agent/kai?tab=stream&lane=tools&at=ev_8831',
             'genie://workspace/tynn?files=',
@@ -95,7 +94,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
         // COUNT over every route shape: a trailing `?` is the kind of drift that makes the
         // bar's text differ from the link an agent pasted, for no visible reason.
         const shapes: Route[] = [
-            { surface: 'deck', item: null, chat: null, pin: null },
+            { surface: 'dashboard', item: 'q_1', chat: null, pin: null },
             { surface: 'dashboard', chat: null, pin: null },
             { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, layout: 'ledger', chat: null, pin: null },
             { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', file: null, line: null, filter: null, detached: false, chat: null, pin: null },
@@ -103,7 +102,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
 
         expect(shapes.map(formatRoute).filter((r) => r.endsWith('?'))).toEqual([]);
         // POSITIVE CONTROL: these DO produce query strings where there is something to say.
-        expect(shapes.map(formatRoute).filter((r) => r.includes('?'))).toHaveLength(1);
+        expect(shapes.map(formatRoute).filter((r) => r.includes('?'))).toHaveLength(2);
     });
 });
 

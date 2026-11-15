@@ -45,7 +45,7 @@ const rail = (over: Partial<Parameters<typeof Sidebar>[0]> = {}): string =>
             route="genie://dashboard?group=workspace"
             deckCount={2}
             workspaces={WORKSPACES}
-            available={['deck', 'dashboard', 'genie', 'workspace']}
+            available={['dashboard', 'genie', 'workspace']}
             onNavigate={() => {}}
             {...over}
         />,
@@ -173,15 +173,15 @@ describe('the rail', () => {
         const html = rail();
         expect(html).toContain('w-52');  // 208px
 
-        for (const label of ['Deck', 'Dashboard', 'genie']) expect(html).toContain(label);
+        for (const label of ['Dashboard', 'genie']) expect(html).toContain(label);
         // Every one is a real control a person can click, not a decorated div.
         expect([...html.matchAll(/data-nav="/g)].length).toBeGreaterThanOrEqual(3);
     });
 
     it('marks the active row from the ROUTE, so refresh and a deep link agree with it', () => {
-        const onDeck = rail({ route: 'genie://deck' });
-        expect(onDeck).toMatch(/data-nav="genie:\/\/deck"[^>]*data-active="true"/);
-        expect(onDeck).not.toMatch(/data-nav="genie:\/\/dashboard"[^>]*data-active="true"/);
+        const onGenie = rail({ route: 'genie://agent/genie' });
+        expect(onGenie).toMatch(/data-nav="genie:\/\/agent\/genie"[^>]*data-active="true"/);
+        expect(onGenie).not.toMatch(/data-nav="genie:\/\/dashboard"[^>]*data-active="true"/);
 
         // POSITIVE CONTROL: the other way round, from the other route.
         const onDash = rail({ route: 'genie://dashboard?group=workspace' });
@@ -241,8 +241,10 @@ describe('the rail', () => {
         expect(html).not.toContain('data-nav="genie://deck"');
         expect(html).not.toContain('data-nav="genie://agent/genie"');
         expect(html).not.toMatch(/\sdisabled=""/);
-        // No orphan badge either: the Deck's count has nowhere to live without the Deck.
-        expect(html).not.toContain('data-deck-badge');
+        // The waiting count rides the Dashboard's row (Tynn #730), so a rail with a Dashboard has it ...
+        expect(html).toContain('data-deck-badge="2"');
+        // ... and one with no Dashboard has no orphan badge: the count has nowhere to live.
+        expect(rail({ available: ['workspace'] })).not.toContain('data-deck-badge');
 
         // POSITIVE CONTROL: the rail is not simply empty, and the workspaces still render.
         expect(html).toContain('data-nav="genie://dashboard"');

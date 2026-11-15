@@ -7,7 +7,7 @@ import { idsIn, personText } from '../src/core/person-text.js';
 import { AlertToasts } from '../src/renderer/components/AlertToasts.js';
 import { ChatMailRow } from '../src/renderer/components/ChatFlyout.js';
 import { ChatProse } from '../src/renderer/components/ChatProse.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { InboxFlyoutView, type InboxFlyoutViewProps } from '../src/renderer/components/InboxFlyout.js';
 import { MobileShell } from '../src/renderer/components/MobileShell.js';
 
@@ -146,7 +146,7 @@ describe('the surfaces, from fixtures full of ids (control: each fixture really 
     const QUIET: SignalState = { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false };
 
     it('the Deck', () => {
-        const html = renderToStaticMarkup(<Deck items={[deckItem()]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} focusId={QID} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[deckItem()]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} focusId={QID} />);
         expect(html).toContain('data-deck-item');
         expect(idsShown(html)).toEqual([]);
         expect(personFacing(html)).toContain('ship the flow');

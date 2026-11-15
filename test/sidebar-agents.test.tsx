@@ -21,7 +21,7 @@ const memory = (collapsed: boolean): Pick<Storage, 'getItem' | 'setItem'> => {
 };
 // Handed the whole roster, as Shell once passed it: the sidebar must still draw no agent.
 const sidebar = (route: string, collapsed = false) => renderToStaticMarkup(
-    <Sidebar route={route} deckCount={0} workspaces={[ws('tynn'), ws('fancy')]} available={['deck', 'dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} currentWorkspaceId={routeWorkspace(route, agents)} {...({ agents } as object)} />,
+    <Sidebar route={route} deckCount={0} workspaces={[ws('tynn'), ws('fancy')]} available={['dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} currentWorkspaceId={routeWorkspace(route, agents)} {...({ agents } as object)} />,
 );
 const workspaceRow = (html: string, id: string) => html.match(new RegExp(`<button[^>]*data-workspace="${id}"[^>]*>`))?.[0] ?? '';
 

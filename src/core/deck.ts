@@ -293,62 +293,9 @@ export function needsYouCount(items: readonly DeckItem[]): number {
     return deckBand(items).filter((i) => !isStale(i)).length;
 }
 
-/** The heading of the stale questions' own band (the owner, 2026-11-08: greyed at the bottom read as "nowhere"). */
-export const EARLIER_RUNS_HEADING = 'Earlier runs: still unanswered';
-
 /** The questions asked by an earlier run, or whose agent is gone, still unanswered: their own band, in rank order. */
 export function earlierRuns(items: readonly DeckItem[]): DeckItem[] {
     return deckBand(items).filter(isStale);
-}
-
-/**
- * ONE WORKSPACE'S PART OF THE DECK (the owner, 2026-10-15: "Grouped by workspace" — sections per workspace, then rows).
- * `workspaceId` null is Genie's own section: its items (a main-process error, trusting the certificate) belong to no
- * workspace. `label` is the workspace's NAME as the rail says it — never its id; one not known here is said as such.
- */
-export interface DeckSection {
-    readonly key: string;
-    readonly workspaceId: string | null;
-    readonly label: string;
-    readonly items: readonly DeckItem[];
-    /** How many of its items are waiting on the person (not stale). */
-    readonly live: number;
-    readonly stale: number;
-}
-
-/** Genie's own section's label, and the one for a workspace this machine has no name for. */
-export const GENIE_SECTION = 'Genie';
-export const UNNAMED_WORKSPACE = 'A workspace not known here';
-
-/**
- * The Needs-you band, IN SECTIONS. The ranking is the band's (`deckBand`: blocking, priority, oldest) and it decides
- * both orders, so the most-worth-doing thing is still at the top of the screen:
- *
- * - within a section, live items in rank order, then its stale ones in rank order (a stale question waits for nobody);
- * - sections in the order of their best LIVE item; a section holding only stale items comes after every live one.
- */
-export function deckSections(items: readonly DeckItem[]): readonly DeckSection[] {
-    const band = deckBand(items);
-    const ordered = [...band.filter((i) => !isStale(i)), ...band.filter(isStale)];
-    const sections = new Map<string, { workspaceId: string | null; label: string | null; items: DeckItem[] }>();
-    for (const item of ordered) {
-        const key = item.workspaceId ?? 'genie:';
-        let section = sections.get(key);
-        if (!section) {
-            section = { workspaceId: item.workspaceId, label: null, items: [] };
-            sections.set(key, section);
-        }
-        if (section.label === null && item.workspaceName !== undefined) section.label = item.workspaceName;
-        section.items.push(item);
-    }
-    return [...sections.entries()].map(([key, s]) => ({
-        key,
-        workspaceId: s.workspaceId,
-        label: s.workspaceId === null ? GENIE_SECTION : (s.label ?? UNNAMED_WORKSPACE),
-        items: s.items,
-        live: s.items.filter((i) => !isStale(i)).length,
-        stale: s.items.filter(isStale).length,
-    }));
 }
 
 export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
@@ -425,7 +372,7 @@ export function signalStrip(state: SignalState): readonly Signal[] {
             kind: 'mail',
             label: `${state.uncollectedMail} message${state.uncollectedMail === 1 ? '' : 's'} not collected`,
             // The AgentInbox flyout over the Deck (beta.33 item 19: not a page); the old page's link would leave the Deck.
-            route: 'genie://deck?inbox=',
+            route: 'genie://dashboard?inbox=',
         });
     }
 
