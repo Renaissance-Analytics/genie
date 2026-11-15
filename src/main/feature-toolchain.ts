@@ -1,5 +1,5 @@
 import { LANG_LABEL } from '../core/toolchain-defaults.js';
-import type { RepairOutcome } from '../core/toolchain.js';
+import type { RepairOutcome, ToolStatus } from '../core/toolchain.js';
 import { updateRisk } from '../core/toolchain-risk.js';
 import type { FeatureAction, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
@@ -25,6 +25,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainUpdating ? { updating: state.toolchainUpdating } : {}),
         ...(state.toolchainUpdated ? { updated: state.toolchainUpdated } : {}),
         ...(state.toolchainResult ? { result: state.toolchainResult } : {}),
+        ...(state.toolchainCheckRun ? { checkRun: state.toolchainCheckRun } : {}),
         ...(state.toolchainRefusals && state.toolchainRefusals.length > 0 ? { refusals: state.toolchainRefusals } : {}),
         ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
         ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
@@ -51,6 +52,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainUpdating: null,
         toolchainUpdated: section?.updated ?? null,
         toolchainResult: section?.result ?? null,
+        toolchainCheckRun: section?.checkRun ?? null,
         toolchainRefusals: section?.refusals ?? null,
         toolchainPhp: section?.php ?? null,
         toolchainNode: section?.node ?? null,
@@ -160,9 +162,28 @@ function describeUpdate(tool: string, outcome: RepairOutcome): string {
 /** The historical dispatcher shares one guard; the host service passes its own process-owned guard. */
 const legacyRepairingCli = new Set<string>();
 
+/**
+ * THE "CHECK FOR UPDATES" RUN's control (Tynn #714): whether one is going, and whether the person pressed Stop. A Stop is
+ * a separate action that arrives while the run's own action is still awaiting a probe, so it can only reach the run through
+ * this shared object. The host service passes its own, like `repairingCli`.
+ */
+export interface ToolchainCheckControl { running: boolean; stop: boolean }
+const legacyCheckControl: ToolchainCheckControl = { running: false, stop: false };
+
+type CheckRows = Record<string, NonNullable<ToolchainSection['checkRun']>['rows'][string]>;
+
+/** What one tool's fresh status says for its row: the five states of the check. */
+function checkStateOf(status: ToolStatus): CheckRows[string] {
+    if (status.tone === 'up-to-date') return { state: 'up-to-date' };
+    if (status.tone === 'update-available' || status.tone === 'security-update') return { state: 'update-available' };
+    if (status.tone === 'broken') return { state: 'failed', reason: status.problem ?? 'it could not run' };
+    if (status.tone === 'not-installed') return { state: 'failed', reason: 'it did not answer' };
+    return { state: 'failed', reason: 'no source could name its newest version' };
+}
+
 /** Shared check, install, update, repair, default, PATH and CLI rules. */
 export async function applyToolchainCoreFeatureAction(services: ToolchainFeatureServices, action: FeatureAction,
-    state: FeatureState, next: FeatureState, ports: Pick<FeaturePorts, 'toolchain'>, repairingCli = legacyRepairingCli): Promise<boolean> {
+    state: FeatureState, next: FeatureState, ports: Pick<FeaturePorts, 'toolchain'>, repairingCli = legacyRepairingCli, checkControl = legacyCheckControl): Promise<boolean> {
     switch (action.kind) {
         case 'toolchain.login': {
             clearRefusal(next, action.tool);
@@ -209,6 +230,53 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             if (shouldCheckUpdates(state.toolchainCheckedAt ?? null, tc.now(), action.force === true)) {
                 await rescanToolchain(next, tc, sitePins(services));
             }
+            break;
+        }
+        case 'toolchain.stopCheck': {
+            if (checkControl.running) checkControl.stop = true;
+            break;
+        }
+        case 'toolchain.checkUpdates': {
+            const tc = ports.toolchain;
+            if (!tc?.probeTool) throw new Error('no per-tool check is wired into this Genie; the check cannot run');
+            if (checkControl.running) break;
+            checkControl.running = true;
+            checkControl.stop = false;
+            const rows: CheckRows = {};
+            let statuses = [...(state.toolStatuses ?? [])];
+            const targets = statuses.filter((t) => t.installed !== null).map((t) => t.tool);
+            for (const tool of targets) rows[tool] = { state: 'waiting' };
+            const publish = (running: boolean) => {
+                next.toolchainCheckRun = { running, rows: { ...rows } };
+                tc.checking?.(running ? next.toolchainCheckRun : null);
+            };
+            let stopped = false;
+            try {
+                publish(true);
+                for (const tool of targets) {
+                    if (checkControl.stop) {
+                        stopped = true;
+                        for (const rest of targets.slice(targets.indexOf(tool))) delete rows[rest];
+                        break;
+                    }
+                    rows[tool] = { state: 'checking' };
+                    publish(true);
+                    try {
+                        const fresh = await tc.probeTool(tool);
+                        statuses = statuses.map((t) => (t.tool === tool ? fresh : t));
+                        rows[tool] = checkStateOf(fresh);
+                    } catch (error) {
+                        rows[tool] = { state: 'failed', reason: error instanceof Error ? error.message : String(error) };
+                    }
+                    publish(true);
+                }
+            } finally {
+                checkControl.running = false;
+                checkControl.stop = false;
+            }
+            next.toolStatuses = statuses;
+            if (!stopped) next.toolchainCheckedAt = tc.now();
+            publish(false);
             break;
         }
         case 'toolchain.update': {

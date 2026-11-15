@@ -114,6 +114,10 @@ export interface FeaturePorts {
     readonly issueWatchSetRepo?: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => Promise<unknown>;
     readonly toolchain?: {
         probe(): Promise<ToolStatus[]>;
+        /** Tynn #714: ONE tool's version and newest version, for the one-at-a-time "Check for updates". Absent = that check is not wired. */
+        probeTool?(tool: string): Promise<ToolStatus>;
+        /** Tynn #714: push the run as it moves (each row's state); `null` when it is over. */
+        checking?(run: NonNullable<ToolchainSection['checkRun']> | null): void;
         /** `version`: the version the button named (genie#1306); `progress`: the row's step while it runs. */
         update(tool: string, version?: string, progress?: (step: string | null) => void): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
         /** Push the row's in-progress state (genie#1306): the update and its step, `null` when it is over. */
@@ -223,6 +227,8 @@ export interface FeatureState {
     toolchainUpdating?: ToolchainSection['updating'] | null;
     toolchainUpdated?: ToolchainSection['updated'] | null;
     toolchainResult?: string | null;
+    /** The last or current "Check for updates" run (Tynn #714). */
+    toolchainCheckRun?: ToolchainSection['checkRun'] | null;
     /** What's new asked for again (Help → What's new, Tynn #762): shown although seen, until closed. */
     whatsNewShown?: boolean;
     /** Refused or failed toolchain actions, one per row, each cleared by that row's next action. */

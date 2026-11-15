@@ -37,20 +37,26 @@ export async function probeInstalled(tool: (typeof HOST_TOOLS)[number], run: Com
 }
 
 export async function probeTools(run: CommandRunner, latest: LatestIndex, platform: Platform = process.platform as Platform): Promise<ToolStatus[]> {
-    return Promise.all(
-        HOST_TOOLS.map(async (tool) => {
-            const installed = await probeInstalled(tool, run, platform);
-            let idx: { version: string; source: string } | null = null;
-            try {
-                idx = await latest(tool.name);
-            } catch {
-                idx = null;
-            }
-            // A language Genie installs itself here (genie#1306): which versions it can move to — the patch first.
-            const choices = installed !== null && genieUpdates(tool.name, platform) ? updateChoices(tool.name, installed) : undefined;
-            return toolStatus({ tool: tool.name, installed, latest: idx?.version ?? null, source: idx?.source ?? null, ...(choices ? { choices } : {}) });
-        }),
-    );
+    return Promise.all(HOST_TOOLS.map((tool) => probeOneTool(tool, run, latest, platform)));
+}
+
+/** ONE tool's status (Tynn #714: the "Check for updates" run asks one at a time). `null` for a name Genie does not manage. */
+export async function probeToolNamed(name: string, run: CommandRunner, latest: LatestIndex, platform: Platform = process.platform as Platform): Promise<ToolStatus | null> {
+    const tool = HOST_TOOLS.find((t) => t.name === name);
+    return tool ? probeOneTool(tool, run, latest, platform) : null;
+}
+
+async function probeOneTool(tool: (typeof HOST_TOOLS)[number], run: CommandRunner, latest: LatestIndex, platform: Platform): Promise<ToolStatus> {
+    const installed = await probeInstalled(tool, run, platform);
+    let idx: { version: string; source: string } | null = null;
+    try {
+        idx = await latest(tool.name);
+    } catch {
+        idx = null;
+    }
+    // A language Genie installs itself here (genie#1306): which versions it can move to — the patch first.
+    const choices = installed !== null && genieUpdates(tool.name, platform) ? updateChoices(tool.name, installed) : undefined;
+    return toolStatus({ tool: tool.name, installed, latest: idx?.version ?? null, source: idx?.source ?? null, ...(choices ? { choices } : {}) });
 }
 
 /** What the "latest" lookup needs: the runner, a JSON fetch for the two web indexes, and the platform it runs on. */

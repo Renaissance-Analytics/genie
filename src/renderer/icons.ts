@@ -33,6 +33,8 @@ import { ORDER_ICON } from '../core/inbox-view.js';
  * drifts from the components silently.
  */
 export const ICON_NAMES: readonly string[] = [
+    // The Toolchain version picker (Tynn #713): the default version, a newer patch available.
+    'star', 'arrow-up',
     // chrome
     'search', 'inbox', 'layout-list', 'sparkles',
     // The Tynn tab's board (genie#1295): each card's next step, delete, its claimant.
