@@ -46,6 +46,7 @@ let host: HTMLDivElement;
 let root: Root;
 let navigated: string[];
 let chatted: string[];
+let files: string[];
 beforeEach(() => {
     g.IS_REACT_ACT_ENVIRONMENT = true;
     host = document.createElement('div');
@@ -53,6 +54,7 @@ beforeEach(() => {
     root = createRoot(host);
     navigated = [];
     chatted = [];
+    files = [];
     window.localStorage.clear();
 });
 afterEach(() => {
@@ -62,7 +64,7 @@ afterEach(() => {
     window.localStorage.clear();
 });
 type Storage_ = ReturnType<typeof memory>;
-const draw = (storage: Storage_, over: { agents?: AgentRow[]; route?: string; collapsed?: boolean } = {}) => {
+const draw = (storage: Storage_, over: { agents?: AgentRow[]; route?: string; collapsed?: boolean; openFiles?: (workspaceId: string) => void } = {}) => {
     if (over.collapsed) storage.data.set('genie.rail.collapsed', '1');
     act(() => root.render(
         <Sidebar
@@ -71,6 +73,7 @@ const draw = (storage: Storage_, over: { agents?: AgentRow[]; route?: string; co
             onNavigate={(r) => navigated.push(r)} onWakeWorkspace={() => {}} onAddWorkspace={() => {}}
             onOpenProcesses={() => {}} onOpenSites={() => {}} railStorage={storage} currentWorkspaceId="tynn"
             agents={over.agents ?? AGENTS} onChatAgent={(id) => chatted.push(id)}
+            {...(over.openFiles ? { onOpenWorkspaceFiles: over.openFiles } : {})}
         />,
     ));
 };
@@ -146,7 +149,7 @@ describe('the toggle', () => {
 });
 
 describe('an agent row', () => {
-    it('has the provider logo, the name, a status dot with no word, the shell count, and two icon buttons: open its workspace, its settings', () => {
+    it('has the provider logo, the name, a status dot with no word, the shell count, and three icon buttons: its terminal window, its workspace Files window, its settings', () => {
         draw(memory({ 'genie.rail.view': 'agents' }));
         const item = agentRow('a_atlas')!;
         expect(item.tagName).toBe('BUTTON');
@@ -173,7 +176,7 @@ describe('an agent row', () => {
             expect(b.textContent?.trim()).toBe('');
         }
         expect(open.getAttribute('data-agent-open-workspace')).toBe('tynn');
-        expect(open.getAttribute('aria-label')).toBe('Open workspace tynn');
+        expect(open.getAttribute('aria-label')).toBe('Open tynn Files in a new window');
         expect(settings.getAttribute('aria-label')).toBe('atlas settings');
     });
 
@@ -217,6 +220,9 @@ describe('the status dot is the Dashboard’s colour for every state', () => {
 
     it.each(STATES)('%s', (state) => {
         const agent = row({ id: `a_${state}`, name: state, state, ...(state === 'remote' ? { fidelity: 'remote' as const } : {}) });
+        // Sleeping and Stopped are the Dashboard's display filters, hidden by default (Tynn #733): shown here to read their dots.
+        window.localStorage.setItem('genie.dashboard.show.sleeping', '1');
+        window.localStorage.setItem('genie.dashboard.show.stopped', '1');
         draw(memory({ 'genie.rail.view': 'agents' }), { agents: [agent] });
         const dot = agentRow(agent.id)!.querySelector<HTMLElement>('[data-agent-status]')!;
         expect(dot.getAttribute('data-agent-status')).toBe(state);
@@ -247,10 +253,11 @@ describe('clicking', () => {
         expect(navigated).toEqual([]);
     });
 
-    it('its open-workspace button opens ITS workspace, and does not touch the chat', () => {
-        draw(memory({ 'genie.rail.view': 'agents' }));
+    it('its folder button opens ITS workspace Files in a window (Tynn #733), and neither navigates nor touches the chat', () => {
+        draw(memory({ 'genie.rail.view': 'agents' }), { openFiles: (id) => files.push(id) });
         click(agentUnit('a_kai')!.querySelector('[data-agent-open-workspace]'));
-        expect(navigated).toEqual(['genie://workspace/fancy']);
+        expect(files).toEqual(['fancy']);
+        expect(navigated).toEqual([]);
         expect(chatted).toEqual([]);
     });
 
