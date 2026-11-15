@@ -1,6 +1,7 @@
-import { Button, Icon, Sidebar } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer, Icon, Sidebar } from '@particle-academy/react-fancy';
 import { startPlan, type BoardActionInput, type BoardClaims, type LiveState } from '../../core/tynn-board.js';
-import { WIP_LENSES, type TynnPageState, type WipLens, type WipStory, type WipTask, type WipView } from '../../core/tynn-pages.js';
+import { WIP_LENSES, wipRef, wipWhen, type TynnPageState, type WipLens, type WipStory, type WipTask, type WipView } from '../../core/tynn-pages.js';
+import { genieClipboardWriter } from '../clipboard.js';
 import { Avatar, LiveMark, OpLine } from './TynnBoardPanel.js';
 
 /**
@@ -21,6 +22,11 @@ export interface TynnWipPanelProps {
     readonly onAction: (input: BoardActionInput) => void;
     readonly onRetry?: (() => void) | undefined;
     readonly live?: LiveState | undefined;
+    /** The version the person asked for (an id); when Tynn's answer is about another, the pane says so. */
+    readonly version?: string | undefined;
+    readonly onVersion?: ((id: string) => void) | undefined;
+    /** The clock for "3 h ago" (tests pass one). */
+    readonly now?: number | undefined;
 }
 
 const LENS_LOOK: Readonly<Record<WipLens, { icon: string; label: string }>> = {
@@ -49,6 +55,34 @@ function Bar({ done, total }: { done: number; total: number }) {
     return <span className="inline-block h-1 w-16 overflow-hidden rounded bg-[var(--bg-2)]"><i className="block h-full bg-[var(--accent)]" style={{ width: `${pct}%` }} /></span>;
 }
 
+function Versions({ view, version, onVersion }: { view: WipView; version: string | undefined; onVersion: TynnWipPanelProps['onVersion'] }) {
+    if (view.versions.length < 2) return null;
+    const chosen = version ?? view.version?.id;
+    return (
+        <div role="group" aria-label="Active versions" data-wip-versions="" className="flex flex-wrap items-center gap-1 border-b border-[var(--border-1)] px-3 py-1.5">
+            {view.versions.map((v) => {
+                const on = v.id === chosen;
+                return (
+                    <Button variant="ghost" size="xs" labelClassName="contents"
+                        key={v.id}
+                        type="button"
+                        data-wip-version={v.id}
+                        aria-pressed={on}
+                        title={v.title}
+                        onClick={() => onVersion?.(v.id)}
+                        className={`inline-flex min-w-0 items-center justify-start gap-1.5 rounded-md px-2 py-1 text-[11px] ${on ? 'bg-[var(--accent)] text-[var(--accent-fg,white)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                    >
+                        <Icon name="circle-play" size="xs" />
+                        <span className="font-mono">{v.number ?? ''}</span>
+                        <span className="max-w-[160px] truncate">{v.title}</span>
+                        {v.total !== null ? <span data-wip-version-progress="" className="text-[10px] opacity-80">{`${v.done ?? 0}/${v.total}`}</span> : null}
+                    </Button>
+                );
+            })}
+        </div>
+    );
+}
+
 function Banner({ view, live }: { view: WipView; live: LiveState | undefined }) {
     return (
         <div data-wip-banner="" className="flex flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-3 py-2 text-[12px]">
@@ -72,7 +106,20 @@ function Banner({ view, live }: { view: WipView; live: LiveState | undefined }) 
     );
 }
 
-function Rail({ view, onLens, onStory }: { view: WipView; onLens: TynnWipPanelProps['onLens']; onStory: TynnWipPanelProps['onStory'] }) {
+/** A list card's last line: the PR (a chip, not a link: the card is itself a button) and when the story last changed. */
+function CardMeta({ story, now }: { story: WipStory; now: number }) {
+    const pr = wipRef(story.pr, story.prUrl);
+    const when = wipWhen(story.updatedAt, now);
+    if (pr === null && when === null) return null;
+    return (
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] text-[var(--fg-3)]">
+            {pr ? <span data-wip-card-pr="" className="inline-flex items-center gap-0.5 rounded-full bg-[var(--bg-2)] px-1.5 font-mono"><Icon name="git-pull-request" size="xs" />{pr.label}</span> : null}
+            {when ? <time data-wip-card-changed="" dateTime={story.updatedAt ?? undefined}>{when}</time> : null}
+        </span>
+    );
+}
+
+function Rail({ view, onLens, onStory, now }: { view: WipView; onLens: TynnWipPanelProps['onLens']; onStory: TynnWipPanelProps['onStory']; now: number }) {
     return (
         <Sidebar embedded className="w-[300px] shrink-0 gap-1 overflow-y-auto border-r border-[var(--border-1)] p-2">
             <div role="group" aria-label="Lens" className="mb-1 flex gap-1">
@@ -117,6 +164,7 @@ function Rail({ view, onLens, onStory }: { view: WipView; onLens: TynnWipPanelPr
                                 <span className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{story.number}</span><StatusChip status={story.status} /></span>
                                 <span className="text-[12px] text-[var(--fg-1)]">{story.title}</span>
                                 {story.progress ? <span className="flex items-center gap-1.5 text-[10px] text-[var(--fg-3)]"><Bar done={story.tasksDone} total={story.taskCount} />{story.progress}</span> : null}
+                                <CardMeta story={story} now={now} />
                             </span>
                         </Sidebar.Item>
                     </div>
@@ -142,7 +190,8 @@ function StepButton({ icon, label, title, disabled, step, onClick }: { icon: str
     );
 }
 
-function TaskCard({ task, claims, onAction }: { task: WipTask; claims: BoardClaims | null; onAction: TynnWipPanelProps['onAction'] }) {
+function TaskCard({ task, claims, onAction, now }: { task: WipTask; claims: BoardClaims | null; onAction: TynnWipPanelProps['onAction']; now: number }) {
+    const when = wipWhen(task.updatedAt, now);
     const step = task.step;
     const ids = { taskId: task.id };
     let next = null;
@@ -161,9 +210,10 @@ function TaskCard({ task, claims, onAction }: { task: WipTask; claims: BoardClai
         );
     }
     return (
-        <div data-wip-task={task.id} className="flex flex-col gap-1.5 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-2.5">
+        <div data-wip-task={task.id} className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-2.5 transition-colors duration-300">
             <div className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{task.number}</span><StatusChip status={task.status} /></div>
-            <div className="text-[12px] text-[var(--fg-1)]">{task.title}</div>
+            <div className="text-[12px] break-words text-[var(--fg-1)] [overflow-wrap:anywhere]">{task.title}</div>
+            {when ? <time dateTime={task.updatedAt ?? undefined} className="text-[10px] text-[var(--fg-3)]">{when}</time> : null}
             {task.claim ? <div><Avatar who={task.claim} /></div> : null}
             {task.features.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
@@ -176,17 +226,63 @@ function TaskCard({ task, claims, onAction }: { task: WipTask; claims: BoardClai
     );
 }
 
-function Tasks({ story, view, onAction }: { story: WipStory; view: WipView; onAction: TynnWipPanelProps['onAction'] }) {
+function RefLink({ value, url, icon, kind }: { value: string | null; url: string | null; icon: string; kind: string }) {
+    const ref = wipRef(value, url);
+    if (ref === null) return null;
+    const label = <><Icon name={icon} size="xs" /><span className="font-mono">{ref.label}</span></>;
+    return ref.href !== null
+        ? <Button variant="ghost" size="xs" labelClassName="contents" data-wip-ref={kind} href={ref.href} target="_blank" rel="noreferrer" title={ref.href} className="inline-flex w-fit items-center justify-start gap-1 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--accent)]">{label}<Icon name="external-link" size="xs" /></Button>
+        : <span data-wip-ref={kind} className="inline-flex w-fit items-center gap-1 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)]">{label}</span>;
+}
+
+/** When the story started, went to QA and finished (Tynn's activity log); a step with no time is left out. */
+function Timeline({ story, now }: { story: WipStory; now: number }) {
+    const steps = ([['started', 'Started', story.startedAt], ['qa', 'Went to QA', story.qaAt], ['done', 'Finished', story.doneAt]] as const)
+        .flatMap(([key, label, at]) => { const when = wipWhen(at, now); return when === null ? [] : [{ key, label, when, at }]; });
+    if (steps.length === 0) return null;
     return (
-        <div data-wip-state="story-selected" className="flex flex-col gap-3">
-            <h2 className="flex items-center gap-1.5 text-[15px] font-semibold text-[var(--fg-1)]"><Icon name="book-open" size="sm" />{story.title}</h2>
-            {story.description ? <p className="text-[12px] whitespace-pre-wrap text-[var(--fg-2)]">{story.description}</p> : null}
+        <ol data-wip-timeline="" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--fg-3)]">
+            {steps.map((s) => <li key={s.key} data-wip-time={s.key}>{`${s.label} `}<time dateTime={s.at ?? undefined}>{s.when}</time></li>)}
+        </ol>
+    );
+}
+
+function Tasks({ story, view, onAction, now }: { story: WipStory; view: WipView; onAction: TynnWipPanelProps['onAction']; now: number }) {
+    const when = wipWhen(story.updatedAt, now);
+    return (
+        <div data-wip-state="story-selected" className="flex min-w-0 flex-col gap-3">
+            <h2 className="flex min-w-0 items-start gap-1.5 text-[15px] font-semibold break-words text-[var(--fg-1)] [overflow-wrap:anywhere]"><Icon name="book-open" size="sm" />{story.title}</h2>
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--fg-3)]">
+                <StatusChip status={story.status} />
+                <RefLink value={story.pr} url={story.prUrl} icon="git-pull-request" kind="pr" />
+                <RefLink value={story.commit} url={story.commitUrl} icon="git-commit-horizontal" kind="commit" />
+                {when ? <span data-wip-changed="" className="inline-flex items-center gap-1"><Icon name="clock" size="xs" /><time dateTime={story.updatedAt ?? undefined}>{`Changed ${when}`}</time></span> : null}
+            </div>
+            <Timeline story={story} now={now} />
+            {story.description ? (
+                <div data-wip-description="" className="min-w-0 text-[12px] break-words text-[var(--fg-2)] [overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:overflow-x-auto">
+                    <ContentRenderer value={story.description} format="markdown" lineSpacing={1.5} clipboardWriter={genieClipboardWriter} />
+                </div>
+            ) : null}
+            {story.criteria.length > 0 ? (
+                <section data-wip-criteria="" className="flex min-w-0 flex-col gap-1">
+                    <div className="text-[10px] font-semibold tracking-wide text-[var(--fg-3)] uppercase">Acceptance criteria</div>
+                    <ul className="flex flex-col gap-1">
+                        {story.criteria.map((c, i) => (
+                            <li key={i} data-wip-criterion="" className="flex min-w-0 items-start gap-1.5 text-[12px] break-words text-[var(--fg-1)] [overflow-wrap:anywhere]">
+                                <span className={`mt-0.5 shrink-0 ${story.status === 'done' ? 'text-[var(--success)]' : 'text-[var(--fg-3)]'}`}><Icon name={story.status === 'done' ? 'square-check' : 'circle'} size="xs" /></span>
+                                <span className="min-w-0">{c}</span>
+                            </li>
+                        ))}
+                    </ul>
+                </section>
+            ) : null}
             <div className="text-[10px] font-semibold tracking-wide text-[var(--fg-3)] uppercase">{`Tasks · ${view.doneTasks} of ${view.tasks.length} done`}</div>
             {view.tasks.length === 0 ? (
-                <p data-wip-state="no-tasks" className="rounded-lg border border-[var(--border-1)] p-6 text-center text-[12px] text-[var(--fg-3)]">No tasks in this story yet.</p>
+                <p data-wip-state="no-tasks" className="text-[12px] text-[var(--fg-3)]">No tasks in this story yet.</p>
             ) : (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
-                    {view.tasks.map((t) => <TaskCard key={t.id} task={t} claims={view.claims} onAction={onAction} />)}
+                    {view.tasks.map((t) => <TaskCard key={t.id} task={t} claims={view.claims} onAction={onAction} now={now} />)}
                 </div>
             )}
         </div>
@@ -240,7 +336,7 @@ function Empty({ view, onStory }: { view: WipView; onStory: TynnWipPanelProps['o
     );
 }
 
-export function TynnWipPanel({ state, onLens, onStory, onAction, onRetry, live }: TynnWipPanelProps) {
+export function TynnWipPanel({ state, onLens, onStory, onAction, onRetry, live, version, onVersion, now = Date.now() }: TynnWipPanelProps) {
     if (state.state !== 'ready') {
         const line = state.state === 'loading'
             ? <><Icon name="loader" size="xs" /> Reading Tynn…</>
@@ -252,13 +348,19 @@ export function TynnWipPanel({ state, onLens, onStory, onAction, onRetry, live }
     const { view, op = null } = state;
     return (
         <div data-tynn-page="wip" className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <Versions view={view} version={version} onVersion={onVersion} />
             <Banner view={view} live={live} />
+            {version !== undefined && view.version !== null && version !== view.version.id ? (
+                <p data-wip-state="version-unserved" className="border-b border-[var(--border-1)] px-3 py-1.5 text-[12px] text-[var(--warning)]">
+                    {`Tynn's WIP page answered for ${view.version.number ?? 'another version'}, not the one you chose: it does not yet open another active version's stories.`}
+                </p>
+            ) : null}
             {op && op.phase !== 'done' ? <div className="px-3 pt-2"><OpLine op={op} onRetry={onRetry} /></div> : null}
             {op && op.phase === 'done' ? <div className="px-3 pt-2"><OpLine op={op} /></div> : null}
             <div className="flex min-h-0 flex-1">
-                <Rail view={view} onLens={onLens} onStory={onStory} />
+                <Rail view={view} onLens={onLens} onStory={onStory} now={now} />
                 <main className="min-w-0 flex-1 overflow-y-auto p-4">
-                    {view.lens === 'done' ? <DoneSummary view={view} /> : view.selected ? <Tasks story={view.selected} view={view} onAction={onAction} /> : <Empty view={view} onStory={onStory} />}
+                    {view.lens === 'done' ? <DoneSummary view={view} /> : view.selected ? <Tasks story={view.selected} view={view} onAction={onAction} now={now} /> : <Empty view={view} onStory={onStory} />}
                 </main>
             </div>
         </div>
