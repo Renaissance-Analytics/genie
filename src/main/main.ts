@@ -1,5 +1,6 @@
 import { browserSiteLabels } from '../core/browser-sites.js';
 import { describeMcpTool } from '../core/mcp-tool-summaries.js';
+import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
@@ -123,6 +124,7 @@ import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { LoginHost } from './login-host.js';
+import type { AccountRecord } from '../core/accounts.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
@@ -728,6 +730,7 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
 let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let loginHost: LoginHost | null = null;
+let refreshLoginAccounts: ((client: SessionEngineClient) => Promise<void>) | null = null;
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
@@ -890,16 +893,17 @@ function openRemoteTakeOverWindow(url: string, terminalId: string, ticket: strin
     takeOverWindow(route, request, { search, ticket });
 }
 
-/** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */
-function openFilesWindow(route: string, activation: Activation): void {
-    const workspaceId = route.split('/').pop() ?? '';
-    const request = { activation, reason: `files window ${route}`, ledger: activationLedger, label: 'files' };
+/**
+ * A workspace's page in a window of its own, opened on `route` and told apart by it: asking again brings the open one up.
+ * `onClosed` runs when it closes. The window loads the same renderer, which draws what the route names.
+ */
+function openRouteWindow(route: string, activation: Activation, label: string, size: { width: number; height: number }, onClosed?: () => void): void {
+    const request = { activation, reason: `${label} window ${route}`, ledger: activationLedger, label };
     for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
     }
     const win = new BrowserWindow({
-        width: 960,
-        height: 720,
+        ...size,
         ...genieWindowIcon(here),
         backgroundColor: '#0a0a0c',
         show: false,
@@ -909,8 +913,19 @@ function openFilesWindow(route: string, activation: Activation): void {
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    win.on('closed', () => filesWindows?.windowClosed(workspaceId));
+    if (onClosed) win.on('closed', onClosed);
     void loadWindowPage(win.webContents, 'index', { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
+}
+
+/** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */
+function openFilesWindow(route: string, activation: Activation): void {
+    const workspaceId = route.split('/').pop() ?? '';
+    openRouteWindow(route, activation, 'files', { width: 960, height: 720 }, () => filesWindows?.windowClosed(workspaceId));
+}
+
+/** A WORKSPACE'S TERMINALS IN A WINDOW OF ITS OWN (Tynn #706): the Dashboard's windows column. Nothing is tracked; closing it closes it. */
+function openTerminalsWindow(route: string, activation: Activation): void {
+    openRouteWindow(route, activation, 'terminals', { width: 1100, height: 720 });
 }
 
 /**
@@ -1349,7 +1364,11 @@ let publishBrowserFacts: () => void = () => {};
  * platform routing as the probe and the update, so on Windows `npm outdated -g` reaches npm.cmd through cmd.exe.
  */
 /** Each provider CLI, measured (Tynn #698): what this process's "installed" and "signed in" read, and the Toolchain's agent rows. */
-const providerHealth = new ProviderHealthBook((provider) => checkProviderHealth(provider, realProviderHealthPorts(execFileRunner)));
+const providerHealth = new ProviderHealthBook(async provider => {
+    const account = await agentEngineLink?.client.providerAccount(provider);
+    if (!account) throw new Error('The provider account book is unavailable; reconnect Genie’s host.');
+    return checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), account);
+});
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
 const toolchainDataDir = (): string => join(genieRoot(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
@@ -1599,6 +1618,7 @@ async function boot(): Promise<void> {
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
                 followGappsChanged(client);
+                void refreshLoginAccounts?.(client).catch(error => console.error('Could not refresh provider account homes', error));
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
@@ -1911,13 +1931,24 @@ async function boot(): Promise<void> {
     // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
     const scratch = scratchArea(genieRoot());
     scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
+    // Provider-only login stays on the persisted legacy account until S6. A window never opens the book or a credential.
+    const loginAccounts = new Map<string, Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'>>();
+    refreshLoginAccounts = async client => {
+        loginAccounts.clear();
+        for (const provider of ['claude', 'codex']) {
+            const account = await client.providerAccount(provider);
+            if (account) loginAccounts.set(provider, account);
+        }
+    };
+    await refreshLoginAccounts(agentEngineLink.client);
     const logins = new LoginHost({
+        accountFor: provider => loginAccounts.get(provider) ?? null,
         scratch: () => scratch.directory(),
         terminals: terminalsForTakeOver,
         // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
-        runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
+        runStatus: (command, cwd, env) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000, ...(env ? { env } : {}) }).then((r) => r.exitCode, () => 1),
         onSignedIn: (provider) => {
             // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698).
             void providerHealth.refresh(provider);
@@ -2035,6 +2066,8 @@ async function boot(): Promise<void> {
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
         return askBrowser([at ?? null, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port(), ca: via.ca(), hosts }]);
     });
+    // THE DASHBOARD'S WINDOWS COLUMN (Tynn #706): a workspace's terminals view in a window of its own; a second ask brings it up.
+    ipcMain.handle('genie:terminals-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string' && workspaceId !== '') openTerminalsWindow(terminalsWindowRoute(workspaceId), 'user-gesture'); });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
     // TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): this machine's window on that host's terminal; a drone opens none.
@@ -2992,7 +3025,7 @@ async function boot(): Promise<void> {
     // workflow: a question asked opens it; one answered in either place leaves both.
     questionWindow = new QuestionWindow({
         items: () => composed.deckItems(),
-        open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null }),
+        open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null, openInFiles: (workspaceId, path) => { revealMainWindow('question: Open in Files'); showToPerson({ activation: 'user-gesture', route: `genie://workspace/${encodeURIComponent(workspaceId)}?files=${encodeURIComponent(path)}`, reason: 'question: Open in Files' }); } }),
         answer: async (item, selections, notes) => { await questionAction({ kind: 'deck.answerForm', item, selections, notes, note: '' }); },
         // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told, with the
         // notes the person wrote in the form.

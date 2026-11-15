@@ -29,7 +29,7 @@ const publisher = { name: 'Genie', keyId: 'genie-official', url: 'https://github
 const DOCUMENT_TYPES = ['.md', '.markdown', '.mdc', '.docx'];
 const SHEET_TYPES = ['.xlsx', '.csv', '.ods'];
 const DECK_TYPES = ['.pptx'];
-const BOARD_TYPES = ['.json', '.html', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'];
+const BOARD_TYPES = ['.json', '.html', '.md', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'];
 const tool = (name: string, description: string, inputSchema: Record<string, unknown>) => ({ name, description, inputSchema, run: 'official', process: 'worker', gated: false });
 
 export const OFFICIAL_PLUGINS: readonly OfficialPlugin[] = [
@@ -106,18 +106,23 @@ export const OFFICIAL_PLUGINS: readonly OfficialPlugin[] = [
             name: 'ArtBoard',
             version: '2.0.0',
             publisher,
-            mcpTools: [tool('post', 'Put something you MADE on the ArtBoard for a person to see — a rendered HTML mockup, or an image you generated. Not for plans or written proposals (those are text: send a message). Provide a title and either html (the markup) or kind "image" with imagePath (workspace-relative; it is COPIED onto the board). Pass a stable id and post again with the same id to REPLACE that card when you revise. By default the card just shows the artifact. Set askVerdict: true only when you need the person to approve or reject it before you go on (a design choice, a direction to sign off); then the verdict, with any comment, arrives in your AgentInbox — the call returns at once, so carry on with work that does not depend on it. Leave it off to show progress, a result, or something to look at.', {
+            mcpTools: [tool('post', 'Put something you MADE on the ArtBoard — a tab of its own in the workspace, beside Files — for a person to see: a rendered HTML mockup (a component, a whole page or a site, shown at the width and height you give), an image, or a document (Markdown or a PDF). Not for plans or written proposals (those are text: send a message). Provide a title and the content: html (the markup), kind "markdown" with markdown (the text) or filePath, kind "pdf" with filePath, or kind "image" with imagePath (workspace-relative; files are COPIED onto the board). Pass a stable id and post again with the same id to add a new VERSION: every version, every verdict and every reply stays on the item for as long as the workspace exists, and the person can compare them side by side. By default the card just shows the artifact. Set askVerdict: true only when you need the person to approve or reject it before you go on (a design choice, a direction to sign off); the tab is flagged and the verdict, with any comment, arrives in your AgentInbox — the call returns at once, so carry on with work that does not depend on it. The answer carries a link straight to the item: put it in any question or message you send about it. BEFORE revising, read the trail with readTrail: true and the id (no id lists every item): it returns the versions, each verdict and its comment, and what is waiting. Pass reply to say what you changed in answer to the last comment; it is kept on the trail.', {
                 type: 'object',
                 properties: {
-                    title: { type: 'string', description: 'What the reviewer sees on the card.' },
-                    kind: { type: 'string', enum: ['html', 'image'], description: 'html (default) or image.' },
+                    title: { type: 'string', description: 'What the reviewer sees on the card. Required to post.' },
+                    kind: { type: 'string', enum: ['html', 'image', 'markdown', 'pdf'], description: 'html (default), image, markdown or pdf.' },
                     html: { type: 'string', description: 'For kind html: the full markup to render.' },
+                    markdown: { type: 'string', description: 'For kind markdown: the document text (or pass filePath).' },
+                    filePath: { type: 'string', description: 'For kind pdf or markdown: the workspace-relative path of the file you made.' },
                     imagePath: { type: 'string', description: 'For kind image: the workspace-relative path of the image you made.' },
-                    id: { type: 'string', description: 'Stable id; posting again with it REPLACES that card.' },
-                    note: { type: 'string', description: 'One line on what you want looked at.' },
+                    width: { type: 'integer', description: 'For kind html: the width in CSS pixels the page or component was made for; it is shown at that size, scaled to fit.' },
+                    height: { type: 'integer', description: 'For kind html: the height in CSS pixels it was made for.' },
+                    id: { type: 'string', description: 'Stable id; posting again with it adds the next VERSION of that item. With readTrail, the item to read.' },
+                    note: { type: 'string', description: 'One line on what you want looked at, or what changed in this version.' },
                     askVerdict: { type: 'boolean', description: 'true: the card offers Approve / Reject with a comment, and the verdict comes to your AgentInbox. Default false: the card just shows it.' },
+                    reply: { type: 'string', description: 'Your answer to the last comment on this item, kept on its trail beside it.' },
+                    readTrail: { type: 'boolean', description: 'true: do not post; return the trail of the item named by id (versions, verdicts, comments, replies), or every item with its status when no id is given.' },
                 },
-                required: ['title'],
             })],
             panels: [{ id: 'board', title: 'ArtBoard', fancyComponent: { export: 'ArtBoardPanel' } }],
             capabilities: { fs: { scope: 'workspace', extensions: BOARD_TYPES }, network: { hosts: [] } },

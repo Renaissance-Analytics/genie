@@ -1,6 +1,7 @@
 import { initTheme } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import type { QuestionMedia } from '../core/question-media.js';
 import { extractFileRefs, type AskFileRef } from '../core/ask-file-refs.js';
 import type { DeckItem } from '../core/deck.js';
 import { activeQuestion, dropDraft, mergeDrafts, putDraft, type QuestionDraft, type QuestionDrafts } from '../core/question-drafts.js';
@@ -29,10 +30,11 @@ interface QuestionBridge {
     onShow(listener: (view: View) => void): () => void;
     /** Genie 1's file drawer: which named files are in the question's workspace (`null` = unknown), one file, and the window widening. */
     files?(id: string, paths: string[]): Promise<string[] | null>;
-    file?(id: string, path: string): Promise<{ ok: true; path: string; text: string } | { ok: false; reason: string }>;
+    file?(id: string, path: string): Promise<{ ok: true; path: string; text: string } | { ok: true; path: string; media: QuestionMedia } | { ok: false; reason: string }>;
+    openInFiles?(id: string, path: string): Promise<boolean>;
     drawer?(open: boolean): Promise<void>;
 }
-type Drawer = { path: string; text?: string; line?: number | null; error?: string };
+type Drawer = { path: string; text?: string; media?: QuestionMedia; line?: number | null; error?: string };
 
 /** The paths the question names, in its own words (core/ask-file-refs.ts). */
 const namedPaths = (item: DeckItem): string[] =>
@@ -103,7 +105,7 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
         setDrawer({ id, path: ref.path, line: ref.line ?? null });
         void bridge.drawer?.(true);
         bridge.file(id, ref.path)
-            .then((r) => setDrawer((d) => (d && d.id === id && d.path === ref.path ? (r.ok ? { ...d, text: r.text } : { ...d, error: r.reason }) : d)))
+            .then((r) => setDrawer((d) => (d && d.id === id && d.path === ref.path ? (!r.ok ? { ...d, error: r.reason } : 'media' in r ? { ...d, media: r.media } : { ...d, text: r.text }) : d)))
             .catch((error: unknown) => setDrawer((d) => (d && d.id === id && d.path === ref.path ? { ...d, error: error instanceof Error ? error.message : String(error) } : d)));
     };
     const closeFile = () => {
@@ -119,6 +121,7 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
             drafts={drafts}
             existing={existing !== null && existing.id === shown ? existing.set : null}
             drawer={open}
+            onOpenInFiles={(path) => { if (shown) void bridge.openInFiles?.(shown, path); }}
             {...(bridge.file ? { onOpenFile: openFile, onCloseFile: closeFile } : {})}
             onPick={(id) => {
                 setPicked(id);

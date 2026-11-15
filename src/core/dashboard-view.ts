@@ -436,3 +436,21 @@ export function fixRoute(agentId: string, fix: string): FixRoute {
     if (fix === 'Terminal') return { kind: 'takeover', agentId };
     return { kind: 'open', agentId };
 }
+
+/**
+ * THE WINDOWS COLUMN (Tynn #706): each agent row opens a menu of exactly two entries, each a NEW window for the row's
+ * workspace — its terminals view, or its file browser. The current window does not navigate.
+ */
+export type WindowEntryKind = 'terminal' | 'files';
+export const WINDOW_ENTRIES: ReadonlyArray<{ readonly kind: WindowEntryKind; readonly label: string; readonly icon: string }> = [
+    { kind: 'terminal', label: 'Terminal', icon: 'square-terminal' },
+    { kind: 'files', label: 'Files', icon: 'folder' },
+];
+
+/**
+ * The entries a row offers. A workstation window (`scopeWorkspaceId` null or absent) offers every workspace's; a
+ * workspace-share window (Tynn #690/#691) offers only its own workspace's, whatever its rows say.
+ */
+export function windowEntriesFor(workspaceId: string, scopeWorkspaceId: string | null | undefined): typeof WINDOW_ENTRIES {
+    return scopeWorkspaceId == null || scopeWorkspaceId === workspaceId ? WINDOW_ENTRIES : [];
+}

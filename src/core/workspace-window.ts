@@ -67,3 +67,11 @@ export function chatSubjectInScope(subject: string | null, scope: WindowScope, a
     if (preferred !== null && own.some((a) => a.id === preferred)) return preferred;
     return own[0]?.id ?? null;
 }
+
+/**
+ * A workspace's terminals view, as the route a NEW window opens on (Tynn #706): the same view the workspace's own page has
+ * under its Terminals tab, in a window of its own.
+ */
+export function terminalsWindowRoute(workspaceId: string): string {
+    return `${workspaceHome(workspaceId)}?view=terminals`;
+}

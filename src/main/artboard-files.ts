@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, readFile, realpath } from 'node:fs/promises';
-import { extname, join, relative } from 'node:path';
-import { BOARD_DIR, BOARD_INDEX, parseBoard, wantsVerdict, type BoardPost } from '../core/artboard.js';
+import { join, relative } from 'node:path';
+import { BOARD_DIR, BOARD_INDEX, mimeFor, parseBoard, versionsOf, wantsVerdict, type BoardPost, type TrailEntry } from '../core/artboard.js';
 import { BLOB_READ_BYTES, type BlobSource } from '../core/local-blobs.js';
 import { beginArtboardBuildTiming } from './artboard-build-timing.js';
 
@@ -21,10 +21,10 @@ export interface ArtboardArtifact {
     size: number | null; type: string; error?: string;
     open(options?: { signal?: AbortSignal }): Promise<BlobSource>;
 }
-export interface ArtboardFilePost extends Omit<BoardPost, 'file' | 'agentId' | 'askVerdict'> { askVerdict: boolean; artifact: ArtboardArtifact }
+/** One VERSION of an item (Tynn #739): the newest carries the verdict, pin and trail; `version`/`versionCount` only when there is more than one. */
+export interface ArtboardFilePost extends Omit<BoardPost, 'file' | 'agentId' | 'askVerdict' | 'versions' | 'trail' | 'agentName'> { askVerdict: boolean; artifact: ArtboardArtifact; version?: number; versionCount?: number; poster?: string; trail?: TrailEntry[] }
 export interface ArtboardFilesBoard { posts: ArtboardFilePost[]; error?: string }
 const IO: ArtifactIo = { readFile: path => readFile(path, 'utf8'), lstat: (path, options) => lstat(path, options), realpath, open };
-const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp' };
 const version = (stat: BigIntStats) => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
 const changed = () => new Error('The ArtBoard artifact changed since the board was listed; refresh the board.');
 const inspectionError = (error: unknown): string => {
@@ -51,10 +51,11 @@ export async function readArtboardFiles(root: string, io: ArtifactIo = IO): Prom
             posts = parseBoard(await io.readFile(index));
         } catch { return { posts: [] }; }
         const out: ArtboardFilePost[] = [];
-        for (const post of posts) {
-            const type = post.kind === 'html' ? 'text/html' : IMAGE_TYPES[extname(post.file).toLowerCase()];
+        for (const post of posts) for (const [index, revision] of versionsOf(post).entries()) {
+            const versions = versionsOf(post), latest = index === versions.length - 1;
+            const type = mimeFor(revision.kind, revision.file) ?? undefined;
             let error: string | undefined, stat: BigIntStats | undefined;
-            const path = join(canonical, post.file);
+            const path = join(canonical, revision.file);
             if (!type) error = 'The ArtBoard image type is not supported.';
             else {
                 try {
@@ -68,11 +69,18 @@ export async function readArtboardFiles(root: string, io: ArtifactIo = IO): Prom
                 size: listed ? Number(listed.size) : null, type: type ?? 'application/octet-stream', ...(error ? { error } : {}),
                 open: async (options = {}) => {
                     if (!listed || error) throw new Error(error ?? 'The ArtBoard artifact metadata is unavailable.');
-                    return openArtifact(io, canonical, post.file, listed, options.signal);
+                    return openArtifact(io, canonical, revision.file, listed, options.signal);
                 },
             };
-            out.push({ id: post.id, title: post.title, kind: post.kind, createdAt: post.createdAt, askVerdict: wantsVerdict(post), artifact,
-                ...(post.note ? { note: post.note } : {}), ...(post.review ? { review: post.review } : {}) });
+            // One entry per version, the newest last; a one-version post is listed exactly as it always was.
+            out.push({ id: post.id, title: revision.title, kind: revision.kind, createdAt: revision.createdAt, askVerdict: wantsVerdict(post), artifact,
+                ...(revision.note ? { note: revision.note } : {}),
+                ...(revision.agentName ? { poster: revision.agentName } : {}),
+                ...(revision.width ? { width: revision.width } : {}), ...(revision.height ? { height: revision.height } : {}),
+                ...(versions.length > 1 ? { version: revision.n, versionCount: versions.length } : {}),
+                ...(latest && post.review ? { review: post.review } : {}),
+                ...(latest && post.pinned ? { pinned: true as const } : {}),
+                ...(latest && post.trail && post.trail.length > 0 ? { trail: post.trail } : {}) });
         }
         return { posts: out };
     } finally { finish(); }

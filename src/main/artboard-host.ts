@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { BOARD_DIR, BOARD_INDEX, applyVerdict, parseBoard, resolveBoard, verdictMessage, wantsVerdict, type ResolvedBoard, type Review } from '../core/artboard.js';
+import { BOARD_DIR, BOARD_INDEX, applyVerdict, isTextKind, parseBoard, resolveBoard, setPinned, verdictMessage, versionsOf, wantsVerdict, type ResolvedBoard, type Review } from '../core/artboard.js';
 import { beginArtboardBuildTiming } from './artboard-build-timing.js';
 
 /**
@@ -27,10 +27,10 @@ async function readResolvedArtBoard(root: string): Promise<ResolvedBoard> {
     // resolveBoard is synchronous over its reads; the artifacts are read first (bare names only — parseBoard refuses any other).
     const texts = new Map<string, string | null>();
     const images = new Map<string, string | null>();
-    for (const p of posts) {
-        const full = join(root, BOARD_DIR, p.file);
-        if (p.kind === 'html') texts.set(p.file, await readFile(full, 'utf8').catch(() => null));
-        else if (MIME_OK.test(p.file)) images.set(p.file, await readFile(full).then((b) => b.toString('base64'), () => null));
+    for (const p of posts) for (const v of versionsOf(p)) {
+        const full = join(root, BOARD_DIR, v.file);
+        if (isTextKind(v.kind)) texts.set(v.file, await readFile(full, 'utf8').catch(() => null));
+        else if (v.kind === 'pdf' || MIME_OK.test(v.file)) images.set(v.file, await readFile(full).then((b) => b.toString('base64'), () => null));
     }
     const finish = beginArtboardBuildTiming('resolve-board', 'sync');
     try { return resolveBoard(posts, { readText: (f) => texts.get(f) ?? null, readBase64: (f) => images.get(f) ?? null }); } finally { finish(); }
@@ -57,4 +57,15 @@ export async function reviewArtBoardPost(root: string, postId: string, review: {
     if (!post.agentId) return { ok: true, delivered: false };
     await deps.send(post.agentId, verdictMessage(post, full));
     return { ok: true, delivered: true };
+}
+
+/**
+ * Keep an item in the default view after its verdict, or let it hide again (Tynn #739). Written to the workspace's index, so
+ * the pin survives a restart; it tells nobody — it is the person's own view of the board.
+ */
+export async function pinArtBoardPost(root: string, postId: string, pinned: boolean): Promise<ReviewResult> {
+    const board = await boardPosts(root);
+    if (!board.some((p) => p.id === postId)) return { ok: false, error: 'That post is no longer on the board.' };
+    await writeFile(join(root, BOARD_DIR, BOARD_INDEX), JSON.stringify({ posts: setPinned(board, postId, pinned) }, null, 2));
+    return { ok: true, delivered: false };
 }

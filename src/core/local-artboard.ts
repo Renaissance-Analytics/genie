@@ -1,3 +1,4 @@
+import type { PostKind, TrailEntry } from './artboard.js';
 import type { MetadataItem } from './local-content.js';
 
 export const LOCAL_ARTBOARD_METHODS = ['artboard.read', 'artboard.review'] as const;
@@ -5,7 +6,9 @@ export type LocalArtboardMethod = typeof LOCAL_ARTBOARD_METHODS[number];
 export const ARTBOARD_CALL_BYTES = 512 * 1024;
 export interface ArtboardBlob { ref: string; size: number | null; sha256: string | null; type: string; error?: string }
 export interface ArtboardMetadata extends MetadataItem {
-    postId: string; title: string; kind: 'html' | 'image'; createdAt: string; askVerdict: boolean; note?: string;
+    postId: string; title: string; kind: PostKind; createdAt: string; askVerdict: boolean; note?: string;
+    /** One item per VERSION, oldest first (Tynn #739); absent on a one-version post. The newest carries the review, pin and trail. */
+    version?: number; versionCount?: number; poster?: string; width?: number; height?: number; pinned?: true; trail?: TrailEntry[];
     artifact: ArtboardBlob;
     review?: { verdict: 'approved' | 'rejected'; at: string; comment?: ArtboardBlob };
 }

@@ -38,6 +38,8 @@ import { TitleBar } from './components/TitleBar.js';
 import { RemoteRefusalBar } from './components/RemoteRefusalBar.js';
 import { UpdateWindow } from './components/UpdateWindow.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
+import { PanelHostContext } from './components/PluginPane.js';
+import { useArtboardWaiting } from './artboard-waiting.js';
 import { WorkspaceTabs } from './components/WorkspaceTabs.js';
 import { readPlanOpen, writePlanOpen } from '../core/plan-column.js';
 import { addTab, agentTabsOf, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
@@ -60,7 +62,7 @@ import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { planStepInsert, type ChatInsert } from '../core/plan-pill.js';
 import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
@@ -233,6 +235,8 @@ export interface ShellProps {
     /** Workspaces whose file panel is in its own window (§4.3): the dock holds a bar, not the panel. */
     filesPopped?: readonly string[] | undefined;
     onPopOutFiles?: ((workspaceId: string) => void) | undefined;
+    /** A workspace's terminals view in a NEW window (Tynn #706): the Dashboard's windows column. Absent = that entry is disabled. */
+    onPopOutTerminals?: ((workspaceId: string) => void) | undefined;
     onBringBackFiles?: ((workspaceId: string) => void) | undefined;
     /** An agent is writing a file you have dirty (§4.3): the ask, and its lifting. */
     onPauseAgent?: ((agent: string, path: string) => void) | undefined;
@@ -401,6 +405,7 @@ export function Shell({
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
+    onPopOutTerminals,
     onBringBackFiles,
     onPauseAgent,
     onResumeAgent,
@@ -525,6 +530,9 @@ export function Shell({
     const workspaceFor = (id: string) => snapshot.workspaces?.find((w) => w.id === id) ?? null;
     // The workspace an agent's page belongs to (Tynn #805): its strip is drawn over the page.
     const agentWorkspace = parsed.surface === 'agent' ? workspaceFor(snapshot.agents.find((a) => a.id === parsed.agentId)?.workspaceId ?? '') : null;
+    // The ArtBoard tab's badge on an agent's page too (Tynn #739): the strip is the same wherever you are in the workspace.
+    const panelHost = useContext(PanelHostContext);
+    const agentArtboardWaiting = useArtboardWaiting(agentWorkspace?.id ?? null, panelHost.artboard, panelHost.files);
     const canServe = servable.includes(parsed.surface);
     /** The AgentInbox flyout rides the route (`inbox=`, core/route.ts): open on the threads (`''`), a thread, a message; or closed. */
     const inboxOpen = parsed.inbox !== undefined && parsed.inbox !== null;
@@ -823,6 +831,10 @@ export function Shell({
                             // The row tray's doors (Open agent / Terminal / Files).
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
+                            // The windows column (Tynn #706): new windows, never a navigation; a share window offers its own workspace only.
+                            onOpenTerminalWindow={onPopOutTerminals}
+                            onOpenFilesWindow={onPopOutFiles}
+                            scopeWorkspaceId={scoped?.workspaceId}
                             faults={workspaceFaults}
                             // The fix: the host's picker and the manifest write; without a bridge for it, the registry's page.
                             onLocateRepo={onLocateRepo ?? ((id) => onNavigate(`genie://workspace/${id}`))}
@@ -881,6 +893,7 @@ export function Shell({
                                     color={agentWorkspace.color ?? null}
                                     canDesign={!readOnly && Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
                                     hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
+                                    artboardWaiting={agentArtboardWaiting}
                                     github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
                                     // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
                                     tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
@@ -981,6 +994,7 @@ export function Shell({
                             onStartAgent={readOnly ? undefined : onStartAgent}
                             panel={parsed.panel}
                             view={parsed.view}
+                            artboardItem={parsed.artboardItem ?? null}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             tynnBoard={tynnBoard}
                             tynnIssues={tynnIssues}

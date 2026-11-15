@@ -18,8 +18,9 @@ import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js'
 import { patchWithinLine } from '../../core/toolchain-update.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
-import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, soundPickerList, type AlertKind } from '../../core/alerts.js';
-import { playAlertSound } from '../alert-sound.js';
+import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
+import { playPreviewSound } from '../alert-sound.js';
+import { SoundPicker } from './SoundPicker.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
@@ -1771,28 +1772,30 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
         return <Switch checked={value === true} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: def.key, value: checked })} aria-label={def.label} />;
     }
     if (def.type === 'enum') {
-        const select = (
-            // Custom file… opens the host's picker (Tynn #766 B2); the row becomes Custom file only once a file is chosen.
-            // By name when the setting has names for its options (a sound is "Wind Down", not `winddown`).
-            // An alert's sounds are grouped by family (Tynn #441): Genie's own, the library's five families, then Custom file and None.
-            <Select list={isAlertSoundKey(def.key) ? soundPickerList() : def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => { if (isAlertSoundKey(def.key) && v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }} aria-label={def.label} />
-        );
-        if (!isAlertSoundKey(def.key)) return select;
-        // PREVIEW (Tynn #766; Genie 1's): the sound this alert would play, through the alert's own player. None has nothing to play.
-        const sound = previewSound(def.key.slice('sound_'.length) as AlertKind, value, customPath);
-        const file = value === 'custom' && typeof customPath === 'string' && customPath.trim() !== '' ? customPath.split(/[\\/]/).pop() : null;
+        if (!isAlertSoundKey(def.key)) {
+            return <Select list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => onAction({ kind: 'settings.set', key: def.key, value: v })} aria-label={def.label} />;
+        }
+        // An alert's sound (Tynn #711): a Button naming it opens a popover of the sounds in their groups, each with its own
+        // play button that previews it WITHOUT choosing it. Custom file… opens the host's picker (Tynn #766 B2); the row
+        // becomes Custom file only once a file is chosen. A preview plays through the alert's own player, one at a time.
+        const kind = def.key.slice('sound_'.length) as AlertKind;
+        const hasCustom = typeof customPath === 'string' && customPath.trim() !== '';
+        const file = value === 'custom' && hasCustom ? customPath.split(/[\\/]/).pop() : null;
         return (
             <span className="flex items-center gap-2">
-                {select}
+                <SoundPicker
+                    value={String(value)}
+                    label={def.label}
+                    onSelect={(v) => { if (v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }}
+                    onPreview={(v) => playPreviewSound(previewSound(kind, v, customPath))}
+                    canPreview={(v) => v !== 'off' && (v !== 'custom' || hasCustom)}
+                />
                 {file ? (
                     <span data-sound-custom={def.key} title={String(customPath)} className="max-w-[160px] truncate text-xs text-[var(--fg-3)]">{file}</span>
                 ) : null}
                 {value === 'custom' ? (
                     <Button type="button" size="sm" variant="ghost" data-action="sound-pick" onClick={pickSound}>Change…</Button>
                 ) : null}
-                <Button type="button" size="sm" variant="ghost" data-sound-preview={def.key} disabled={sound === null} onClick={() => playAlertSound(sound)} title="Preview" aria-label={`Preview: ${def.label}`}>
-                    <Icon name="play" size="xs" />
-                </Button>
             </span>
         );
     }
@@ -2307,7 +2310,7 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
             </label>
             <label className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">This screen’s name</span>
-                <Input name="label" placeholder="glenn’s laptop" />
+                <Input name="label" placeholder="Office laptop" />
             </label>
             <Button size="xs" type="submit" className={button}>Connect</Button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}

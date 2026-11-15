@@ -1,4 +1,6 @@
 import { isOsAgent } from '../core/os-agent.js';
+import { legacyAccountId, providerAccountEnv, type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
+import { isAcpProvider } from '../core/engine.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
@@ -135,7 +137,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
-import { sessionsDir } from './paths.js';
+import { legacyProviderHomes, sessionsDir } from './paths.js';
 
 /**
  * THE RUNNING AGENTS — one place that owns sessions, and counts them.
@@ -161,7 +163,7 @@ import { sessionsDir } from './paths.js';
 
 /** Injected so a test can run this host without spawning a provider CLI. */
 /** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>>; /** The MCP servers its workspace has off by default (Tynn #628). */ workspaceMcpOff?: readonly string[] }) => SessionDriverFactory | null;
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { account?: AccountRecord; mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>>; /** The MCP servers its workspace has off by default (Tynn #628). */ workspaceMcpOff?: readonly string[] }) => SessionDriverFactory | null;
 
 /**
  * THE AGENT'S SERVICE VARIABLES, AS PRISM-ACP TAKES THEM (the owner, 2026-10-16: "ONLY let through Genie-managed
@@ -170,9 +172,11 @@ export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: stri
  * reach the agent, and nothing else Genie's environment holds does. None = no options, the provider's default.
  */
 export function serviceEnvDriverOptions(serviceEnv: Readonly<Record<string, string>>): { parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
-    const names = Object.keys(serviceEnv);
+    // Account selection belongs to the host, never a workspace's .env or managed-service override.
+    const services = Object.fromEntries(Object.entries(serviceEnv).filter(([key]) => !/^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(key)));
+    const names = Object.keys(services);
     if (names.length === 0) return {};
-    return { parentEnv: { ...process.env, ...serviceEnv }, allowEnv: names };
+    return { parentEnv: { ...process.env, ...services }, allowEnv: names };
 }
 
 /** A provider configured as a script — run by an interpreter, never as a binary of its own. */
@@ -190,6 +194,7 @@ export function providerLaunchOptions(
     configured: string | undefined,
     serviceEnv: Readonly<Record<string, string>>,
     runtime: { readonly execPath: string; readonly electron: boolean },
+    account?: ProviderAccountHome,
 ): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
     let service = serviceEnvDriverOptions(serviceEnv);
     // A provider starts through a shell, and its environment is an allow-list: what hardenProcess set goes with it.
@@ -210,6 +215,11 @@ export function providerLaunchOptions(
             parentEnv[key] = value;
         }
         service = { parentEnv, allowEnv: [...(service.allowEnv ?? []).filter((name) => !overridden.has(name.toUpperCase())), ...overridden] };
+    }
+    if (account) {
+        service = { parentEnv: providerAccountEnv(account, service.parentEnv ?? process.env),
+            allowEnv: [...(service.allowEnv ?? []).filter(key => !/^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(key)),
+                account.provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] };
     }
     if (!configured) return service;
     if (!SCRIPT.test(configured)) return { binary: configured, ...service };
@@ -406,15 +416,18 @@ export function listModelsOptionsFor(
     env: Record<string, string | undefined>,
     runtime: { readonly execPath: string; readonly electron: boolean },
     ports?: ProviderProgramPorts,
+    account?: ProviderAccountHome,
 ): ListModelsOptions {
-    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
+    if (account && account.provider !== provider) throw new Error('The model probe needs an account of its provider');
+    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
-export const realListModels: ListProviderModels = (provider) => {
+export const realListModels = (provider: Parameters<ListProviderModels>[0], account?: ProviderAccountHome): ReturnType<ListProviderModels> => {
     const problem = providerStartProblem(provider);
     if (problem !== null) return Promise.reject(new Error(problem));
-    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }));
+    const bound = account ?? { provider, home: legacyProviderHomes()[provider], legacy: true };
+    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, undefined, bound));
 };
 
 /** How often a held login is read again while it waits (genie#1195). */
@@ -481,7 +494,12 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
     // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
-    const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
+    // Production SessionHost supplies the book's record. Standalone legacy harnesses keep their existing home;
+    // a managed binding without its book must never silently use a different login.
+    if (isAcpProvider(record.provider) && record.accountId && record.accountId !== legacyAccountId(record.provider) && !extras?.account)
+        return () => { throw new Error('The agent account is unavailable; reconnect its account book before starting.'); };
+    const account = extras?.account ?? (isAcpProvider(record.provider) ? { provider: record.provider, home: legacyProviderHomes()[record.provider], legacy: true } : undefined);
+    const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, account);
 
     switch (record.provider) {
         case 'claude':
@@ -541,6 +559,7 @@ export class SessionHost {
     readonly #userData: string;
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
+    readonly #accountById: ((id: string) => AccountRecord | null) | undefined;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
@@ -619,6 +638,8 @@ export class SessionHost {
     constructor(options: {
         userData: string;
         driverFor?: DriverFor;
+        /** The one host account book; absent only for standalone legacy hosts/tests. */
+        accountById?: (id: string) => AccountRecord | null;
         clock?: () => number;
         processTree?: ProcessTree;
         /**
@@ -718,6 +739,7 @@ export class SessionHost {
         let shared: SessionStore | null = null;
         this.#store = options.store ?? (() => (shared ??= openDurableStore(sessionsDir(this.#userData))));
         this.#driverFor = options.driverFor ?? realDriverFor;
+        this.#accountById = options.accountById;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -1018,6 +1040,16 @@ export class SessionHost {
         const held = this.#heldElsewhere?.(record) ?? null;
         if (held !== null) return { ok: false, reason: held };
 
+        let account: AccountRecord | undefined;
+        if (this.#accountById) {
+            const found = this.#accountById(record.accountId ?? `account_legacy_${record.provider}`);
+            let reason: string | null = !found || found.provider !== record.provider ? 'This agent’s provider account is missing or belongs to another provider; select its account before starting.' : null;
+            if (found && reason === null) {
+                try { providerAccountEnv(found, {}); account = found; }
+                catch { reason = 'This agent’s provider account has an invalid home; repair its account before starting.'; }
+            }
+            if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
+        }
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
         // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
@@ -1031,7 +1063,7 @@ export class SessionHost {
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
+            const factory = this.#driverFor(record, cwd, record.threadId, { ...(account ? { account } : {}), mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
             if (current) {
@@ -1047,7 +1079,7 @@ export class SessionHost {
             waitingFor = 'the provider to answer';
             startPhase('handshake');
             return factory;
-        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [] });
+        }) : this.#driverFor(record, cwd, record.threadId, { ...(account ? { account } : {}), mcpServers, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [] });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);
