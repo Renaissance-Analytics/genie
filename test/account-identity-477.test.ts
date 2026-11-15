@@ -90,7 +90,7 @@ describe('the reads run the provider in the account\'s own home', () => {
     it('a legacy account inherits the parent environment exactly: an unset variable stays unset', async () => {
         const run = vi.fn(async () => answer(claudeStatus({ email: EMAIL })));
         await readAccountIdentity(record('claude', true), portsFor(run, { PATH: '/bin' }));
-        const options = run.mock.calls[0]![2] as unknown as { env: Record<string, string> };
+        const options = (run.mock.calls as unknown as unknown[][])[0]![2] as { env: Record<string, string> };
         expect(Object.keys(options.env).filter((k) => /^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(k))).toEqual([]);
     });
 

@@ -84,7 +84,17 @@ export function execInProcess(binary: string, args: readonly string[], options: 
             },
         );
         // Nothing is ever written to a command Genie runs: its input ends now.
-        child.stdin?.end();
+        if (options.input === undefined) child.stdin?.end();
+        else {
+            child.stdin?.on('error', () => {});
+            child.stdin?.write(options.input);
+            if (options.endInputOnOutput === undefined) child.stdin?.end();
+            else {
+                const reply = new RegExp(options.endInputOnOutput);
+                let seen = '';
+                child.stdout?.on('data', (chunk: Buffer | string) => { seen = (seen + String(chunk)).slice(-65_536); if (reply.test(seen)) child.stdin?.end(); });
+            }
+        }
         const timer = setTimeout(() => {
             timedOut = true;
             void endChildTrees([child], systemProcessTree).catch(() => { child.kill(); });

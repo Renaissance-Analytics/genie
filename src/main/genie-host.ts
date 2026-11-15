@@ -135,6 +135,7 @@ import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
+import { AccountIdentityReader } from './account-identity.js';
 import { statusCommandFor } from './login-host.js';
 import { accountIdentityFrom } from '../core/provider-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
@@ -1028,9 +1029,15 @@ async function main(): Promise<void> {
     const providerModels = new ProviderModelCache(provider => realListModels(provider, accounts.defaultFor(provider) ?? undefined));
     // Tynn #698: each provider CLI MEASURED (the file the agent runs, its version, its own status call), when the host starts:
     // what "installed" and "signed in" read. A CLI that cannot run is said in the log by name.
+    // Tynn #477: who each account is, as its provider reports it (never a credential file): at host start, after a login, and
+    // whenever a provider's status is measured again.
+    const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
+    void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
         if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
-        return checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.defaultFor(provider) ?? undefined);
+        const health = await checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.defaultFor(provider) ?? undefined);
+        void accountIdentity.refreshProvider(provider);
+        return health;
     });
     void providerHealth.refreshAll().then((all) => {
         for (const health of all) if (health?.fault) console.warn(`[provider-health] ${health.provider}: ${health.fault}: ${health.words}`);
@@ -1049,6 +1056,7 @@ async function main(): Promise<void> {
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
         providerAccount: provider => isAcpProvider(provider) ? accounts.defaultFor(provider) : null,
+        refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
         pid: process.pid,
