@@ -6,6 +6,7 @@ import { MarketplacePane } from './MarketplacePane.js';
 import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
+import { McpServerPanel } from './McpServerPanel.js';
 import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, QrCode, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
@@ -2227,18 +2228,6 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
  * section says so (the owner, 2026-10-13: a picker here, above Genie start's record of every workspace, read as
  * "I chose one workspace but it updated all workspaces").
  */
-/** Every tool Genie's MCP serves, with what it does — what every agent session is given (the owner: "no way to check"). */
-export function mcpToolsList(tools: readonly { name: string; description: string }[]) {
-    if (tools.length === 0) return <p data-mcp-tools="0" className="text-sm text-[var(--fg-3)]">No tools are registered.</p>;
-    return (
-        <ul data-mcp-tools={tools.length} className="mt-1 flex flex-col gap-1">
-            {tools.map((t) => (
-                <li key={t.name} data-mcp-tool={t.name} className="text-sm"><span className="font-mono text-xs">{t.name}</span>{t.description ? <span className="text-[var(--fg-3)]"> — {t.description}</span> : null}</li>
-            ))}
-        </ul>
-    );
-}
-
 /**
  * SIGN IN TO TYNN — Genie 1's card (the owner, 2026-10-19: "this is not how we handle tynn logins. Look at Genie 1").
  * One button opens Tynn in the browser; the host is shown; the code comes back by itself (genie://) or is pasted. The
@@ -2341,38 +2330,7 @@ function SetSection({ title, desc, children, ...rest }: { title: string; desc?: 
 /** AGENT MCP (§6.4, §6.9): where Genie's own MCP server listens, whether the boot probe answered, the tools every agent gets. */
 function McpServerBlock({ integrations }: { integrations: FeatureData['integrations'] }) {
     if (integrations === null) return <div data-integrations=""><Skeletons rows={3} /></div>;
-    return (
-        <div data-integrations="" className="flex flex-col gap-3">
-                    {/* THE TRANSPORT, VERIFIED AT BOOT (§6.4, §6.9): where Genie's own MCP server listens and whether a real server/discover answered. */}
-                    <div>
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Genie’s MCP server</h3>
-                        {integrations.mcp.url === null ? (
-                            <p data-mcp-status="off" className="text-sm text-[var(--fg-3)]">Not listening — agents in terminals have no Genie tools until it does.</p>
-                        ) : integrations.mcp.verified?.ok ? (
-                            <p data-mcp-status="verified" className="flex flex-wrap items-center gap-2 text-sm">
-                                <span className="font-mono text-xs">{integrations.mcp.url}</span>
-                                <span className="text-[var(--fg-3)]">verified at boot — serves {integrations.mcp.verified.versions.join(', ')}</span>
-                            </p>
-                        ) : (
-                            <p data-mcp-status="unverified" className="flex flex-wrap items-center gap-2 text-sm">
-                                <span className="font-mono text-xs">{integrations.mcp.url}</span>
-                                <span className="text-[var(--danger)]">listening, but the boot probe did not answer: {integrations.mcp.verified ? integrations.mcp.verified.reason : 'not probed yet'}</span>
-                            </p>
-                        )}
-                    </div>
-                    {/* What every agent gets from it: the tools, each with what it does. */}
-                    {integrations.mcp.url !== null && integrations.mcp.tools ? (
-                        <div data-mcp-tool-list="">
-                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tools every agent session is given</h3>
-                            {mcpToolsList(integrations.mcp.tools)}
-                        </div>
-                    ) : null}
-                    <div data-workspace-files-note="">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Workspace agent files</h3>
-                        <p className="text-sm text-[var(--fg-3)]">Genie writes its MCP endpoint and its agent instructions into every workspace when it starts and when a workspace is added; the switches above choose which harness configs it writes. Each workspace’s status, and a Sync now for it, are in each workspace’s own Settings.</p>
-                    </div>
-        </div>
-    );
+    return <McpServerPanel url={integrations.mcp.url} verified={integrations.mcp.verified} tools={integrations.mcp.tools ?? []} />;
 }
 
 /**

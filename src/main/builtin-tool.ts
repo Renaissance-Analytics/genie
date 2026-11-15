@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_SUMMARIES } from '../core/mcp-tool-summaries.js';
 import { ToolDefinition, type JsonObject } from '@particle-academy/prism-mcp';
 
 /**
@@ -17,7 +18,7 @@ export interface BuiltinTool {
 
 /** In ToolDefinition's own argument order, so a declaration reads as the definition it replaced. */
 export function declareBuiltinTool(name: string, description: string, inputSchema: JsonObject, title: string, annotations?: JsonObject): BuiltinTool {
-    return { name, title, description, summary: '', inputSchema, ...(annotations === undefined ? {} : { annotations }) };
+    return { name, title, description, summary: builtinSummary(name), inputSchema, ...(annotations === undefined ? {} : { annotations }) };
 }
 
 /** The MCP definition a declaration goes out as. */
@@ -25,4 +26,11 @@ export function builtinToolDefinition(tool: BuiltinTool): ToolDefinition {
     return tool.annotations === undefined
         ? new ToolDefinition(tool.name, tool.description, tool.inputSchema, tool.title)
         : new ToolDefinition(tool.name, tool.description, tool.inputSchema, tool.title, tool.annotations);
+}
+
+/** A builtin's written one-line summary (core/mcp-tool-summaries.ts); a builtin without one does not load. */
+function builtinSummary(name: string): string {
+    const known = BUILTIN_TOOL_SUMMARIES[name];
+    if (!known) throw new Error(`builtin tool ${name} has no summary in core/mcp-tool-summaries.ts`);
+    return known.summary;
 }

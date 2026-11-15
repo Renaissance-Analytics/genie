@@ -1,3 +1,4 @@
+import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
@@ -2745,7 +2746,7 @@ async function boot(): Promise<void> {
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
         const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
-        mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
+        mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? ''));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
         if (engineLink) {

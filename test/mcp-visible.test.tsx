@@ -9,7 +9,8 @@ import { parseRoute } from '../src/core/route.js';
 import type { SessionDriverFactory } from '../src/core/session.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
-import { mcpToolsList } from '../src/renderer/components/FeatureSurfaces.js';
+import { describeMcpTool } from '../src/core/mcp-tool-summaries.js';
+import { McpServerPanel } from '../src/renderer/components/McpServerPanel.js';
 
 /**
  * WHAT AN AGENT'S GENIE MCP GIVES IT, ON SCREEN (the owner: "I have no way to check to see what it even should have
@@ -53,11 +54,11 @@ describe('the Agent view rail', () => {
 });
 
 describe('Settings lists what every agent gets', () => {
-    it('each tool by name with what it does; none known says so', () => {
-        const html = renderToStaticMarkup(mcpToolsList([{ name: 'imDone', description: 'Tell the human you are finished.' }, { name: 'agentinbox', description: 'Send and receive agent mail.' }]));
-        expect(html).toMatch(/data-mcp-tool="imDone"[\s\S]*Tell the human you are finished\./);
+    const panel = (tools: ReturnType<typeof describeMcpTool>[]) => renderToStaticMarkup(<McpServerPanel url="http://127.0.0.1:1/mcp" verified={{ ok: true, versions: ['2025-06-18'] }} tools={tools} />);
+    it('each tool by name with its one line; none known says so', () => {
+        const html = panel([describeMcpTool('imDone', 'Tell the human you are finished.'), describeMcpTool('agentinbox', 'Send and receive agent mail.')]);
+        expect(html).toMatch(/data-mcp-tool="imDone"[\s\S]*data-mcp-tool-summary/);
         expect(html).toMatch(/data-mcp-tool="agentinbox"/);
-        expect(html).toMatch(/data-mcp-tools="2"/);
-        expect(renderToStaticMarkup(mcpToolsList([]))).toContain('No tools are registered.');
+        expect(panel([])).toContain('No tools are registered.');
     });
 });

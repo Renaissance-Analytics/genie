@@ -1,3 +1,4 @@
+import { describeMcpTool, type McpToolRow } from '../core/mcp-tool-summaries.js';
 import { featureWorkspaceFiles } from './feature-workspace-files.js';
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
@@ -330,7 +331,7 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     /** A source's app credential (genie#1345) under the workspace's switch — what sites get, for the process book too. */
     appEnv(source: AppEnvSource): Readonly<Record<string, string>>;
     /** §6.9: Genie's MCP server and the agent files. Tynn and GitHub are their accounts' (main/tynn-account.ts, main/github-account.ts), added by feature-ipc. */
-    integrations(): { mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
+    integrations(): { mcp: { url: string | null; verified: Verification | null; tools: readonly McpToolRow[] }; agentFiles: readonly AgentFilesReport[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. `source`: Genie's start (default) or you. */
     syncConfig(workspacePath: string, source?: SyncSource): Promise<SyncResult[]>;
     /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
@@ -690,7 +691,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         }),
         integrations: () => {
             return {
-                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: input.mcpTools?.() ?? [] },
+                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description)) },
                 agentFiles: agentFiles.list(),
             };
         },

@@ -1,4 +1,5 @@
 import { Button, Icon, Input, Select } from '@particle-academy/react-fancy';
+import { BrowserSitesRow } from './BrowserSitesRow.js';
 import type { CSSProperties, RefObject } from 'react';
 import type { BrowserSnapshot } from '../../main/genie-browser-window.js';
 
@@ -105,22 +106,7 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
                 </div>
             </div>
 
-            {s.sites.length > 0 ? (
-                <div data-browser-sites="" className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--border-1)] px-2 py-1">
-                    {s.sites.map((host) => (
-                        <Button variant="ghost" size="xs"
-                            key={host}
-                            type="button"
-                            data-browser-site={host}
-                            aria-current={onScreenHost === host ? 'page' : undefined}
-                            onClick={() => p.onOpen(`https://${host}/`)}
-                            className={`rounded-md px-2 py-0.5 font-mono text-[11px] hover:bg-[var(--bg-2)] ${onScreenHost === host ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}
-                        >
-                            {host}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
+            {s.sites.length > 0 ? <BrowserSitesRow sites={s.sites} current={onScreenHost} onOpen={p.onOpen} /> : null}
 
             {s.notice ? (
                 <div data-browser-notice="" className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-1 text-[11px] text-[var(--fg-2)]">{s.notice}{s.noticeRestart ? <Button size="xs" type="button" data-browser-restart="" className="ml-2" onClick={p.onRestart}>Restart</Button> : null}</div>
