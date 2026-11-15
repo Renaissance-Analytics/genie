@@ -31,6 +31,8 @@ import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { formatBytes, type StorageView } from '../core/workspace-storage.js';
 import { threadAttachmentFiles } from '../core/thread-store.js';
 import { AccountsHost } from './accounts-host.js';
+import { providerAccountEnv } from '../core/accounts.js';
+import { isAcpProvider } from '../core/engine.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { readTynnPage } from './tynn-page-client.js';
@@ -104,6 +106,7 @@ import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain } from './host-keychain.js';
+import { startProofOfDone } from './proof-of-done-host.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
@@ -136,6 +139,7 @@ import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
+import { AccountIdentityReader } from './account-identity.js';
 import { statusCommandFor } from './login-host.js';
 import { accountIdentityFrom } from '../core/provider-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
@@ -530,6 +534,7 @@ async function main(): Promise<void> {
     const terminalsService = new TerminalsService(terminalHost);
     // TAKE OVER'S ONE OWNER (Tynn #553, P5d.5c): who has a TUI open. This host opens no window; whoever clicked opens its own.
     const takeOverHost = new TakeOverHost({
+        accountFor: record => accounts.get(record.accountId ?? `account_legacy_${record.provider}`),
         terminals: terminalHost,
         openWindow: () => {},
         mcp: () => { const e = mcp?.endpoint() ?? null; return e ? { mcpUrl: e.url, token: e.token } : null; },
@@ -1025,10 +1030,19 @@ async function main(): Promise<void> {
     };
     const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
     // ONE cache of each provider's models (core/provider-models.ts): a window's ask and a phone's read the same answer.
-    const providerModels = new ProviderModelCache(realListModels);
+    const providerModels = new ProviderModelCache(provider => realListModels(provider, accounts.defaultFor(provider) ?? undefined));
     // Tynn #698: each provider CLI MEASURED (the file the agent runs, its version, its own status call), when the host starts:
     // what "installed" and "signed in" read. A CLI that cannot run is said in the log by name.
-    const providerHealth = new ProviderHealthBook((provider) => checkProviderHealth(provider, realProviderHealthPorts(execFileRunner)));
+    // Tynn #477: who each account is, as its provider reports it (never a credential file): at host start, after a login, and
+    // whenever a provider's status is measured again.
+    const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
+    void accountIdentity.refreshAll();
+    const providerHealth = new ProviderHealthBook(async provider => {
+        if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
+        const health = await checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.defaultFor(provider) ?? undefined);
+        void accountIdentity.refreshProvider(provider);
+        return health;
+    });
     void providerHealth.refreshAll().then((all) => {
         for (const health of all) if (health?.fault) console.warn(`[provider-health] ${health.provider}: ${health.fault}: ${health.words}`);
     });
@@ -1045,6 +1059,8 @@ async function main(): Promise<void> {
         features: featureCallers,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
+        providerAccount: provider => isAcpProvider(provider) ? accounts.defaultFor(provider) : null,
+        refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
         pid: process.pid,
@@ -1167,6 +1183,7 @@ async function main(): Promise<void> {
     await lockIdentity;
     bootStep('lock identity', stepAt);
     const host = new SessionHost({
+        accountById: id => accounts.get(id),
         userData: home,
         ...engineHostOptions,
         // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
@@ -1188,9 +1205,12 @@ async function main(): Promise<void> {
         // different account releases the agents held on it. Nothing to tell it by = no change.
         rateLimit: {
             accountOf: async (provider) => {
+                if (!isAcpProvider(provider)) return null;
                 const command = statusCommandFor(provider, providerBinary(provider as AgentRecord['provider']) ?? null);
                 if (command === null) return null;
-                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000 });
+                const account = accounts.defaultFor(provider);
+                if (!account) return null;
+                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000, env: providerAccountEnv(account, process.env) });
                 return r.exitCode === 0 ? accountIdentityFrom(r.streams.stdout) : null;
             },
         },
@@ -1547,6 +1567,20 @@ async function main(): Promise<void> {
     let processBookNow: ProcessBook | null = null;
     /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
     const clocks: Array<{ stop(): void }> = [marketplacePlugins];
+    // PROOF-OF-DONE (Tynn #742): this host's key signs for the signed-in Tynn user; a HITL claim waits on the Deck as an approval.
+    const podCaller: import('./mcp-tools.js').Caller = { agentId: 'genie-proof-of-done' as AgentId, agentName: 'Genie', workspaceId: '', workspacePath: '' };
+    void tynnOpening.then((account) => {
+        clocks.push(startProofOfDone({
+            file: join(home, 'proof-of-done-notes.json'),
+            keychain,
+            tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), request: (path, init) => account.request(path, init) },
+            approve: async (request) => (await approvals.gate(podCaller, 'pod.sign', request.detail)) === 'allowed' ? 'allowed' : 'denied',
+            workspaces: () => hostRegistry.listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
+            label: () => hostname(),
+            log: say,
+            onAccountChange: (listener) => account.onChange(listener),
+        }));
+    }, () => {});
     /** The clocks to plan again when the person leaves safe mode — arming what may fire later, and starting nothing now. */
     const planners: Array<{ plan(): void }> = [];
     safeMode.onChange((view) => { if (!view.active) for (const p of planners) p.plan(); });

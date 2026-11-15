@@ -587,7 +587,7 @@ export interface GenieBridge {
     } | undefined;
     artboard?: {
         read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
-        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
+        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
     } | undefined;
 
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */

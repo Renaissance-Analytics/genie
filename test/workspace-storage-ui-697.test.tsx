@@ -85,7 +85,7 @@ describe('the pure pieces', () => {
     });
 
     it('the Storage tab: in the strip when this window can measure, as view=storage', () => {
-        expect(tabStrip({ tabs: [] } as never, [], { storage: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'storage', 'add', 'settings']);
+        expect(tabStrip({ tabs: [] } as never, [], { storage: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'artboard', 'storage', 'add', 'settings']);
         expect(tabStrip({ tabs: [] } as never, []).map((t) => t.kind)).not.toContain('storage');
         expect(parseRoute('genie://workspace/ws1?view=storage')).toMatchObject({ surface: 'workspace', view: 'storage' });
     });

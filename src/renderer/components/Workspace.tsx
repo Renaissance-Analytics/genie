@@ -12,7 +12,7 @@ import { ErrorBoundary } from './ErrorBoundary.js';
 import type { TynnTabHost } from '../../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../../core/tynn-issues.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
-import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
 import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
@@ -48,7 +48,9 @@ import { workspaceFileOf } from '../../core/terminal-links.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { reattachWithState, type ReattachState } from '../reattach.js';
 import { ReattachBanner } from './ReattachBanner.js';
-import { PluginPane, type PluginPanelView } from './PluginPane.js';
+import { PanelHostContext, PluginPane, type PluginPanelView } from './PluginPane.js';
+import { ArtBoardPanel } from './ArtBoardPanel.js';
+import { useArtboardWaiting } from '../artboard-waiting.js';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import type { WorkspaceView } from '../../core/route.js';
 import { workspaceDashboard } from '../../core/workspace-dashboard.js';
@@ -186,6 +188,8 @@ export interface WorkspaceProps {
     onStartAgent?: ((agentId: string) => void) | undefined;
     /** The panels ENABLED plugins contribute (§4.6 `+plugin`); absent or empty = no `+plugin`. */
     pluginPanels?: readonly PluginPanelView[] | undefined;
+    /** The ArtBoard item a link points at (the route's `item=`): the ArtBoard tab opens on it, decided or not (Tynn #739). */
+    artboardItem?: string | null | undefined;
     /** The plugins as the host lists them (Settings, Plugins): why an open pane's panel is gone (ADF A6). */
     pluginEntries?: readonly { readonly id: string; readonly name: string; readonly state: string }[] | undefined;
     /** IssueWatch's view of this workspace (Tynn #806); absent = none to show, and no GitHub tab. */
@@ -261,7 +265,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, storage = null, onStorageAction, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], artboardItem = null, pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, storage = null, onStorageAction, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -292,6 +296,9 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
     // THE WORKSPACE DASHBOARD (beta.33 item 10): a lane per agent — heartbeat, plan, now, its own waiting-on-you, its live
     // feed. The minute tick slides the heartbeat while nothing is pushed.
     useMinuteTick();
+    // THE ARTBOARD TAB'S BADGE (Tynn #739): items waiting for a verdict, from the host the panels share.
+    const panelHost = useContext(PanelHostContext);
+    const artboardWaiting = useArtboardWaiting(workspace.id, panelHost.artboard, panelHost.files);
     const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, ...(feeds ? { feeds } : {}), now: Date.now() });
     const filesInline = panel === 'files' && files !== undefined && !filesPinned && !filesPopped;
     // What the body shows: the Files tab while the files are open here (beta.35 #41), else the route's view.
@@ -724,6 +731,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                 github={issueWatch?.linked === true}
                 storage={onStorageAction !== undefined}
                 tynn={issueWatch?.linked === true && tynnBoard !== undefined}
+                artboardWaiting={artboardWaiting}
                 // Files is the open files (`?files=`); any other tab is a view, and choosing it leaves the files (Shell).
                 onView={(v) => { if (v === 'files') { if (!filesInline) onTogglePanel?.(); } else onViewChange?.(v as WorkspaceView); }}
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
@@ -961,6 +969,16 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             {onScreen === 'home' ? (
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
                     <ErrorBoundary surface="Workspace dashboard" resetKeys={[workspace.id]}><WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} /></ErrorBoundary>
+                </div>
+            ) : null}
+            {/* THE ARTBOARD — ITS OWN TAB, BESIDE FILES (Tynn #739): what agents made, every version and verdict kept; a link opens it on one item. */}
+            {onScreen === 'artboard' ? (
+                <div data-workspace-body="artboard" className="flex min-h-0 flex-1 flex-col">
+                    <ErrorBoundary surface="ArtBoard" resetKeys={[workspace.id]}>
+                        {pluginPanels.some((pp) => pp.pluginId === 'ai.genie.artboard')
+                            ? <ArtBoardPanel workspaceId={workspace.id} artboard={panelHost.artboard} files={panelHost.files} focusId={artboardItem} />
+                            : <p className="p-4 text-[13px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace. Switch it on in Settings, Plugins, to see what agents post.</p>}
+                    </ErrorBoundary>
                 </div>
             ) : null}
             {onScreen === 'terminals' ? <ErrorBoundary surface="Terminals" resetKeys={[workspace.id]}>{terminalsBody}</ErrorBoundary> : null}

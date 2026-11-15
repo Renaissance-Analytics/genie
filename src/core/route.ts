@@ -54,8 +54,8 @@ interface Common {
 export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 'activity' | 'settings';
 export type WorkspacePanel = 'files';
 /** `tab:<id>` is a tab the person designed (Tynn #282, core/workspace-tabs.ts). */
-export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | 'tynn' | 'storage' | `tab:${string}`;
-const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn', 'storage'];
+export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | 'tynn' | 'artboard' | 'storage' | `tab:${string}`;
+const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn', 'artboard', 'storage'];
 /** A designed tab's id, as `core/workspace-tabs.ts` mints it; anything else in `view=` falls back to the Agents view. */
 const DESIGNED_TAB = /^tab:[A-Za-z0-9-]{1,40}$/;
 function workspaceViewOf(raw: string | null): WorkspaceView {
@@ -93,6 +93,8 @@ export type Route =
           filter: 'changed' | null;
           /** The panel in its own window (`?files=detached`). */
           detached: boolean;
+          /** The ArtBoard item the link points at (`&item=<id>`, on `view=artboard`): shown even when it has been decided (Tynn #739). Absent = none. */
+          artboardItem?: string | undefined;
       } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
     | ({ surface: 'takeover'; terminalId: string; login?: string } & Common)
@@ -204,6 +206,8 @@ export function parseRoute(input: string): Route {
             // `panel=files` link still opens the panel.
             const files = params.get('files');
             const detached = files === 'detached';
+            const view = workspaceViewOf(params.get('view'));
+            const artboardItem = view === 'artboard' ? params.get('item') : null;
             return {
                 surface: 'workspace',
                 workspaceId: tail,
@@ -212,7 +216,8 @@ export function parseRoute(input: string): Route {
                 line: files !== null && files !== '' && !detached ? lineOf(params.get('line')) : null,
                 filter: files !== null && params.get('filter') === 'changed' ? 'changed' : null,
                 detached,
-                view: workspaceViewOf(params.get('view')),
+                view,
+                ...(artboardItem ? { artboardItem } : {}),
                 ...common,
             };
         }
@@ -283,6 +288,7 @@ export function formatRoute(route: Route): string {
                 if (route.file && route.line !== null && !route.detached) params.set('line', String(route.line));
             }
             if (route.view !== 'home') params.set('view', route.view);
+            if (route.view === 'artboard' && route.artboardItem) params.set('item', route.artboardItem);
             break;
         case 'takeover':
             if (route.login) params.set('login', route.login);

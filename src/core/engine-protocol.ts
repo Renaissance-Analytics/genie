@@ -54,6 +54,10 @@ export const ENGINE_METHODS = [
     // A provider's model list, for an agent not running yet (beta.61.1): asked of the provider's CLI by genie-host, which has
     // the process supervisor. `[provider, refresh]`.
     'engine.providerModels',
+    // The persisted legacy account home for this machine's own login/status UI (S3); no credentials.
+    'engine.providerAccount',
+    // After a login: ask the provider who the account is now (Tynn #477). `[provider]`.
+    'engine.refreshAccountIdentity',
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',

@@ -24,6 +24,8 @@ export interface WorkspaceTabsProps {
     readonly tynn?: boolean;
     /** This window's host can measure the workspace's disk: its Storage tab (Tynn #697). */
     readonly storage?: boolean;
+    /** Items on the ArtBoard waiting for a verdict (Tynn #739): the tab shows the count and is flagged. 0 or absent = no badge. */
+    readonly artboardWaiting?: number | undefined;
     readonly onView: (view: string) => void;
     readonly onAdd: () => void;
     readonly onOpenAgent: (agentId: string) => void;
@@ -47,7 +49,7 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, storage = false, onView, onAdd, onOpenAgent, planToggle, color = null, onShare }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, storage = false, artboardWaiting = 0, onView, onAdd, onOpenAgent, planToggle, color = null, onShare }: WorkspaceTabsProps) {
     // Literal classes, dark: included: react-fancy's underline tab carries its own dark: colours, and only a class with the
     // same variant replaces one.
     const underline = color ? 'border-[var(--ws)] dark:border-[var(--ws)]' : 'border-[var(--fg-1)] dark:border-[var(--fg-1)]';
@@ -84,11 +86,12 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                         </Tabs.Tab>
                     );
                 }
-                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : t.kind === 'storage' ? 'storage' : `tab:${t.id}`;
+                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : t.kind === 'artboard' ? 'artboard' : t.kind === 'storage' ? 'storage' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
-                    <Tabs.Tab key={view} value={view} data-workspace-tab={view} className={`shrink-0 ${tab(on)}`}>
-                        {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : t.kind === 'storage' ? 'Storage' : 'Settings'}
+                    <Tabs.Tab key={view} value={view} data-workspace-tab={view} {...(t.kind === 'artboard' && artboardWaiting > 0 ? { 'data-artboard-waiting': 'true' } : {})} className={`shrink-0 ${tab(on)}`}>
+                        {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : t.kind === 'artboard' ? 'ArtBoard' : t.kind === 'storage' ? 'Storage' : 'Settings'}
+                        {t.kind === 'artboard' && artboardWaiting > 0 ? <span data-artboard-badge={String(artboardWaiting)} title={`${artboardWaiting} waiting for your verdict`} className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-semibold leading-4 text-[var(--bg-0)]">{artboardWaiting}</span> : null}
                     </Tabs.Tab>
                 );
             })}

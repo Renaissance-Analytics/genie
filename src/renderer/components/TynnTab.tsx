@@ -1,7 +1,7 @@
 import { Icon, Sidebar } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
-import { PageFollower, readTynnSection, writeTynnSection, TYNN_FIRST_SECTION, TYNN_SECTIONS, type HomeView, type ReleasesView, type VipView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
+import { PageFollower, readTynnSection, WIP_POLL_MS, writeTynnSection, TYNN_FIRST_SECTION, TYNN_SECTIONS, type HomeView, type ReleasesView, type VipView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
 import { TynnFeaturesPanel } from './TynnFeaturesPanel.js';
 import { TynnVipPanel } from './TynnVipPanel.js';
@@ -49,7 +49,7 @@ const CLAIM_START = /^task\.claim-start$/;
 
 /** WIP: reads the page at a lens and story, acts through the board door, and reads again — live on the board's rings. */
 export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
-    const [query, setQuery] = useState<{ view?: WipLens; story?: string }>({});
+    const [query, setQuery] = useState<{ view?: WipLens; story?: string; version?: string }>({});
     const [state, setState] = useState<TynnPageState<WipView>>({ state: 'loading' });
     const [op, setOp] = useState<BoardOp | null>(null);
     const [lastInput, setLastInput] = useState<BoardActionInput | null>(null);
@@ -75,6 +75,15 @@ export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: T
         });
         return () => { stop(); follower.stop(); setLive(undefined); };
     }, [host, workspaceId, read]);
+    // Not live (no socket, or it dropped): read again every WIP_POLL_MS while the tab is visible, and as it becomes visible.
+    useEffect(() => {
+        if (live === 'live') return undefined;
+        const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+        const tick = setInterval(() => { if (visible()) void read(); }, WIP_POLL_MS);
+        const onVisible = () => { if (visible()) void read(); };
+        if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+        return () => { clearInterval(tick); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible); };
+    }, [live, read]);
     const act = async (input: BoardActionInput) => {
         setLastInput(input);
         const r = CLAIM_START.test(input.action)
@@ -90,11 +99,13 @@ export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: T
     return (
         <TynnWipPanel
             state={shown}
-            onLens={(lens) => { setOp(null); setQuery({ view: lens }); }}
+            onLens={(lens) => { setOp(null); setQuery((q) => ({ ...(q.version !== undefined ? { version: q.version } : {}), view: lens })); }}
             onStory={(slug) => { setOp(null); setQuery((q) => ({ ...q, story: slug })); }}
             onAction={(input) => { void act(input); }}
             onRetry={lastInput ? () => { void act(lastInput); } : undefined}
             live={live}
+            version={query.version}
+            onVersion={(id) => { setOp(null); setQuery({ version: id }); }}
         />
     );
 }

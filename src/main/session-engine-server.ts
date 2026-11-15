@@ -1,3 +1,4 @@
+import type { AccountRecord } from '../core/accounts.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
 import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
@@ -127,6 +128,10 @@ export interface EngineServerOptions {
     readonly pid?: number;
     /** A provider's model list, from the host's one cache (core/provider-models.ts); `refresh` asks the CLI again. */
     readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
+    /** The host book's persisted legacy account; only this machine's window may ask. */
+    readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null;
+    /** After a login: read the provider's account identity again (Tynn #477). */
+    readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
     readonly onShutdown?: () => void;
     /** The number of authenticated windows changed (the host's idle exit watches it). */
@@ -624,6 +629,17 @@ export class SessionEngineServer {
             return this.#options.features.call(conn.id, 'act', [action], { connectionId: 'question-window', origin: 'local-window',
                 profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'this Genie question window' },
                 async () => { throw new Error('the question window provides no other UI effects'); }, null);
+        }
+        if (method === 'engine.providerAccount') {
+            if (!conn.local || !conn.window) throw new Error('Provider account homes need this machine’s own window.');
+            if (!this.#options.providerAccount) throw new Error('The provider account book is unavailable.');
+            const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
+            return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
+        }
+        if (method === 'engine.refreshAccountIdentity') {
+            if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');
+            await this.#options.refreshAccountIdentity?.(typeof args[0] === 'string' ? args[0] : '');
+            return true;
         }
         if (method === 'engine.features') {
             if (!conn.local || !conn.window) throw new Error('features need this machine’s own window connection');

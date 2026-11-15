@@ -61,12 +61,18 @@ export interface GenieElements {
         }[];
     };
     'ai.genie.artboard.post': {
-        title: string;
-        kind?: 'html' | 'image';
+        title?: string;
+        kind?: 'html' | 'image' | 'markdown' | 'pdf';
         html?: string;
+        markdown?: string;
+        filePath?: string;
         imagePath?: string;
+        width?: number;
+        height?: number;
         id?: string;
         note?: string;
         askVerdict?: boolean;
+        reply?: string;
+        readTrail?: boolean;
     };
 }

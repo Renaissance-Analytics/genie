@@ -37,6 +37,8 @@ interface Pending {
 
 const VERBS: Record<string, string> = {
     'gapps.install': 'install an app',
+    // The host's own Proof-of-Done signing (proof-of-done.ts): the detail names the task, its How Done? score and the commits.
+    'pod.sign': 'sign a Proof-of-Done',
     create: 'open a terminal',
     write: 'write to a terminal',
     // An agent's `services` / `sites` tools (mcp-tools-hosting.ts): the detail names the engine, version and image.

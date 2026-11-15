@@ -63,7 +63,7 @@ describe('the ArtBoard panel', () => {
         const html = renderToStaticMarkup(<ArtBoardView posts={[
             { id: 'login', title: 'Login screen', kind: 'html', createdAt: '2026-10-20T10:00:00Z', note: 'check contrast', html: '<h1>Hi</h1>', askVerdict: true },
             { id: 'hero', title: 'Hero', kind: 'image', createdAt: '2026-10-20T09:00:00Z', src: 'data:image/png;base64,AAAA', askVerdict: true, review: { verdict: 'approved', at: '2026-10-20T11:00:00Z' } },
-        ]} error={null} onReview={() => {}} />);
+        ]} error={null} onReview={() => {}} initialFilter="all" />);
         expect(html).toContain('Login screen');
         expect(html).toContain('check contrast');
         expect(html).toMatch(/<iframe[^>]*sandbox=""[^>]*srcDoc="&lt;h1&gt;Hi&lt;\/h1&gt;"|<iframe[^>]*srcDoc="&lt;h1&gt;Hi&lt;\/h1&gt;"[^>]*sandbox=""/i);
