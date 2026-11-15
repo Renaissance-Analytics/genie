@@ -91,6 +91,7 @@ async function preparePostRunner(repo, workspace, agentId) {
     try {
         const parent = url.pathToFileURL(path.join(repo, 'package.json')).href;
         const { runOfficialTool } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/main/official-tools.ts')).href, parent);
+        const { pinArtBoardPost, reviewArtBoardPost } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/main/artboard-host.ts')).href, parent);
         const { OFFICIAL_PLUGINS } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/core/official-plugins.ts')).href, parent);
         const { parseManifest } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/core/plugins.ts')).href, parent);
         const { stallStacksWanted } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/main/stall-profile.ts')).href, parent);
@@ -102,6 +103,8 @@ async function preparePostRunner(repo, workspace, agentId) {
         const input = { pluginId: 'ai.genie.artboard', tool: 'post', args: { id: 'posted-image', title: 'Posted 2 MiB image', kind: 'image', imagePath: 'fixture.png', askVerdict: false },
             caller: { agentId, agentName: 'ArtBoard fixture', workspaceId: 'tynn', workspacePath: workspace }, manifest: parsed.manifest };
         globalThis.__artboardPost = { run: async () => { const at = performance.now(); const result = await runOfficialTool(input); return { result, elapsedMs: performance.now() - at }; }, stop: () => scoped.unregister() };
+        // The person's side of the board, on the same workspace: a verdict (refused unless the post asked) and pin / unpin (Tynn #739).
+        globalThis.__artboardBoard = { pin: (id, pinned) => pinArtBoardPost(workspace, id, pinned), review: (id, verdict) => reviewArtBoardPost(workspace, id, { verdict }, { send: async () => {}, now: () => new Date().toISOString() }) };
         return { elapsedMs: performance.now() - started, entry: 'runOfficialTool', location: 'owned Electron main', transport: 'direct native runner, not MCP/provider dispatch', traceModes };
     } catch (error) { await scoped.unregister(); throw error; }
 }
@@ -215,20 +218,37 @@ try {
         demand(native.gapGauge.dropped === 0 && value.heartbeat.dropped === 0 && rowClock.dropped === 0, 'the ArtBoard measurement gap gauges dropped records');
         if (!BASELINE) {
             demand(native.artboardPhases?.dropped === 0 && ['metadata-build', 'artifact-open', 'projection'].every(phase => native.artboardPhases.events.some(event => event.phase === phase)) && !native.artboardPhases.events.some(event => event.phase === 'native-build' || event.phase === 'resolve-board'), 'ArtBoard metadata/file-source timing positive controls');
-            demand(native.methods['artboard.read'] === 1 && native.methods['blob.open'] > 0 && wire.pages >= 2 && wire.items === 100 && native.connections === 1, 'ArtBoard metadata pages and blobs use the app connection');
+            demand(native.methods['artboard.read'] === 1 && native.methods['blob.open'] > 0 && wire.pages >= 2 && wire.items === input.expect.count && native.connections === 1, 'ArtBoard metadata pages and blobs use the app connection');
             demand(native.maxGapMs < 250 + idle.mainMs && value.heartbeat.maxGapMs < 250 + idle.pageClockMs && rowClock.maxGapMs < 250 + idle.pageClockMs && native.rssPeak - native.rssBefore < 100 * 1024 * 1024, 'ArtBoard transfer blocked a clock or retained excessive main memory');
         }
         return row;
     }
     await measure('open-image-2MiB', { postId: 'initial-image', expect: { bytes: image.length, sha256: imageHash, count: 100 } });
     await measure('list-100-posts', { expect: { bytes: boardBytes.length, sha256: sha(boardBytes), count: 100 } });
-    await measure('post-image-2MiB', { postId: 'posted-image', expect: { bytes: image.length, sha256: imageHash, count: 100 } }, async () => {
+    await measure('post-image-2MiB', { postId: 'posted-image', expect: { bytes: image.length, sha256: imageHash, count: 101 } }, async () => {
         const posting = await main.evaluate('globalThis.__artboardPost.run()');
         demand(posting.result?.ok === true && posting.result.result?.id === 'posted-image', 'the native agent image-post runner succeeds');
         demand(sha(readFileSync(join(board, 'posted-image.png'))) === imageHash, 'the native image post copied every byte');
-        const stored = json(join(board, 'index.json')); demand(stored.posts.length === 100 && stored.posts[0].id === 'posted-image' && stored.posts[0].agentId === agent.id && stored.posts[0].askVerdict === false, 'native post cap, identity and opt-in verdict semantics');
+        const stored = json(join(board, 'index.json')); const first = stored.posts[0];
+        // The cap is 500 now and a trail is never cut: 100 seeded + 1 posted = 101, none dropped. The post is version 1 of its id, by this agent, opt-in verdict off.
+        demand(stored.posts.length === 101 && stored.posts.some(post => post.id === 'initial-image') && first.id === 'posted-image' && first.agentId === agent.id && first.agentName === 'ArtBoard fixture' && first.askVerdict === false, 'native post cap, identity and opt-in verdict semantics');
+        demand(first.versions?.length === 1 && first.versions[0].n === 1 && first.versions[0].file === 'posted-image.png' && first.review === undefined && first.trail === undefined && first.pinned === undefined, 'a new post is version 1 with no verdict, trail or pin');
         return { posting };
     });
+    // THE TRAIL (Tynn #739): re-posting an id appends a version under it, a post that asked for no verdict cannot be given one, and pin / unpin persist.
+    const again = await main.evaluate('globalThis.__artboardPost.run()');
+    demand(again.result?.ok === true && again.result.result?.id === 'posted-image' && again.result.result?.version === 2, 'a re-post of the same id is version 2');
+    let trailed = json(join(board, 'index.json')), item = trailed.posts.find(post => post.id === 'posted-image');
+    demand(trailed.posts.length === 101 && item.versions.length === 2 && item.versions[0].file === 'posted-image.png' && item.versions[1].file === 'posted-image.v2.png', 'versions append under one id and the board does not grow');
+    demand(sha(readFileSync(join(board, 'posted-image.png'))) === imageHash && sha(readFileSync(join(board, 'posted-image.v2.png'))) === imageHash, 'every version keeps its own file, byte for byte');
+    const refused = await main.evaluate('globalThis.__artboardBoard.review("posted-image","approved")');
+    demand(refused.ok === false && /did not ask/i.test(refused.error) && json(join(board, 'index.json')).posts.find(post => post.id === 'posted-image').review === undefined, 'a post that asked for no verdict is refused one');
+    const pinned = await main.evaluate('globalThis.__artboardBoard.pin("posted-image", true)');
+    demand(pinned.ok === true && json(join(board, 'index.json')).posts.find(post => post.id === 'posted-image').pinned === true, 'pin is written to the workspace');
+    const unpinned = await main.evaluate('globalThis.__artboardBoard.pin("posted-image", false)');
+    demand(unpinned.ok === true && json(join(board, 'index.json')).posts.find(post => post.id === 'posted-image').pinned === undefined, 'unpin is written to the workspace');
+    demand((await main.evaluate('globalThis.__artboardBoard.pin("no-such-post", true)')).ok === false, 'pinning an item that is not there is refused');
+    reports.push({ label: 'trail-versions-pin', passed: true });
     let broke = false; try { await run({ postId: 'posted-image', expect: { sha256: '0'.repeat(64) } }); } catch (error) { demand(/hash differs/i.test(error.message), 'negative ArtBoard hash failed for another reason'); broke = true; }
     demand(broke, 'deliberate ArtBoard hash mismatch must fail'); reports.push({ label: 'negative-hash-control', passed: true }); code = 0;
 } catch (error) { failure = error.stack ?? String(error); console.error(failure); }
@@ -244,7 +264,7 @@ finally {
         try { await main?.evaluate('globalThis.__artboardTrace?.stop();true'); } catch {}
     }
     try { await page?.evaluate('clearInterval(window.__artboardRow?.timer);true'); } catch {}
-    try { await main?.evaluate('(async()=>{await globalThis.__artboardPost?.stop();delete globalThis.__artboardPost;globalThis.__artboardMain?.stop();return true;})()'); } catch {}
+    try { await main?.evaluate('(async()=>{await globalThis.__artboardPost?.stop();delete globalThis.__artboardPost;delete globalThis.__artboardBoard;globalThis.__artboardMain?.stop();return true;})()'); } catch {}
     try { await main?.evaluate('process.getBuiltinModule("node:module").createRequire(process.execPath)("electron").app.quit();true'); } catch {}
     for (const session of sessions) session.socket.close(); await sleep(1000); if (app?.exitCode === null) { try { app.kill('SIGTERM'); } catch {} }
     const record = root ? json(join(root, '.genie', 'runtime', 'host.json')) : null;

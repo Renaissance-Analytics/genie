@@ -119,6 +119,9 @@ export class LocalFilesContent {
             const artifact: ArtboardBlob = { ref: this.#resource(scope, { scope, type: 'artboard-file', artifact: file }), size: file.size, sha256: null, type: file.type, ...(file.error === undefined ? {} : { error: file.error }) };
             return { id: String(index), postId: post.id, title: post.title, kind: post.kind, createdAt: post.createdAt, askVerdict: post.askVerdict, artifact,
                 ...(post.note === undefined ? {} : { note: post.note }),
+                ...(post.version === undefined || post.versionCount === undefined ? {} : { version: post.version, versionCount: post.versionCount }),
+                ...(post.poster ? { poster: post.poster } : {}), ...(post.width ? { width: post.width } : {}), ...(post.height ? { height: post.height } : {}),
+                ...(post.pinned ? { pinned: true as const } : {}), ...(post.trail && post.trail.length > 0 ? { trail: post.trail } : {}),
                 ...(post.review ? { review: { verdict: post.review.verdict, at: post.review.at, ...(post.review.comment === undefined ? {} : { comment: blob(Buffer.from(JSON.stringify(post.review.comment)), 'application/json') }) } } : {}) };
         });
         const list = this.#resource(scope, { scope, type: 'artboard-page', items });

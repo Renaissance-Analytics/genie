@@ -21,7 +21,7 @@ const STORIES = parseBoard({
 
 describe('the tab', () => {
     it('is in the strip only for a linked workspace, before + and Settings, and routes to its own view', () => {
-        expect(tabStrip({ tabs: [] }, [], { tynn: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'tynn', 'add', 'settings']);
+        expect(tabStrip({ tabs: [] }, [], { tynn: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'artboard', 'tynn', 'add', 'settings']);
         expect(tabStrip({ tabs: [] }, [], {}).map((t) => t.kind)).not.toContain('tynn');
         expect(parseRoute('genie://workspace/w1?view=tynn')).toMatchObject({ surface: 'workspace', view: 'tynn' });
     });

@@ -1,7 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { listRepos } from '../core/repo-registry.js';
-import { readArtBoard, reviewArtBoardPost, type ReviewResult } from './artboard-host.js';
+import { pinArtBoardPost, readArtBoard, reviewArtBoardPost, type ReviewResult } from './artboard-host.js';
 import { repoCommit, repoCreateBranch, repoDiff, repoPull, repoPush, repoStage, repoStatus, repoUnstage, type RepoResult } from './repo-git.js';
 import type { ResolvedBoard } from '../core/artboard.js';
 import { readArtboardFiles, type ArtboardFilesBoard } from './artboard-files.js';
@@ -73,6 +73,8 @@ export async function artboardReadFiles(deps: PanelsHostDeps, workspaceId: unkno
 export async function artboardReview(deps: PanelsHostDeps, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown): Promise<ReviewResult> {
     const root = typeof workspaceId === 'string' ? deps.workspacePath(workspaceId) : null;
     if (!root) return { ok: false, error: unknownWorkspace };
+    // `pin` / `unpin` ride the same call as a verdict: it is the person's one action on a post (the wire has one method for it).
+    if (typeof postId === 'string' && (verdict === 'pin' || verdict === 'unpin')) return pinArtBoardPost(root, postId, verdict === 'pin');
     if (typeof postId !== 'string' || (verdict !== 'approved' && verdict !== 'rejected')) return { ok: false, error: 'bad arguments' };
     return reviewArtBoardPost(root, postId, { verdict, comment: typeof comment === 'string' ? comment : undefined }, { send: deps.send, now: deps.now });
 }

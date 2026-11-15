@@ -2,7 +2,7 @@ import { Agent as SlideAgent } from '@particle-academy/dark-slide';
 import { Agent as SheetAgent } from '@particle-academy/holy-sheet';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { BOARD_DIR, BOARD_INDEX, addPost, parseBoard, type BoardPost } from '../core/artboard.js';
+import { BOARD_DIR, BOARD_INDEX, addPost, addReply, artboardItemRoute, nextVersionNumber, parseBoard, postStatus, trailOf, versionFile, type BoardPost, type PostKind } from '../core/artboard.js';
 import { bridgeAccess, type PluginManifest } from '../core/plugins.js';
 import type { RunResult } from './plugin-runner.js';
 
@@ -125,47 +125,89 @@ async function readBoardFile(root: string): Promise<BoardPost[]> {
     try { return parseBoard(await readFile(join(root, BOARD_DIR, BOARD_INDEX), 'utf8')); } catch { return []; }
 }
 
+const DOCUMENT_EXTENSION = { markdown: '.md', pdf: '.pdf' } as const;
+
+/** Read an item's trail (or, with no id, list the items) — so a revision can answer the last comment (Tynn #739). */
+async function readTrail(input: OfficialToolInput, args: Args): Promise<RunResult> {
+    const board = await readBoardFile(input.caller.workspacePath);
+    const id = str(args.id);
+    if (!id) {
+        const items = board.map((p) => ({ id: p.id, title: p.title, status: postStatus(p), pinned: p.pinned === true, currentVersion: trailOf(p).currentVersion }));
+        const waiting = items.filter((i) => i.status === 'waiting').length;
+        return { ok: true, result: { items, text: items.length === 0 ? 'The ArtBoard is empty.' : `${items.length} item(s) on the ArtBoard, ${waiting} awaiting a verdict:${NL}${items.map((i) => `- ${i.id}: "${i.title}" (${i.status}, version ${i.currentVersion})`).join(NL)}` } };
+    }
+    const post = board.find((p) => p.id === slug(id, 'post')) ?? board.find((p) => p.id === id);
+    if (!post) return refuse(`There is no item "${id}" on the ArtBoard. Read the trail with no id to list the items.`);
+    const trail = trailOf(post);
+    const lines = trail.events.map((e) => {
+        const who = 'by' in e && e.by ? ` ${e.by}` : '';
+        if (e.kind === 'version') return `- v${e.version} posted${who} ${e.at}${e.note ? `: ${e.note}` : ''}`;
+        if (e.kind === 'verdict') return `- v${e.version} ${e.verdict}${who} ${e.at}${e.comment ? `: ${e.comment}` : ' (no comment)'}`;
+        return `- v${e.version} reply${who} ${e.at}: ${e.text}`;
+    });
+    const last = trail.lastVerdict ? `Last verdict: ${trail.lastVerdict.verdict} on version ${trail.lastVerdict.version}${trail.lastVerdict.comment ? ` — "${trail.lastVerdict.comment}"` : ' with no comment'}.` : 'Nobody has decided anything yet.';
+    return { ok: true, result: { trail, link: artboardItemRoute(input.caller.workspaceId, post.id), text: `"${post.title}" (${post.id}) is ${trail.status}, at version ${trail.currentVersion}${trail.pinned ? ', pinned' : ''}. ${last}${NL}${lines.join(NL)}` } };
+}
+
 async function postToBoard(input: OfficialToolInput): Promise<RunResult> {
     const args = (input.args && typeof input.args === 'object' ? input.args : {}) as Args;
+    if (args.readTrail === true) return readTrail(input, args);
     const title = str(args.title);
     if (!title) return refuse('A post needs a title — it is what the reviewer sees on the card.');
-    const kind = args.kind === 'image' ? 'image' : 'html';
+    const kind: PostKind = args.kind === 'image' ? 'image' : args.kind === 'markdown' ? 'markdown' : args.kind === 'pdf' ? 'pdf' : 'html';
     const id = slug(str(args.id) || title, 'post');
+    const root = input.caller.workspacePath;
+    const existing = await readBoardFile(root);
+    // One file per version, so a revision never overwrites what the person was looking at when they decided.
+    const n = nextVersionNumber(existing, id);
     let file: string;
-    if (kind === 'html') {
-        const html = typeof args.html === 'string' ? args.html : '';
-        if (!html.trim()) return refuse('An html post needs the markup in html.');
-        file = `${id}.html`;
-        const w = await write(input, `${BOARD_DIR}/${file}`, html);
+    if (kind === 'html' || (kind === 'markdown' && typeof args.markdown === 'string')) {
+        const body = kind === 'html' ? (typeof args.html === 'string' ? args.html : '') : String(args.markdown);
+        if (!body.trim()) return refuse(kind === 'html' ? 'An html post needs the markup in html.' : 'A markdown post needs the text in markdown, or a filePath.');
+        file = versionFile(id, n, kind === 'html' ? '.html' : DOCUMENT_EXTENSION.markdown);
+        const w = await write(input, `${BOARD_DIR}/${file}`, body);
         if (!w.ok) return refuse(w.reason);
     } else {
-        const from = str(args.imagePath);
-        if (!from) return refuse('An image post needs imagePath — the workspace-relative path of the image you made.');
+        const from = str(args.filePath) || (kind === 'image' ? str(args.imagePath) : '');
+        if (!from) {
+            return refuse(kind === 'image' ? 'An image post needs imagePath — the workspace-relative path of the image you made.'
+                : kind === 'markdown' ? 'A markdown post needs the text in markdown, or a filePath.'
+                    : 'A pdf post needs filePath — the workspace-relative path of the PDF you made.');
+        }
         const source = guarded(input, from);
         if (!source.ok) return refuse(source.reason);
         const dot = from.lastIndexOf('.');
-        file = `${id}${dot > 0 ? from.slice(dot).toLowerCase() : '.png'}`;
+        const ext = kind === 'image' ? (dot > 0 ? from.slice(dot).toLowerCase() : '.png') : DOCUMENT_EXTENSION[kind as 'markdown' | 'pdf'];
+        file = versionFile(id, n, ext);
         const target = guarded(input, `${BOARD_DIR}/${file}`);
         if (!target.ok) return refuse(target.reason);
         // COPIED, not referenced: the reviewer still sees what was posted after the agent rewrites its own output.
         await mkdir(dirname(target.full), { recursive: true });
         await copyFile(source.full, target.full);
     }
-    const root = input.caller.workspacePath;
     // OPT-IN (genie#1275): only `askVerdict: true` asks. Written explicitly either way — on disk an absent field means a
     // post from before #1275, which asked.
     const askVerdict = args.askVerdict === true;
-    const entry: BoardPost = { id, title, kind, file, createdAt: new Date().toISOString(), agentId: input.caller.agentId, askVerdict, ...(str(args.note) ? { note: str(args.note) } : {}) };
-    const board = addPost(await readBoardFile(root), entry);
+    const at = new Date().toISOString();
+    const width = typeof args.width === 'number' && Number.isInteger(args.width) && args.width >= 1 && args.width <= 10_000 ? args.width : undefined;
+    const height = typeof args.height === 'number' && Number.isInteger(args.height) && args.height >= 1 && args.height <= 10_000 ? args.height : undefined;
+    const entry: BoardPost = { id, title, kind, file, createdAt: at, agentId: input.caller.agentId, agentName: input.caller.agentName, askVerdict, ...(str(args.note) ? { note: str(args.note) } : {}), ...(kind === 'html' && width ? { width } : {}), ...(kind === 'html' && height ? { height } : {}) };
+    let board = addPost(existing, entry);
+    // What the agent did about the last comment, on the record beside it.
+    if (str(args.reply)) board = addReply(board, id, { text: str(args.reply), at, agentId: input.caller.agentId, agentName: input.caller.agentName });
     const w = await write(input, `${BOARD_DIR}/${BOARD_INDEX}`, JSON.stringify({ posts: board }, null, 2));
     if (!w.ok) return refuse(w.reason);
+    const link = artboardItemRoute(input.caller.workspaceId, id);
+    const versionNote = n > 1 ? ` as version ${n} of ${id} (the earlier versions and their verdicts stay on its trail)` : ` as ${id}`;
     return {
         ok: true,
         result: {
             id,
+            version: n,
+            link,
             text: askVerdict
-                ? `Posted "${title}" to the ArtBoard as ${id}. The person sees it in the workspace's ArtBoard panel and can approve or reject it with a comment; that verdict arrives in your AgentInbox, so this call does not wait — carry on with work that does not depend on the answer.${NL}Revising? Post again with id "${id}" and the board REPLACES that card.`
-                : `Posted "${title}" to the ArtBoard as ${id}. The person sees it in the workspace's ArtBoard panel. No verdict was asked for, so none will come; post with askVerdict: true when you need one.${NL}Revising? Post again with id "${id}" and the board REPLACES that card.`,
+                ? `Posted "${title}" to the ArtBoard${versionNote}. The person sees it in the workspace's ArtBoard tab (${link}) and can approve or reject it with a comment; that verdict arrives in your AgentInbox, so this call does not wait — carry on with work that does not depend on the answer.${NL}Revising? Post again with id "${id}": it becomes the next version. Read the trail first (readTrail: true) so the revision answers the last comment.`
+                : `Posted "${title}" to the ArtBoard${versionNote}. The person sees it in the workspace's ArtBoard tab (${link}). No verdict was asked for, so none will come; post with askVerdict: true when you need one.${NL}Revising? Post again with id "${id}": it becomes the next version.`,
         },
     };
 }
