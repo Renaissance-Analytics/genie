@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -140,5 +141,27 @@ describe('a reading is stamped with the account and run the agent was launched o
         expect(stamps[1]).toMatchObject({ accountId: ACCOUNT_B });
         expect(stamps[0]!.runId).toMatch(/\S/);
         expect(stamps[1]!.runId).not.toBe(stamps[0]!.runId);
+    });
+});
+
+describe('a per-agent Resume now opens only that agent’s account (Tynn #478)', () => {
+    it('resuming one agent on A leaves B held, and the account rides the engine protocol', () => {
+        const a1 = record('atlas', ACCOUNT_A); const b1 = record('kai', ACCOUNT_B);
+        host.start(a1, dir); host.start(b1, dir);
+        hitLimit(a1, now + 60 * MIN);
+        hitLimit(b1, now + 90 * MIN);
+        // What host-api's resumeLimit does for an agent: its provider and ITS account.
+        host.resumeLimit(a1.provider, a1.accountId);
+        expect(host.probe(a1.id)?.limit).toEqual({ state: 'open' });
+        expect(host.probe(b1.id)?.limit).toMatchObject({ state: 'paused' });
+        host.resumeLimit(b1.provider, b1.accountId);
+        expect(host.probe(b1.id)?.limit).toEqual({ state: 'open' });
+    });
+
+    it('host-api passes the agent’s account; the client sends it and the server hands it to the host', () => {
+        const read = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8').replace(/\r\n/g, '\n');
+        expect(read('src/main/host-api.ts')).toContain('deps.host.resumeLimit(r.provider, r.accountId);');
+        expect(read('src/main/session-engine-client.ts')).toContain("this.call('engine.resumeLimit', accountId === undefined ? [provider] : [provider, accountId])");
+        expect(read('src/main/session-engine-server.ts')).toContain("host.resumeLimit(str(0), typeof args[1] === 'string' ? args[1] : undefined);");
     });
 });

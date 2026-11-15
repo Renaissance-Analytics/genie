@@ -1094,8 +1094,8 @@ export class SessionEngineClient {
         void this.call('engine.clearDesignLogin', [agentId]);
     }
 
-    resumeLimit(provider: string): void {
-        void this.call('engine.resumeLimit', [provider]);
+    resumeLimit(provider: string, accountId?: string): void {
+        void this.call('engine.resumeLimit', accountId === undefined ? [provider] : [provider, accountId]);
     }
 
     #view(agentId: string): EngineAgentView {

@@ -2,7 +2,8 @@ import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
 import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
-import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
+import { useNow } from '../use-now.js';
+import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
@@ -430,6 +431,8 @@ export interface DashboardProps {
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** Each provider's rate limit, buffered in main (the header's pills). */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
+    now?: number | undefined;
     /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
     mailSignals?: readonly MailSignal[] | undefined;
     /** Workspaces an agent acted in that the person has not visited since: their Workspace cells pulse. */
@@ -441,7 +444,7 @@ export interface DashboardProps {
     scopeWorkspaceId?: string | null | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, now, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
@@ -552,7 +555,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent">
                     {['J', 'K', '↵'].map((key) => <kbd key={key} className="rounded border border-[var(--border-1)] px-1 font-mono">{key}</kbd>)}
                 </span>
-                <RateLimitPills limits={rateLimits ?? {}} />
+                <RateLimitPills limits={rateLimits ?? {}} {...(now !== undefined ? { now } : {})} />
                 <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie">Chat <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span></Button>
             </div>
             {legend ? <div data-legend="" className="flex shrink-0 flex-wrap gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
@@ -588,7 +591,9 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
  * window. A click or Enter opens a POPOVER with every window (the owner, 2026-10-31: "can we make these cleaner? this
  * should be a popover not a tooltip"). Buffered in main, so this redraws at most once per provider per buffer.
  */
-export function RateLimitPills({ limits, now }: { limits: Readonly<Record<string, Headroom>>; now?: number }) {
+export function RateLimitPills({ limits, now: pinned }: { limits: Readonly<Record<string, Headroom>>; now?: number }) {
+    // Re-read twice a minute: a window that resets while the header is open turns Refreshed without a new reading.
+    const now = useNow(true, pinned, 30_000);
     const providers = Object.keys(limits).sort();
     if (providers.length === 0) return null;
     return (
@@ -601,10 +606,12 @@ export function RateLimitPills({ limits, now }: { limits: Readonly<Record<string
 const LEVEL_TEXT: Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
 const LEVEL_FILL: Readonly<Record<LimitLevel, string>> = { ok: 'bg-[var(--success)]', warning: 'bg-[var(--warning)]', danger: 'bg-[var(--danger)]' };
 
-function RateLimitPill({ provider, limit, now }: { provider: string; limit: Headroom; now: number | undefined }) {
+function RateLimitPill({ provider, limit, now }: { provider: string; limit: Headroom; now: number }) {
     const [open, setOpen] = useState(false);
-    const tight = tightestWindow(limit);
-    const level = limitLevel(tight);
+    // Every window past its reset: Refreshed, never the last figure (Tynn #478).
+    const refreshed = allRefreshed(limit, now);
+    const tight = tightestWindow(limit, now);
+    const level = refreshed ? 'ok' : limitLevel(tight);
     const name = providerName(provider);
     return (
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
@@ -616,13 +623,13 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                     data-level={level}
                     aria-haspopup="dialog"
                     aria-expanded={open}
-                    aria-label={`${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
+                    aria-label={refreshed ? `${name} rate limits: refreshed` : `${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
                     // Enter and Space toggle here and cancel the click the browser would add, so one key press is one toggle.
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
                     className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
-                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span>
+                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{refreshed ? 'Refreshed' : tight.over ? 'over' : `${tight.leftPct}%`}</span>
                     <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span>
                 </Button>
             </Popover.Trigger>
@@ -632,7 +639,7 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                 data-rate-limit-popover={provider}
                 className="w-60 border-[var(--border-1)] bg-[var(--surface-raised)] p-3 text-[var(--fg-1)]"
             >
-                <RateLimitDetail provider={provider} limit={limit} now={now ?? Date.now()} />
+                <RateLimitDetail provider={provider} limit={limit} now={now} />
             </Popover.Content>
         </Popover>
     );
@@ -651,6 +658,11 @@ export function RateLimitDetail({ provider, limit, now }: { provider: string; li
                     <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
                     <Icon name="circle-help" size="xs" />
                     <span>unknown</span>
+                </div>
+            ) : readLimitWindow(w, now).refreshed ? (
+                <div key={w.window} data-rate-limit-window={w.window} data-level="refreshed" className="flex items-center gap-2 text-[var(--fg-3)]">
+                    <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
+                    <span data-rate-limit-pct="">Refreshed</span>
                 </div>
             ) : (
                 <div key={w.window} data-rate-limit-window={w.window} data-level={limitLevel(w)} className="flex flex-col gap-1">

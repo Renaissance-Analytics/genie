@@ -752,7 +752,7 @@ export class SessionEngineServer {
                 return true;
             }
             case 'engine.resumeLimit':
-                host.resumeLimit(str(0));
+                host.resumeLimit(str(0), typeof args[1] === 'string' ? args[1] : undefined);
                 return true;
             case 'engine.clearDesignLogin':
                 host.clearDesignLogin(str(0));

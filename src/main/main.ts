@@ -2493,7 +2493,7 @@ async function boot(): Promise<void> {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => agentsUp().stop(id),
                 cancel: (id, intent) => agentsUp().cancel(id, 'you', intent),
-                resumeLimit: (provider) => agentsUp().resumeLimit(provider),
+                resumeLimit: (provider, accountId) => agentsUp().resumeLimit(provider, accountId),
                 prompt: (id, text, by) => agentsUp().prompt(id, text, by),
                 // The composer's own attach path, for this window and a phone's photo (genie#1346).
                 promptWith: (id, text, attachments, by) => agentsUp().promptWith(id, text, attachments, by),

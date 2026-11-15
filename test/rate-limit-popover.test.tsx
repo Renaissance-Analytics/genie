@@ -17,7 +17,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { shortDateTime } from '../src/core/clock-words.js';
-import { headroomFromMeta, limitLevel, resetsIn, type Headroom } from '../src/core/headroom.js';
+import { headroomFromMeta, limitLevel, rateLimitAlert, resetsIn, type Headroom } from '../src/core/headroom.js';
 import { RateLimitPills } from '../src/renderer/components/Dashboard.js';
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
@@ -242,5 +242,47 @@ describe('the relative reset', () => {
 
     it('the exact time is short: weekday, date and am/pm time', () => {
         expect(shortDateTime(new Date(2026, 9, 31, 15, 40).getTime())).toBe('Sat, Oct 31, 3:40 PM');
+    });
+});
+
+describe('a window past its reset reads Refreshed, never its last figure (Tynn #478)', () => {
+    const elapsed = (window: string, leftPct: number, resetsAtMs: number) => ({ window, usedPct: 100 - leftPct, leftPct, resetsAtMs, over: false });
+    /** 5h reset a minute ago (stale 5% left); 7d resets in two hours (40% left). */
+    const mixed = (): Headroom => {
+        const five = elapsed('5h', 5, NOW - MIN);
+        const week = elapsed('7d', 40, NOW + 120 * MIN);
+        return { plan: null, window: '5h', leftPct: 5, resetsAtMs: five.resetsAtMs, over: false, windows: [five, week] };
+    };
+
+    it('the popover: the elapsed window says Refreshed with no bar and no percentage; the other keeps its figure', () => {
+        render({ claude: mixed() });
+        click(pill('claude'));
+        const five = row('claude', '5h')!;
+        expect(five.getAttribute('data-level')).toBe('refreshed');
+        expect(five.textContent).toBe('5hRefreshed');
+        expect(five.querySelector('[role="progressbar"]')).toBeNull();
+        expect(five.textContent).not.toMatch(/5%|resets/);
+        // Positive control: the window that has not reset still draws its bar and figure.
+        const seven = row('claude', '7d')!;
+        expect(seven.querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('40');
+        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('40%');
+    });
+
+    it('the pill: shows the tightest window that has NOT reset, not the stale 5%', () => {
+        render({ claude: mixed() });
+        expect(pill('claude').textContent).toBe('40%7d');
+        expect(pill('claude').getAttribute('data-level')).toBe('ok');
+    });
+
+    it('the pill: every window past its reset reads Refreshed, named so for a screen reader', () => {
+        render({ claude: reading({ window: '5h', usedPct: 95, leftPct: 5, resetsAtMs: NOW, over: false }) });
+        expect(pill('claude').textContent).toContain('Refreshed');
+        expect(pill('claude').textContent).not.toMatch(/5%/);
+        expect(pill('claude').getAttribute('aria-label')).toBe('Claude Code rate limits: refreshed');
+    });
+
+    it('the sidebar alert ignores an elapsed window, and still warns for one that has not reset', () => {
+        expect(rateLimitAlert({ claude: reading({ window: '5h', usedPct: 95, leftPct: 5, resetsAtMs: NOW - MIN, over: false }) }, NOW)).toBeNull();
+        expect(rateLimitAlert({ claude: reading({ window: '5h', usedPct: 95, leftPct: 5, resetsAtMs: NOW + MIN, over: false }) }, NOW)).toMatchObject({ level: 'danger' });
     });
 });

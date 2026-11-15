@@ -21,8 +21,10 @@ import { RateLimitPills } from '../src/renderer/components/Dashboard.js';
  * kept in MAIN, before anything reaches the window: an ignored reading costs one comparison and sends nothing.
  */
 
+/** The test's clock, injected into the pills: every reset below is an hour AFTER it, so no window reads Refreshed. */
+const NOW = Date.UTC(2026, 9, 26, 13, 0, 0);
 const h = (leftPct: number, window = '5h'): Headroom => {
-    const resetsAtMs = Date.UTC(2026, 9, 26, 14, 0, 0);
+    const resetsAtMs = NOW + 3_600_000;
     return { plan: null, window, leftPct, resetsAtMs, over: false, windows: [{ window, usedPct: 100 - leftPct, leftPct, resetsAtMs, over: false }] };
 };
 const T0 = 1_000_000;
@@ -81,7 +83,7 @@ describe('a reading in an agent’s stream reaches the host’s owner with its p
 
 describe('in the header', () => {
     it('one pill per provider, its share left and window; the detail is a popover (rate-limit-popover)', () => {
-        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(62), codex: h(97, '7d') }} />);
+        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(62), codex: h(97, '7d') }} now={NOW} />);
         expect(html).toMatch(/data-rate-limit="claude"[^>]*aria-label="Claude Code rate limits: 62% left in the 5-hour window"/);
         expect(html).toContain('62%');
         expect(html).toMatch(/data-rate-limit="codex"/);
@@ -89,6 +91,6 @@ describe('in the header', () => {
     });
 
     it('nothing reported yet: nothing drawn', () => {
-        expect(renderToStaticMarkup(<RateLimitPills limits={{}} />)).toBe('');
+        expect(renderToStaticMarkup(<RateLimitPills limits={{}} now={NOW} />)).toBe('');
     });
 });

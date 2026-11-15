@@ -30,6 +30,8 @@ const dotIn = (row: string): { color: string; words: string } | null => {
  */
 const KEY = 'particle.academy/rate_limit';
 const at = (d: number, h: number) => new Date(2026, 9, d, h, 0).getTime();
+/** The test's clock, injected into the pills and the Shell: before every reset these readings carry. */
+const NOW = at(27, 12);
 const claude = {
     status: 'allowed', resetsAtMs: at(27, 16), rateLimitType: 'five_hour',
     windows: { five_hour: { utilization: 0.62, resetsAtMs: at(27, 16) }, seven_day: { utilization: 0.92, resetsAtMs: at(30, 9) }, seven_day_opus: { utilization: 0.4, resetsAtMs: at(31, 9) } },
@@ -87,14 +89,14 @@ describe('the pill’s accessible name (the detail itself is a popover now: rate
     const named = (html: string, provider: string) => html.match(new RegExp(`data-rate-limit="${provider}"[^>]*aria-label="([^"]*)"`))?.[1] ?? '';
 
     it('names the provider and its most constrained window, in the sidebar dot’s words', () => {
-        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta(claude)!, codex: headroomFromMeta(codex)! }} />);
+        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta(claude)!, codex: headroomFromMeta(codex)! }} now={NOW} />);
         // Claude's binding window is the 5h (38% left), but its 7d has 8% left: the tighter one is what a person needs.
         expect(named(html, 'claude')).toBe('Claude Code rate limits: 8% left this week');
         expect(named(html, 'codex')).toBe('Codex rate limits: 60% left in the 5-hour window');
     });
 
     it('a spent window reads as over', () => {
-        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 1.08, resetsAtMs: at(27, 16) } } })! }} />);
+        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 1.08, resetsAtMs: at(27, 16) } } })! }} now={NOW} />);
         expect(named(html, 'claude')).toBe('Claude Code rate limits: over the limit in the 5-hour window');
     });
 });
@@ -190,6 +192,7 @@ describe('from any page: the Shell lights the dot from the header’s readings',
             onAnswerApproval={() => {}}
             onAnswerDeckItem={() => {}}
             rateLimits={rateLimits}
+            now={NOW}
         />,
     );
 
