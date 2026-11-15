@@ -1,3 +1,4 @@
+import { describeMcpTool, type McpToolRow } from '../core/mcp-tool-summaries.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { writeTextPrivate } from './store.js';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -102,7 +103,7 @@ export interface HostMcp {
     /** A session's Genie MCP entry: the endpoint, its token and this agent's caller key. */
     sessionServers(record: AgentRecord): McpServer[];
     endpoint(): { url: string; token: string } | null;
-    status(): { endpoint: { url: string; token: string } | null; verified: Verification | null; tools: Array<{ name: string; description: string }> };
+    status(): { endpoint: { url: string; token: string } | null; verified: Verification | null; tools: McpToolRow[] };
     /**
      * One of the host's own tools, asked by the WINDOW for a caller it knows (a flow's step, P3.1): run here with that
      * caller, answered as the tool answers. Only the host's own tools; the window has the rest.
@@ -120,7 +121,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     let view: WindowView | null = null;
     let server: GenieMcpServer | null = null;
     let verified: Verification | null = null;
-    let tools: Array<{ name: string; description: string }> = [];
+    let tools: McpToolRow[] = [];
     let starting: Promise<void> | null = null;
     /** The endpoint file's private write, while it is landing. It never rejects: a failure is logged. */
     let endpointWrite: Promise<void> = Promise.resolve();
@@ -189,7 +190,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const servedAll = hostRegistrations(all, { native: (name) => pluginNames.has(name), resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         // Every call this server answers is the calling agent's to have ended by its Interrupt (Tynn #702), forwarded ones too.
         const served = ports.toolCalls ? withInterruptibleCalls(servedAll, resolveCaller, ports.toolCalls) : servedAll;
-        tools = served.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
+        tools = served.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? ''));
         native = new Map(served.filter((r) => isNative(r.definition.name)).map((r) => [r.definition.name, r]));
         servedNow = served;
         return served;

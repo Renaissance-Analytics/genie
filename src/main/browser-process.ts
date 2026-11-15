@@ -49,6 +49,7 @@ export async function runBrowserProcess(): Promise<void> {
     let linkedClient: BrowserLinkClient | null = null;
     let hosts: readonly string[] = [];
     let workspaceOf: Readonly<Record<string, string>> = {};
+    let siteLabels: Readonly<Record<string, string>> = {};
     let opened = false;
     // Started and given nothing to open: not a process left behind.
     setTimeout(() => { if (!opened) app.quit(); }, NO_WINDOW_LIMIT_MS).unref?.();
@@ -69,8 +70,9 @@ export async function runBrowserProcess(): Promise<void> {
         door = { frontDoorPort: facts.frontDoorPort, caPem: facts.caPem };
         hosts = facts.hosts;
         workspaceOf = facts.workspaceOf;
+        siteLabels = facts.siteLabels ?? {};
         if (windows === null) {
-            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => (locked ? [] : hosts), genieHome: home, workspaceOf: (host) => workspaceOf[host] ?? SHARED_STORE, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
+            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => (locked ? [] : hosts), siteLabels: () => siteLabels, genieHome: home, workspaceOf: (host) => workspaceOf[host] ?? SHARED_STORE, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
         } else {
             rerouteGenieBrowserSession({ frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, log });
         }

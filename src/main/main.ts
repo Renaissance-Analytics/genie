@@ -1,3 +1,5 @@
+import { browserSiteLabels } from '../core/browser-sites.js';
+import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
@@ -2751,7 +2753,7 @@ async function boot(): Promise<void> {
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
         const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
-        mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
+        mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? ''));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
         if (engineLink) {
@@ -3155,6 +3157,7 @@ async function boot(): Promise<void> {
             caPem: frontDoorNow.caPem,
             hosts: composed.routes().map((r) => r.host),
             workspaceOf: Object.fromEntries(composed.sites.list().map((s) => [s.host.toLowerCase(), s.workspaceId])),
+            siteLabels: browserSiteLabels(composed.routes().map((r) => r.host), composed.sites.list(), Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? basename(w.path)]))),
             launch: { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] },
         };
         void agentEngineLink.client.browserCall('publish', [facts]).catch((error: unknown) => { rendererErrorLog?.(`the browser's facts could not be published: ${error instanceof Error ? error.message : String(error)}`); });

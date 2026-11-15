@@ -46,7 +46,7 @@ describe('the catalog alone lists today’s MCP tools', () => {
 });
 
 describe('a builtin goes through the same validator as a plugin', () => {
-    const badSchema = { name: 'brokenTool', title: 'Broken', description: 'A builtin with an invalid schema.', inputSchema: { type: 'string' } };
+    const badSchema = { name: 'brokenTool', title: 'Broken', description: 'A builtin with an invalid schema.', summary: 'A broken builtin.', inputSchema: { type: 'string' } };
 
     it('a builtin with an invalid schema is refused, and the catalog will not start with it', () => {
         expect(() => genieCatalog({ builtins: [...BUILTIN_TOOLS, badSchema] })).toThrow(/brokenTool.*inputSchema/);
