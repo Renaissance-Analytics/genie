@@ -8,14 +8,39 @@ import type { AlertSound } from '../core/alerts.js';
  * a real speaker. Best-effort and silent on failure: an alert must never throw into what it announces.
  */
 export function playAlertSound(sound: AlertSound | null): void {
-    if (!sound) return;
-    if (sound.kind === 'synth') { playChime(sound.motif); return; }
+    start(sound);
+}
+
+/** A sound that is playing: what stops it. */
+interface Playing { stop: () => void }
+
+function start(sound: AlertSound | null): Playing | null {
+    if (!sound) return null;
+    if (sound.kind === 'synth') return playChime(sound.motif);
     if (sound.kind === 'custom') {
         // Your own file, read by main (the renderer cannot read disk); one that cannot be read plays the kind's own sound.
-        void customLoader(sound.key).then((data) => (data ? playUrl(data) : playAlertSound(sound.fallback))).catch(() => playAlertSound(sound.fallback));
-        return;
+        let inner: Playing | null = null;
+        let stopped = false;
+        const fallback = () => { if (!stopped) inner = start(sound.fallback); };
+        void customLoader(sound.key).then((data) => { if (stopped) return; if (data) inner = playUrl(data); else fallback(); }).catch(fallback);
+        return { stop: () => { stopped = true; inner?.stop(); } };
     }
-    playUrl(new URL(`./sounds/${sound.file}`, import.meta.url).href);
+    return playUrl(new URL(`./sounds/${sound.file}`, import.meta.url).href);
+}
+
+/** The preview that is playing now (Tynn #711): at most one, so previewing the next sound stops it. */
+let previewing: Playing | null = null;
+
+export function stopPreviewSound(): void {
+    const p = previewing;
+    previewing = null;
+    p?.stop();
+}
+
+/** Settings' preview: stops whatever preview is playing, then plays this one. */
+export function playPreviewSound(sound: AlertSound | null): void {
+    stopPreviewSound();
+    previewing = start(sound);
 }
 
 /** How a custom file is read — main's, through the bridge (App sets it once). Until then, none: the fallback plays. */
@@ -25,15 +50,17 @@ export function setCustomSoundLoader(load: (key: string) => Promise<string | nul
     customLoader = load;
 }
 
-function playUrl(url: string): void {
-    if (typeof Audio === 'undefined') return;
-    void new Audio(url).play().catch(() => { /* autoplay refused: the toast still says it */ });
+function playUrl(url: string): Playing | null {
+    if (typeof Audio === 'undefined') return null;
+    const audio = new Audio(url);
+    void audio.play().catch(() => { /* autoplay refused: the toast still says it */ });
+    return { stop: () => { audio.pause(); audio.currentTime = 0; } };
 }
 
-function playChime(motif: ChimeMotif): void {
+function playChime(motif: ChimeMotif): Playing | null {
     try {
         const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!Ctx) return;
+        if (!Ctx) return null;
         const ctx = new Ctx();
         const now = ctx.currentTime;
         for (const t of chimeTones(motif)) {
@@ -48,8 +75,11 @@ function playChime(motif: ChimeMotif): void {
             osc.start(now + t.start);
             osc.stop(now + t.start + t.dur);
         }
-        setTimeout(() => void ctx.close().catch(() => {}), CHIME_CLOSE_MS[motif]);
+        const close = () => void ctx.close().catch(() => {});
+        setTimeout(close, CHIME_CLOSE_MS[motif]);
+        return { stop: close };
     } catch {
         /* audio is best-effort */
+        return null;
     }
 }
