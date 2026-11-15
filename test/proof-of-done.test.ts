@@ -252,7 +252,10 @@ describe('the git note', () => {
         const { r } = await asTheHost((k) => ({ pending: [item({ host_key_id: k }, claim)], gitHas: () => true }));
         await r.pod.tick();
         await r.pod.idle();
-        expect(r.gitCalls.some((g) => g.args.some((a) => String(a).includes('upload-pack')))).toBe(false);
+        // The note's MESSAGE is the signed claim verbatim, so it carries the string; no git ARGUMENT other than that message may.
+        const argumentsOf = (g: { args: readonly string[] }) => g.args.filter((_, i) => g.args[i - 1] !== '-m');
+        expect(r.gitCalls.some((g) => argumentsOf(g).some((a) => String(a).includes('upload-pack')))).toBe(false);
+        expect(r.gitCalls.filter((g) => g.args[0] === 'cat-file')).toHaveLength(1);
         expect(r.gitCalls.some((g) => g.args.includes('c'.repeat(40)))).toBe(true);
     });
 });
