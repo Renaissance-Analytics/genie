@@ -55,8 +55,8 @@ describe('where it lives', () => {
     });
 
     it('a GitHub tab after the designed tabs, only for a workspace linked to a Tynn project (CONTROL: not linked, none)', () => {
-        expect(tabStrip({ tabs: [] }, [], { github: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'github', 'add', 'settings']);
-        expect(tabStrip({ tabs: [] }, [], { github: false }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'add', 'settings']);
+        expect(tabStrip({ tabs: [] }, [], { github: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'artboard', 'github', 'add', 'settings']);
+        expect(tabStrip({ tabs: [] }, [], { github: false }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'artboard', 'add', 'settings']);
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'github' }} canDesign hasSettings github onView={() => {}} onAdd={() => {}} onOpenAgent={() => {}} />);
         expect(control(html, 'data-workspace-tab="github"')).toMatchObject({ tag: 'button', tab: true });
         expect(control(html, 'data-workspace-tab="github"')!.text).toMatch(/^GitHub(?![\w])/);

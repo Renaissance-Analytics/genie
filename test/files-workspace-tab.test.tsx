@@ -19,7 +19,7 @@ import { control } from './helpers/control-markup.js';
 describe('the strip', () => {
     it('Files follows Dashboard, always (COUNTED)', () => {
         const kinds = tabStrip({ tabs: [] }).map((t) => t.kind);
-        expect(kinds).toEqual(['dashboard', 'files', 'add', 'settings']);
+        expect(kinds).toEqual(['dashboard', 'files', 'artboard', 'add', 'settings']);
         expect(kinds.filter((k) => k === 'files')).toHaveLength(1);
     });
 
