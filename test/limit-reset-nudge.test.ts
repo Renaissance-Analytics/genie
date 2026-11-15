@@ -6,7 +6,7 @@ import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity
 import { OS_AGENT_NAME, OS_WORKSPACE } from '../src/core/os-agent.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
-import { LIMIT_RESUME_PROMPT } from '../src/core/session.js';
+import { limitResumePrompt } from '../src/core/session.js';
 import { RateLimitGate } from '../src/core/rate-limit-gate.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
@@ -88,14 +88,14 @@ describe.each<Provider>(['claude', 'codex'])('the reset nudge on %s', (provider)
     it('CONTROL: the agent whose turn the limit cut off is told to continue, once, at the reset', () => {
         start(record('atlas', provider));
         breachAndReset('atlas');
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
     });
 
     it('an IDLE agent on the same login, held only because its login was, is told nothing', () => {
         start(record('atlas', provider));
         start(record('wren', provider));
         breachAndReset('atlas');
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
         expect(sent.get('wren')).toEqual([]);
         expect(host.probe(ids.get('wren')!)?.limit).toEqual({ state: 'open' });
     });
@@ -143,14 +143,14 @@ describe.each<Provider>(['claude', 'codex'])('the reset nudge on %s', (provider)
         start(record('atlas', provider));
         start(record('wren', provider));
         breachAndReset('atlas');
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
         endsCleanly('atlas');
         // Resume now again after the reset changes nothing.
         host.resumeLimit(provider);
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
         // Another agent's breach holds atlas again; atlas was not cut off this time, so the next reset tells it nothing.
         breachAndReset('wren', 'your turn');
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
-        expect(sent.get('wren')).toEqual(['your turn', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
+        expect(sent.get('wren')).toEqual(['your turn', limitResumePrompt('your turn')]);
     });
 });

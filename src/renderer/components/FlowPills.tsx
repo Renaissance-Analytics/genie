@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, Icon, Popover } from '@particle-academy/react-fancy';
-import { flowPills, type EndedFlow, type FlowPill, type LiveFlow } from '../../core/flow-pills.js';
+import { flowPills, pausedWords, type EndedFlow, type FlowPill, type LiveFlow } from '../../core/flow-pills.js';
 import { useWorkspaceColor, wsStyle } from '../workspace-colors.js';
 
 export interface FlowPillsProps {
@@ -14,7 +14,10 @@ export interface FlowPillsProps {
     readonly onOpen: (flowId: string) => void;
 }
 
-const STATE_WORDS: Record<FlowPill['state'], string> = { running: 'running', failed: 'failed', held: 'held' };
+const STATE_WORDS: Record<FlowPill['state'], string> = { running: 'running', paused: 'paused at its limit', failed: 'failed', held: 'held' };
+const clockOf = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+/** What the pill says about its state: a paused one says when it resumes (Tynn #749). */
+const wordsOf = (pill: FlowPill): string => (pill.state === 'paused' ? pausedWords(pill.resumesAtMs, clockOf) : STATE_WORDS[pill.state]);
 
 /** The state's icon: a spinner while it runs, a cross for a failure, a pause for a held run. */
 function StateIcon({ state }: { state: FlowPill['state'] }) {
@@ -34,8 +37,8 @@ function Pill({ pill, onOpen, row }: { pill: FlowPill; onOpen: (flowId: string) 
             data-flow-state={pill.state}
             {...(color ? { 'data-workspace-color': color } : {})}
             style={wsStyle(color)}
-            title={`${pill.name} · ${STATE_WORDS[pill.state]}`}
-            aria-label={`${pill.name}, ${STATE_WORDS[pill.state]}. Open the run`}
+            title={`${pill.name} · ${wordsOf(pill)}`}
+            aria-label={`${pill.name}, ${wordsOf(pill)}. Open the run`}
             onClick={() => onOpen(pill.flowId)}
             className={`[-webkit-app-region:no-drag] flex min-w-0 items-center gap-1 whitespace-nowrap rounded-full border border-l-[3px] border-[var(--border-1)] border-l-[var(--ws,var(--border-2))] bg-[var(--bg-1)] px-2 py-0 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] ${row ? 'w-full justify-start' : 'max-w-40'}`}
         >

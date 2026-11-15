@@ -392,11 +392,11 @@ export function withProblems(graph: FlowGraph, problems: readonly FlowProblem[])
 }
 
 /** One node's outcome in a recorded run (main/flow-store.ts FlowRun.nodes). */
-export type NodeOutcome = 'ran' | 'failed' | 'held' | 'skipped' | 'not reached' | 'stopped' | 'running' | 'queued';
+export type NodeOutcome = 'ran' | 'failed' | 'held' | 'skipped' | 'not reached' | 'stopped' | 'running' | 'queued' | 'paused';
 
 /** A run's node outcomes as fancy-flow's viewer statuses: what the run overlay draws on the canvas (genie#1204 item 6). */
 export function viewerStatuses(nodes: Readonly<Record<string, NodeOutcome>>): Record<string, 'ok' | 'running' | 'failed' | 'skipped' | 'pending'> {
-    const map = { ran: 'ok', failed: 'failed', held: 'running', skipped: 'skipped', 'not reached': 'pending', stopped: 'failed', running: 'running', queued: 'running' } as const;
+    const map = { ran: 'ok', failed: 'failed', held: 'running', skipped: 'skipped', 'not reached': 'pending', stopped: 'failed', running: 'running', queued: 'running', paused: 'running' } as const;
     return Object.fromEntries(Object.entries(nodes).map(([id, o]) => [id, map[o]]));
 }
 
