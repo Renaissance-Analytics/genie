@@ -442,6 +442,8 @@ export type FeatureAction =
     | { kind: 'flows.remove'; flowId: string }
     /** The person's Run now: one run of the flow, armed or not; its outcome lands in the flow's run history. */
     | { kind: 'flows.runNow'; flowId: string }
+    /** Resume now for a run paused at its agent's provider limit (Tynn #749): the limit's hold is lifted at once. */
+    | { kind: 'flows.resumeLimit'; flowId: string }
     | { kind: 'flows.add'; workspaceId: string }
     | { kind: 'flows.cancelForm' }
     /** The Add-a-flow form, submitted as the USER (so `armed` is honoured). */

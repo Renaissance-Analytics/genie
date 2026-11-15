@@ -283,6 +283,18 @@ export function failedRunText(failure: string, code: number | null, signal: stri
 /** What a held agent is told when its provider's limit has reset and nothing was sent while it waited (Tynn #793). */
 export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continue where you left off.";
 
+const TASK_WORDS_MAX = 200;
+/**
+ * The nudge a cut turn is resumed with, NAMING WHAT IT WAS DOING (Tynn #749): the provider keeps the conversation, but the
+ * agent should be told which of its turns the limit cut off, in the words it was given. No task known -> the plain nudge.
+ */
+export function limitResumePrompt(task: string | null): string {
+    const words = (task ?? '').replace(/\s+/g, ' ').trim();
+    if (words === '') return LIMIT_RESUME_PROMPT;
+    const shown = words.length > TASK_WORDS_MAX ? `${words.slice(0, TASK_WORDS_MAX - 1)}…` : words;
+    return `${LIMIT_RESUME_PROMPT} Your last turn was cut off while working on: "${shown}".`;
+}
+
 /**
  * AN OVERLOADED PROVIDER IS WAITED OUT (the owner, 2026-10-23, a Codex agent "Broken · 8h 45m · serverOverloaded": "we
  * need to catch codex errors like this one"). prism-acp sorts Codex's `serverOverloaded` and Claude's 529 into
@@ -458,6 +470,8 @@ export class AgentSession {
      * nothing, so at the reset it is told nothing. Cleared when the reset is told, so it is told at most once per reset.
      */
     #cutByLimit = false;
+    /** What the turn in flight was asked, in the words it was given (a Genie resume nudge excepted): what a limit's nudge names. */
+    #turnTask: string | null = null;
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
@@ -709,19 +723,28 @@ export class AgentSession {
         // what waited behind it could never go — `#flushAfterTurn` refuses while a turn is open. Genie ends the turn
         // itself; what waited, or the "continue", goes when its end comes.
         if (this.#held && this.running && this.#inTurn) {
+            // A turn the limit did NOT touch is genuinely working (held only because its LOGIN was): it is not cut. The hold
+            // is lifted and what waited goes when that turn ends (Tynn #749).
+            if (!this.#cutByLimit && !this.#limitThisTurn) {
+                this.#held = false;
+                this.#overloadCancel?.();
+                this.#overloadCancel = null;
+                this.#changed();
+                return;
+            }
             const nudge = (this.#cutByLimit || this.#limitThisTurn) && this.#options.limitNudge !== false;
             this.#cutByLimit = false;
             this.#held = false;
             this.#overloadCancel?.();
             this.#overloadCancel = null;
-            if (nudge && !this.#afterTurn.some((p) => p.steer === undefined)) this.prompt(LIMIT_RESUME_PROMPT, 'genie');
+            if (nudge && !this.#afterTurn.some((p) => p.steer === undefined)) this.prompt(limitResumePrompt(this.#turnTask), 'genie');
             this.cancel('genie', 'interrupt');
             this.#changed();
             return;
         }
         const nudge = this.#cutByLimit && this.#options.limitNudge !== false;
         if (this.#held && this.running) this.#cutByLimit = false;
-        this.#resumeHeld(nudge ? LIMIT_RESUME_PROMPT : null);
+        this.#resumeHeld(nudge ? limitResumePrompt(this.#turnTask) : null);
     }
 
     /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's (`null`: nothing is sent). */
@@ -1774,6 +1797,7 @@ export class AgentSession {
             // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
             this.#queued = [];
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
+            if (!command && !(by === 'genie' && (text.startsWith(LIMIT_RESUME_PROMPT) || text.startsWith(OVERLOAD_RESUME_PROMPT)))) this.#turnTask = text;
             this.#inTurn = true;
             this.#limitThisTurn = false;
             this.#stopWindow = false;

@@ -26,6 +26,8 @@ export interface PersonalFeatureServices {
     readonly knowledge: MaybeAsync<Pick<KnowledgeStore, 'summaries' | 'search' | 'add'>>;
     readonly flows: FlowsApi;
     readonly flowScheduler: { runNow(id: string): Promise<unknown> };
+    /** Lift the provider-limit hold on an agent's login at once (Tynn #749's Resume now); absent = this host cannot. */
+    resumeAgentLimit?(agentId: string): void;
     readonly inbox: Pick<InboxStore, 'all' | 'unread' | 'involving' | 'send' | 'receive' | 'attachmentForPerson' | 'deleteThread'>;
     readonly attention: Pick<AttentionStore, 'asked'>;
     agentAddresses(): ReadonlyArray<{ address: string; agentId: string; name: string }>;
@@ -187,6 +189,13 @@ export async function applyPersonalFeatureAction(services: PersonalFeatureServic
             // and the store's change pushes the snapshot that shows it.
             if (!services.flows.get(action.flowId)) throw new Error(`no flow ${action.flowId}`);
             void services.flowScheduler.runNow(action.flowId).catch((error: unknown) => console.error(`[flows] run now: ${error instanceof Error ? error.message : String(error)}`));
+            break;
+        }
+        case 'flows.resumeLimit': {
+            const pause = services.flows.get(action.flowId)?.inFlight?.pause;
+            if (!pause) throw new Error(`flow ${action.flowId} is not paused at a limit`);
+            if (!services.resumeAgentLimit) throw new Error('this Genie cannot lift a limit hold from here');
+            services.resumeAgentLimit(pause.agentId);
             break;
         }
         case 'flows.openEditor':

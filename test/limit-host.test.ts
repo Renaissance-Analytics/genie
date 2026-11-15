@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
-import { LIMIT_RESUME_PROMPT } from '../src/core/session.js';
+import { limitResumePrompt } from '../src/core/session.js';
 import { RateLimitGate } from '../src/core/rate-limit-gate.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
@@ -104,7 +104,7 @@ describe('one breach holds the whole login', () => {
         expect(sent.get('wren')).toEqual([]);
         expect(sent.get('atlas')).toEqual(['build it']);
         advanceTo(t0 + 62 * MIN);
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
         expect(sent.get('wren')).toEqual(['hello']);
         expect(host.probe(a.id)?.limit).toEqual({ state: 'open' });
     });
@@ -117,7 +117,7 @@ describe('one breach holds the whole login', () => {
         failTurn('atlas');
         host.resumeLimit('claude');
         // Resume now opens the gate early; its last provider reading is still 0%, so the next work must warn.
-        const warnedResume = `You have 0% until you hit your rate limit. Reduce the size of your work per turn to minimize loss\n\n---\n\n${LIMIT_RESUME_PROMPT}`;
+        const warnedResume = `You have 0% until you hit your rate limit. Reduce the size of your work per turn to minimize loss\n\n---\n\n${limitResumePrompt('build it')}`;
         expect(sent.get('atlas')).toEqual(['build it', warnedResume]);
         advanceTo(now + 62 * MIN);
         expect(sent.get('atlas')).toEqual(['build it', warnedResume]);
@@ -132,9 +132,9 @@ describe('one breach holds the whole login', () => {
         advanceTo(resetAt + MIN); // Already reset, but still inside the gate timer's two-minute margin.
         expect(sent.get('atlas')).toEqual(['build it']);
         host.resumeLimit('claude');
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
         advanceTo(resetAt + 2 * MIN);
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
     });
 });
 
