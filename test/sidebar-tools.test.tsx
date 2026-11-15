@@ -62,8 +62,12 @@ describe('collapsed', () => {
         expect(html).toContain('data-rail-tool="add-workspace"');
         // the labels are not drawn — the rail is narrow — but each control is still named for a screen reader
         expect(html).not.toContain('>Dashboard</span>');
-        // Named for a screen reader, with what waits when something does ("Dashboard, 3 waiting").
-        expect(html).toMatch(/aria-label="Dashboard/);
+        // Each control is still named for a screen reader. An item with no mark is named by its aria-label; the Dashboard now
+        // carries the waiting count as its dot (Tynn #730), and Sidebar names a dotted item by its label AND the dot's words.
+        expect(html).toMatch(/data-nav="genie:\/\/agent\/genie"[^>]*aria-label="genie"|aria-label="genie"[^>]*data-nav="genie:\/\/agent\/genie"/);
+        const dashboard = html.match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '';
+        expect(dashboard).toContain('Dashboard');
+        expect(dashboard).toMatch(/data-react-fancy-sidebar-dot-label=""[^>]*>\s*3 waiting\s*</);
     });
 
     it('CONTROL: expanded draws the labels and no expand tool', () => {
