@@ -84,7 +84,7 @@ describe('FlowPills', () => {
 });
 
 describe('the title bar', () => {
-    const bar = (extra: object) => renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={null} onNavigate={() => {}} onOpenPalette={() => {}} platform="windows" {...extra} />);
+    const bar = (extra: object) => renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={null} onNavigate={() => {}} onOpenPalette={() => {}} {...extra} />);
     const flows = { live: [live('a')], ended: [], now: NOW, onOpen: () => {} };
 
     it('shows the pills when it is given flows', () => {

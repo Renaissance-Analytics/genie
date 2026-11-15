@@ -1,4 +1,5 @@
 import { featureWorkspaceFiles } from './feature-workspace-files.js';
+import { flowPillSignals } from '../core/flow-pill-signals.js';
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
@@ -683,6 +684,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         appEnv: (source) => appEnvOf(source),
         signals: ({ osAgentWorking, githubBlocked }) => ({
             flowsRunning: flowScheduler.inFlightCount(),
+            ...flowPillSignals(flows.list(), Date.now()),
             // Mail agents have not collected: unread for every registered agent, the human excluded.
             uncollectedMail: [...agents().keys()].reduce((n, id) => n + inbox.unread(id as never).length, 0),
             githubBlocked,

@@ -12,6 +12,7 @@ import type { ConnectProgress } from '../../core/connect-machine.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 import type { DndHeaderView } from '../../core/dnd-header.js';
+import { FlowPills, type FlowPillsProps } from './FlowPills.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -104,6 +105,11 @@ export interface TitleBarProps {
      * every window. `view` is core/dnd-header.ts's reading of the host's settings; absent = not known yet (no control).
      */
     dnd?: { view: DndHeaderView; onToggle: () => unknown } | undefined;
+    /**
+     * THE RUNNING FLOWS (Tynn #707): a pill each, after the feature icons. A workspace-share window sets `workspaceId`, and
+     * only that workspace's flows show. Absent = no pills.
+     */
+    flows?: FlowPillsProps | undefined;
     connect?: {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
@@ -134,7 +140,7 @@ export interface RemoteBadge {
 export function TitleBar(props: TitleBarProps) {
     // A workspace window (Tynn #690) carries none of the workstation's controls, whatever it was handed.
     const scopedHome = props.scopedHome;
-    const { route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, onOpenUpdate, paletteKey, workspace } = props;
+    const { route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, onOpenUpdate, paletteKey, workspace, flows } = props;
     const { update, version, inbox, connect, gapps, share, dnd } = scopedHome ? { update: null, version: null, inbox: undefined, connect: undefined, gapps: undefined, share: undefined, dnd: undefined } : props;
     const [storeOpen, setStoreOpen] = useState(false);
     // The write is in flight until the host's next snapshot redraws the state: the button shows it is working meanwhile.
@@ -313,6 +319,7 @@ export function TitleBar(props: TitleBarProps) {
                     </Popover>
                 ) : null}
             </div>
+            {flows ? <FlowPills {...flows} /> : null}
 
             {workspace ? (
                 <span data-title-workspace={workspace.name} className="flex min-w-0 shrink-0 items-center gap-1.5 text-[12px] font-medium text-[var(--fg-2)]">

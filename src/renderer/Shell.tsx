@@ -28,6 +28,7 @@ import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
 import type { ProviderProgramChosen } from './components/ProviderProgramChoice.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
+import { useNow } from './use-now.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -575,6 +576,10 @@ export function Shell({
     // The same object while every colour is the same (genie#1340): a context value, so a new-but-equal map would redraw every
     // consumer — the chat among them — for each estate push, memoised or not.
     const colorMap = useShared(useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]));
+    // THE RUNNING FLOWS in the header (Tynn #707). A failed or held end lingers a few seconds, so the clock ticks only while one is reported.
+    const flowsLive = snapshot.signals.flowsLive ?? [];
+    const flowsEnded = snapshot.signals.flowsEnded ?? [];
+    useNow(flowsEnded.length > 0, undefined, 1000); // the tick re-renders the bar, which reads the clock below
     // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
     const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
     /** Trust a workspace from an approval card that asks only because it isn't trusted (Tynn #618): the trust step's own action. */
@@ -618,6 +623,7 @@ export function Shell({
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk && !scoped ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
+                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); } } : undefined}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || scoped || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
