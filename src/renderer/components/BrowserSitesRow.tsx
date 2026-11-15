@@ -63,14 +63,15 @@ export function BrowserSitesRow(p: BrowserSitesRowProps) {
         setMeasured(sitesThatFit({ widths: p.sites.map((h) => widths.current.get(h) ?? 0), available, moreWidth: MORE_WIDTH, gap: GAP }));
     }, [measured, forced, key]);
 
+    const label = (host: string): string => p.labels?.[host] ?? siteLabel(host);
     const shown = p.sites.slice(0, fit);
     const hidden = p.sites.slice(fit);
     const behind = p.current !== null && hidden.includes(p.current);
     return (
         <div ref={row} data-browser-sites="" className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-hidden whitespace-nowrap border-b border-[var(--border-1)] px-2 py-1">
             {shown.map((host) => (
-                <Button variant="ghost" size="xs" key={host} type="button" data-browser-site={host} title={host} aria-current={p.current === host ? 'page' : undefined} onClick={() => p.onOpen(`https://${host}/`)} className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] hover:bg-[var(--bg-2)] ${p.current === host ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
-                    <span>{siteLabel(host)}</span>
+                <Button variant="ghost" size="xs" key={host} type="button" data-browser-site={host} title={label(host)} aria-current={p.current === host ? 'page' : undefined} onClick={() => p.onOpen(`https://${host}/`)} className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] hover:bg-[var(--bg-2)] ${p.current === host ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
+                    <span>{label(host)}</span>
                 </Button>
             ))}
             {hidden.length > 0 ? (
@@ -84,7 +85,7 @@ export function BrowserSitesRow(p: BrowserSitesRowProps) {
                         <Dropdown.Items>
                             {hidden.map((host) => (
                                 <Dropdown.Item key={host} data-browser-site-more={host} aria-current={p.current === host ? 'page' : undefined} onClick={() => p.onOpen(`https://${host}/`)}>
-                                    <span className="flex items-center gap-1.5 text-xs">{p.current === host ? <Icon name="check" size="xs" /> : null}{siteLabel(host)}</span>
+                                    <span className="flex items-center gap-1.5 text-xs">{p.current === host ? <Icon name="check" size="xs" /> : null}{label(host)}</span>
                                 </Dropdown.Item>
                             ))}
                         </Dropdown.Items>

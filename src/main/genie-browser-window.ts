@@ -52,11 +52,15 @@ export interface BrowserSnapshot extends BrowserState {
     readonly presets: ReadonlyArray<{ readonly id: string; readonly label: string }>;
     /** The Genie sites this window can open — the chrome's row of chips and its empty state. */
     readonly sites: readonly string[];
+    /** Each site's label: its workspace's name (and the site, where it has several), never an id-like host. */
+    readonly siteLabels?: Readonly<Record<string, string>>;
 }
 
 export interface GenieBrowserPorts {
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
+    /** The labels for those hosts (core/browser-sites.ts `browserSiteLabels`); absent = each host's own safe label. */
+    readonly siteLabels?: () => Readonly<Record<string, string>>;
     readonly newTabId: () => string;
     /** `url`: the site it opens on, so its session can be that site's workspace's. */
     readonly createView: (tabId: string, events: TabViewEvents, url: string) => TabViewPort;
@@ -191,7 +195,7 @@ export class GenieBrowser {
     }
 
     snapshot(): BrowserSnapshot {
-        return { ...this.#state, notice: this.#notice, noticeRestart: this.#noticeRestart, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
+        return { ...this.#state, notice: this.#notice, noticeRestart: this.#noticeRestart, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()], ...(this.#ports.siteLabels ? { siteLabels: this.#ports.siteLabels() } : {}) };
     }
 
     #openTab(url: string, background = false): void {
