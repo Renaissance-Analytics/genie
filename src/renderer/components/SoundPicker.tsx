@@ -27,7 +27,7 @@ export function SoundPicker({ value, label, onSelect, onPreview, canPreview }: {
     // Open on the selected row, so the arrows start where the person is.
     useEffect(() => {
         if (!open) return;
-        const t = setTimeout(() => (document.querySelector('[data-sound-popover] [data-sound-name][aria-checked="true"]') as HTMLElement | null)?.focus(), 0);
+        const t = setTimeout(() => (document.querySelector('[data-sound-popover] [data-sound-name][aria-pressed="true"]') as HTMLElement | null)?.focus({ preventScroll: true }), 0);
         return () => clearTimeout(t);
     }, [open]);
 
@@ -42,7 +42,7 @@ export function SoundPicker({ value, label, onSelect, onPreview, canPreview }: {
             e.preventDefault();
             const names = [...document.querySelectorAll('[data-sound-popover] [data-sound-name]')] as HTMLElement[];
             const at = names.indexOf(name) + (e.key === 'ArrowDown' ? 1 : -1);
-            names[Math.max(0, Math.min(names.length - 1, at))]?.focus();
+            names[Math.max(0, Math.min(names.length - 1, at))]?.focus({ preventScroll: true });
         } else if (e.key === ' ') {
             e.preventDefault();
             if (playable(v)) onPreview(v);
@@ -79,8 +79,7 @@ export function SoundPicker({ value, label, onSelect, onPreview, canPreview }: {
                                     type="button"
                                     size="sm"
                                     variant="ghost"
-                                    role="menuitemradio"
-                                    aria-checked={o.value === value}
+                                    aria-pressed={o.value === value}
                                     data-sound-name={o.value}
                                     className="flex w-full min-w-0 flex-1 items-center justify-start gap-2 text-left"
                                     onClick={() => choose(o.value)}

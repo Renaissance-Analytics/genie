@@ -84,8 +84,8 @@ describe('the popover', () => {
         }
         const marked = [...popover()!.querySelectorAll('[data-sound-row][data-selected="true"]')].map((e) => e.getAttribute('data-sound-row'));
         expect(marked).toEqual(['winddown']);
-        expect(name('winddown').getAttribute('aria-checked')).toBe('true');
-        expect(name('sparkle').getAttribute('aria-checked')).toBe('false');
+        expect(name('winddown').getAttribute('aria-pressed')).toBe('true');
+        expect(name('sparkle').getAttribute('aria-pressed')).toBe('false');
     });
 
     it("a row's play button previews THAT sound without selecting it and leaves the popover open", () => {

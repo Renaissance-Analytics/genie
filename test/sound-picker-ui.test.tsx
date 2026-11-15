@@ -6,34 +6,33 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
 /**
  * THE SOUND PICKER IN SETTINGS → GENERAL (Tynn #766; the owner, 2026-10-17: "what happened to the action sounds settings
  * we had?"). Genie 1 offered a sound per alert, by NAME; Genie 2 had an on/off box. Each alert row is now a choice that
- * reads as words — "Wind Down", not `winddown` — with the person's choice selected, and None last.
+ * reads as words — "Wind Down", not `winddown` — with the person's choice named on its Button (Tynn #711: the sounds themselves are in its popover).
  */
 const general = (values: Record<string, boolean | string>) =>
     renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} section="notifications" />);
 
 describe('a sound per alert', () => {
-    it('each alert row offers the sounds by name, grouped by family — Genie’s own with the Default chime first, the library (Tynn #441), Custom file… and None last; COUNTED: twenty-six rows of fifty-five choices in seven groups', () => {
+    it('each alert row is ONE Button naming its sound (Tynn #711); the popover of groups and play buttons opens from it, so a closed row holds no native select, option or play button; COUNTED: twenty-six rows', () => {
         const html = general({});
         const rows = html.match(/<li[^>]*data-setting="sound_[a-z]+"[\s\S]*?<\/li>/g) ?? [];
         expect(rows).toHaveLength(26);
         for (const row of rows) {
-            expect(row.match(/<option /g)).toHaveLength(55);
-            expect([...row.matchAll(/<optgroup label="([^"]+)"/g)].map((m) => m[1])).toEqual(['Genie', 'Chimes and confirmations', 'Alerts and errors', 'Clicks and moves', 'Digital', 'Jingles', 'Other']);
-            expect(row).toMatch(/value="custom"[^>]*>Custom file…<\/option><option value="off"/);
-            expect(row).toMatch(/<select[^>]*><optgroup label="Genie"><option value="synth"[^>]*>Default chime<\/option>/);
-            expect(row).toContain('>Wind Down</option>');
-            expect(row).toMatch(/<optgroup label="Jingles">[\s\S]*>Jingles · Robin<\/option>/);
-            expect(row).toMatch(/value="off"[^>]*>None<\/option><\/optgroup><\/select>/);
+            expect(row.match(/data-sound-picker=""/g)).toHaveLength(1);
+            expect(row).toMatch(/<button[^>]*data-sound-picker=""[^>]*aria-haspopup="dialog"[^>]*aria-expanded="false"/);
+            expect(row).not.toMatch(/<select|<option|<optgroup/);
+            expect(row).not.toContain('data-sound-play');
+            expect(row).not.toContain('data-sound-popover');
         }
+        expect(rows.find((r) => r.includes('data-setting="sound_finished"'))).toContain('<span class="truncate">Triumphant</span>');
     });
 
-    it('each row has Preview — the sound it would play; None has nothing to preview (COUNTED: twenty-six; disabled exactly where None)', () => {
+    it('a row names None exactly where it is None (COUNTED: twenty-one), and the Button names the sound otherwise', () => {
         const html = general({ sound_mail: 'off', sound_edits: 'sparkle' });
-        const previews = html.match(/<button[^>]*data-sound-preview="sound_[a-z]+"[^>]*>/g) ?? [];
-        expect(previews).toHaveLength(26);
-        const disabled = previews.filter((b) => / disabled=""/.test(b)).map((b) => b.match(/data-sound-preview="(sound_[a-z]+)"/)![1]).sort();
-        // Mail set to None, and the new kinds that default to None — except edits, given Sparkle here.
-        expect(disabled).toEqual(['sound_agentmail', 'sound_exits', 'sound_fetches', 'sound_flowdone', 'sound_ghci', 'sound_ghissue', 'sound_ghpr', 'sound_ghsecurity', 'sound_limited', 'sound_mail', 'sound_plans', 'sound_reads', 'sound_replied', 'sound_resumed', 'sound_runs', 'sound_serviceup', 'sound_sitedown', 'sound_siteup', 'sound_started', 'sound_stopped', 'sound_thumbsup']);
+        const rows = html.match(/<li[^>]*data-setting="sound_[a-z]+"[\s\S]*?<\/li>/g) ?? [];
+        const none = rows.filter((r) => r.includes('<span class="truncate">None</span>')).map((r) => r.match(/data-setting="(sound_[a-z]+)"/)![1]).sort();
+        // Mail set to None, and the kinds that default to None — except edits, given Sparkle here.
+        expect(none).toEqual(['sound_agentmail', 'sound_exits', 'sound_fetches', 'sound_flowdone', 'sound_ghci', 'sound_ghissue', 'sound_ghpr', 'sound_ghsecurity', 'sound_limited', 'sound_mail', 'sound_plans', 'sound_reads', 'sound_replied', 'sound_resumed', 'sound_runs', 'sound_serviceup', 'sound_sitedown', 'sound_siteup', 'sound_started', 'sound_stopped', 'sound_thumbsup']);
+        expect(rows.find((r) => r.includes('data-setting="sound_edits"'))).toContain('<span class="truncate">Sparkle</span>');
     });
 
     it('the sound rows are shown in their groups — Needs you, Its turn, Its work, Messages — each kind once (COUNTED)', () => {
@@ -52,11 +51,12 @@ describe('a sound per alert', () => {
         expect(finished).not.toContain('data-sound-custom');
     });
 
-    it('the person’s choice is the selected one; CONTROL: an untouched row selects its own sound', () => {
+    it('the person’s choice is the one the Button names; CONTROL: an untouched row names its own sound (the selected row inside the popover is marked in sound-picker.test.tsx)', () => {
         const html = general({ sound_finished: 'sparkle' });
         const finished = html.match(/<li[^>]*data-setting="sound_finished"[\s\S]*?<\/li>/)![0];
-        expect(finished).toMatch(/<option value="sparkle" selected="">Sparkle<\/option>/);
+        expect(finished).toMatch(/data-sound-picker=""[\s\S]*?<span class="truncate">Sparkle<\/span>/);
+        expect(finished).not.toContain('Triumphant');
         const question = html.match(/<li[^>]*data-setting="sound_question"[\s\S]*?<\/li>/)![0];
-        expect(question).toMatch(/<option value="dingdongdoink" selected="">Ding Dong Doink<\/option>/);
+        expect(question).toMatch(/data-sound-picker=""[\s\S]*?<span class="truncate">Ding Dong Doink<\/span>/);
     });
 });
