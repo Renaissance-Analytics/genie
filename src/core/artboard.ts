@@ -199,6 +199,11 @@ function toTrailEntry(raw: unknown): TrailEntry | null {
     return null;
 }
 
+/** The trail entries in a raw value that are well-formed; the rest are dropped (the wire and the index are both untrusted). */
+export function trailFrom(raw: unknown): TrailEntry[] {
+    return Array.isArray(raw) ? raw.map(toTrailEntry).filter((e): e is TrailEntry => e !== null) : [];
+}
+
 function toPost(raw: unknown): BoardPost | null {
     if (typeof raw !== 'object' || raw === null) return null;
     const r = raw as Record<string, unknown>;
@@ -454,10 +459,23 @@ export function verdictMessage(post: BoardPost, review: Review): string {
  * into what a human sees, and that judgement is worth testing without a disk.
  */
 
+/** One revision, resolved for display. `n` is its version number; the content is whichever of html / src / text its kind uses. */
+export interface DisplayVersion {
+    n: number;
+    kind: PostKind;
+    createdAt: string;
+    note?: string;
+    poster?: string;
+    html?: string;
+    src?: string;
+    text?: string;
+    contentError?: string;
+}
+
 export interface DisplayPost {
     id: string;
     title: string;
-    kind: 'html' | 'image';
+    kind: PostKind;
     createdAt: string;
     note?: string;
     /** Resolved: true shows Approve / Reject and the comment box; false shows the artifact only. */
@@ -465,14 +483,27 @@ export interface DisplayPost {
     review?: BoardPost['review'];
     html?: string;
     src?: string;
+    /** A Markdown document, to render. */
+    text?: string;
     /** A listed artifact that could not be inspected is kept visible with its failure. */
     contentError?: string;
+    /** Who posted the latest version. */
+    poster?: string;
+    /** The size an HTML item was made for (CSS pixels). */
+    width?: number;
+    height?: number;
+    /** The person kept it in the default view after a verdict. */
+    pinned?: true;
+    /** Every verdict and reply, in order. Absent when there are none. */
+    trail?: TrailEntry[];
+    /** Every version, oldest first, the latest included. Absent when there is only one: nothing to compare. */
+    versions?: DisplayVersion[];
 }
 
 export interface ResolveDeps {
     /** Read a post's file as text. Throws / returns null when it is gone. */
     readText: (file: string) => string | null;
-    /** Read it as base64, for an image. */
+    /** Read it as base64, for an image or a PDF. */
     readBase64: (file: string) => string | null;
 }
 
@@ -486,15 +517,38 @@ const MIME: Record<string, string> = {
     '.webp': 'image/webp',
 };
 
-function mimeFor(file: string): string | null {
+/** The content type of a post's file, by kind; an image of a type the board cannot draw has none. */
+export function mimeFor(kind: PostKind, file: string): string | null {
+    if (kind === 'html') return 'text/html';
+    if (kind === 'markdown') return 'text/markdown';
+    if (kind === 'pdf') return 'application/pdf';
     const dot = file.lastIndexOf('.');
     if (dot <= 0) return null;
     return MIME[file.slice(dot).toLowerCase()] ?? null;
 }
 
+/** Whether a kind is read as text (HTML, Markdown) or as bytes (an image, a PDF). */
+export const isTextKind = (kind: PostKind): boolean => kind === 'html' || kind === 'markdown';
+
 export interface ResolvedBoard {
     posts: DisplayPost[];
     error?: string;
+}
+
+type Content = { html: string } | { text: string } | { src: string };
+
+function contentOf(kind: PostKind, file: string, deps: ResolveDeps): Content | null {
+    if (kind === 'html') {
+        const html = safely(() => deps.readText(file));
+        return html === null ? null : { html };
+    }
+    if (kind === 'markdown') {
+        const text = safely(() => deps.readText(file));
+        return text === null ? null : { text };
+    }
+    const mime = mimeFor(kind, file);
+    const b64 = mime ? safely(() => deps.readBase64(file)) : null;
+    return mime && b64 !== null ? { src: `data:${mime};base64,${b64}` } : null;
 }
 
 /**
@@ -503,14 +557,22 @@ export interface ResolvedBoard {
  * A post whose file has been deleted is dropped rather than rendered as an empty
  * card — an empty card claims the agent posted nothing, which is a different and
  * wrong statement. The count is surfaced instead, because silently showing four
- * of five posts is how a reviewer approves the wrong thing.
+ * of five posts is how a reviewer approves the wrong thing. (An EARLIER version
+ * whose file is gone is different: the item is there, so that version says why it
+ * cannot be shown.)
  */
 export function resolveBoard(posts: BoardPost[], deps: ResolveDeps): ResolvedBoard {
     const out: DisplayPost[] = [];
     let missing = 0;
 
     for (const post of posts) {
-        const base: DisplayPost = {
+        const latest = contentOf(post.kind, post.file, deps);
+        if (latest === null) {
+            missing++;
+            continue;
+        }
+        const versions = versionsOf(post);
+        const shown: DisplayPost = {
             id: post.id,
             title: post.title,
             kind: post.kind,
@@ -518,25 +580,21 @@ export function resolveBoard(posts: BoardPost[], deps: ResolveDeps): ResolvedBoa
             askVerdict: wantsVerdict(post),
             ...(post.note ? { note: post.note } : {}),
             ...(post.review ? { review: post.review } : {}),
+            ...(post.agentName ? { poster: post.agentName } : {}),
+            ...(post.width ? { width: post.width } : {}),
+            ...(post.height ? { height: post.height } : {}),
+            ...(post.pinned ? { pinned: true as const } : {}),
+            ...(post.trail && post.trail.length > 0 ? { trail: post.trail } : {}),
+            ...latest,
         };
-
-        if (post.kind === 'html') {
-            const html = safely(() => deps.readText(post.file));
-            if (html === null) {
-                missing++;
-                continue;
-            }
-            out.push({ ...base, html });
-            continue;
+        if (versions.length > 1) {
+            shown.versions = versions.map((v, i): DisplayVersion => {
+                const base: DisplayVersion = { n: v.n, kind: v.kind, createdAt: v.createdAt, ...(v.note ? { note: v.note } : {}), ...(v.agentName ? { poster: v.agentName } : {}) };
+                const content = i === versions.length - 1 ? latest : contentOf(v.kind, v.file, deps);
+                return content ? { ...base, ...content } : { ...base, contentError: 'This version\'s file is missing from the board.' };
+            });
         }
-
-        const mime = mimeFor(post.file);
-        const b64 = mime ? safely(() => deps.readBase64(post.file)) : null;
-        if (!mime || b64 === null) {
-            missing++;
-            continue;
-        }
-        out.push({ ...base, src: `data:${mime};base64,${b64}` });
+        out.push(shown);
     }
 
     return missing > 0
