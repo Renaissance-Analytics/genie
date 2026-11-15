@@ -8,6 +8,7 @@ import { SERVER_HOST, decideIdle, serverCommand } from '../core/playwright-manag
  */
 
 export const PLAYWRIGHT_SERVER_PROCESS_ID = 'genie-playwright-server';
+const POLL_MS = 200;
 
 export interface PlaywrightServerPorts {
     readonly supervisor: Pick<SupervisorApi, 'start' | 'stop' | 'status'>;
@@ -52,7 +53,7 @@ export class PlaywrightServer {
             cur.lastActiveAt = now;
             return { port: cur.port, token: cur.token, version: cur.version };
         }
-        if (cur) this.stop();
+        if (cur) void this.stop();
         const port = this.#ports.allocatePort();
         const token = this.#ports.mintToken();
         const { command } = serverCommand({ cliDir: this.#ports.cliDir(version), host: SERVER_HOST, port, token });
@@ -69,16 +70,44 @@ export class PlaywrightServer {
         const connections = await this.#ports.connections(cur.port);
         if (connections !== null && connections > 0) cur.lastActiveAt = now;
         if (decideIdle({ lastActiveAt: cur.lastActiveAt, now, idleMs: this.#ports.idleMs, connections }) === 'stop') {
-            this.stop();
+            void this.stop();
             return 'stopped';
         }
         return 'kept';
     }
 
-    stop(): Promise<'ended' | 'forced'> | void {
-        if (!this.#current) return;
+    /**
+     * Stop it, and see that it ENDED. The supervisor's stop closes the server's pty, whose helper's job object takes the tree
+     * with it (spawn-host-client.ts); that is asked, not assumed: a process still there after the grace is ended with everything
+     * it started, by the process tree's rules (`forceEnd`). Never hangs: a forced end that does not return, or fails, is given up
+     * on after the same grace. The supervisor's stop happens before this returns, so callers need not wait.
+     */
+    stop(): Promise<'ended' | 'forced'> {
+        if (!this.#current) return Promise.resolve('ended');
+        const pid = this.#ports.supervisor.status(PLAYWRIGHT_SERVER_PROCESS_ID)?.pid ?? null;
         this.#ports.supervisor.stop(PLAYWRIGHT_SERVER_PROCESS_ID);
         this.#current = null;
+        return this.#verifyEnded(pid);
+    }
+
+    async #verifyEnded(pid: number | null): Promise<'ended' | 'forced'> {
+        const { pidAlive, forceEnd } = this.#ports;
+        if (pid === null || !pidAlive) return 'ended';
+        const grace = this.#ports.forceAfterMs ?? 5_000;
+        const sleep = this.#ports.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
+        for (let waited = 0; waited < grace; waited += POLL_MS) {
+            if (!pidAlive(pid)) return 'ended';
+            await sleep(POLL_MS);
+        }
+        if (!pidAlive(pid)) return 'ended';
+        if (forceEnd) {
+            try {
+                await Promise.race([forceEnd(pid), sleep(grace)]);
+            } catch {
+                // it could not be ended here either: the stop is reported forced, and the process list still shows it
+            }
+        }
+        return 'forced';
     }
 
     running(): RunningPlaywrightServer | null {

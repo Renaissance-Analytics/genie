@@ -65,7 +65,7 @@ export class PlaywrightHost {
     }
 
     dispose(): void {
-        this.server.stop();
+        void this.server.stop();
     }
 }
 

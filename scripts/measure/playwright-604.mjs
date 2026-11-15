@@ -60,8 +60,9 @@ rec('worktree-test-managed-browsers', { code: r.code, ms: r.ms, out: r.out });
 // 5. the browser server
 const port = await freePort();
 const token = 'tok' + Math.random().toString(36).slice(2);
-const srvArgs = ['playwright', 'run-server', '--host', '127.0.0.1', '--port', String(port), '--path', '/' + token];
-const srv = spawn(win ? 'cmd.exe' : 'npx', win ? ['/d', '/s', '/c', 'npx', ...srvArgs] : srvArgs, { cwd: main, env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsers }, stdio: ['ignore', 'pipe', 'pipe'] });
+// node on the CLI itself, as Genie starts it: no cmd.exe/npx wrapper whose death would orphan the real server holding our pipes.
+const srvArgs = [join(main, 'node_modules', 'playwright', 'cli.js'), 'run-server', '--host', '127.0.0.1', '--port', String(port), '--path', '/' + token];
+const srv = spawn(process.execPath, srvArgs, { cwd: main, env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsers }, stdio: ['ignore', 'pipe', 'pipe'] });
 let srvOut = '';
 srv.stdout.on('data', (d) => (srvOut += d));
 srv.stderr.on('data', (d) => (srvOut += d));
@@ -91,8 +92,17 @@ const before = readdirSync(browsers);
 r = sh('npx', ['playwright', 'install', 'chromium'], { cwd: old, env: { PLAYWRIGHT_BROWSERS_PATH: browsers } });
 rec('install-old-into-shared-path', { code: r.code, ms: r.ms, bytes: dirSize(browsers), dirsBefore: before, dirsAfter: readdirSync(browsers), downloaded: /Downloading/i.test(r.out) });
 
-srv.kill();
+// End the server WITH what it started, while its parent link is intact (taskkill /T after kill() finds no tree), wait for it
+// bounded, then let go of its pipes: an exited server's open pipes are what kept this process (and the job) alive.
+const gone = new Promise((ok) => { srv.once('exit', ok); setTimeout(ok, 10000); });
 if (win) spawnSync('taskkill', ['/F', '/T', '/PID', String(srv.pid)]);
+else srv.kill('SIGKILL');
+const endAt = now();
+await gone;
+rec('server-stopped', { exited: srv.exitCode !== null || srv.signalCode !== null, ms: now() - endAt });
+srv.stdout.destroy();
+srv.stderr.destroy();
 mkdirSync('ci-out', { recursive: true });
 writeFileSync(join('ci-out', 'playwright-604.json'), JSON.stringify(results, null, 2));
 console.log('DONE');
+process.exit(0);

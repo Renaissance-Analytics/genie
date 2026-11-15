@@ -53,7 +53,8 @@ import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.js';
 import { setGitExecRoute } from './git-exec.js';
-import { ProcessSupervisor } from './process-supervisor.js';
+import { ProcessSupervisor, osPidAlive } from './process-supervisor.js';
+import { endChildTrees } from './end-child-trees.js';
 import { SupervisorService } from './supervisor-host.js';
 import { LinkGate } from './linked-stream.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
@@ -1189,7 +1190,7 @@ async function main(): Promise<void> {
             mintToken: () => randomBytes(32).toString('base64url'),
             now: () => Date.now(),
             connections: (port) => osConnections(port, process.platform, async (binary, args) => { const r = await execFileRunner(binary, args, { timeoutMs: 10_000 }); return { exitCode: r.exitCode, stdout: r.streams.stdout }; }),
-            idleMs: 10 * 60_000,
+            idleMs: 10 * 60_000, pidAlive: osPidAlive, /* a server that will not exit is ended with all it started, by the process tree rules (never taskkill /T) */ forceEnd: (pid) => endChildTrees([{ pid, exitCode: null, signalCode: null, kill: () => { try { process.kill(pid); return true; } catch { return false; } }, once: () => undefined }], systemProcessTree),
         },
         workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null,
         optIn: (id) => settings.snapshotFor(id).playwright_server !== false,
