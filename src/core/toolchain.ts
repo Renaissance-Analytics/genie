@@ -174,11 +174,17 @@ const PROVIDER_TOOL: Readonly<Record<string, string>> = { claude: 'claude-code',
  * its version print said (an npm placeholder answers nothing; another copy on PATH answered 2.1.316). Signed out is a login
  * matter, not the tool's state: that row keeps its tone and is marked `signedOut` ("Not signed in", Log in).
  */
-export function withProviderHealth<T extends ToolStatus>(statuses: readonly T[], health: ReadonlyArray<{ readonly provider: string; readonly installed: boolean; readonly signedIn: boolean | null; readonly words: string | null } | null>): T[] {
+export function withProviderHealth<T extends ToolStatus>(statuses: readonly T[], health: ReadonlyArray<{ readonly provider: string; readonly installed: boolean; readonly signedIn: boolean | null; readonly words: string | null; readonly version?: string | null } | null>): T[] {
     return statuses.map((status) => {
         const found = health.find((h) => h !== null && PROVIDER_TOOL[h.provider] === status.tool) ?? null;
         if (found === null) return status;
-        if (found.installed) return found.signedIn === false ? { ...status, signedOut: true } : status;
+        if (found.installed) {
+            // The version of the program the AGENTS run (Tynn #734), not of whichever `claude` cmd.exe found first: with two copies
+            // on one machine the row read the old one while the agent refused to start on it.
+            const measured = found.version ?? null;
+            const row: T = measured === null || measured === status.installed ? status : { ...status, installed: measured, tone: status.latest === null ? 'unknown' : compareVersions(status.latest, measured) > 0 ? 'update-available' : 'up-to-date' };
+            return found.signedIn === false ? { ...row, signedOut: true } : row;
+        }
         return { ...status, tone: 'broken', ...(found.words ? { problem: found.words } : {}) };
     });
 }
