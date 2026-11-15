@@ -58,6 +58,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-export', 'window-port'],
     ['genie:browser-window-open', 'window-port'],
     ['genie:files-popout', 'window-port'],
+    ['genie:terminals-popout', 'window-port'],
     ['genie:remote-open-window', 'window-port'],
     ['genie:connect-link', 'window-port'],
     ['genie:relay-open', 'later:P5 relay client moves into genie-host'],

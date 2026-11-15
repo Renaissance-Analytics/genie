@@ -58,6 +58,8 @@ export const ICON_NAMES: readonly string[] = [
     'cpu',
     // Connect to another machine (the title bar's button, Genie 1's Hosts), and a Tynn workstation's desktop / cloud.
     'monitor', 'cloud',
+    // The Dashboard's windows column (Tynn #706): open a workspace's Terminal or Files in a new window.
+    'app-window',
     // Do not disturb in the title bar (Tynn #655): off, on.
     'bell', 'bell-off',
     // Share a workspace or the workstation through Tynn (Tynn #587).

@@ -1,5 +1,6 @@
 import { browserSiteLabels } from '../core/browser-sites.js';
 import { describeMcpTool } from '../core/mcp-tool-summaries.js';
+import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
@@ -890,16 +891,17 @@ function openRemoteTakeOverWindow(url: string, terminalId: string, ticket: strin
     takeOverWindow(route, request, { search, ticket });
 }
 
-/** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */
-function openFilesWindow(route: string, activation: Activation): void {
-    const workspaceId = route.split('/').pop() ?? '';
-    const request = { activation, reason: `files window ${route}`, ledger: activationLedger, label: 'files' };
+/**
+ * A workspace's page in a window of its own, opened on `route` and told apart by it: asking again brings the open one up.
+ * `onClosed` runs when it closes. The window loads the same renderer, which draws what the route names.
+ */
+function openRouteWindow(route: string, activation: Activation, label: string, size: { width: number; height: number }, onClosed?: () => void): void {
+    const request = { activation, reason: `${label} window ${route}`, ledger: activationLedger, label };
     for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
     }
     const win = new BrowserWindow({
-        width: 960,
-        height: 720,
+        ...size,
         ...genieWindowIcon(here),
         backgroundColor: '#0a0a0c',
         show: false,
@@ -909,8 +911,19 @@ function openFilesWindow(route: string, activation: Activation): void {
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    win.on('closed', () => filesWindows?.windowClosed(workspaceId));
+    if (onClosed) win.on('closed', onClosed);
     void loadWindowPage(win.webContents, 'index', { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
+}
+
+/** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */
+function openFilesWindow(route: string, activation: Activation): void {
+    const workspaceId = route.split('/').pop() ?? '';
+    openRouteWindow(route, activation, 'files', { width: 960, height: 720 }, () => filesWindows?.windowClosed(workspaceId));
+}
+
+/** A WORKSPACE'S TERMINALS IN A WINDOW OF ITS OWN (Tynn #706): the Dashboard's windows column. Nothing is tracked; closing it closes it. */
+function openTerminalsWindow(route: string, activation: Activation): void {
+    openRouteWindow(route, activation, 'terminals', { width: 1100, height: 720 });
 }
 
 /**
@@ -2035,6 +2048,8 @@ async function boot(): Promise<void> {
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
         return askBrowser([at ?? null, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port(), ca: via.ca(), hosts }]);
     });
+    // THE DASHBOARD'S WINDOWS COLUMN (Tynn #706): a workspace's terminals view in a window of its own; a second ask brings it up.
+    ipcMain.handle('genie:terminals-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string' && workspaceId !== '') openTerminalsWindow(terminalsWindowRoute(workspaceId), 'user-gesture'); });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
     // TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): this machine's window on that host's terminal; a drone opens none.
