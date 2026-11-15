@@ -385,6 +385,10 @@ export interface UpdateSignalInput {
 
 export interface SignalState {
     flowsRunning: number;
+    /** The flows running now, for the header's pills (Tynn #707). Absent = not reported (a guest, an older host). */
+    flowsLive?: readonly import('./flow-pills.js').LiveFlow[];
+    /** Flows whose latest run just ended failed or held; the header shows each briefly. */
+    flowsEnded?: readonly import('./flow-pills.js').EndedFlow[];
     /** Mail agents have not collected. */
     uncollectedMail: number;
     /** GitHub permissions are blocking features. */

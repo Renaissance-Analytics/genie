@@ -4,6 +4,7 @@ import { stableView } from '../stable-view.js';
 import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { ChatQueueBar } from './ChatQueueBar.js';
+import { ChatPlanLine } from './ChatPlanLine.js';
 import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { toHotkey, fancyPlatform } from '../hotkey-strings.js';
 import { sendKeyHint } from '../../core/send-key.js';
@@ -604,7 +605,7 @@ function ChatFlyoutBody({
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
             {thread?.context || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} {...(thread?.context?.title ? { title: thread.context.title } : {})} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
-                    {thread?.context?.text ?? 'Working'}
+                    <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
                     {onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"

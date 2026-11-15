@@ -2873,6 +2873,8 @@ async function boot(): Promise<void> {
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking (what the GitHub
     // sign-in read from GitHub), the OS agent working.
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })(), githubBlocked: (githubAccount?.view().signal ?? null) !== null }));
+    // The header's flow pills (Tynn #707): a flow starting, ending or failing changes the signals, so the windows are told.
+    composed.flows.onChange(() => registry?.touch());
     // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
     // finished agents, Genie's tool approvals. Built in compose and never read before (the owner never saw a question).
     registry.setDeckSource(() => [...mainErrors.deckItems(), ...composed.deckItems()]);
