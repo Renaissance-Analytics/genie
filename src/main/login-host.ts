@@ -29,7 +29,7 @@ import type { TerminalHost } from './terminal-host.js';
  * #699: the owner switched accounts at his limit and his agent never resumed) — every agent held on that provider's limit is
  * released and what waited goes, as when the limit resets.
  */
-export function afterSignedIn(provider: string, deps: { signedOutAgents: (provider: string) => readonly string[]; restart: (id: string) => void; resumeLimit: (provider: string) => void }): void {
+export function afterSignedIn(provider: string, deps: { signedOutAgents: (provider: string, accountId?: string) => readonly string[]; restart: (id: string) => void; resumeLimit: (provider: string, accountId?: string) => void }, _accountId?: string): void {
     for (const id of deps.signedOutAgents(provider)) deps.restart(id);
     deps.resumeLimit(provider);
 }
@@ -40,8 +40,8 @@ export interface LoginHostOptions {
     /** Run a status command in `cwd` through the shell; resolves with its exit code. */
     runStatus: (command: string, cwd: string, env?: Readonly<Record<string, string>>) => Promise<number>;
     /** The host book's account. Provider-only UI login remains legacy scoped until S6. */
-    accountFor?: (provider: string) => ProviderAccountHome | null;
-    onSignedIn: (provider: string) => void;
+    accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string }) | null;
+    onSignedIn: (provider: string, accountId?: string) => void;
     /** The Claude Design login window ended (there is no status to ask): the agents that waited are told to retry. */
     onDesignLoginEnded?: (() => void) | undefined;
     /** The provider CLI's resolved path, when it is not simply on PATH (`providerBinary`). */
@@ -94,7 +94,7 @@ export class LoginHost {
         });
     }
 
-    start(provider: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
+    start(provider: string, _accountId?: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
         const existing = this.#live.get(provider);
         if (existing) {
             this.#options.openWindow(this.#route(existing));
@@ -135,6 +135,12 @@ export class LoginHost {
         this.#options.openWindow(this.#route(live));
         return { ok: true, terminalId: opened.id };
     }
+
+    /** RED STUB (Tynn #479): inert until implemented. */
+    cancel(_accountId: string): void {}
+
+    /** RED STUB (Tynn #479): inert until implemented. */
+    dispose(): void {}
 
     #route(live: Live): string {
         return `genie://takeover/${live.terminalId}?login=${encodeURIComponent(live.provider)}`;

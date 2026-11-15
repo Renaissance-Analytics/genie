@@ -967,7 +967,7 @@ export class SessionHost {
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.accountPaused !== null).map(([id]) => id);
     }
 
-    signedOutAgents(provider: string): AgentId[] {
+    signedOutAgents(provider: string, _accountId?: string): AgentId[] {
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.signedOut).map(([id]) => id);
     }
 

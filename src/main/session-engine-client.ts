@@ -1287,6 +1287,14 @@ export class SessionEngineClient {
         await this.#value('engine.refreshAccountIdentity', [provider], false);
     }
 
+    /** RED STUB (Tynn #479): inert until implemented. */
+    async login(_provider: string, _accountId?: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }> {
+        return { ok: false, reason: 'not implemented' };
+    }
+
+    /** RED STUB (Tynn #479): inert until implemented. */
+    async cancelLogin(_accountId: string): Promise<void> {}
+
     /** The persisted legacy account home, or unknown while the host/book cannot answer. */
     async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null> {
         return this.#value('engine.providerAccount', [provider], null);
