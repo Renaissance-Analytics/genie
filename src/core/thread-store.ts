@@ -893,6 +893,24 @@ function mayMatter(line: Buffer, runToken: Buffer | null, before: number | undef
  * the digest being the first 32 hex characters of the key's SHA-256. A durable on-disk name (changing it would orphan every
  * thread ever written), pinned against the real store by test/thread-history-bounded.test.ts.
  */
+/**
+ * The images an agent's thread keeps (Tynn #697, the Storage tab's "files shared in chat"): each by its id, where it is,
+ * and its size, as the thread's attachment index lists them. Read-only; a missing or unreadable index lists none.
+ */
+export async function threadAttachmentFiles(directory: string, agentId: AgentId): Promise<Array<{ id: string; path: string; bytes: number }>> {
+    const folder = join(directory, ledgerName(threadKeyFor(agentId)));
+    let raw: unknown;
+    try { raw = JSON.parse(await readFile(join(folder, ATTACHMENT_INDEX), 'utf8')); } catch { return []; }
+    if (!Array.isArray(raw)) return [];
+    const out: Array<{ id: string; path: string; bytes: number }> = [];
+    for (const e of raw as AttachmentEntry[]) {
+        if (typeof e?.id !== 'string' || !ATTACHMENT_ID.test(e.id) || ATTACHMENT_EXT[e.mimeType] === undefined) continue;
+        const path = join(folder, `att-${e.id}.${ATTACHMENT_EXT[e.mimeType]}`);
+        try { const s = await lstat(path); if (s.isFile()) out.push({ id: e.id, path, bytes: s.size }); } catch { /* gone already */ }
+    }
+    return out;
+}
+
 export function threadLogFile(directory: string, agentId: AgentId): string {
     return join(directory, `${createHash('sha256').update(threadKeyFor(agentId)).digest('hex').slice(0, 32)}.jsonl`);
 }

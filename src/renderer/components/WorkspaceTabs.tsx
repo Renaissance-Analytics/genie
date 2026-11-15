@@ -22,6 +22,8 @@ export interface WorkspaceTabsProps {
     readonly github?: boolean;
     /** The workspace is linked to a Tynn project: its Tynn tab (genie#1295). */
     readonly tynn?: boolean;
+    /** This window's host can measure the workspace's disk: its Storage tab (Tynn #697). */
+    readonly storage?: boolean;
     readonly onView: (view: string) => void;
     readonly onAdd: () => void;
     readonly onOpenAgent: (agentId: string) => void;
@@ -45,7 +47,7 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, onView, onAdd, onOpenAgent, planToggle, color = null, onShare }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, storage = false, onView, onAdd, onOpenAgent, planToggle, color = null, onShare }: WorkspaceTabsProps) {
     // Literal classes, dark: included: react-fancy's underline tab carries its own dark: colours, and only a class with the
     // same variant replaces one.
     const underline = color ? 'border-[var(--ws)] dark:border-[var(--ws)]' : 'border-[var(--fg-1)] dark:border-[var(--fg-1)]';
@@ -64,7 +66,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                 is an action, sitting where the owner put it (just before Settings); the arrow keys skip it. */}
             <Tabs activeTab={selected} onTabChange={(v) => (v.startsWith('agent:') ? onOpenAgent(v.slice('agent:'.length)) : onView(v))} className="flex min-w-0 items-stretch">
             <Tabs.List className="items-stretch border-b-0">
-            {tabStrip(designed, agents, { github, tynn }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
+            {tabStrip(designed, agents, { github, tynn, storage }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
                 if (t.kind === 'add') {
                     return (
                         <Button variant="ghost" size="xs" labelClassName="contents" key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
@@ -82,11 +84,11 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                         </Tabs.Tab>
                     );
                 }
-                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : `tab:${t.id}`;
+                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : t.kind === 'storage' ? 'storage' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
                     <Tabs.Tab key={view} value={view} data-workspace-tab={view} className={`shrink-0 ${tab(on)}`}>
-                        {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : 'Settings'}
+                        {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : t.kind === 'storage' ? 'Storage' : 'Settings'}
                     </Tabs.Tab>
                 );
             })}

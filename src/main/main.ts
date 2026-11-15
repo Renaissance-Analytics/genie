@@ -190,7 +190,10 @@ import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
 import { channelFrom } from '../core/update-channel.js';
-import { genieRoot, installDir, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, installDir, osaHomeDir, runtimeDir, sessionsDir } from './paths.js';
+import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
+import { formatBytes, type StorageView } from '../core/workspace-storage.js';
+import { threadAttachmentFiles } from '../core/thread-store.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
@@ -3145,8 +3148,57 @@ async function boot(): Promise<void> {
             progress: (step) => { busyLine(step); if (step) row?.(step); },
         };
     };
+    // A WORKSPACE'S STORAGE (Tynn #697): measured off this thread (main/dir-size.ts), pushed when done; every Move, Restore
+    // and Empty re-validated by the host module and followed by a fresh measure, so the tab shows what is on disk now.
+    const storageHost = new WorkspaceStorage();
+    const storageViews = new Map<string, StorageView>();
+    const setStorage = (id: string, patch: Partial<StorageView>): void => {
+        storageViews.set(id, { measuring: false, report: null, error: null, outcome: null, ...storageViews.get(id), ...patch });
+        requestFeaturePush();
+    };
+    const storageRoot = (id: string): string => {
+        const w = registry?.workspace(id);
+        if (!w || w.asleep === true) throw new Error('That workspace is not open on this machine.');
+        return w.path;
+    };
+    const chatFilesOf = async (id: string): Promise<ChatFile[]> => {
+        const out: ChatFile[] = [];
+        for (const a of registry?.agentsOf(id) ?? []) {
+            for (const f of await threadAttachmentFiles(sessionsDir(genieRoot()), a.id)) out.push({ agentId: a.id, agentName: a.name, attachmentId: f.id, path: f.path, bytes: f.bytes });
+        }
+        return out;
+    };
+    const remeasure = async (id: string): Promise<void> => {
+        setStorage(id, { measuring: true });
+        try {
+            const report = await storageHost.measure(storageRoot(id), { chatFiles: await chatFilesOf(id) });
+            setStorage(id, { measuring: false, report, error: null });
+        } catch (error) {
+            setStorage(id, { measuring: false, error: `Genie could not measure this workspace: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    };
+    const storagePort: NonNullable<FeaturePorts['storage']> = {
+        views: () => Object.fromEntries(storageViews),
+        measure: (id) => { if (storageViews.get(id)?.measuring !== true) void remeasure(id); },
+        trash: async (id, itemId) => {
+            const r = await storageHost.moveToTrash(storageRoot(id), itemId, { chatFiles: await chatFilesOf(id) });
+            setStorage(id, { outcome: r.ok ? `Moved ${r.label} to .trash.` : r.reason });
+            void remeasure(id);
+        },
+        restore: async (id, trashId) => {
+            const r = await storageHost.restore(storageRoot(id), trashId);
+            setStorage(id, { outcome: r.ok ? `Put ${r.label} back.` : r.reason });
+            void remeasure(id);
+        },
+        empty: async (id, approval) => {
+            const r = await storageHost.emptyTrash(storageRoot(id), approval);
+            setStorage(id, { outcome: r.ok ? `Deleted ${r.deleted} ${r.deleted === 1 ? 'item' : 'items'} (${formatBytes(r.bytes)}) from .trash for good.` : r.reason });
+            void remeasure(id);
+        },
+    };
     const featurePorts: FeaturePorts = {
         ...processPorts(),
+        storage: storagePort,
         openInBrowser: openInBrowserFor('user-gesture'),
         // "Leave safe mode" (Tynn #386): the host's; this window only asks.
         safeMode: { leave: () => (windowSafe ? windowSafe.leave() : Promise.resolve({ ok: false as const, reason: 'Genie is still starting' })) },

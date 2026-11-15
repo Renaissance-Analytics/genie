@@ -113,6 +113,18 @@ export interface FeaturePorts {
     readonly issueWatch?: () => Readonly<Record<string, IssueWatchPanelView>>;
     /** Have Tynn read a workspace's repos now — the GitHub panel's Refresh. Absent = none (doctor mode). */
     readonly issueWatchRefresh?: (workspaceId: string) => Promise<unknown>;
+    /**
+     * Each workspace's storage (main/workspace-storage-host.ts, Tynn #697): its view, and the four things the Storage tab asks.
+     * Ids only: the port resolves the workspace and re-validates every item. `measure` starts a measure and returns; main pushes
+     * when it is done. Absent = this window cannot measure (doctor mode, a remote window without a host).
+     */
+    readonly storage?: {
+        views(): Readonly<Record<string, import('../core/workspace-storage.js').StorageView>>;
+        measure(workspaceId: string): void;
+        trash(workspaceId: string, itemId: string): Promise<void>;
+        restore(workspaceId: string, trashId: string): Promise<void>;
+        empty(workspaceId: string, approval: import('../core/workspace-storage.js').TrashApproval): Promise<void>;
+    };
     /** Set one repo's IssueWatch switch in Tynn (tynn.ai#307). Absent = none (doctor mode). */
     readonly issueWatchSetRepo?: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => Promise<unknown>;
     readonly toolchain?: {
@@ -582,6 +594,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
         integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null, ...(ports.keyring?.notice?.() ? { keyringNotice: ports.keyring.notice!() } : {}) },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
+        storage: ports.storage ? ports.storage.views() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
         plugins: { dir: services.pluginsDir, publisherChecksOff: services.settings.snapshot().publisher_checks_off === true, entries: services.plugins.list(), panels: catalogPanels(services.catalogDefinitions()) as never, editors: catalogEditors(services.catalogDefinitions()) },
@@ -1632,6 +1645,17 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 ...(typeof action.includeUpstream === 'boolean' ? { includeUpstream: action.includeUpstream } : {}),
             });
             break;
+        case 'storage.measure':
+        case 'storage.trash':
+        case 'storage.restore':
+        case 'storage.emptyTrash': {
+            if (!ports.storage) throw new Error('this window cannot measure storage');
+            if (action.kind === 'storage.measure') ports.storage.measure(action.workspaceId);
+            else if (action.kind === 'storage.trash') await ports.storage.trash(action.workspaceId, action.itemId);
+            else if (action.kind === 'storage.restore') await ports.storage.restore(action.workspaceId, action.trashId);
+            else await ports.storage.empty(action.workspaceId, action.approval);
+            break;
+        }
         case 'issueWatch.refresh':
             // The GitHub panel's Refresh: Tynn reads the workspace's repos now and pushes what it finds.
             await ports.issueWatchRefresh?.(action.workspaceId);
