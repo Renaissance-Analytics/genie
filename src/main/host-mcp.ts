@@ -75,7 +75,7 @@ export interface HostMcpPorts {
     /** openFileForUser with no window: shown when the next window connects. */
     readonly openFileLater: (call: ForwardedToolCall) => void;
     /** A tool's moment for the window: a glow, a thumbs-up, an action signal. Dropped with no window. */
-    readonly signal: (signal: { kind: 'glow'; terminalId: string } | { kind: 'action'; agentId: string; action: string; tool?: string; reason?: string }) => void;
+    readonly signal: (signal: { kind: 'glow'; terminalId: string } | { kind: 'terminal-needs-you'; workspaceId: string; terminalId: string; agentName: string; reason: string } | { kind: 'action'; agentId: string; action: string; tool?: string; reason?: string }) => void;
     /** The agent's calls while forwarded to the window (shared with the stores' approval gate, genie#1360). */
     readonly forwardedCalls?: Map<string, import('./mcp-tools.js').McpCall>;
     /** Where the endpoint is remembered (`<genieHome>/mcp-endpoint.json`). */
@@ -163,6 +163,12 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             openFile: unavailable('openFileForUser'),
             terminals: ports.terminals ?? { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             ...(ports.terminalEnv ? { terminalEnv: ports.terminalEnv } : {}),
+            // A terminal that needs the person (Tynn #722): a Show terminal notice in the window they use; nothing without one.
+            surfaceTerminal: (request) => {
+                if (!ports.window.connected()) return false;
+                ports.signal({ kind: 'terminal-needs-you', ...request });
+                return true;
+            },
             plugins: ports.plugins ?? { tools: () => [], guard: () => null, run: unavailable('a plugin tool') },
             ...(ports.processes ? { processes: ports.processes } : {}),
             ...(ports.flows ? { flows: ports.flows } : {}),

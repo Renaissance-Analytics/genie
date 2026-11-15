@@ -100,16 +100,15 @@ describe('a question from an agent that is NOT on screen reaches the window', ()
         expect(h.items().map((i) => i.id)).toEqual(['q_wren']);
     });
 
-    it('DND turned off again: the next NEW question opens the window, and the one asked during DND is listed with it (counted)', () => {
+    it('DND turned off again (Tynn #721): the question asked during DND opens the window at once, and nothing else is thrown at the person', () => {
         const h = harness([], true);
         h.set([wrenAsks]);
         h.setDnd(false);
-        // Turning DND off throws nothing at the person on its own...
         h.ctl.changed();
-        expect(h.opens()).toBe(0);
-        // ...the next question asked opens the window — on the NEW one — and the waiting one is in its queue.
+        expect(h.log).toEqual(['open', 'show q_wren']);
+        // A later NEW question joins the window's queue; the one on screen stays.
         h.set([wrenAsks, q('q_kai2', 3_000, 'kai', 'shop.example', 'Deploy')]);
-        expect(h.log).toEqual(['open', 'show q_kai2']);
+        expect(h.opens()).toBe(1);
         expect((h.last() as Queued).queue?.map((i) => i.id)).toEqual(['q_wren', 'q_kai2']);
     });
 });

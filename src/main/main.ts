@@ -234,6 +234,7 @@ import type { GAppBookApi, GAppsApi } from '../core/gapps.js';
 import { gappWindowsElectron } from './gapp-windows-electron.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
+import { TERMINAL_NEEDS_YOU } from '../core/terminal-surface.js';
 import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
 import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -1519,8 +1520,13 @@ async function boot(): Promise<void> {
         onOpenFileLater: (call: ForwardedToolCall) => { if (windowToolRun) void windowToolRun(call); else openFilesLater.push(call); },
         // A tool's moment, from the host's own tools: the glow, the thumbs-up, the action on the agent's row.
         onToolSignal: (raw: unknown) => {
-            const signal = raw as { kind?: string; terminalId?: string; agentId?: string; action?: string; tool?: string; reason?: string };
-            if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
+            const signal = raw as { kind?: string; terminalId?: string; agentId?: string; action?: string; tool?: string; reason?: string; workspaceId?: string; agentName?: string };
+            // A terminal an agent started needs the person (Tynn #722): a Show terminal notice in the window they are using — the
+            // focused one, else the main window — and never a navigation (core/view-requests.ts).
+            if (signal.kind === 'terminal-needs-you' && typeof signal.workspaceId === 'string' && typeof signal.terminalId === 'string') {
+                const target = BrowserWindow.getFocusedWindow() ?? window;
+                if (target && !target.isDestroyed()) target.webContents.send('genie:action', { agentId: null, kind: TERMINAL_NEEDS_YOU, workspaceId: signal.workspaceId, terminalId: signal.terminalId, agentName: signal.agentName ?? 'An agent' });
+            } else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
         // Both providers wait for their own private Tynn identity. Workspace/cwd config never supplies a fallback key.
@@ -2993,6 +2999,8 @@ async function boot(): Promise<void> {
         dnd: () => composed.settings.snapshot().do_not_disturb === true,
     });
     composed.attention.onChange(() => questionWindow?.changed());
+    // Do Not Disturb turned OFF, by hand or on its schedule, opens what waited (Tynn #721).
+    composed.settings.onChange((key) => { if (key === 'do_not_disturb') questionWindow?.changed(); });
     // Questions already waiting when Genie starts come up too.
     questionWindow.changed();
     ipcMain.handle(FEATURE_CHANNELS.browserBounds, (_event, raw: unknown) => {
