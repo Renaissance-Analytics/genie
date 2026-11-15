@@ -1,3 +1,4 @@
+import { providerAccountEnv, type AccountRecord } from '../core/accounts.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { type Burst, type TakeOverProbe } from '../core/observed.js';
 import { randomUUID } from 'node:crypto';
@@ -32,6 +33,8 @@ import type { TerminalsApi } from './terminals-host.js';
  */
 
 export interface TakeOverOptions {
+    /** The account already bound to this agent, resolved by the host's book. */
+    accountFor?: (record: AgentRecord) => Pick<AccountRecord, 'provider' | 'home'> | null;
     terminals: Pick<TerminalsApi, 'open' | 'close' | 'onData' | 'onExit'>;
     /** Open (or re-open — the opener decides whether that means focus) a window on a route. */
     openWindow: (route: string) => void;
@@ -56,6 +59,7 @@ const BURSTS_KEPT = 600;
 
 export class TakeOverHost {
     readonly #terminals: TakeOverOptions['terminals'];
+    readonly #accountFor: TakeOverOptions['accountFor'];
     readonly #listeners = new Set<() => void>();
     readonly #openWindow: (route: string) => void;
     readonly #clock: () => number;
@@ -66,6 +70,7 @@ export class TakeOverHost {
 
     constructor(options: TakeOverOptions) {
         this.#terminals = options.terminals;
+        this.#accountFor = options.accountFor;
         this.#openWindow = options.openWindow;
         this.#clock = options.clock ?? (() => Date.now());
         this.#mcp = options.mcp ?? (() => null);
@@ -115,10 +120,16 @@ export class TakeOverHost {
         // different key and stays the terminal host's. This host is the one place that maps the two.
         const mcp = this.#mcp();
         const callerId = `takeover_${randomUUID()}`;
-        const env = mcp === null ? undefined : takeOverEnv({ mcpUrl: mcp.mcpUrl, token: mcp.token, terminalId: callerId });
+        let env = mcp === null ? undefined : takeOverEnv({ mcpUrl: mcp.mcpUrl, token: mcp.token, terminalId: callerId });
+        if (this.#accountFor) {
+            const account = this.#accountFor(record);
+            if (!account || account.provider !== record.provider) return { ok: false, reason: 'The agent’s provider account is unavailable; repair its account before Take Over.' };
+            try { env = providerAccountEnv(account, env ?? {}); }
+            catch { return { ok: false, reason: 'The agent’s provider account home is invalid; repair it before Take Over.' }; }
+        }
         // A WORKSPACE terminal. There is no agent parameter to pass, which is the point.
         const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, personal: true, limited: false, ...(env === undefined ? {} : { env }) });
-        if (env !== undefined) this.#callers.set(callerId, { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: cwd });
+        if (mcp !== null) this.#callers.set(callerId, { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: cwd });
         this.#live.set(record.id, { terminalId: opened.id, startedAt: this.#clock(), lastOutputAt: null, bursts: [] });
         this.#changed();
         if (!window) return { ok: true, terminalId: opened.id, started: true };

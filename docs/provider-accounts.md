@@ -68,3 +68,31 @@ Provider-switch carry-over uses that destination account's departure time.
 These are data/model primitives. No account-switch tool, UI action or guided
 login flow is introduced by S2. Launching with the bound home belongs to S3;
 person-confirmed switching belongs to the later switch story.
+
+## Provider launch homes (Accounts S3)
+
+`providerAccountEnv(account, parentEnv)` in `src/core/accounts.ts` returns a
+fresh environment with the account's documented home. It validates an absolute
+home, replaces both home-variable names case-insensitively, and performs no
+credential or filesystem I/O. S4 can use this helper for its provider-owned
+identity/status subprocesses.
+
+Production `SessionHost.accountById` resolves the persisted binding before either
+immediate or deferred launch, fresh or resumed. The observed Take Over TUI
+also resolves that same binding before its terminal opens, keeping its existing
+MCP attribution separate from the home. An unknown account, mismatched
+provider or invalid home refuses the start. Workspace service variables cannot
+choose either provider home. The driver and model-probe allow-lists explicitly
+admit the selected home; all existing trust, MCP and interpreter options remain.
+
+Provider-only login, Design login and provider-wide health/model probes still
+select the legacy account. The existing window gets that persisted legacy home
+from genie-host, reloads it on reconnect, and never opens the account book.
+Login captures its environment before opening the terminal and uses the same
+home for the completion status command. Missing metadata is unknown and a login
+refuses visibly. Closing a Design terminal still does not prove authorization.
+Per-account login orchestration and person-confirmed switching remain S6/S9.
+
+These tests prove environment selection and host wiring with inert process
+ports. They do not prove real subscription isolation or Design authorization;
+the owner-arranged VM measurements retain those claims.

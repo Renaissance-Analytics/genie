@@ -18,6 +18,20 @@ export interface AccountRecord {
     readonly createdAt: string;
 }
 
+/** The provider's documented home, chosen by the host book. No credential I/O and no mutation of the parent's env. */
+export function providerAccountEnv(account: Pick<AccountRecord, 'provider' | 'home'>, parentEnv: Readonly<Record<string, string | undefined>>): Record<string, string> {
+    const { provider, home } = account;
+    // Pure because the account model is also used by the renderer. Accept absolute POSIX, drive and UNC paths.
+    if ((provider !== 'claude' && provider !== 'codex') || typeof home !== 'string' || /[\x00-\x1f\x7f]/.test(home) ||
+        !(home.startsWith('/') || /^[A-Za-z]:[\\/]/.test(home) || /^\\\\[^\\]+\\[^\\]+/.test(home))) throw new Error('Invalid provider account home');
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parentEnv)) {
+        if (value !== undefined && !/^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(key)) env[key] = value;
+    }
+    env[provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] = home;
+    return env;
+}
+
 /** S4 supplies ONLY fields returned by the provider's own status command. */
 export function accountLabel(email: string | null, ordinal: number): string {
     return email?.trim() || `Account ${ordinal}`;
