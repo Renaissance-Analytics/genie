@@ -70,7 +70,7 @@ describe('a push costs what it changed (the real Shell, rendered)', () => {
         <Shell
             route="genie://agent/a_atlas?tab=stream&chat=a_atlas"
             snapshot={snapshot}
-            servable={['dashboard', 'deck', 'agent', 'workspace']}
+            servable={['dashboard', 'agent', 'workspace']}
             agentDetail={agentDetail}
             agentResolved
             selectedRowId={null}

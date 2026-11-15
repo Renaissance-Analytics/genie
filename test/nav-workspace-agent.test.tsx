@@ -32,7 +32,7 @@ const memory = (collapsed: boolean): Pick<Storage, 'getItem' | 'setItem'> => {
     return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => { data.set(k, v); } };
 };
 const sidebar = (route: string, collapsed: boolean) => renderToStaticMarkup(
-    <Sidebar route={route} deckCount={0} workspaces={[ws('tynn'), ws('fancy')]} available={['deck', 'dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} currentWorkspaceId={routeWorkspace(route, agents)} />,
+    <Sidebar route={route} deckCount={0} workspaces={[ws('tynn'), ws('fancy')]} available={['dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} currentWorkspaceId={routeWorkspace(route, agents)} />,
 );
 const activeRows = (html: string): string[] => [...html.matchAll(/<button[^>]*data-nav="genie:\/\/workspace\/([a-z]+)"[^>]*data-active="true"/g)].map((m) => m[1]!);
 

@@ -17,7 +17,7 @@ const snapshot = { agents: [], osAgent: null, workspaces: [{ id: 'w', path: '/w'
 const connectProps = { state: null, remembered: [], onConnect: () => {}, onDisconnect: () => {}, tynnWorkstations: { ok: true as const, workstations: [{ id: 'ws_d', name: 'drone-1', role: 'drone' }] }, onOpenWorkstation: () => {}, onOpenLink: () => {}, onRefresh: () => {} };
 const titleBar = (tynnWorkstation: unknown): string => renderToStaticMarkup(
     <Shell
-        route="genie://dashboard" snapshot={snapshot} servable={['dashboard', 'deck', 'agent', 'workspace']} agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null}
+        route="genie://dashboard" snapshot={snapshot} servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null}
         onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}} onSend={() => {}} onCloseChat={() => {}}
         answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}}
         features={{ ...EMPTY_FEATURES, remote: { host: 'pilot', url: null, unavailable: 'stopped', locked: false, pin: null, devices: [], connections: [], enabled: false, firewall: true, tynnWorkstation } } as unknown as FeatureData}

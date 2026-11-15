@@ -47,6 +47,7 @@ import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, tynnIssuesHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { setDashboardFilter } from './dashboard-filter.js';
 import { useHostHome, withPickerStart } from './host-home.js';
 import { EMPTY_FEATURES, forgetHost, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
@@ -1956,7 +1957,8 @@ function DesktopApp({ bridge }: AppProps) {
     // the verbs, every workspace, every agent (named with its workspace).
     const paletteActions: Array<{ id: string; label: string; run: () => void }> = [
         { id: 'go-dashboard', label: 'Open the Dashboard', run: () => navigate('genie://dashboard') },
-        { id: 'go-deck', label: 'Open the Deck', run: () => navigate('genie://deck') },
+        // The Deck merged into the Dashboard (Tynn #730): what needs the person is the Dashboard's "Needs you" view.
+        { id: 'go-needs-you', label: 'Show what needs me', run: () => { setDashboardFilter('needsYou', true); navigate('genie://dashboard'); } },
         { id: 'go-hosting', label: 'Open Hosting', run: () => navigate('genie://hosting') },
         { id: 'go-settings', label: 'Open Settings', run: () => navigate('genie://settings') },
         { id: 'add-workspace', label: 'Add a workspace…', run: () => previewAdd() },

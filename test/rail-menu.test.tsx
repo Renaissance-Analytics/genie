@@ -7,12 +7,12 @@ import { control } from './helpers/control-markup.js';
 /**
  * THE RAIL IS A MENU (the owner, 2026-11-01, on beta.55's rail: "those should not be buttons, it's a menu").
  *
- * Its destinations — Deck, Dashboard, genie, Hosting, Browser, Settings and each workspace — are items of react-fancy's
+ * Its destinations — Dashboard, genie, Hosting, Browser, Settings and each workspace — are items of react-fancy's
  * Sidebar (6.1.0), which wraps them in its own `<nav aria-label="Genie">` (`navLabel`) and moves focus with the arrow
  * keys (`keyboardNav`, test/rail-keyboard.test.tsx). The current item is `aria-current="page"` in Sidebar's selected
  * style (beta.55 drew a near-black focus ring there instead); rings are keyboard-only.
  * Every attention mark is Sidebar's item DOT, drawn at the icon's corner in BOTH modes, with words for a screen reader
- * (`dotLabel`): the Deck (what is waiting), the rate limit, the Settings alert, a workspace that needs you.
+ * (`dotLabel`): the Dashboard (what is waiting), the rate limit, the Settings alert, a workspace that needs you.
  * The processes/sites pill stays as real Buttons — actions — beside its workspace's item, never inside it.
  *
  * Markup claims (docs/decisions.md D3).
@@ -27,7 +27,7 @@ const rail = (collapsed: boolean, rateLevel: 'warning' | 'danger' = 'warning') =
         route="genie://dashboard"
         deckCount={3}
         workspaces={[ws({}), ws({ id: 'fancy', path: '/w/fancy', name: 'fancy', alert: false })]}
-        available={['deck', 'dashboard', 'genie', 'hosting', 'browser', 'workspace', 'settings']}
+        available={['dashboard', 'genie', 'hosting', 'browser', 'workspace', 'settings']}
         onNavigate={() => {}}
         onOpenBrowser={() => {}}
         onOpenProcesses={() => {}}
@@ -37,7 +37,7 @@ const rail = (collapsed: boolean, rateLevel: 'warning' | 'danger' = 'warning') =
         settingsAlert={{ label: 'Sign in to Tynn' }}
     />,
 );
-const DESTINATIONS = ['data-nav="genie://deck"', 'data-nav="genie://dashboard"', 'data-nav="genie://agent/genie"', 'data-nav="genie://hosting"', 'data-open-browser-window=""', 'data-nav="genie://settings"', 'data-workspace="tynn"', 'data-workspace="fancy"'];
+const DESTINATIONS = ['data-nav="genie://dashboard"', 'data-nav="genie://agent/genie"', 'data-nav="genie://hosting"', 'data-open-browser-window=""', 'data-nav="genie://settings"', 'data-workspace="tynn"', 'data-workspace="fancy"'];
 const classes = (open: string) => (/\sclass="([^"]*)"/.exec(open)?.[1] ?? '').split(/\s+/);
 /** The text a screen reader reads from markup: every aria-hidden element (and what is inside it) left out. */
 const heard = (inner: string): string => {
@@ -128,8 +128,8 @@ describe('the expanded rail', () => {
         expect(heard(tynn.inner)).toMatch(/^tynn\s+needs you\s*, 2 agents$/);
     });
 
-    it('still shows how many wait in the Deck — seen, not read twice (the dot says it in words)', () => {
-        const deck = control(rail(false), 'data-nav="genie://deck"')!.inner;
+    it('still shows how many wait — on the Dashboard row now, seen, not read twice (the dot says it in words)', () => {
+        const deck = control(rail(false), 'data-nav="genie://dashboard"')!.inner;
         expect(deck).toMatch(/data-deck-badge="3"[^>]*aria-hidden="true"|aria-hidden="true"[^>]*data-deck-badge="3"/);
     });
 });

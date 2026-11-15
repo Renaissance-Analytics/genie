@@ -14,7 +14,7 @@ import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Wo
 
 describe('Sidebar', () => {
     it('marks a governed row with its governor and indents it; an ungoverned row has no mark', () => {
-        const html = renderToStaticMarkup(<Sidebar route="genie://dashboard" deckCount={0} workspaces={[{ id: 'ops', path: '/w/ops', count: 1, alert: false }, { id: 'fancy', path: '/w/fancy', count: 2, alert: false, governedBy: 'ops' }]} available={['deck', 'dashboard', 'genie', 'workspace']} onNavigate={() => {}} />);
+        const html = renderToStaticMarkup(<Sidebar route="genie://dashboard" deckCount={0} workspaces={[{ id: 'ops', path: '/w/ops', count: 1, alert: false }, { id: 'fancy', path: '/w/fancy', count: 2, alert: false, governedBy: 'ops' }]} available={['dashboard', 'genie', 'workspace']} onNavigate={() => {}} />);
         expect(html).toContain('data-workspace="fancy" data-governed-by="ops"');
         expect(html).not.toMatch(/data-workspace="ops" data-governed-by/);
     });

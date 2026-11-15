@@ -41,7 +41,7 @@ describe('the Shell on the deck route', () => {
     const snapshot: GenieSnapshot = { ...EMPTY_SNAPSHOT, workspaces: [{ id: 'tynn', path: 'C:/_Projects/tynn.ai', agentsKnown: true }], deckItems: [inline, form], workstation: { name: 'alphar', healthy: true } };
     const render = (route: string) =>
         renderToStaticMarkup(
-            <Shell route={route} snapshot={snapshot} servable={['dashboard', 'deck', 'agent', 'workspace']} agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null}
+            <Shell route={route} snapshot={snapshot} servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null}
                 onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}} onSend={() => {}} onCloseChat={() => {}} answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}} />,
         );
 

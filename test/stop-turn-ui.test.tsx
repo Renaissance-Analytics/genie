@@ -43,7 +43,7 @@ function shell(chatSession: LiveSession | null): string {
         <Shell
             route="genie://workspace/ws_beta?chat=a_lark"
             snapshot={snapshot}
-            servable={['dashboard', 'deck', 'agent', 'workspace']}
+            servable={['dashboard', 'agent', 'workspace']}
             agentDetail={null}
             agentResolved={false}
             selectedRowId={null}

@@ -112,7 +112,7 @@ describe('the window draws none of the workstation (positive control: a workstat
                 windowScope={windowScope}
                 snapshot={snapshot}
                 features={features}
-                servable={['dashboard', 'deck', 'agent', 'workspace', 'flows', 'knowledge', 'settings', 'hosting', 'browser']}
+                servable={['dashboard', 'agent', 'workspace', 'flows', 'knowledge', 'settings', 'hosting', 'browser']}
                 agentDetail={null}
                 agentResolved={false}
                 selectedRowId={null}

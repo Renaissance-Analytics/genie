@@ -354,8 +354,9 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
         try { window.localStorage.setItem(SHOW_ASLEEP_KEY, next ? '1' : '0'); } catch { /* a preference that cannot be saved still applies now */ }
     };
     const current = route.split('?')[0];
-    // No orphan badge: the Deck's count has nowhere to live without the Deck.
-    const badge = has('deck') ? deckBadge(deckCount) : null;
+    // What waits on the person (the Deck merged into the Dashboard, Tynn #730): its count rides the Dashboard's row, and a
+    // build with no Dashboard has nowhere to put it — no orphan badge.
+    const badge = has('dashboard') ? deckBadge(deckCount) : null;
     const asleepCount = workspaces.filter((w) => w.asleep === true).length;
     const shown = filterRail(workspaces.filter((w) => showAsleep || w.asleep !== true).map((workspace) => workspace.asleep
         ? { id: workspace.id, path: workspace.path, ...(workspace.name ? { name: workspace.name } : {}), asleep: true, count: null, alert: null }
@@ -416,11 +417,8 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                 </Button>
                 {viewToggle}
                 <FancySidebar embedded collapsed collapseMode="icons" navLabel="Genie" keyboardNav className="w-full items-center gap-1">
-                {has('deck') ? (
-                    <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} compact {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
-                ) : null}
                 {has('dashboard') ? (
-                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : {})} />
+                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
                 ) : null}
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
@@ -492,11 +490,18 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                 ) : null}
             </div>
             <FancySidebar embedded navLabel="Genie" keyboardNav className="shrink-0 gap-0.5">
-            {has('deck') ? (
-                <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})}>
+            {has('dashboard') ? (
+                <NavRow
+                    route="genie://dashboard"
+                    current={route}
+                    icon="layout-list"
+                    label="Dashboard"
+                    onNavigate={onNavigate}
+                    {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})}
+                >
                 {/*
-                 * The only badge in the application. Zero renders nothing — a badge that is
-                 * sometimes `0` is furniture, and furniture is what people learn not to read.
+                 * What is WAITING on the person (Tynn #730: the Deck merged into the Dashboard, so its count lives here). Zero
+                 * renders nothing — a badge that is sometimes `0` is furniture, and furniture is what people learn not to read.
                  */}
                 {badge !== null ? (
                     <span
@@ -518,17 +523,6 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                     </span>
                 ) : null}
                 </NavRow>
-            ) : null}
-
-            {has('dashboard') ? (
-                <NavRow
-                    route="genie://dashboard"
-                    current={route}
-                    icon="layout-list"
-                    label="Dashboard"
-                    onNavigate={onNavigate}
-                    {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : {})}
-                />
             ) : null}
 
             {/*

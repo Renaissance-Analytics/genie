@@ -12,7 +12,7 @@ import { Sidebar } from '../src/renderer/components/Sidebar.js';
  * workspace (+) — over "Search workspaces…"; collapsed, an icon rail with each workspace's name as its tooltip.
  */
 const ws = (id: string, over: Partial<RailItem> = {}): RailItem => ({ id, path: `/w/${id}`, name: id, count: 2, alert: null, ...over } as RailItem);
-const ALL = ['deck', 'dashboard', 'genie', 'workspace', 'settings'] as const;
+const ALL = ['dashboard', 'genie', 'workspace', 'settings'] as const;
 function memory(collapsed: boolean): Pick<Storage, 'getItem' | 'setItem'> {
     const data = new Map<string, string>([['genie.rail.collapsed', collapsed ? '1' : '0']]);
     return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => { data.set(k, v); } };
@@ -54,11 +54,11 @@ describe('collapsed', () => {
         const html = render({ railStorage: memory(true) });
         expect(html).toContain('data-rail="collapsed"');
         expect(html).toMatch(/data-rail-tool="expand"[^>]*aria-label="Expand sidebar"/);
-        for (const route of ['genie://deck', 'genie://dashboard', 'genie://agent/genie', 'genie://workspace/tynn', 'genie://workspace/fancy']) {
+        for (const route of ['genie://dashboard', 'genie://agent/genie', 'genie://workspace/tynn', 'genie://workspace/fancy']) {
             expect(html).toContain(`data-nav="${route}"`);
         }
         expect(html).toMatch(/data-nav="genie:\/\/workspace\/tynn"[^>]*title="tynn"/);
-        expect(html.match(/<button[^>]*data-nav="genie:\/\/deck"[\s\S]*?<\/button>/)?.[0] ?? '').toContain('data-react-fancy-sidebar-dot=""');
+        expect(html.match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '').toContain('data-react-fancy-sidebar-dot=""');
         expect(html).toContain('data-rail-tool="add-workspace"');
         // the labels are not drawn — the rail is narrow — but each control is still named for a screen reader
         expect(html).not.toContain('>Dashboard</span>');

@@ -13,7 +13,7 @@ const ghost = { id: 'ghost', name: 'Hibernated project', path: '/ghost', asleep:
 const snapshot = { ...EMPTY_SNAPSHOT, agents: [], workspaces: [{ id: 'awake', name: 'Active project', path: '/awake', asleep: false, agentsKnown: true }], hibernatedWorkspaces: [ghost], deckItems: [], workstation: { name: 'test', healthy: true } } as GenieSnapshot;
 let root: Root | null = null;
 afterEach(() => { if (root) act(() => root!.unmount()); root = null; document.body.innerHTML = ''; localStorage.clear(); });
-const shell = (route: string) => <Shell route={route} snapshot={snapshot} servable={['dashboard', 'deck', 'agent', 'workspace', 'flows', 'knowledge', 'settings']}
+const shell = (route: string) => <Shell route={route} snapshot={snapshot} servable={['dashboard', 'agent', 'workspace', 'flows', 'knowledge', 'settings']}
     agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null}
     onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}}
     onSelectRow={() => {}} onSend={() => {}} onCloseChat={() => {}} answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}} />;

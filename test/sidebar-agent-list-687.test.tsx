@@ -69,7 +69,7 @@ const draw = (storage: Storage_, over: { agents?: AgentRow[]; route?: string; co
     act(() => root.render(
         <Sidebar
             route={over.route ?? 'genie://workspace/tynn'} deckCount={0} workspaces={WORKSPACES}
-            available={['deck', 'dashboard', 'genie', 'workspace', 'settings']}
+            available={['dashboard', 'genie', 'workspace', 'settings']}
             onNavigate={(r) => navigated.push(r)} onWakeWorkspace={() => {}} onAddWorkspace={() => {}}
             onOpenProcesses={() => {}} onOpenSites={() => {}} railStorage={storage} currentWorkspaceId="tynn"
             agents={over.agents ?? AGENTS} onChatAgent={(id) => chatted.push(id)}

@@ -29,7 +29,7 @@ const agentPage = (route: string, opts: { linked: boolean; host: boolean }) => r
     <Shell
         route={route}
         snapshot={{ ...EMPTY_SNAPSHOT, agents: [row], workspaces: [{ id: 'ws', path: '/srv/ws', agentsKnown: true }] } as never}
-        servable={['dashboard', 'deck', 'agent', 'workspace']}
+        servable={['dashboard', 'agent', 'workspace']}
         agentDetail={detail as never}
         agentResolved
         selectedRowId={null}

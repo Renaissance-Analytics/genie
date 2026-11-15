@@ -63,7 +63,7 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
         <Shell
             route="genie://dashboard?group=workspace"
             snapshot={LIVE}
-            servable={['dashboard', 'deck', 'agent', 'workspace']}
+            servable={['dashboard', 'agent', 'workspace']}
             agentDetail={null}
             agentResolved={false}
             selectedRowId={null}
@@ -373,25 +373,26 @@ describe('the chat thread', () => {
     });
 });
 
-describe('the Deck surface', () => {
-    it('renders at its route, with the band on it', () => {
-        const html = render({ route: 'genie://deck' });
+describe('the Deck is the Dashboard (Tynn #730)', () => {
+    it('its route draws the Dashboard, with the item named opened on its agent row', () => {
+        const html = render({ route: 'genie://deck?item=approval:kai' });
 
-        expect(html).toContain('data-surface="deck"');
+        expect(html).toContain('data-surface="dashboard"');
+        expect(html).not.toContain('data-surface="deck"');
         expect(html).toContain('data-deck-item="approval:kai"');
+        // The approval is answered on its toast: that is where its Allow is.
         expect(html).toContain('data-approval-option="allow"');
     });
 
-    it('offers the Deck row in the rail, because the surface can now be served', () => {
-        // The rail's rows are DERIVED from `servable`, so this is not a separate decision —
-        // it is the same one, read from the other end.
-        expect(render()).toContain('data-nav="genie://deck"');
+    it('has no Deck row in the rail - the Dashboard row carries the count', () => {
+        expect(render()).not.toContain('data-nav="genie://deck"');
+        expect(render()).toContain('data-nav="genie://dashboard"');
     });
 
     it('badges the rail from the BAND, so the two cannot disagree', () => {
         /**
-         * One number, one source. Two copies is how a badge ends up saying 3 while the Deck
-         * shows 2 — and the badge is the one people trust enough not to check.
+         * One number, one source. Two copies is how a badge ends up saying 3 while the board
+         * shows 2 - and the badge is the one people trust enough not to check.
          */
         expect(render()).toContain('data-deck-badge="1"');
 
@@ -399,17 +400,12 @@ describe('the Deck surface', () => {
         expect(empty).not.toContain('data-deck-badge');
 
         // POSITIVE CONTROL: the surface still renders; it is the BADGE that is absent.
-        expect(empty).toContain('data-nav="genie://deck"');
+        expect(empty).toContain('data-nav="genie://dashboard"');
     });
 
-    it('shows no badge while the queue is unread — which is not the same as empty', () => {
+    it('shows no badge while the queue is unread - which is not the same as empty', () => {
         const unread = render({ snapshot: { ...LIVE, deckItems: null } });
         expect(unread).not.toContain('data-deck-badge');
-    });
-
-    it('does not render the Dashboard underneath the Deck', () => {
-        const html = render({ route: 'genie://deck' });
-        expect(html).not.toContain('data-surface="dashboard"');
     });
 });
 
