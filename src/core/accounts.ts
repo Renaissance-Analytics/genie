@@ -27,6 +27,15 @@ export function legacyAccountId(provider: AcpProvider): string {
     return `account_legacy_${provider}`;
 }
 
+/** Managed ids carry no provider claim; the host book checks their provider when assigning one. */
+export function accountIdIsValid(provider: AcpProvider, value: unknown): value is string {
+    return typeof value === 'string' && (value === legacyAccountId(provider) || /^account_[0-9a-f]{32}$/.test(value));
+}
+
+export function accountThreadKey(provider: AcpProvider, accountId: string): string {
+    return `${provider}:${accountId}`;
+}
+
 export function unknownAccountIdentity(): AccountIdentity { return { name: null, email: null, plan: null }; }
 
 /** Narrow the metadata API as well as disk data; never retain fields outside this model. */
