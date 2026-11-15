@@ -19,7 +19,7 @@ const memory = (collapsed: boolean): Pick<Storage, 'getItem' | 'setItem'> => {
     return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => { data.set(k, v); } };
 };
 const rail = (pulsing: ReadonlySet<string> | undefined, collapsed = false) => renderToStaticMarkup(
-    <Sidebar route="genie://dashboard" deckCount={0} workspaces={[item({}), item({ id: 'fancy', name: 'fancy', path: '/w/fancy' })]} available={['deck', 'dashboard', 'workspace']} onNavigate={() => {}} railStorage={memory(collapsed)} {...(pulsing ? { pulsing } : {})} />,
+    <Sidebar route="genie://dashboard" deckCount={0} workspaces={[item({}), item({ id: 'fancy', name: 'fancy', path: '/w/fancy' })]} available={['dashboard', 'workspace']} onNavigate={() => {}} railStorage={memory(collapsed)} {...(pulsing ? { pulsing } : {})} />,
 );
 const button = (html: string, id: string) => html.match(new RegExp(`<button[^>]*data-workspace="${id}"[^>]*>`))?.[0] ?? '';
 

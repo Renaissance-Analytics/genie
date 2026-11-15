@@ -29,7 +29,7 @@ import { Workspace } from '../src/renderer/components/Workspace.js';
  * chat) is still drawn as an element.
  */
 const { boom, thrower, ce } = vi.hoisted(() => {
-    const boom = { Dashboard: false, AgentView: false, ChatFlyout: false, InboxFlyout: false, Deck: false, Workspace: false, TynnBoardTab: false, WorkspaceTabs: false, Sidebar: false, ApprovalToasts: false, PairPrompt: false };
+    const boom = { Dashboard: false, AgentView: false, ChatFlyout: false, InboxFlyout: false, Workspace: false, TynnBoardTab: false, WorkspaceTabs: false, Sidebar: false, ApprovalToasts: false, PairPrompt: false };
     const thrower = (ce: (type: never, props: never) => unknown, name: keyof typeof boom, real: unknown) => (p: object) => {
         if (boom[name]) throw new Error(`${name} exploded`);
         return ce(real as never, p as never);
@@ -41,11 +41,10 @@ vi.mock('../src/renderer/components/Dashboard.js', async (orig) => { const m = a
 vi.mock('../src/renderer/components/AgentView.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/AgentView.js')>(); return { ...m, AgentView: thrower(await ce(), 'AgentView', m.AgentView) }; });
 vi.mock('../src/renderer/components/ChatFlyout.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/ChatFlyout.js')>(); return { ...m, ChatFlyout: thrower(await ce(), 'ChatFlyout', m.ChatFlyout) }; });
 vi.mock('../src/renderer/components/InboxFlyout.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/InboxFlyout.js')>(); return { ...m, InboxFlyout: thrower(await ce(), 'InboxFlyout', m.InboxFlyout) }; });
-vi.mock('../src/renderer/components/Deck.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Deck.js')>(); return { ...m, Deck: thrower(await ce(), 'Deck', m.Deck) }; });
 vi.mock('../src/renderer/components/Workspace.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Workspace.js')>(); return { ...m, Workspace: thrower(await ce(), 'Workspace', m.Workspace) }; });
 vi.mock('../src/renderer/components/WorkspaceTabs.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/WorkspaceTabs.js')>(); return { ...m, WorkspaceTabs: thrower(await ce(), 'WorkspaceTabs', m.WorkspaceTabs) }; });
 vi.mock('../src/renderer/components/Sidebar.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Sidebar.js')>(); return { ...m, Sidebar: thrower(await ce(), 'Sidebar', m.Sidebar) }; });
-vi.mock('../src/renderer/components/ApprovalToasts.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/ApprovalToasts.js')>(); return { ...m, ApprovalToasts: thrower(await ce(), 'ApprovalToasts', m.ApprovalToasts) }; });
+vi.mock('../src/renderer/components/ApprovalToasts.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/ApprovalToasts.js')>(); return { ...m, ApprovalToastStack: thrower(await ce(), 'ApprovalToasts', m.ApprovalToastStack) }; });
 vi.mock('../src/renderer/components/PairPrompt.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/PairPrompt.js')>(); return { ...m, PairPrompt: thrower(await ce(), 'PairPrompt', m.PairPrompt) }; });
 vi.mock('../src/renderer/components/TynnBoardPanel.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/TynnBoardPanel.js')>(); return { ...m, TynnBoardTab: thrower(await ce(), 'TynnBoardTab', m.TynnBoardTab) }; });
 
@@ -75,7 +74,7 @@ describe('a render error stays in the surface that threw (the real Shell, render
         <Shell
             route={route}
             snapshot={snapshot}
-            servable={['dashboard', 'deck', 'agent', 'workspace']}
+            servable={['dashboard', 'agent', 'workspace']}
             agentDetail={detail}
             agentResolved
             selectedRowId={null}
@@ -174,9 +173,8 @@ describe('a render error stays in the surface that threw (the real Shell, render
         await act(async () => root.render(draw('genie://dashboard?chat=a_atlas')));
         expect(failed('Dashboard')).not.toBeNull();
         boom.Dashboard = false;
-        await act(async () => root.render(draw('genie://deck?chat=a_atlas')));
+        await act(async () => root.render(draw('genie://flows?chat=a_atlas')));
         expect(host.querySelector('[data-surface-failed]')).toBeNull();
-        expect(host.querySelector('[data-surface="deck"]')).not.toBeNull();
     });
 
     it('the agent view throwing keeps the chat and the title bar', async () => {
@@ -199,13 +197,6 @@ describe('a render error stays in the surface that threw (the real Shell, render
         await act(async () => root.render(draw('genie://dashboard?chat=a_atlas&inbox=')));
         expect(failed('AgentInbox')).not.toBeNull();
         expect(host.querySelector('[data-surface="dashboard"]')).not.toBeNull();
-        expect(host.querySelector('[data-chat="pinned"]')).not.toBeNull();
-    });
-
-    it('the Deck throwing keeps the chat', async () => {
-        boom.Deck = true;
-        await act(async () => root.render(draw('genie://deck?chat=a_atlas')));
-        expect(failed('Deck')).not.toBeNull();
         expect(host.querySelector('[data-chat="pinned"]')).not.toBeNull();
     });
 

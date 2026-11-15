@@ -159,10 +159,8 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             return withQuery(`${ws}/${slug}/${agentSegment(ctx, agent)}${sub}`, params);
         }
         case 'dashboard':
-            return withQuery(`${ws}/dashboard`, params);
-        case 'deck':
             if (r.item) params.set('item', r.item);
-            return withQuery(`${ws}/deck`, params);
+            return withQuery(`${ws}/dashboard`, params);
         case 'hosting':
             if (r.tab) params.set('tab', r.tab);
             if (r.commandRun) {
@@ -224,8 +222,9 @@ function routeOfPage(address: string, ctx: AddressContext): string | null {
     };
     if (second === undefined) return null;
     switch (second) {
-        case 'dashboard': return `genie://dashboard?group=${params.get('group') === 'status' ? 'status' : 'workspace'}`;
-        case 'deck': return `genie://deck${q(keep(['item']))}`;
+        case 'dashboard': return `genie://dashboard?group=${params.get('group') === 'status' ? 'status' : 'workspace'}${params.get('item') ? `&item=${encodeURIComponent(params.get('item')!)}` : ''}`;
+        // The Deck merged into the Dashboard (Tynn #730): its address is the Dashboard's, on the item it named.
+        case 'deck': return `genie://dashboard${q(keep(['item']))}`;
         case 'hosting': return `genie://hosting${q(keep(['tab', 'process', 'workspace']))}`;
         case 'settings': return third ? `genie://settings/${third}` : 'genie://settings';
         case 'browser': return `genie://browser${q(keep(['url']))}`;

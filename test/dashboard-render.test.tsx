@@ -194,7 +194,7 @@ describe('the Dashboard resolves nothing', () => {
             row({ id: 'broken-one', state: 'broken', reason: 'Provider sign-in expired', fixes: ['Sign in to kimi'] }),
         ]);
 
-        // The question is SHOWN, as the status detail. It is answered on the Deck.
+        // The question is SHOWN, as the status detail. It is answered on its toast or its agent's row.
         expect(rowHtml(html, 'waiting-one')).toContain('Allow php artisan migrate --force?');
         // The only button on a row is the windows menu (Tynn #706): it opens windows, it resolves nothing.
         const withoutWindows = rowHtml(html, 'waiting-one').replace(/<button\b[^>]*data-windows-menu[\s\S]*?<\/button>/, '');

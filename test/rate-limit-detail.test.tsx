@@ -137,7 +137,7 @@ describe('the sidebar alert', () => {
 
 describe('the dot on the Dashboard’s sidebar row', () => {
     const sidebar = (alert: Parameters<typeof Sidebar>[0]['rateLimitAlert'], collapsed = false) => renderToStaticMarkup(
-        <Sidebar route="genie://settings" deckCount={0} workspaces={[]} available={['deck', 'dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => (collapsed ? '1' : '0'), setItem: () => {} }} rateLimitAlert={alert} />,
+        <Sidebar route="genie://settings" deckCount={0} workspaces={[]} available={['dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => (collapsed ? '1' : '0'), setItem: () => {} }} rateLimitAlert={alert} />,
     );
     const dashboardRow = (html: string) => html.match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '';
 
@@ -174,7 +174,7 @@ describe('from any page: the Shell lights the dot from the header’s readings',
             route={route}
             snapshot={{ ...EMPTY_SNAPSHOT, workspaces: [], deckItems: [] }}
             features={EMPTY_FEATURES}
-            servable={['dashboard', 'deck', 'agent', 'settings', 'knowledge']}
+            servable={['dashboard', 'agent', 'settings', 'knowledge']}
             agentDetail={null}
             agentResolved
             selectedRowId={null}

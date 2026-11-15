@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { deckBody, linkParts, type DeckItem, type SignalState } from '../src/core/deck.js';
 import { deckItemsFrom } from '../src/core/deck-sources.js';
 import { LISTS_TOOL } from '../src/main/mcp-tools.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { control } from './helpers/control-markup.js';
 
 /**
@@ -26,7 +26,7 @@ const itemOf = (text: string, id = 'li_1'): DeckItem => deckItemsFrom({
     unreadDms: [], agents: { agent_t: { name: 'tynn' } }, workspaceNames: { tynn: 'Tynn.ai' },
 } as unknown as Parameters<typeof deckItemsFrom>[0])[0]!;
 const render = (items: readonly DeckItem[]) =>
-    renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} />);
+    renderToStaticMarkup(<DeckOnDashboard items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} />);
 /** Text as a person reads it: the markup's entities (`&#x27;` for an apostrophe) turned back into their characters. */
 const decoded = (text: string) => text.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 /** The row's first line: everything up to the end of its header. */
@@ -132,5 +132,5 @@ describe('the lists tool asks for that shape', () => {
 
 /** The row as it looks once opened (the Deck opens it on a click; here it is drawn opened). */
 function DeckOpened({ text }: { text: string }) {
-    return <Deck items={[itemOf(text)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} initiallyExpanded={['li_1']} />;
+    return <DeckOnDashboard items={[itemOf(text)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} initiallyExpanded={['li_1']} />;
 }

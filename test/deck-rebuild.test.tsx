@@ -1,17 +1,16 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Question } from '../src/core/attention.js';
-import { deckSections, dismissableStale, needsYouCount, type DeckItem, type SignalState } from '../src/core/deck.js';
+import { dismissableStale, needsYouCount, type DeckItem, type SignalState } from '../src/core/deck.js';
 import { deckItemsFrom, questionStale } from '../src/core/deck-sources.js';
 import type { PendingQuestion } from '../src/main/attention-store.js';
-import { Deck, type DeckProps } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard, type DeckOnDashboardProps as DeckProps } from './helpers/deck-on-dashboard.js';
 import { control } from './helpers/control-markup.js';
 
 /**
- * THE DECK, REBUILT (the owner, 2026-10-15, answering the Deck's purpose):
+ * WHAT WAITS, KEPT (the owner, 2026-10-15, answering the Deck's purpose; since Tynn #730 on the Dashboard, under each agent's row):
  *
- * - "Grouped by workspace": sections per workspace, then rows — each thing that needs the person, with the agent, the
- *   question or request, its age, and Answer / Open / Dismiss in place.
+ * - Each thing that needs the person, with the agent, the question or request, its age, and Answer / Open / Dismiss in place.
  * - Old items, "Keep, but mark stale": a question whose agent no longer waits (gone, session ended, or asked by an
  *   earlier run) stays, greyed and said, with one-click Dismiss and "Dismiss all stale".
  *
@@ -52,60 +51,29 @@ const ITEMS: DeckItem[] = [
 ];
 
 const render = (over: Partial<DeckProps> = {}) =>
-    renderToStaticMarkup(<Deck items={ITEMS} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onDismiss={() => {}} now={1_760_000_060_000} {...over} />);
+    renderToStaticMarkup(<DeckOnDashboard items={ITEMS} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onDismiss={() => {}} now={1_760_000_060_000} {...over} />);
 
-/** The markup of each section, in order, keyed by its `data-deck-section`. */
-const sectionsOf = (html: string): { key: string; rows: string[] }[] =>
-    html.split('<section').slice(1).map((chunk) => ({
-        key: /^[^>]*data-deck-section="([^"]+)"/.exec(chunk)?.[1] ?? '',
-        rows: [...chunk.split('</section>')[0]!.matchAll(/data-deck-item="([^"]+)"/g)].map((m) => m[1]!),
-    }));
-
-describe('grouped by workspace — the model', () => {
-    it('sections in the order of their best LIVE item, Genie’s own section for workspace-less items, stale-only last; rows live then stale, each in rank order', () => {
-        const sections = deckSections(ITEMS);
-        // COUNTED: four sections, in this order, with exactly these rows.
-        expect(sections.map((s) => s.key)).toEqual(['ws_b', 'ws_a', 'genie:', 'ws_c']);
-        expect(sections.map((s) => s.items.map((i) => i.id))).toEqual([['q_b1'], ['q_a1', 'q_a2', 'q_a3'], ['genie:main-error:1'], ['q_c1']]);
-        expect(sections.map((s) => [s.live, s.stale])).toEqual([[1, 0], [2, 1], [1, 0], [0, 1]]);
-        expect(sections.map((s) => s.label)).toEqual(['blog.example', 'shop.example', 'Genie', 'docs.example']);
-    });
-
-    it('a workspace this machine has no name for is said as such — never its id', () => {
-        const [only] = deckSections([question('q_x', 'ws_01HUNNAMED', undefined)]);
-        expect(only!.label).toBe('A workspace not known here');
-        expect(only!.label).not.toContain('ws_01HUNNAMED');
-    });
-
+describe('the count', () => {
     it('the count waiting on you leaves out a stale question (its agent is not waiting); control: the live ones are all counted', () => {
         expect(needsYouCount(ITEMS)).toBe(4);
         expect(needsYouCount(ITEMS.map((i) => ({ ...i, stale: undefined })))).toBe(6);
     });
 });
 
-describe('grouped by workspace — on screen', () => {
+describe('on its agent’s row', () => {
     const html = render();
 
-    // Stale questions have their own band, "Earlier runs: still unanswered" (2026-11-08): the workspace sections hold what waits.
-    it('one section per workspace, in order, each with its LIVE rows (counted); the stale ones are not in them', () => {
-        const sections = sectionsOf(html);
-        expect(sections).toEqual([
-            { key: 'ws_b', rows: ['q_b1'] },
-            { key: 'ws_a', rows: ['q_a1', 'q_a2'] },
-            { key: 'genie:', rows: ['genie:main-error:1'] },
-        ]);
+    it('each live item sits on its own agent’s row, in rank order; Genie’s own item (no agent) is on the Genie row', () => {
+        for (const id of ['q_a1', 'q_a2', 'q_b1']) expect(html, id).toContain(`data-waiting-items="agent_${id}"`);
+        expect(html).toContain('data-waiting-items="genie:"');
+        expect(html).toMatch(/data-waiting-items="genie:"[\s\S]*?data-deck-item="genie:main-error:1"/);
+        // COUNTED: every item is drawn exactly once.
+        expect((html.match(/data-deck-item="/g) ?? []).length).toBe(ITEMS.length);
     });
 
-    it('each section is headed by the workspace’s NAME, with how many wait and how many are stale; the id is never text', () => {
-        expect(html).toMatch(/data-deck-workspace="ws_b"[^>]*>blog\.example</);
-        expect(html).toMatch(/data-deck-workspace="ws_a"[^>]*>shop\.example<\/span><span[^>]*>2 waiting</);
-        expect(html).toMatch(/data-deck-workspace=""[^>]*>Genie</);
+    it('the chip counts what waits on you (4); the ids are never text a person reads', () => {
+        expect(html).toContain('Needs you 4');
         for (const id of ['ws_a', 'ws_b', 'ws_c']) expect(html).not.toContain(`>${id}<`);
-    });
-
-    it('the header counts what waits on you (4) and says the stale ones (2) beside it', () => {
-        expect(html).toContain('data-deck-count="4"');
-        expect(html).toMatch(/data-deck-stale-count="2"[^>]*>2 stale</);
     });
 
     it('a row has Open (its agent) beside its age; Genie’s own item has no agent to open (control)', () => {
@@ -158,10 +126,10 @@ describe('stale: kept, and marked', () => {
         expect(render()).not.toContain('deck-dismiss-stale');
     });
 
-    it('only stale questions: nothing is waiting on you, and it says so — the stale ones are still there', () => {
+    it('only stale questions: nothing is waiting on you (the chip says 0) — the stale ones are still there, badged', () => {
         const only = render({ items: [ITEMS[0]!], onDismissStale: () => {} });
-        expect(only).toContain('data-deck="only-stale"');
-        expect(only).not.toContain('data-deck-count');
+        expect(only).toContain('Needs you 0');
+        expect(only).toContain('data-waiting-badge="stale"');
         expect(only).toContain('data-deck-item="q_c1"');
     });
 });
@@ -209,28 +177,27 @@ describe('which questions are stale (the source)', () => {
 });
 
 /**
- * A STALE QUESTION IS NEVER INVISIBLE (the owner, 2026-11-08: greyed at the bottom of its section read as "nowhere"; 7
- * questions from 11-04 and 11-05 were still unanswered). They have their own band, under its own heading, each said in
- * full — not greyed — with Answer and Dismiss, its workspace named.
+ * A STALE QUESTION IS NEVER INVISIBLE (the owner, 2026-11-08: greyed at the bottom of its section read as "nowhere"). On the
+ * Dashboard each is badged `stale` on its own agent's row, said in full - not greyed - with Answer and Dismiss, and is counted
+ * in the sidebar's earlier-runs badge.
  */
 describe('Earlier runs: still unanswered', () => {
     const html = render({ onDismissStale: () => {} });
-    const band = html.split('data-deck-band="earlier-runs"')[1] ?? '';
+    const rowOf = (id: string) => html.split(`data-deck-item="${id}"`)[1]!.split('data-deck-item="')[0]!;
 
-    it('a band of their own, headed, in rank order, every stale question in it and nothing live', () => {
-        expect(html).toContain('data-deck-band="earlier-runs"');
-        expect(band).toMatch(/^[^>]*>\s*<h2[^>]*>Earlier runs: still unanswered<\/h2>/);
-        expect([...band.matchAll(/data-deck-item="([^"]+)"/g)].map((m) => m[1])).toEqual(['q_c1', 'q_a3']);
+    it('each stale question is badged on its agent’s row, and nothing live is badged stale', () => {
+        expect((html.match(/data-waiting-badge="stale"/g) ?? []).length).toBe(2);
+        expect(html).toMatch(/data-agent="agent_q_c1"[\s\S]*?data-waiting-badge="stale"/);
     });
 
-    it('each is said plainly, not greyed: its workspace, why it is here, Answer and Dismiss', () => {
-        expect(band).not.toMatch(/data-deck-item="q_c1"[^>]*class="[^"]*opacity-60/);
-        expect(band).toMatch(/data-deck-earlier-workspace="ws_c"[^>]*>docs\.example</);
-        expect(control(band, 'data-deck-answer-anyway="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Answer' });
-        expect(control(band, 'data-deck-dismiss="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
+    it('each is said plainly, not greyed: why it is here, Answer and Dismiss', () => {
+        expect(html).not.toMatch(/data-deck-item="q_c1"[^>]*class="[^"]*opacity-60/);
+        expect(rowOf('q_c1')).toContain('agent gone');
+        expect(control(rowOf('q_c1'), 'data-deck-answer-anyway="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Answer' });
+        expect(control(rowOf('q_c1'), 'data-deck-dismiss="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
     });
 
-    it('CONTROL: nothing stale, no band', () => {
-        expect(render({ items: ITEMS.map((i) => ({ ...i, stale: undefined })) })).not.toContain('data-deck-band="earlier-runs"');
+    it('CONTROL: nothing stale, no stale badge', () => {
+        expect(render({ items: ITEMS.map((i) => ({ ...i, stale: undefined })) })).not.toContain('data-waiting-badge="stale"');
     });
 });

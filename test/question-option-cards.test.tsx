@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { QuestionForm } from '../src/renderer/components/QuestionForm.js';
 
 /**
@@ -108,7 +108,7 @@ describe('what is picked is unmistakable, and is not what hover looks like', () 
     });
 
     it('the Deck’s copy is the same form', () => {
-        const html = renderToStaticMarkup(<Deck items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} />);
         expect(card(html, LONG)).toMatch(/data-option-title=""/);
         expect(card(html, LONG)).toMatch(/data-option-indicator="radio"/);
     });

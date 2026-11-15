@@ -5,7 +5,7 @@ export interface PillFlow {
     readonly id: string;
     readonly workspaceId: string;
     readonly name: string;
-    readonly inFlight?: { readonly at: string } | undefined;
+    readonly inFlight?: { readonly at: string; readonly pause?: { readonly resumesAtMs: number | null; readonly agent: string } | undefined } | undefined;
     readonly runs: readonly { readonly outcome: string; readonly endedAt: string }[];
 }
 
@@ -17,7 +17,7 @@ const ENDED_REPORT_MS = 30_000;
  * run just ended failed or held. The names are the person's own; no flow id is ever shown as text.
  */
 export function flowPillSignals(flows: readonly PillFlow[], now: number): { flowsLive: LiveFlow[]; flowsEnded: EndedFlow[] } {
-    const flowsLive = flows.filter((f) => f.inFlight).map((f): LiveFlow => ({ flowId: f.id, name: f.name, workspaceId: f.workspaceId, at: f.inFlight!.at }));
+    const flowsLive = flows.filter((f) => f.inFlight).map((f): LiveFlow => ({ flowId: f.id, name: f.name, workspaceId: f.workspaceId, at: f.inFlight!.at, ...(f.inFlight!.pause ? { pause: { resumesAtMs: f.inFlight!.pause.resumesAtMs, agent: f.inFlight!.pause.agent } } : {}) }));
     const flowsEnded = flows.flatMap((f): EndedFlow[] => {
         const last = f.runs.at(-1);
         if (!last || (last.outcome !== 'failed' && last.outcome !== 'held')) return [];

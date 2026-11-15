@@ -173,7 +173,7 @@ describe('the Shell hands the Dashboard its window openers', () => {
     };
     const render = (over: Partial<Parameters<typeof Shell>[0]> = {}) => renderToStaticMarkup(
         <Shell
-            route="genie://dashboard" snapshot={snapshot} servable={['dashboard', 'deck', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
+            route="genie://dashboard" snapshot={snapshot} servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
             selectedRowId={null} chatThread={null} pinned={null} files={NO_FILES} onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}}
             onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}} onSend={() => {}} onToggleFilesPin={() => {}} onCloseChat={() => {}}
             answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}} {...over}

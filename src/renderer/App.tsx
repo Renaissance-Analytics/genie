@@ -11,7 +11,7 @@ import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { sendKeyFrom } from '../core/send-key.js';
 import { setSendKey } from './send-key-store.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
-import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import type { AlertToast } from './components/AlertToasts.js';
 import { TERMINAL_NEEDS_YOU, showTerminalRoute } from '../core/terminal-surface.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
@@ -47,6 +47,7 @@ import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, tynnIssuesHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { setDashboardFilter } from './dashboard-filter.js';
 import { useHostHome, withPickerStart } from './host-home.js';
 import { EMPTY_FEATURES, forgetHost, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
@@ -1098,7 +1099,7 @@ function DesktopApp({ bridge }: AppProps) {
     const showAlert = useCallback((toast: { title: string; body: string; color?: string; action?: AlertToast['action'] }) => {
         if (alertDelivery(typeof document !== 'undefined' && document.hasFocus()) === 'in-app') {
             const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            setAlertToasts((prev) => [...prev.slice(-3), { id, ...toast }]);
+            setAlertToasts((prev) => [...prev.slice(-7), { id, ...toast }]);
             setTimeout(() => dismissAlert(id), toast.action ? ALERT_ACTION_TOAST_MS : ALERT_TOAST_MS);
         } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
             try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
@@ -1956,7 +1957,8 @@ function DesktopApp({ bridge }: AppProps) {
     // the verbs, every workspace, every agent (named with its workspace).
     const paletteActions: Array<{ id: string; label: string; run: () => void }> = [
         { id: 'go-dashboard', label: 'Open the Dashboard', run: () => navigate('genie://dashboard') },
-        { id: 'go-deck', label: 'Open the Deck', run: () => navigate('genie://deck') },
+        // The Deck merged into the Dashboard (Tynn #730): what needs the person is the Dashboard's "Needs you" view.
+        { id: 'go-needs-you', label: 'Show what needs me', run: () => { setDashboardFilter('needsYou', true); navigate('genie://dashboard'); } },
         { id: 'go-hosting', label: 'Open Hosting', run: () => navigate('genie://hosting') },
         { id: 'go-settings', label: 'Open Settings', run: () => navigate('genie://settings') },
         { id: 'add-workspace', label: 'Add a workspace…', run: () => previewAdd() },
@@ -2003,6 +2005,8 @@ function DesktopApp({ bridge }: AppProps) {
             </div>
         ) : null}
         <Shell
+            alertToasts={alertToasts}
+            onDismissAlert={dismissAlert}
             pulsingWorkspaces={pulsingIds(pulses)}
             rowEmoji={rowEmoji}
             rateLimits={rateLimits}
@@ -2363,7 +2367,6 @@ function DesktopApp({ bridge }: AppProps) {
                 onRefresh={remote.reloadTynnWorkstations}
             />
         ) : null}
-        <AlertToasts toasts={alertToasts} onDismiss={dismissAlert} />
         </PanelHostContext.Provider>
         </PluginEditorsContext.Provider>
         </HostPathPickerContext.Provider>

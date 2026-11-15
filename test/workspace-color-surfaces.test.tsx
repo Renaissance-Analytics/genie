@@ -158,7 +158,7 @@ describe('a question, an approval and a toast name their source\'s colour', () =
         const item = { ...base, id: 'appr_1', source: 'agent-question', title: 'Start a site', workspaceColor: TEAL,
             answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] } } as unknown as DeckItem;
         const view = toastView(toastReducer(EMPTY_TOASTS, { kind: 'items', items: [item], dnd: false }), [item]);
-        const html = renderToStaticMarkup(<ApprovalToastStack view={view} onAnswer={noop} onLater={noop} onFront={noop} onEngage={noop} />);
+        const html = renderToStaticMarkup(<ApprovalToastStack view={view} onAnswer={noop} onExpand={noop} />);
         expect(marked(html)).toBe(true);
         expect(html).toMatch(/data-approval-toast-workspace=""[\s\S]*Tynn/);
     });

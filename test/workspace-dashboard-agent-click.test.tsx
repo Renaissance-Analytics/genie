@@ -76,7 +76,7 @@ function activateLane(agentId: string, deckItems: readonly DeckItem[], how: How)
     const opened: string[] = [];
     captured.length = 0;
     renderToStaticMarkup(<Shell route={ROUTE} snapshot={snapshot}
-        servable={['dashboard', 'deck', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
+        servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
         selectedRowId={null} chatThread={null} pinned={null} onNavigate={(r) => navigated.push(r)}
         // App's onOpenAgent: start or reattach, then the agent's page on its stream.
         onOpenAgent={(id) => { opened.push(id); navigated.push(`genie://agent/${id}?tab=stream`); }}

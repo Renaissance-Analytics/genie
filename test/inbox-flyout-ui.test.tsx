@@ -84,7 +84,7 @@ describe('the flyout in the shell', () => {
     const features: FeatureData = { ...EMPTY_FEATURES, inbox: { unread: [mail[1]] as never, peers, recent: [], threads, uncollected: 1 } };
     const shell = (route: string, withAsk = true) => renderToStaticMarkup(
         <Shell
-            route={route} snapshot={snapshot} servable={['dashboard', 'deck', 'agent', 'workspace', 'settings']}
+            route={route} snapshot={snapshot} servable={['dashboard', 'agent', 'workspace', 'settings']}
             agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null} files={NO_FILES}
             features={features}
             {...(withAsk ? { featureAsk: async () => features } : {})}

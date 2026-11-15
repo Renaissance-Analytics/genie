@@ -25,6 +25,11 @@ import type { MemoryClass, Scope } from './knowledge-store.js';
 export interface PromptHooks {
     queued?(note: string): void;
     started?(): void;
+    /**
+     * The step is PAUSED at the agent's provider limit (Tynn #749), or `null` when it is going again: when it resumes (`null` = no
+     * time is stated), and whose agent it waits on. Not a failure: the run keeps its place and its inputs.
+     */
+    paused?(info: { resumesAtMs: number | null; agentId: string; agent: string } | null): void;
 }
 
 export interface FlowPorts {

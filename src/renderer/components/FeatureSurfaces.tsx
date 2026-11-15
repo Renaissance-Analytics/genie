@@ -42,6 +42,7 @@ import { engineChoiceActions, engineName, processActions, scheduledActions, serv
 import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
 import { flowSummary } from '../../core/flow-canvas.js';
+import { pausedWords } from '../../core/flow-pills.js';
 import { describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
@@ -221,6 +222,14 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                 <Button size="xs" type="button" className="text-[13px]" onClick={open}>Open</Button>
                 <Button size="xs" type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAsk('delete')}>Delete</Button>
             </span>
+            {f.inFlight?.pause ? (
+                <span data-flow-paused={f.id} className="flex basis-full items-center gap-2 pl-5 text-xs">
+                    <Badge color="amber" variant="soft" size="sm">{pausedWords(f.inFlight.pause.resumesAtMs, (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</Badge>
+                    <span className="text-[var(--fg-3)]">{f.inFlight.pause.agent} waits for its provider; the run keeps its place and goes on by itself.</span>
+                    <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.resumeLimit', flowId: f.id })}>Resume now</Button>
+                    <Button size="xs" type="button" className="text-[13px]" disabled title="Switching the agent to another account comes with guided account switching">Switch account</Button>
+                </span>
+            ) : null}
             <span data-flow-summary={f.id} className="basis-full truncate pl-5 text-xs text-[var(--fg-3)]">{[summary.trigger, ...summary.steps].join(' → ')}</span>
             <span className="basis-full pl-5 text-[11px] text-[var(--fg-4)]">{summary.steps.length} {summary.steps.length === 1 ? 'step' : 'steps'}</span>
             {confirming ? <FlowConfirm flow={f} kind={confirming} now={now} onAction={onAction} onCancel={() => onAsk(null)} /> : null}

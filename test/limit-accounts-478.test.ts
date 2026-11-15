@@ -162,6 +162,8 @@ describe('a per-agent Resume now opens only that agent’s account (Tynn #478)',
         const read = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8').replace(/\r\n/g, '\n');
         expect(read('src/main/host-api.ts')).toContain('deps.host.resumeLimit(r.provider, r.accountId);');
         expect(read('src/main/session-engine-client.ts')).toContain("this.call('engine.resumeLimit', accountId === undefined ? [provider] : [provider, accountId])");
+        // A flow paused at a limit: Resume now lifts the paused agent's own account (Tynn #749 + #478).
+        expect(read('src/main/genie-host.ts')).toContain('host.resumeLimit(record.provider, record.accountId);');
         expect(read('src/main/session-engine-server.ts')).toContain("host.resumeLimit(str(0), typeof args[1] === 'string' ? args[1] : undefined);");
     });
 });

@@ -2,6 +2,7 @@ import type { WorkstationRole } from '../core/workstation-role.js';
 import type { TailscaleStatus } from '../main/tailscale-cli.js';
 import type { KeyringView } from '../main/linux-keyring.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import type { StorageView, TrashApproval } from '../core/workspace-storage.js';
 import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ServiceInstance } from '../core/services.js';
@@ -359,6 +360,8 @@ export interface FeatureData {
     readonly plugins: PluginsSection | null;
     /** IssueWatch's view per workspace id (Tynn #806), pushed by main; `null` until main reports. */
     readonly issueWatch: Readonly<Record<string, IssueWatchPanelView>> | null;
+    /** Each workspace's Storage tab (Tynn #697), as main holds it; absent/`null` = this window cannot measure. */
+    readonly storage?: Readonly<Record<string, StorageView>> | null;
     /** What's New for the running version, once (Tynn #762); `null`/absent = nothing to show. */
     readonly whatsNew?: { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it); absent/`null` = not known yet. */
@@ -422,6 +425,13 @@ export const EMPTY_FEATURES: FeatureData = {
 export type FeatureAction =
     /** The GitHub panel's Refresh: Tynn reads this workspace's repos now. */
     | { kind: 'issueWatch.refresh'; workspaceId: string }
+    /** STORAGE (Tynn #697): measure a workspace; move one item to its .trash; put one back; empty .trash with the person's approval. Ids only, never paths. */
+    | { kind: 'storage.measure'; workspaceId: string }
+    | { kind: 'storage.trash'; workspaceId: string; itemId: string }
+    | { kind: 'storage.restore'; workspaceId: string; trashId: string }
+    /** The one-click clean-up: the host moves only those of these ids that a fresh measure still suggests. */
+    | { kind: 'storage.cleanUp'; workspaceId: string; itemIds: string[] }
+    | { kind: 'storage.emptyTrash'; workspaceId: string; approval: TrashApproval }
     /** One repo's IssueWatch switch in Tynn (watch it; include a fork's upstream) — one field at a time. */
     | { kind: 'issueWatch.setRepo'; workspaceId: string; owner: string; repo: string; enabled?: boolean; includeUpstream?: boolean }
     | { kind: 'whatsNew.show' }
@@ -442,6 +452,8 @@ export type FeatureAction =
     | { kind: 'flows.remove'; flowId: string }
     /** The person's Run now: one run of the flow, armed or not; its outcome lands in the flow's run history. */
     | { kind: 'flows.runNow'; flowId: string }
+    /** Resume now for a run paused at its agent's provider limit (Tynn #749): the limit's hold is lifted at once. */
+    | { kind: 'flows.resumeLimit'; flowId: string }
     | { kind: 'flows.add'; workspaceId: string }
     | { kind: 'flows.cancelForm' }
     /** The Add-a-flow form, submitted as the USER (so `armed` is honoured). */

@@ -138,7 +138,7 @@ describe('one click', () => {
 describe('in the shell — every window, local or another machine’s, draws the same Shell and title bar', () => {
     const shell = (values: FeatureData['settings']['values'], onFeature: (a: FeatureAction) => unknown = noop) => (
         <Shell
-            route="genie://dashboard?group=workspace" snapshot={EMPTY_SNAPSHOT} servable={['dashboard', 'deck', 'agent', 'workspace', 'settings']}
+            route="genie://dashboard?group=workspace" snapshot={EMPTY_SNAPSHOT} servable={['dashboard', 'agent', 'workspace', 'settings']}
             agentDetail={null} agentResolved={false} selectedRowId={null} chatThread={null} pinned={null} files={NO_FILES}
             features={{ ...EMPTY_FEATURES, settings: { values } }}
             onNavigate={noop} onOpenAgent={noop} onAddAgent={noop} onAddWorkspace={noop} onOpenPalette={noop} onSelectRow={noop}

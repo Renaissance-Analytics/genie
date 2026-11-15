@@ -49,7 +49,7 @@ function smokeRailSelector(): string {
 describe('step 10 of the smoke', () => {
     it('measures the rail container (w-52, 208px) — not a nav inside it', () => {
         act(() => root.render(
-            <Sidebar route="genie://dashboard" deckCount={0} workspaces={[]} available={['deck', 'dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => '0', setItem: () => {} }} />,
+            <Sidebar route="genie://dashboard" deckCount={0} workspaces={[]} available={['dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => '0', setItem: () => {} }} />,
         ));
         const measured = host.querySelector(smokeRailSelector());
         expect(measured, 'the smoke’s selector finds an element in the rail').not.toBeNull();
@@ -77,7 +77,7 @@ describe('the layout sweep', () => {
         const sel = /querySelector\((["'])(.+?)\1\)/.exec(line!)?.[2];
         expect(sel, 'the sweep queries one selector').toBeDefined();
         act(() => root.render(
-            <Sidebar route="genie://dashboard" deckCount={0} workspaces={[]} available={['deck', 'dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => '0', setItem: () => {} }} />,
+            <Sidebar route="genie://dashboard" deckCount={0} workspaces={[]} available={['dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => '0', setItem: () => {} }} />,
         ));
         const measured = host.querySelector(sel!);
         expect(measured, 'the sweep’s selector finds an element in the rail').not.toBeNull();

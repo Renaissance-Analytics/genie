@@ -451,7 +451,7 @@ export function railIsCollapsed(contentWidth: number): boolean {
     return contentWidth < RAIL_COLLAPSE_AT;
 }
 
-export type ApprovalPlacement = 'chat' | 'stream';
+export type ApprovalPlacement = 'chat' | 'stream' | 'toast';
 
 /**
  * WHERE a parked approval is actionable — and it is exactly one place.
@@ -469,8 +469,13 @@ export type ApprovalPlacement = 'chat' | 'stream';
  * Two live sets of buttons for one decision is not a cosmetic problem. Answering in one leaves
  * the other showing a question that has been resolved, and the reader cannot tell whether
  * their answer landed.
+ *
+ * THE TOAST (Tynn #730): an approval the approval toasts carry (`core/approval-toasts.ts`) is answered THERE — the toast is
+ * the actionable place, and the stream and the chat show the marker. `inToast` is false when no toast carries it (Do Not
+ * Disturb held it back; a window with no toasts), and then the composer's place is the answer as before.
  */
-export function approvalPlacement(agentId: string, chatSubject: string | null): ApprovalPlacement {
+export function approvalPlacement(agentId: string, chatSubject: string | null, inToast = false): ApprovalPlacement {
+    if (inToast) return 'toast';
     return chatSubject === agentId ? 'chat' : 'stream';
 }
 

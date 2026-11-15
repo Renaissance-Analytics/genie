@@ -6,7 +6,7 @@ import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { LimitReading } from '../src/core/rate-limit-gate.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
-import { AgentSession, LIMIT_RESUME_PROMPT, type DriverEvents, type SessionDriverFactory } from '../src/core/session.js';
+import { AgentSession, limitResumePrompt, type DriverEvents, type SessionDriverFactory } from '../src/core/session.js';
 
 /**
  * A RATE LIMIT HOLDS THE AGENT, IT DOES NOT BREAK IT (Tynn #793, story #287). The owner, 2026-10-17: when a limit
@@ -162,7 +162,7 @@ describe('a turn the rate limit ended', () => {
         s.endInError();
         const before = s.sent.length;
         s.session.resumeAfterLimit();
-        expect(s.sent.slice(before)).toEqual([LIMIT_RESUME_PROMPT]);
+        expect(s.sent.slice(before)).toEqual([limitResumePrompt('build it')]);
         s.session.resumeAfterLimit(); // not held any more: nothing
         expect(s.sent.length).toBe(before + 1);
     });

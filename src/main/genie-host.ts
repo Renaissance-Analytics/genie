@@ -26,7 +26,10 @@ import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
-import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir } from './paths.js';
+import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
+import { formatBytes, type StorageView } from '../core/workspace-storage.js';
+import { threadAttachmentFiles } from '../core/thread-store.js';
 import { AccountsHost } from './accounts-host.js';
 import { providerAccountEnv } from '../core/accounts.js';
 import { isAcpProvider } from '../core/engine.js';
@@ -103,6 +106,7 @@ import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain } from './host-keychain.js';
+import { startProofOfDone } from './proof-of-done-host.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
@@ -1366,7 +1370,61 @@ async function main(): Promise<void> {
             engines: (await hostingStack?.engineStatuses() ?? []).filter(e => e.status === 'running').map(e => e.instance.containerName ?? `${e.instance.engine} ${e.instance.version}`),
         }),
     });
+    // A WORKSPACE'S STORAGE (Tynn #697): measured off this thread (main/dir-size.ts), pushed when done; every Move, Restore
+    // and Empty re-validated by the host module and followed by a fresh measure, so the tab shows what is on disk now.
+    const storageHost = new WorkspaceStorage();
+    const storageViews = new Map<string, StorageView>();
+    const setStorage = (id: string, patch: Partial<StorageView>): void => {
+        storageViews.set(id, { measuring: false, report: null, error: null, outcome: null, ...storageViews.get(id), ...patch });
+        featureChanged();
+    };
+    const storageRoot = (id: string): string => {
+        const w = hostRegistry.workspace(id);
+        if (!w || w.asleep === true) throw new Error('That workspace is not open on this machine.');
+        return w.path;
+    };
+    const chatFilesOf = async (id: string): Promise<ChatFile[]> => {
+        const out: ChatFile[] = [];
+        for (const a of hostRegistry.listAgents().filter(agent => agent.workspaceId === id)) {
+            for (const f of await threadAttachmentFiles(sessionsDir(home), a.id)) out.push({ agentId: a.id, agentName: a.name, attachmentId: f.id, path: f.path, bytes: f.bytes });
+        }
+        return out;
+    };
+    const remeasure = async (id: string): Promise<void> => {
+        setStorage(id, { measuring: true });
+        try {
+            const report = await storageHost.measure(storageRoot(id), { chatFiles: await chatFilesOf(id) });
+            setStorage(id, { measuring: false, report, error: null });
+        } catch (error) {
+            setStorage(id, { measuring: false, error: `Genie could not measure this workspace: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    };
+    const storagePort: NonNullable<MachineFeaturePorts['storage']> = {
+        views: () => Object.fromEntries(storageViews),
+        measure: (id) => { if (storageViews.get(id)?.measuring !== true) void remeasure(id); },
+        trash: async (id, itemId) => {
+            const r = await storageHost.moveToTrash(storageRoot(id), itemId, { chatFiles: await chatFilesOf(id) });
+            setStorage(id, { outcome: r.ok ? `Moved ${r.label} to .trash.` : r.reason });
+            void remeasure(id);
+        },
+        cleanUp: async (id, itemIds) => {
+            const r = await storageHost.cleanUp(storageRoot(id), itemIds, { chatFiles: await chatFilesOf(id) });
+            setStorage(id, { outcome: `Moved ${r.moved.length} ${r.moved.length === 1 ? 'item' : 'items'} to .trash${r.skipped.length + r.failed.length > 0 ? `; left ${r.skipped.length + r.failed.length} that were no longer safe to move` : ''}.` });
+            void remeasure(id);
+        },
+        restore: async (id, trashId) => {
+            const r = await storageHost.restore(storageRoot(id), trashId);
+            setStorage(id, { outcome: r.ok ? `Put ${r.label} back.` : r.reason });
+            void remeasure(id);
+        },
+        empty: async (id, approval) => {
+            const r = await storageHost.emptyTrash(storageRoot(id), approval);
+            setStorage(id, { outcome: r.ok ? `Deleted ${r.deleted} ${r.deleted === 1 ? 'item' : 'items'} (${formatBytes(r.bytes)}) from .trash for good.` : r.reason });
+            void remeasure(id);
+        },
+    };
     const featureEffects: MachineFeaturePorts = {
+        storage: storagePort,
         tynnAccount: {
             status: () => featureTynn.dump().status, host: () => featureTynn.dump().host,
             unreachableThrough: () => featureTynn.dump().unreachableThrough, onChange: listener => featureTynn.onEvent(listener),
@@ -1408,7 +1466,7 @@ async function main(): Promise<void> {
     hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
         roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
         mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
-        runFlow: id => hostFlows.runNow(id), refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
+        runFlow: id => hostFlows.runNow(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider, record.accountId); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
         ...(hostingStack ? { hosting: { api: hostingStack, supervisor: processSupervisor, processes: hostBook,
             processScheduler: { runNow: id => hostBook.runNow(id) }, workspaceVisible: id => !hiddenWorkspaces().includes(id) } } : {}),
         machine: {
@@ -1509,6 +1567,20 @@ async function main(): Promise<void> {
     let processBookNow: ProcessBook | null = null;
     /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
     const clocks: Array<{ stop(): void }> = [marketplacePlugins];
+    // PROOF-OF-DONE (Tynn #742): this host's key signs for the signed-in Tynn user; a HITL claim waits on the Deck as an approval.
+    const podCaller: import('./mcp-tools.js').Caller = { agentId: 'genie-proof-of-done' as AgentId, agentName: 'Genie', workspaceId: '', workspacePath: '' };
+    void tynnOpening.then((account) => {
+        clocks.push(startProofOfDone({
+            file: join(home, 'proof-of-done-notes.json'),
+            keychain,
+            tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), request: (path, init) => account.request(path, init) },
+            approve: async (request) => (await approvals.gate(podCaller, 'pod.sign', request.detail)) === 'allowed' ? 'allowed' : 'denied',
+            workspaces: () => hostRegistry.listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
+            label: () => hostname(),
+            log: say,
+            onAccountChange: (listener) => account.onChange(listener),
+        }));
+    }, () => {});
     /** The clocks to plan again when the person leaves safe mode — arming what may fire later, and starting nothing now. */
     const planners: Array<{ plan(): void }> = [];
     safeMode.onChange((view) => { if (!view.active) for (const p of planners) p.plan(); });

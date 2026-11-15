@@ -9,7 +9,7 @@
 #   2. bump to -Next (the next prerelease number), package again → release\ holds Next + latest.yml; restore the bump
 #   3. serve release\ on 127.0.0.1:8099; point the installed app's app-update.yml at it
 #   4. launch the installed app with CDP; update-cdp.mjs in AUTO_CHECK mode waits for the state to become
-#      `available` on its own, asserts the version, that nothing downloaded, and that the Deck shows the door
+#      `available` on its own, asserts the version, that nothing downloaded, and that the Dashboard shows the door
 #   5. tear down and uninstall
 param([string] $Next = '')
 $ErrorActionPreference = 'Stop'
@@ -133,7 +133,7 @@ try {
     Start-Sleep 2
     Write-Output ("install dir gone: " + (-not (Test-Path $exe)))
     Write-Output ""
-    Write-Output "VM AUTO-CHECK OK: the installed $current found $Next on the feed by itself, offered it in the Deck, downloaded nothing"
+    Write-Output "VM AUTO-CHECK OK: the installed $current found $Next on the feed by itself, offered it on the Dashboard, downloaded nothing"
 } finally {
     if ($feed -and -not $feed.HasExited) { Kill-Tree $feed.Id }
     Stop-Transcript | Out-Null
