@@ -15,8 +15,7 @@ import { isWindowQuestion, nextQuestion, waitingBehind, windowQueue } from '../c
  *   question is only in the Deck. The person answers any of them, in any order (`select`, and an id on answer/dismiss).
  * - A question arriving opens the window — whichever agent asked, whatever screen or app the person has open. Nothing
  *   here knows which agent is on screen, and nothing may. Unless DO NOT DISTURB is on: then no window opens, the question
- *   waits in Pending Questions (the Deck), and turning DND off does not throw the backlog at the person (Genie 1's DND
- *   parked to the inbox the same way).
+ *   waits in Pending Questions (the Deck) until DND is turned off, which opens it (below).
  * - An arrival while the window is up is LISTED in its queue; the question the person is answering stays where it is,
  *   and what they typed stays with the question it was typed for (drafts, keyed by question id — kept here as well, so a
  *   window closed and reopened loses nothing). The window is shown without taking focus (question-window-electron.ts).
@@ -24,6 +23,10 @@ import { isWindowQuestion, nextQuestion, waitingBehind, windowQueue } from '../c
  * - Later, or closing the window, PARKS the question THAT WAS SHOWN: it stays in Pending Questions and in the queue (the
  *   person can still pick it), the agent keeps waiting, and it does not bring the window back on its own. Only that one:
  *   a question queued behind it, which the person never saw, still gets the window — it reopens for the next at once.
+ * - Turning DND OFF (by hand or on its schedule; Tynn #721) opens what waited: the questions put off BY DND — not ones the
+ *   person put off with Later — come up in the usual window, one at a time, highest priority first then oldest. Answered,
+ *   dismissed and withdrawn ones are gone from the list and are not reopened; with none pending nothing opens. Main calls
+ *   `changed()` when the setting changes, and the one shared window is the one the person is using.
  * - Its agent ASKING IT AGAIN is a new ask (the item's `asks` count goes up — attention-store.ts): the park is lifted and
  *   the window opens for it — unless Do Not Disturb is on — with the draft the person had started still in it. A park
  *   holds for the ask it was made on, never for the agent's later asks.
@@ -75,6 +78,10 @@ export class QuestionWindow {
      * item's `asks` count at the time: the park holds only while that count is unchanged (a re-ask lifts it).
      */
     readonly #parkedAt = new Map<string, number>();
+    /** The ones among them put off by Do Not Disturb (not by Later): turning it off lets exactly these come up. */
+    readonly #byDnd = new Set<string>();
+    /** Was Do Not Disturb on at the last check? Its going off is what opens the backlog. */
+    #dndWas = false;
     /** The window on screen. One WE are closing is not it any more: it is let go the moment we ask it to close. */
     #window: QuestionWindowPort | null = null;
     #current: string | null = null;
@@ -92,12 +99,23 @@ export class QuestionWindow {
         // A park made on an earlier ask is lifted: its agent asked again (or the question is gone).
         for (const [id, asks] of this.#parkedAt) {
             const item = queue.find((i) => i.id === id);
-            if (!item || (item.asks ?? 0) !== asks) this.#parkedAt.delete(id);
+            if (!item || (item.asks ?? 0) !== asks) { this.#parkedAt.delete(id); this.#byDnd.delete(id); }
         }
-        // DO NOT DISTURB: no window opens. What arrives meanwhile is put off — it waits in Pending Questions and does not
-        // come at the person when DND is turned off. A window the person already has open keeps working.
-        if (!this.#window && this.#deps.dnd?.() === true) {
-            for (const item of queue) this.#park(item);
+        // DO NOT DISTURB turned OFF: what it put off comes up now.
+        const dndOn = this.#deps.dnd?.() === true;
+        if (this.#dndWas && !dndOn) {
+            for (const id of this.#byDnd) this.#parkedAt.delete(id);
+            this.#byDnd.clear();
+        }
+        this.#dndWas = dndOn;
+        // DO NOT DISTURB: no window opens. What arrives meanwhile is put off — it waits in Pending Questions until DND is
+        // turned off, which opens it (above). A window the person already has open keeps working.
+        if (!this.#window && dndOn) {
+            for (const item of queue) {
+                if (this.#parkedAt.has(item.id)) continue;
+                this.#park(item);
+                this.#byDnd.add(item.id);
+            }
             this.#current = null;
             return;
         }
@@ -198,7 +216,7 @@ export class QuestionWindow {
 
     #parkCurrent(): void {
         const item = this.#current === null ? undefined : this.#deps.items().find((i) => i.id === this.#current);
-        if (item) this.#park(item);
+        if (item) { this.#park(item); this.#byDnd.delete(item.id); }
     }
 
     #park(item: DeckItem): void {
