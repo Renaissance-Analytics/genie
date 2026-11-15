@@ -81,6 +81,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['question:draft', 'later:question window'],
     ['question:files', 'later:question window'],
     ['question:file', 'later:question window'],
+    ['question:open-in-files', 'later:question window'],
     ['question:drawer', 'later:question window'],
 
     ['site-panel:prepare', 'window-port'],

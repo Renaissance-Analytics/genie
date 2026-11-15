@@ -51,3 +51,49 @@ describe('the drawer', () => {
         expect(render({ existing: null })).not.toContain('data-question-drawer=');
     });
 });
+
+/*
+ * Tynn #726: the drawer showed "not a text file" for a PNG. An image is drawn (scaled to fit, click to zoom), an SVG through
+ * <img> and never as markup, a PDF and any other binary named with their size and an Open in Files action.
+ */
+describe('the drawer shows media (Tynn #726)', () => {
+    const SRC = 'data:image/png;base64,iVBORw0KGgo=';
+    const open = (path: string, media: unknown) => render({ existing: null, drawer: { path, media } });
+
+    it('an image is an <img> scaled to fit, with a click-to-zoom control', () => {
+        const html = open('shots/a.png', { kind: 'image', src: SRC, size: 2048 });
+        expect(html).toMatch(/<img[^>]*src="data:image\/png;base64,iVBORw0KGgo="/);
+        expect(html).toMatch(/<img[^>]*class="[^"]*object-contain[^"]*max-h-full[^"]*max-w-full/);
+        expect(html).toContain('data-action="question-drawer-zoom"');
+        expect(html).not.toContain('not a text file');
+    });
+
+    it('an SVG goes through <img>, never inlined as markup', () => {
+        const html = open('logo.svg', { kind: 'image', src: 'data:image/svg+xml;base64,PHN2Zy8+', size: 10 });
+        expect(html).toMatch(/<img[^>]*src="data:image\/svg\+xml;base64,PHN2Zy8\+"/);
+        expect(html).not.toMatch(/<svg/);
+    });
+
+    it('a PDF offers Open in Files with its name and size', () => {
+        const html = open('docs/spec.pdf', { kind: 'pdf', size: 3 * 1024 * 1024 });
+        expect(html).toMatch(/data-question-drawer-binary="pdf"/);
+        expect(html).toContain('spec.pdf');
+        expect(html).toContain('3.0 MB');
+        expect(html).toContain('data-action="question-drawer-open-in-files"');
+    });
+
+    it('another binary shows its name, its size and Open in Files — not an error', () => {
+        const html = open('data/blob.bin', { kind: 'binary', size: 1536 });
+        expect(html).toMatch(/data-question-drawer-binary="binary"/);
+        expect(html).toContain('blob.bin');
+        expect(html).toContain('1.5 KB');
+        expect(html).toContain('data-action="question-drawer-open-in-files"');
+        expect(html).not.toContain('data-question-drawer-error');
+    });
+
+    it('CONTROL: a text file is still the viewer, with no media chrome', () => {
+        const html = render({ existing: null, drawer: { path: 'a.ts', text: 'const a = 1;', line: null } });
+        expect(html).not.toContain('question-drawer-zoom');
+        expect(html).not.toContain('data-question-drawer-binary');
+    });
+});
