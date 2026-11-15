@@ -64,7 +64,7 @@ export function McpServerPanel(p: McpServerPanelProps) {
                                             const isOpen = open.has(t.name);
                                             return (
                                                 <li key={t.name} data-mcp-tool={t.name}>
-                                                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" aria-expanded={isOpen} className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-[var(--bg-2)]" onClick={() => toggle(t.name)}>
+                                                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" aria-expanded={isOpen} className="flex w-full items-center justify-start gap-2 px-2 py-1 text-left hover:bg-[var(--bg-2)]" onClick={() => toggle(t.name)}>
                                                         <span data-mcp-tool-icon="" className="contents"><Icon name={family[t.family] ?? 'puzzle'} size="xs" className="shrink-0 text-[var(--fg-3)]" /></span>
                                                         <span className="shrink-0 font-mono text-xs text-[var(--fg-1)]">{t.name}</span>
                                                         <span data-mcp-tool-summary="" className="min-w-0 flex-1 truncate text-xs text-[var(--fg-3)]">{t.summary}</span>
