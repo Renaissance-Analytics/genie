@@ -1,7 +1,7 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
 import { ActivityLight, Button, Icon, Popover } from '@particle-academy/react-fancy';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, type RefObject } from 'react';
 import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
@@ -10,7 +10,11 @@ import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 import { agentStatusStyle } from '../agent-status-color.js';
-import { useDashboardFilter } from '../dashboard-filter.js';
+import { useDashboardFilter, useNeedsYouFilter } from '../dashboard-filter.js';
+import { DAY_MS, deckBand, dismissableOlderThan, dismissableStale, signalStrip, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
+import type { ApprovalAnswering } from '../../core/approval-answering.js';
+import { groupWaiting, needsYouChipCount, needsYouRows, waitingBadges, type WaitingBadge, type WaitingKind } from '../../core/waiting.js';
+import { DeckRow, type RowProps } from './Deck.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import {
     commsOf,
@@ -32,11 +36,13 @@ import {
 /**
  * THE WORKFLOW DASHBOARD — the landing surface.
  *
- * *"What is being produced, and by whom?"* A board you READ. It carries **no resolving
- * control anywhere**: no approve, no deny, no answer, no composer, not even in a row tray. A
- * row click (a waiting one too) opens that agent's chat beside the board, which stays (the
- * owner, 2026-10-28); a question is answered on the Deck, its toast or that chat. `A`/`D` are
- * deliberately unbound on this surface.
+ * *"What is being produced, and by whom?"* A board you READ - and, since the Deck merged into it (Tynn #730, the owner's
+ * option B), *what is waiting on you*, on the row of the agent it is about. The board itself carries **no resolving control**:
+ * no approve, no deny, no composer, not even in a row tray. A row click (a waiting one too) opens that agent's chat beside the
+ * board, which stays (the owner, 2026-10-28). What waits on an agent is a BADGE on its row (an approval, a question, stale,
+ * mail); the badge opens the items under the row, where they are answered, dismissed or collected in place - except an
+ * approval a toast carries, which is answered on the toast (core/approval-toasts.ts). Items with no agent are the Genie
+ * row's. `A`/`D` are deliberately unbound on this surface.
  *
  * ## This file only renders
  *
@@ -69,6 +75,8 @@ import {
  */
 
 /** One shared template: Agent · Workspace · Status · Target · Delivery · Comms · Context. */
+const NO_ITEMS: readonly DeckItem[] = [];
+
 const GRID =
     'grid grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px] gap-4 pl-7 pr-5';
 
@@ -170,6 +178,53 @@ function Lanes({ segments }: { segments: readonly LaneSegment[] | undefined }) {
     );
 }
 
+/** The badges' colours: an approval blocks an agent (amber), a question is the person's to answer (violet), the rest are quiet. */
+const BADGE_TONE: Record<WaitingKind, string> = {
+    approval: 'border-[var(--warning)]/50 bg-[var(--warning)]/10 text-[var(--warning)]',
+    question: 'border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--accent)]',
+    mail: 'border-[var(--success)]/40 bg-[var(--success)]/10 text-[var(--success)]',
+    todo: 'border-[var(--border-2)] text-[var(--fg-2)]',
+    genie: 'border-[var(--border-2)] text-[var(--fg-2)]',
+    stale: 'border-[var(--border-2)] text-[var(--fg-3)]',
+};
+
+/**
+ * WHAT WAITS ON AN AGENT, as badges on its row (Tynn #730, option B): one per kind, each a real button that opens or folds
+ * the items under the row - one click to see them, one to answer, no page change. The row's own click opens the chat, so
+ * these stop it.
+ */
+function WaitingBadges({ owner, badges, open, onToggle }: { owner: string; badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void }) {
+    return (
+        <span data-waiting-badges={owner} className="flex shrink-0 items-center gap-1">
+            {badges.map((badge) => (
+                <Button
+                    key={badge.kind}
+                    type="button"
+                    size="xs"
+                    data-waiting-badge={badge.kind}
+                    aria-expanded={open}
+                    title={open ? 'Hide what is waiting' : 'Show what is waiting'}
+                    onClick={(event) => { event.stopPropagation(); onToggle(); }}
+                    className={`rounded-full border px-2 py-0 text-[11px] ${BADGE_TONE[badge.kind]}`}
+                >
+                    {badge.label}
+                </Button>
+            ))}
+        </span>
+    );
+}
+
+/** An agent's items (or the Genie row's), opened under its row: the Deck's own rows, with their own actions. */
+function WaitingItems({ owner, items, row }: { owner: string; items: readonly DeckItem[]; row: RowProps }) {
+    return (
+        <div data-waiting-items={owner} className="border-b border-[var(--border-1)] bg-[var(--bg-1)]">
+            <div className="ml-5 border-l-2 border-[var(--accent)]/50">
+                {items.map((item) => <DeckRow key={item.id} item={item} {...row} />)}
+            </div>
+        </div>
+    );
+}
+
 /**
  * THE ROW TRAY (§4.1 `Space`): under its row, read-only plus three doors. Sections the row did not measure are not
  * drawn. Nothing here approves, denies or composes — the Deck resolves; the Dashboard shows.
@@ -207,7 +262,7 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
     );
 }
 
-function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji, waiting }: {
     row: AgentRow;
     workspaceName: string;
     workspaceColor?: string | undefined;
@@ -224,6 +279,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     lanes?: readonly LaneSegment[] | undefined;
     /** Hovering the comms cell reveals this row's collaborators; leaving it ends the reveal. */
     onReveal?: ((id: string | null) => void) | undefined;
+    /** What waits on this agent: its badges, and whether its items are open under the row. Absent = nothing waits (or no Deck). */
+    waiting?: { badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void } | undefined;
 }) {
     const role = reveal ? (reveal.focus === row.id ? 'focus' : reveal.peers[row.id] ? 'peer' : 'dim') : null;
     const peerLink = role === 'peer' ? reveal!.peers[row.id]! : null;
@@ -262,6 +319,7 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
             </div>
             <div className="flex min-w-0 items-center gap-1.5">
                 <span className={`shrink-0 font-medium ${STATUS_TONE[status.tone]}`}>{status.word}</span>
+                {waiting ? <WaitingBadges owner={row.id} badges={waiting.badges} open={waiting.open} onToggle={waiting.onToggle} /> : null}
                 {status.detail ? <span className="truncate text-xs text-[var(--fg-3)]" {...(status.title ? { title: status.title } : {})}>{status.detail}</span> : null}
             </div>
 
@@ -408,16 +466,82 @@ export interface DashboardProps {
     mailSignals?: readonly MailSignal[] | undefined;
     /** Workspaces an agent acted in that the person has not visited since: their Workspace cells pulse. */
     pulsing?: ReadonlySet<string> | undefined;
+    /**
+     * WHAT WAITS ON THE PERSON (Tynn #730: the Deck merged into this board). Absent = no Deck here (a window that serves none):
+     * no badges, no "Needs you" chip, no Genie row.
+     */
+    waiting?: DashboardWaiting | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing }: DashboardProps) {
+export interface DashboardWaiting {
+    /** The Deck's items. */
+    items: readonly DeckItem[];
+    signals: SignalState;
+    /** The answer in flight, if any - which agent's (core/approval-answering.ts): only THAT agent's row refuses a second press. */
+    answering: ApprovalAnswering | null;
+    /** `note`: the person's words with an approval's answer; absent = none. */
+    onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
+    /** Open the item's agent (its chat). */
+    onOpenItem: (item: DeckItem) => void;
+    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
+    /** The last refused action, said beside THAT item (or under the header for the two bulk dismissals). */
+    formRefusal?: { itemId: string; reason: string } | null | undefined;
+    /** Dismiss an agent's question without an answer, with the notes written in its form. Absent = not offered. */
+    onDismiss?: ((item: DeckItem, notes: string[]) => void) | undefined;
+    /** "Dismiss all older than 1 day": the age, in ms. Absent = not offered. */
+    onDismissOlder?: ((olderThanMs: number) => void) | undefined;
+    /** "Dismiss all stale": exactly the ids shown marked stale. Absent = not offered. */
+    onDismissStale?: ((ids: string[]) => void) | undefined;
+    onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
+    /** The signal strip's update door (download, then install). */
+    onSignalAction?: ((action: SignalAction) => void) | undefined;
+    /** The action in flight on one of Genie's own items: that button shows progress, its row takes no second press. */
+    busy?: { itemId: string; optionId: string } | null | undefined;
+    /** The approvals a toast carries (core/approval-toasts.ts): the toast answers them, their rows show a marker. */
+    toastIds?: ReadonlySet<string> | undefined;
+    /** The item the reader was SENT to (`?item=<id>`): its agent's row is open on it, marked and scrolled to. */
+    focusItemId?: string | null | undefined;
+    /** Rows drawn opened (a test of the opened row; the board itself opens one on a click): agent ids, or `genie:`. */
+    initiallyOpen?: readonly string[] | undefined;
+    /** The clock the ages are read against; now by default (tests pass a fixed one). */
+    now?: number | undefined;
+}
+
+/** The Genie row's key: items that belong to no agent, or whose agent has no row on screen. */
+export const GENIE_ROW = 'genie:';
+
+const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
+
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing, waiting }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
     const all = genie ? [genie, ...rows] : rows;
     const { filter, toggle } = useDashboardFilter();
     const { sleeping: showSleeping, stopped: showStopped } = filter;
-    const shown = dashboardRows(all, filter);
+    const needsYou = useNeedsYouFilter();
+    const items = waiting?.items ?? NO_ITEMS;
+    // "Needs you": only the agents with something waiting - the Sleeping / Stopped filters do not hide one that needs the person.
+    const shown = waiting && needsYou.on ? dashboardRows(needsYouRows(all, items), { sleeping: true, stopped: true }) : dashboardRows(all, filter);
+    const groups = groupWaiting(items, new Set(shown.map((row) => row.id)));
+    // Which rows are open: a click on a badge opens one; the item the reader was sent to is open; under "Needs you" all are.
+    const focusItem = waiting?.focusItemId ?? null;
+    const focusKey = focusItem === null ? null : ([...groups.byAgent].find(([, list]) => list.some((i) => i.id === focusItem))?.[0] ?? (groups.genie.some((i) => i.id === focusItem) ? GENIE_ROW : null));
+    const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set(waiting?.initiallyOpen ?? []));
+    const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
+    const isOpen = (key: string): boolean => !closed.has(key) && (opened.has(key) || key === focusKey || (needsYou.on && waiting !== undefined));
+    const toggleOpen = (key: string): void => {
+        const wasOpen = isOpen(key);
+        setOpened((prev) => { const next = new Set(prev); if (wasOpen) next.delete(key); else next.add(key); return next; });
+        setClosed((prev) => { const next = new Set(prev); if (wasOpen) next.add(key); else next.delete(key); return next; });
+    };
+    const focusRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => { focusRef.current?.scrollIntoView?.({ block: 'center' }); }, [focusItem]);
+    const rowProps: RowProps | null = waiting ? {
+        answering: waiting.answering, onAnswer: waiting.onAnswer, onOpenItem: waiting.onOpenItem, onAnswerForm: waiting.onAnswerForm,
+        formRefusal: waiting.formRefusal ?? null, focusId: focusItem, focusRef: focusRef as RefObject<HTMLDivElement | null>,
+        onDismiss: waiting.onDismiss, now: waiting.now ?? Date.now(), busy: waiting.busy, onTrustWorkspace: waiting.onTrustWorkspace, toastIds: waiting.toastIds,
+    } : null;
     const [ownFocus, setOwnFocus] = useState<string | null>(null);
     const focused = focusedId ?? ownFocus;
     const [ownReveal, setOwnReveal] = useState<string | null>(null);
@@ -442,6 +566,10 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
         return () => window.removeEventListener('keydown', onKey);
     }, [visibleIds, focused, onOpenAgent]);
     const lanes = reveal ? lanesFor(visibleIds, reveal) : null;
+    const band = deckBand(items);
+    const staleItems = dismissableStale(band);
+    const olderItems = dismissableOlderThan(band, waiting?.now ?? Date.now(), DAY_MS);
+    const strip = waiting ? signalStrip(waiting.signals) : [];
     const chips = summaryChips(all);
     const workspaceOf = (row: AgentRow) => workspaces?.find((workspace) => workspace.id === row.workspaceId);
     const nameOf = (row: AgentRow) => {
@@ -512,6 +640,24 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     ))}
                 </div>
                 <span className="flex-1" />
+                {/* The questions nobody waits for any more: exactly the ones on screen, put aside in one go (the Deck's, kept). */}
+                {waiting?.onDismissStale && staleItems.length > 0 ? (
+                    <Button size="xs" type="button" data-action="deck-dismiss-stale" data-deck-stale={staleItems.length} onClick={() => waiting.onDismissStale?.(staleItems.map((i) => i.id))} title="Every question whose agent no longer waits; each agent is told" className={HEADER_BUTTON}>
+                        {`Dismiss all stale (${staleItems.length})`}
+                    </Button>
+                ) : null}
+                {/* The questions nobody is going to answer: put aside in one go, each agent told. Only when there are such. */}
+                {waiting?.onDismissOlder && olderItems.length > 0 ? (
+                    <Button size="xs" type="button" data-action="deck-dismiss-older" data-deck-older={olderItems.length} onClick={() => waiting.onDismissOlder?.(DAY_MS)} title="Each agent is told its question was dismissed without an answer" className={HEADER_BUTTON}>
+                        {`Dismiss all older than 1 day (${olderItems.length})`}
+                    </Button>
+                ) : null}
+                {/* NEEDS YOU (Tynn #730): only the agents with something waiting, beside the status filters, in the same store. */}
+                {waiting ? (
+                    <Button type="button" size="xs" icon="hand" data-dashboard-filter="needsYou" className={needsYou.on ? 'ring-1 ring-[var(--warning)]' : ''} aria-pressed={needsYou.on} onClick={needsYou.toggle}>
+                        {`Needs you ${needsYouChipCount(items)}`}
+                    </Button>
+                ) : null}
                 {(['sleeping', 'stopped'] as const).map((kind) => {
                     const active = kind === 'sleeping' ? showSleeping : showStopped;
                     return <Button key={kind} type="button" size="xs" data-dashboard-filter={kind} data-chip={active && all.some((row) => shownState(row) === kind) ? kind : undefined} style={stateStyle(kind)} className={active ? 'ring-1 ring-[var(--agent-status)]' : ''} aria-pressed={active} onClick={() => toggle(kind)}>
@@ -524,6 +670,20 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 <RateLimitPills limits={rateLimits ?? {}} />
                 <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie">Chat <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span></Button>
             </div>
+            {/* "Dismiss all stale" or "Dismiss all older" refused: said under the header (Tynn #600). */}
+            {waiting?.formRefusal && (waiting.formRefusal.itemId === 'deck:stale' || waiting.formRefusal.itemId === 'deck:older') ? (
+                <p data-deck-refusal={waiting.formRefusal.itemId} role="alert" className="px-7 pb-2 text-xs text-[var(--danger)]">{waiting.formRefusal.reason}</p>
+            ) : null}
+            {/* The signal strip - silent unless something is true, and every signal a door (the Deck's, kept). */}
+            {strip.length > 0 ? (
+                <div data-signal-strip="" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-7 py-2">
+                    {strip.map((signal) => (
+                        <Button size="xs" key={signal.kind} type="button" data-signal={signal.kind} data-nav={signal.route} data-action={signal.action} onClick={() => (signal.action ? waiting?.onSignalAction?.(signal.action) : go(signal.route))} className={HEADER_BUTTON}>
+                            {signal.label}
+                        </Button>
+                    ))}
+                </div>
+            ) : null}
             {legend ? <div data-legend="" className="flex shrink-0 flex-wrap gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
                 <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full bg-[var(--fg-3)]" />Declared — reports plan, deliveries, comms, usage</span>
                 <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-[var(--fg-3)]" />Observed — terminal activity, commits and file writes only</span>
@@ -534,12 +694,26 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
+                    {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}
+                {/* THE GENIE ROW: what belongs to no agent (a flow signal, a workstation item, Genie's own asks), and what waits on an agent with no row on screen. */}
+                {rowProps && groups.genie.length > 0 ? (
+                    <div data-waiting-genie="">
+                        <div className="flex h-8 items-center gap-3 border-b border-[var(--border-1)] pl-7 pr-5 text-[13px]">
+                            <Icon name="sparkles" size="sm" className="shrink-0 text-[var(--fg-3)]" />
+                            <span className="font-medium">Genie</span>
+                            <span className="text-xs text-[var(--fg-3)]">items that belong to no agent</span>
+                            <WaitingBadges owner={GENIE_ROW} badges={waitingBadges(groups.genie)} open={isOpen(GENIE_ROW)} onToggle={() => toggleOpen(GENIE_ROW)} />
+                        </div>
+                        {isOpen(GENIE_ROW) ? <WaitingItems owner={GENIE_ROW} items={groups.genie} row={rowProps} /> : null}
+                    </div>
+                ) : null}
             </div>
             {workspaces.length === 0 ? <p data-dashboard-no-active-workspaces="" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No active workspaces. Redock a hibernated workspace from the sidebar to see it here.</p>
-                : shown.length === 0 ? <p role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No agents shown. Use Sleeping or Stopped to include those agents.</p> : null}
+                : waiting && needsYou.on && shown.length === 0 && groups.genie.length === 0 ? <p data-needs-you="empty" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">Nothing needs you.</p>
+                : shown.length === 0 && !(waiting && needsYou.on) ? <p role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No agents shown. Use Sleeping or Stopped to include those agents.</p> : null}
             {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`flex items-center gap-3 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
                 {workspace.color ? <WorkspaceSwatch color={workspace.color} /> : null}
                 <span>{workspace.name ?? workspace.id} has no agents yet.</span><Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>

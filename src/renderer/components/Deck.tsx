@@ -27,7 +27,7 @@ import {
     type SignalAction,
     type SignalState,
 } from '../../core/deck.js';
-import { ApprovalCard } from './ApprovalCard.js';
+import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 
 /**
  * THE DECK — "does anything need me?"
@@ -265,7 +265,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
     );
 }
 
-interface RowProps {
+export interface RowProps {
     answering: ApprovalAnswering | null;
     /** `note`: the person's words with an approval's answer (beta.33 item 16); absent = none. */
     onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
@@ -279,6 +279,11 @@ interface RowProps {
     initiallyExpanded?: readonly string[] | undefined;
     busy?: { itemId: string; optionId: string } | null | undefined;
     onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
+    /**
+     * The approvals a toast carries (Tynn #730, core/approval-toasts.ts): the toast is where they are answered, so this row
+     * shows a marker and no second set of buttons. Absent / not in it = the row's own card answers (Do Not Disturb held it back).
+     */
+    toastIds?: ReadonlySet<string> | undefined;
 }
 
 /** One workspace's section: the Dashboard's group header (name, then how many wait and how many are stale), then its rows. */
@@ -296,7 +301,7 @@ function DeckSectionView({ section, ...row }: RowProps & { section: DeckSection 
     );
 }
 
-function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded, busy, onTrustWorkspace }: RowProps & { item: DeckItem }) {
+export function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded, busy, onTrustWorkspace, toastIds }: RowProps & { item: DeckItem }) {
     // A stale question's form is folded away until the person chooses to answer it anyway — its agent is not waiting.
     const [opened, setOpened] = useState(false);
     // A long to-do or message shows its first line; a click opens the whole text (the owner, 2026-10-18).
@@ -388,7 +393,10 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
              * set as code. A to-do or a message is prose already shown whole in the row — its buttons only,
              * never its text again in a monospace box.
              */}
-            {item.answer.kind === 'inline' && item.source === 'agent-question' ? (
+            {item.answer.kind === 'inline' && item.source === 'agent-question' && toastIds?.has(item.id) ? (
+                <ApprovalMarker where="the toast at the bottom left" />
+            ) : null}
+            {item.answer.kind === 'inline' && item.source === 'agent-question' && !toastIds?.has(item.id) ? (
                 <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answeringHere} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} onTrustWorkspace={onTrustWorkspace && item.workspaceId ? () => onTrustWorkspace(item.workspaceId!) : undefined} />
             ) : null}
 
