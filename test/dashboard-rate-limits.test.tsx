@@ -21,8 +21,10 @@ import { RateLimitPills } from '../src/renderer/components/Dashboard.js';
  * kept in MAIN, before anything reaches the window: an ignored reading costs one comparison and sends nothing.
  */
 
+/** The test's clock, injected into the pills: every reset below is an hour AFTER it, so no window reads Refreshed. */
+const NOW = Date.UTC(2026, 9, 26, 13, 0, 0);
 const h = (leftPct: number, window = '5h'): Headroom => {
-    const resetsAtMs = Date.UTC(2026, 9, 26, 14, 0, 0);
+    const resetsAtMs = NOW + 3_600_000;
     return { plan: null, window, leftPct, resetsAtMs, over: false, windows: [{ window, usedPct: 100 - leftPct, leftPct, resetsAtMs, over: false }] };
 };
 const T0 = 1_000_000;
@@ -31,17 +33,17 @@ const MIN = 60_000;
 describe('the buffer', () => {
     it('the first reading shows; any other within the buffer is IGNORED; after it, the next shows', () => {
         const board = new HeadroomBoard();
-        expect(board.offer('claude', h(80), T0, MIN)).toBe(true);
-        expect(board.offer('claude', h(40), T0 + MIN - 1, MIN)).toBe(false);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(80), T0, MIN)).toBe(true);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(40), T0 + MIN - 1, MIN)).toBe(false);
         expect(board.view()).toEqual({ claude: h(80) });
-        expect(board.offer('claude', h(40), T0 + MIN, MIN)).toBe(true);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(40), T0 + MIN, MIN)).toBe(true);
         expect(board.view()).toEqual({ claude: h(40) });
     });
 
     it('one buffer per provider: codex is not held by claude’s', () => {
         const board = new HeadroomBoard();
-        board.offer('claude', h(80), T0, MIN);
-        expect(board.offer('codex', h(97, '7d'), T0 + 1, MIN)).toBe(true);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, h(80), T0, MIN);
+        expect(board.offer({ provider: 'codex', accountId: 'account_legacy_codex' }, h(97, '7d'), T0 + 1, MIN)).toBe(true);
         expect(board.view()).toEqual({ claude: h(80), codex: h(97, '7d') });
     });
 
@@ -81,7 +83,7 @@ describe('a reading in an agent’s stream reaches the host’s owner with its p
 
 describe('in the header', () => {
     it('one pill per provider, its share left and window; the detail is a popover (rate-limit-popover)', () => {
-        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(62), codex: h(97, '7d') }} />);
+        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(62), codex: h(97, '7d') }} now={NOW} />);
         expect(html).toMatch(/data-rate-limit="claude"[^>]*aria-label="Claude Code rate limits: 62% left in the 5-hour window"/);
         expect(html).toContain('62%');
         expect(html).toMatch(/data-rate-limit="codex"/);
@@ -89,6 +91,6 @@ describe('in the header', () => {
     });
 
     it('nothing reported yet: nothing drawn', () => {
-        expect(renderToStaticMarkup(<RateLimitPills limits={{}} />)).toBe('');
+        expect(renderToStaticMarkup(<RateLimitPills limits={{}} now={NOW} />)).toBe('');
     });
 });

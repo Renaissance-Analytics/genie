@@ -39,6 +39,26 @@ export interface LimitWindow {
     readonly over: boolean;
 }
 
+/**
+ * WHICH ACCOUNT, AND WHICH RUN, A READING CAME FROM (Tynn #478): stamped when the agent LAUNCHES, so a reading that
+ * arrives after the agent was moved to another account still belongs to the account it was read on.
+ */
+export interface ReadingStamp {
+    readonly accountId: string;
+    readonly runId: string;
+}
+
+/** A window as it reads at a moment: a window past its reset time is `Refreshed`, and carries no figure at all. */
+export type WindowReading =
+    | { readonly refreshed: true; readonly window: string }
+    | { readonly refreshed: false; readonly window: string; readonly leftPct: number; readonly over: boolean; readonly resetsAtMs: number };
+
+/** A window whose reset time has come reads Refreshed: its last figure is not the account's figure any more. */
+export function readLimitWindow(w: LimitWindow, nowMs: number): WindowReading {
+    if (w.resetsAtMs <= nowMs) return { refreshed: true, window: w.window };
+    return { refreshed: false, window: w.window, leftPct: w.leftPct, over: w.over, resetsAtMs: w.resetsAtMs };
+}
+
 export const RATE_LIMIT_META = 'particle.academy/rate_limit';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -160,11 +180,13 @@ export const LIMIT_DANGER_LEFT_PCT = 10;
  * The dot across every provider's every reported window: the warning at 30% or less left, the danger at 10% or less or
  * spent; `null` once every window is above 30% left.
  */
-export function rateLimitAlert(limits: Readonly<Record<string, Headroom>>): RateLimitAlert | null {
+export function rateLimitAlert(limits: Readonly<Record<string, Headroom>>, nowMs?: number): RateLimitAlert | null {
     let danger = false;
     const low: string[] = [];
     for (const provider of Object.keys(limits).sort()) {
         for (const w of limits[provider]!.windows) {
+            // A window past its reset is Refreshed (Tynn #478): its last figure warns about nothing.
+            if (nowMs !== undefined && readLimitWindow(w, nowMs).refreshed) continue;
             if (!w.over && w.leftPct > LIMIT_WARNING_LEFT_PCT) continue;
             if (w.over || w.leftPct <= LIMIT_DANGER_LEFT_PCT) danger = true;
             low.push(`${providerWord(provider)}: ${w.over ? `over the limit ${windowWords(w.window)}` : `${w.leftPct}% left ${windowWords(w.window)}`}`);
@@ -181,9 +203,16 @@ export function limitLevel(w: { readonly leftPct: number; readonly over: boolean
 }
 
 /** The window with the least left — a spent one first; on a tie, the provider's order. What the pill shows. */
-export function tightestWindow(h: Headroom): LimitWindow {
+export function tightestWindow(h: Headroom, nowMs?: number): LimitWindow {
     const fallback: LimitWindow = { window: h.window, usedPct: 100 - h.leftPct, leftPct: h.leftPct, resetsAtMs: h.resetsAtMs, over: h.over };
-    return h.windows.reduce((best, w) => ((w.over ? -1 : w.leftPct) < (best.over ? -1 : best.leftPct) ? w : best), h.windows[0] ?? fallback);
+    // With a clock, a window past its reset is Refreshed and cannot be the tightest (Tynn #478).
+    const live = nowMs === undefined ? h.windows : h.windows.filter((w) => !readLimitWindow(w, nowMs).refreshed);
+    return live.reduce((best, w) => ((w.over ? -1 : w.leftPct) < (best.over ? -1 : best.leftPct) ? w : best), live[0] ?? h.windows[0] ?? fallback);
+}
+
+/** Every window the reading reported is past its reset: the provider reads Refreshed until a new reading arrives. */
+export function allRefreshed(h: Headroom, nowMs: number): boolean {
+    return h.windows.length > 0 ? h.windows.every((w) => readLimitWindow(w, nowMs).refreshed) : h.resetsAtMs <= nowMs;
 }
 
 /** A window the popover lists but the provider did not report. */

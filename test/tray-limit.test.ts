@@ -79,7 +79,7 @@ describe('which logins are held — the host answers', () => {
             _meta: { 'particle.academy/rate_limit': { status: 'rejected', rateLimitType: 'five_hour', resetsAtMs: now + 60 * MIN, windows: { five_hour: { utilization: 1, resetsAtMs: now + 60 * MIN } }, raw: {} } },
         });
         events.get('atlas')!.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution' });
-        expect(host.heldLogins()).toEqual([{ provider: 'claude', view: expect.objectContaining({ state: 'paused', resumeAtMs: now + 62 * MIN }) }]);
+        expect(host.heldLogins()).toEqual([{ provider: 'claude', account: 'account_legacy_claude', view: expect.objectContaining({ state: 'paused', resumeAtMs: now + 62 * MIN }) }]);
         host.resumeLimit('claude');
         expect(host.heldLogins()).toEqual([]);
     });

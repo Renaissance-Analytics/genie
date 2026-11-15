@@ -11,7 +11,7 @@ import { LiveReadings, planStepsOf } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
-import { resetsIn, type Headroom } from '../core/headroom.js';
+import { resetsIn, type Headroom, type ReadingStamp } from '../core/headroom.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
 import { supervisorFailureWords } from '../core/supervisor-failure.js';
@@ -513,12 +513,19 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     }
 };
 
+/** A rate-limit login: a provider's account (Tynn #478). */
+interface Login { readonly provider: string; readonly account: string }
+const loginKey = (login: Login): string => `${login.provider}:${login.account}`;
+const onLogin = (e: { readonly provider: string; readonly accountId: string }, login: Login): boolean => e.provider === login.provider && e.accountId === login.account;
+
 interface Running {
     session: AgentSession;
     /** What this run's launch read of the workspace's verdict; unset until it has. */
     launchedUntrusted?: boolean;
     /** The provider it runs on: whose rate-limit login holds it (Tynn #793). */
     provider: string;
+    /** The account it was LAUNCHED on (Tynn #478): its login is the provider's and this account's, not the provider's alone. */
+    accountId: string;
     /** The ledger, with arrival times. Timestamps are recorded HERE because this is where the
      *  event arrives — the wire carries none, and a time invented later would be a guess. */
     rows: TimedEvent[];
@@ -570,7 +577,7 @@ export class SessionHost {
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
-    readonly #onHeadroom: ((provider: string, headroom: Headroom) => void) | undefined;
+    readonly #onHeadroom: ((provider: string, headroom: Headroom, stamp?: ReadingStamp) => void) | undefined;
     readonly #onMcpServers: ((agentId: AgentId, reports: readonly McpServerReport[]) => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
@@ -694,7 +701,7 @@ export class SessionHost {
          */
         onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
-        onHeadroom?: (provider: string, headroom: Headroom) => void;
+        onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
         /** Each MCP server's state as an agent's provider reports it (genie#1202): main decides whether one is missing. */
         onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
         serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -770,22 +777,26 @@ export class SessionHost {
     }
 
     readonly #accountOf: ((provider: string) => Promise<string | null>) | undefined;
-    /** The account each held login was signed in to when its hold began (`null`: not known yet). Forgotten when it opens. */
+    /** The signed-in identity each held login was on when its hold began (`null`: not known yet), by login key. Forgotten when it opens. */
     readonly #heldAccount = new Map<string, string | null>();
     /** When each held login's account was last read: its own interval, so a login no session can read limits for is read too. */
     readonly #lastAccountRead = new Map<string, number>();
 
-    /** Read a held login's account: the first read is the one it is held on; a different one later releases it (Tynn #699). */
-    #readAccount(provider: string): void {
+    /**
+     * Read a held login's account: the first read is the one it is held on; a different one later releases it (Tynn #699).
+     * `accountOf` reads the provider's own default home, so only the legacy account's login is read this way.
+     */
+    #readAccount(login: Login): void {
         const read = this.#accountOf;
         if (!read) return;
-        void read(provider).then((account) => {
-            if (account === null || !this.#heldAccount.has(provider)) return;
-            const was = this.#heldAccount.get(provider) ?? null;
-            if (was === null) { this.#heldAccount.set(provider, account); return; }
+        const key = loginKey(login);
+        void read(login.provider).then((account) => {
+            if (account === null || !this.#heldAccount.has(key)) return;
+            const was = this.#heldAccount.get(key) ?? null;
+            if (was === null) { this.#heldAccount.set(key, account); return; }
             if (was === account) return;
-            this.#heldAccount.delete(provider);
-            this.resumeLimit(provider);
+            this.#heldAccount.delete(key);
+            this.resumeLimit(login.provider, login.account);
         }, () => {});
     }
 
@@ -800,16 +811,23 @@ export class SessionHost {
     readonly #schedule: (ms: number, fn: () => void) => () => void;
     #wakeCancel: (() => void) | null = null;
 
-    /** Every Genie agent of a provider runs on the person's one login of it, so the login IS the provider here. */
-    #loginOf(provider: string): { provider: string; account: string } {
-        return { provider, account: 'default' };
+    /** A login is a provider's ACCOUNT (Tynn #478): a limit on one account never holds an agent on another. */
+    #loginOf(provider: string, account: string): Login {
+        return { provider, account };
+    }
+
+    /** The distinct logins the running agents are on. */
+    #runningLogins(): Login[] {
+        const seen = new Map<string, Login>();
+        for (const e of this.#running.values()) seen.set(loginKey({ provider: e.provider, account: e.accountId }), this.#loginOf(e.provider, e.accountId));
+        return [...seen.values()];
     }
 
     /** A session's readings: the gate decides; a closed login holds every agent on it, and the wake is (re)scheduled. */
-    #limitReport(provider: string, readings: readonly LimitReading[], message: string | null): void {
-        this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
+    #limitReport(login: Login, readings: readonly LimitReading[], message: string | null): void {
+        this.#gate.report(login, readings, this.#clock(), message);
         // The provider's own reading says the login is limited: every agent on it waits (Tynn #793).
-        if (this.#gate.limitedByReading(this.#loginOf(provider), this.#clock())) this.#holdLogin(provider);
+        if (this.#gate.limitedByReading(login, this.#clock())) this.#holdLogin(login);
         this.#wake();
     }
 
@@ -819,8 +837,8 @@ export class SessionHost {
      * held only when the provider's own reading says the login is limited (`#limitReport`); the held agent's next re-read
      * asks for that reading.
      */
-    #limitBreach(agentId: AgentId, provider: string, reason: string): void {
-        this.#gate.breach(this.#loginOf(provider), this.#clock(), `The provider ended a turn on its rate limit (${reason}).`);
+    #limitBreach(agentId: AgentId, login: Login, reason: string): void {
+        this.#gate.breach(login, this.#clock(), `The provider ended a turn on its rate limit (${reason}).`);
         this.#emit(agentId);
         this.#onAction?.(agentId, 'limited');
         this.#wake();
@@ -830,15 +848,16 @@ export class SessionHost {
      * The limit an agent is under: its login's, as the gate holds it — except a breach's retry, which is the agent's own
      * that hit it and not the login's (Tynn #556): an agent it did not hold reads open.
      */
-    #limitOf(provider: string, held: boolean): GateView {
-        const login = this.#loginOf(provider), now = this.#clock(), view = this.#gate.view(login, now);
+    #limitOf(login: Login, held: boolean): GateView {
+        const now = this.#clock(), view = this.#gate.view(login, now);
         if (view.state === 'retrying' && !held && !this.#gate.limitedByReading(login, now)) return { state: 'open' };
         return view;
     }
 
     /** Why an agent is held, and until when — said in its chat when it comes up held (Tynn #556), never silent. */
-    #heldWords(provider: string): string {
-        const now = this.#clock(), view = this.#gate.view(this.#loginOf(provider), now);
+    #heldWords(login: Login): string {
+        const provider = login.provider;
+        const now = this.#clock(), view = this.#gate.view(login, now);
         const name = provider.charAt(0).toUpperCase() + provider.slice(1);
         const at = view.state === 'paused' ? view.resumeAtMs : view.state === 'retrying' ? view.nextTryAtMs : null;
         if (at === null) return `Held: the ${name} login needs you before it can go on${view.state === 'needs-person' && view.message ? ` (${view.message})` : ''}. Genie starts this agent once it is sorted.`;
@@ -846,10 +865,10 @@ export class SessionHost {
         return `Held: the ${name} login is at its rate limit. Genie resumes this agent at ${clock} (${resetsIn(at, now).replace(/^resets/, 'resumes')}); Resume now starts it at once.`;
     }
 
-    #holdLogin(provider: string): void {
+    #holdLogin(login: Login): void {
         let first: AgentId | null = null;
         for (const [id, entry] of this.#running) {
-            if (entry.provider === provider && !entry.session.held) { entry.session.hold(); this.#emit(id); first ??= id; }
+            if (onLogin(entry, login) && !entry.session.held) { entry.session.hold(); this.#emit(id); first ??= id; }
         }
         // ONCE for the login, not once per agent it holds: one limit, one sound.
         if (first !== null) this.#onAction?.(first, 'limited');
@@ -860,10 +879,10 @@ export class SessionHost {
         this.#wakeCancel?.();
         this.#wakeCancel = null;
         const now = this.#clock();
-        for (const key of this.#gate.due(now)) this.#resumeHeld(key.provider);
+        for (const key of this.#gate.due(now)) this.#resumeHeld(key);
         let next = Infinity;
-        for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
-            const v = this.#gate.view(this.#loginOf(provider), now);
+        for (const login of this.#runningLogins()) {
+            const v = this.#gate.view(login, now);
             if (v.state === 'paused') next = Math.min(next, v.resumeAtMs);
             else if (v.state === 'retrying') next = Math.min(next, v.nextTryAtMs);
         }
@@ -881,51 +900,53 @@ export class SessionHost {
     #rereadHeld(now: number): { next: number; ask: Array<() => void> } {
         let next = Infinity;
         const ask: Array<() => void> = [];
-        for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
-            const state = this.#gate.view(this.#loginOf(provider), now).state;
-            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); this.#heldAccount.delete(provider); this.#lastAccountRead.delete(provider); continue; }
+        for (const login of this.#runningLogins()) {
+            const provider = login.provider, key = loginKey(login);
+            const state = this.#gate.view(login, now).state;
+            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(key); this.#heldAccount.delete(key); this.#lastAccountRead.delete(key); continue; }
             // The account it is held on, read when the hold begins and every LIMIT_REREAD_MS after (Tynn #699).
-            if (this.#accountOf) {
-                if (!this.#heldAccount.has(provider)) this.#heldAccount.set(provider, null);
-                const lastAccount = this.#lastAccountRead.get(provider);
+            // Only the legacy account's: the read is of the provider's default home.
+            if (this.#accountOf && login.account === `account_legacy_${provider}`) {
+                if (!this.#heldAccount.has(key)) this.#heldAccount.set(key, null);
+                const lastAccount = this.#lastAccountRead.get(key);
                 if (lastAccount === undefined || now >= lastAccount + LIMIT_REREAD_MS) {
-                    ask.push(() => this.#readAccount(provider));
-                    this.#lastAccountRead.set(provider, now);
+                    ask.push(() => this.#readAccount(login));
+                    this.#lastAccountRead.set(key, now);
                     next = Math.min(next, now + LIMIT_REREAD_MS);
                 } else next = Math.min(next, lastAccount + LIMIT_REREAD_MS);
             }
             // The session that will be asked: the first on this login whose driver can read. None — nothing to wait for.
-            const reader = [...this.#running.values()].find((e) => e.provider === provider && e.session.canReadRateLimits);
-            if (!reader) { this.#lastLimitRead.delete(provider); continue; }
-            const last = this.#lastLimitRead.get(provider);
-            if (last === undefined) { this.#lastLimitRead.set(provider, now); next = Math.min(next, now + LIMIT_REREAD_MS); continue; }
+            const reader = [...this.#running.values()].find((e) => onLogin(e, login) && e.session.canReadRateLimits);
+            if (!reader) { this.#lastLimitRead.delete(key); continue; }
+            const last = this.#lastLimitRead.get(key);
+            if (last === undefined) { this.#lastLimitRead.set(key, now); next = Math.min(next, now + LIMIT_REREAD_MS); continue; }
             if (now < last + LIMIT_REREAD_MS) { next = Math.min(next, last + LIMIT_REREAD_MS); continue; }
             // prism-acp never rejects it (a failed read is reported on the session); a rejection from an older or fake
             // driver is that same "no reading" — the hold stands and the next interval asks again.
             ask.push(() => { reader.session.readRateLimits()?.catch(() => {}); });
-            this.#lastLimitRead.set(provider, now);
+            this.#lastLimitRead.set(key, now);
             next = Math.min(next, now + LIMIT_REREAD_MS);
         }
         return { next, ask };
     }
 
-    #resumeHeld(provider: string): void {
+    #resumeHeld(login: Login): void {
         let first: AgentId | null = null;
         for (const [id, entry] of this.#running) {
-            if (entry.provider === provider && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); first ??= id; }
+            if (onLogin(entry, login) && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); first ??= id; }
         }
         if (first !== null) this.#onAction?.(first, 'resumed');
     }
 
     /** The provider logins the gate holds now, among the running agents — one per login, however many it holds (Tynn #794: the tray). */
-    heldLogins(): Array<{ provider: string; view: GateView }> {
+    heldLogins(): Array<{ provider: string; account: string; view: GateView }> {
         const now = this.#clock();
-        const out: Array<{ provider: string; view: GateView }> = [];
-        for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
-            const view = this.#gate.view(this.#loginOf(provider), now);
+        const out: Array<{ provider: string; account: string; view: GateView }> = [];
+        for (const login of this.#runningLogins()) {
+            const view = this.#gate.view(login, now);
             // A breach's retry is the login's only while it holds one of its agents (Tynn #556).
-            const holds = view.state !== 'retrying' || this.#gate.limitedByReading(this.#loginOf(provider), now) || [...this.#running.values()].some((e) => e.provider === provider && e.session.held);
-            if (view.state !== 'open' && holds) out.push({ provider, view });
+            const holds = view.state !== 'retrying' || this.#gate.limitedByReading(login, now) || [...this.#running.values()].some((e) => onLogin(e, login) && e.session.held);
+            if (view.state !== 'open' && holds) out.push({ provider: login.provider, account: login.account, view });
         }
         return out;
     }
@@ -961,9 +982,10 @@ export class SessionHost {
     }
 
     /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */
-    resumeLimit(provider: string): void {
-        this.#gate.resumeNow(this.#loginOf(provider));
-        this.#resumeHeld(provider);
+    resumeLimit(provider: string, accountId?: string): void {
+        // One account's login, or — with no account named — every account of the provider that a running agent is on.
+        const logins = accountId !== undefined ? [this.#loginOf(provider, accountId)] : this.#runningLogins().filter((l) => l.provider === provider);
+        for (const login of logins) { this.#gate.resumeNow(login); this.#resumeHeld(login); }
         this.#wake();
     }
 
@@ -1144,7 +1166,9 @@ export class SessionHost {
         const rows: TimedEvent[] = [];
         const startedAt = this.#clock();
         const runId = randomUUID();
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
+        // Fixed at launch: a reading or a breach that arrives after the agent was moved still belongs to THIS account.
+        const launchAccountId = account?.id ?? record.accountId ?? `account_legacy_${record.provider}`;
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, accountId: launchAccountId, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
 
         // The plan kept from before this run: shown at once, until the run reports its own (identity.ts `plan`).
         if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
@@ -1174,8 +1198,8 @@ export class SessionHost {
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
-            onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
-            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room) } : {}),
+            onRateLimit: (readings, message) => this.#limitReport(this.#loginOf(record.provider, launchAccountId), readings, message),
+            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: launchAccountId, runId }) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
@@ -1190,7 +1214,7 @@ export class SessionHost {
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
             mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
-            onLimitBreach: (reason) => this.#limitBreach(record.id, record.provider, reason),
+            onLimitBreach: (reason) => this.#limitBreach(record.id, this.#loginOf(record.provider, launchAccountId), reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *
@@ -1208,7 +1232,7 @@ export class SessionHost {
                         // A turn that REPLIED went through: a no-reset backoff on its login is over, and the next breach
                         // starts at its first step (genie#1195: `ok` was never called). Only when the login is open — a
                         // reply from a turn that was already running never lets another agent's hold go.
-                        const login = this.#loginOf(record.provider);
+                        const login = this.#loginOf(record.provider, launchAccountId);
                         if (this.#gate.view(login, this.#clock()).state === 'open') this.#gate.ok(login);
                     }
                     entry.sounded.clear();
@@ -1325,9 +1349,9 @@ export class SessionHost {
             }
             // Its login is at its limit (the provider's reading says so): held from the start, so nothing is sent to a
             // provider that would refuse it — and the chat says why and until when (Tynn #556).
-            if (this.#gate.limitedByReading(this.#loginOf(record.provider), this.#clock())) {
+            if (this.#gate.limitedByReading(this.#loginOf(record.provider, launchAccountId), this.#clock())) {
                 session.hold();
-                session.notice(this.#heldWords(record.provider));
+                session.notice(this.#heldWords(this.#loginOf(record.provider, launchAccountId)));
             }
         } catch (error) {
             this.#running.delete(record.id);
@@ -2079,7 +2103,7 @@ export class SessionHost {
                 : null;
 
         return {
-            limit: this.#limitOf(entry.provider, entry.session.held),
+            limit: this.#limitOf(this.#loginOf(entry.provider, entry.accountId), entry.session.held),
             signedOut: entry.session.signedOut,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),

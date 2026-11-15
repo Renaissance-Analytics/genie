@@ -38,7 +38,7 @@ import {
     type EngineWelcome,
     type WireAttachment,
 } from '../core/engine-protocol.js';
-import type { Headroom } from '../core/headroom.js';
+import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -106,7 +106,7 @@ export interface EngineClientOptions {
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
     readonly onTurnNumbered?: (agentId: AgentId, n: number) => void;
     readonly onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
-    readonly onHeadroom?: (provider: string, headroom: Headroom) => void;
+    readonly onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
     readonly onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
     readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
@@ -526,7 +526,7 @@ export class SessionEngineClient {
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
             case 'action': o.onAction?.(c.agentId as AgentId, c.kind as AgentActionKind); return;
-            case 'headroom': o.onHeadroom?.(c.provider, c.headroom as Headroom); return;
+            case 'headroom': o.onHeadroom?.(c.provider, c.headroom as Headroom, c.stamp); return;
             case 'mcpServers': o.onMcpServers?.(c.agentId as AgentId, c.reports as readonly McpServerReport[]); return;
             case 'stopUnverified': o.onStopUnverified?.(c.agentId as AgentId, c.reason); return;
             case 'openFileForUser': o.onOpenFileLater?.(c.call as ForwardedToolCall); return;
@@ -1066,7 +1066,7 @@ export class SessionEngineClient {
         return [...this.#global.startedIds] as AgentId[];
     }
 
-    heldLogins(): Array<{ provider: string; view: GateView }> {
+    heldLogins(): Array<{ provider: string; account: string; view: GateView }> {
         return [...this.#global.heldLogins];
     }
 
@@ -1094,8 +1094,8 @@ export class SessionEngineClient {
         void this.call('engine.clearDesignLogin', [agentId]);
     }
 
-    resumeLimit(provider: string): void {
-        void this.call('engine.resumeLimit', [provider]);
+    resumeLimit(provider: string, accountId?: string): void {
+        void this.call('engine.resumeLimit', accountId === undefined ? [provider] : [provider, accountId]);
     }
 
     #view(agentId: string): EngineAgentView {

@@ -377,7 +377,7 @@ export class SessionEngineServer {
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
             onAction: (agentId, kind) => this.callback({ name: 'action', agentId, kind }),
-            onHeadroom: (provider, headroom) => this.callback({ name: 'headroom', provider, headroom }),
+            onHeadroom: (provider, headroom, stamp) => this.callback({ name: 'headroom', provider, headroom, ...(stamp ? { stamp } : {}) }),
             onMcpServers: (agentId, reports) => this.callback({ name: 'mcpServers', agentId, reports }),
         };
     }
@@ -752,7 +752,7 @@ export class SessionEngineServer {
                 return true;
             }
             case 'engine.resumeLimit':
-                host.resumeLimit(str(0));
+                host.resumeLimit(str(0), typeof args[1] === 'string' ? args[1] : undefined);
                 return true;
             case 'engine.clearDesignLogin':
                 host.clearDesignLogin(str(0));

@@ -188,7 +188,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             start: (record, cwd) => engine().start(record, cwd),
             stop: (id) => engine().stop(id),
             cancel: (id, intent) => engine().cancel(id, 'you', intent),
-            resumeLimit: (provider) => engine().resumeLimit(provider),
+            resumeLimit: (provider, accountId) => engine().resumeLimit(provider, accountId),
             prompt: (id, text, by) => engine().prompt(id, text, by),
             promptWith: (id, text, attachments, by) => engine().promptWith(id, text, attachments, by),
             resolvePrompt: (id, promptId, action) => engine().resolvePrompt(id, promptId, action),

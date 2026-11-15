@@ -9,7 +9,7 @@ import type { BoardScope } from '../core/tynn-board.js';
 import { readTynnIssueChanges } from './tynn-issues-client.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
-import type { Headroom } from '../core/headroom.js';
+import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy, retryHostCopy } from '../core/main-errors.js';
@@ -1504,7 +1504,7 @@ async function boot(): Promise<void> {
         onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
-        onHeadroom: (provider: string, room: Headroom) => headroomFeed.offer(provider, room),
+        onHeadroom: (provider: string, room: Headroom, stamp?: ReadingStamp) => headroomFeed.offer(provider, room, stamp),
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
@@ -2493,7 +2493,7 @@ async function boot(): Promise<void> {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => agentsUp().stop(id),
                 cancel: (id, intent) => agentsUp().cancel(id, 'you', intent),
-                resumeLimit: (provider) => agentsUp().resumeLimit(provider),
+                resumeLimit: (provider, accountId) => agentsUp().resumeLimit(provider, accountId),
                 prompt: (id, text, by) => agentsUp().prompt(id, text, by),
                 // The composer's own attach path, for this window and a phone's photo (genie#1346).
                 promptWith: (id, text, attachments, by) => agentsUp().promptWith(id, text, attachments, by),
