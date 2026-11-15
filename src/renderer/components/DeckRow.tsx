@@ -1,269 +1,40 @@
 import { Badge, Button, Icon } from '@particle-academy/react-fancy';
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useState, type ReactNode, type RefObject } from 'react';
 import { QuestionForm } from './QuestionForm.js';
 import { personText } from '../../core/person-text.js';
 import { answeringFor, type ApprovalAnswering } from '../../core/approval-answering.js';
 import {
     ageLabel,
-    DAY_MS,
-    deckBand,
     deckBody,
     deckPreview,
     linkParts,
-    deckSections,
-    dismissableOlderThan,
-    earlierRuns,
-    EARLIER_RUNS_HEADING,
-    GENIE_SECTION,
-    isStale,
-    UNNAMED_WORKSPACE,
-    dismissableStale,
     isDismissable,
-    needsYouCount,
-    signalStrip,
     staleLabel,
     type DeckItem,
-    type DeckSection,
-    type SignalAction,
-    type SignalState,
 } from '../../core/deck.js';
 import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 
 /**
- * THE DECK — "does anything need me?"
- *
- * ## Grouped by workspace (the owner, 2026-10-15)
- *
- * Sections per workspace — its NAME, as the rail says it, in the Dashboard's group header — then rows. Genie's own items
- * (a main-process error, trusting the certificate) are Genie's section. The band's ranking decides both orders
- * (`core/deck.ts deckSections`): the section holding the most-worth-doing item comes first, and inside it the rows are in
- * rank order. A row is each thing that needs the person — an agent's question, an approval, Genie's own item — with the
- * agent, the question or request, how long it has waited, and its answer IN PLACE, Open (its agent) and Dismiss.
- *
- * ## The acceptance test is a sentence, and the layout serves it
- *
- * > **You can clear the entire band without navigating once.**
- *
- * So every item is answered where it is read: inline options as buttons, an agent's questions as their form, right in
- * the row, and a forwarded one shown with the host it belongs to rather than a button that would mark it done while the
- * real question waits forever.
+ * ONE WAITING ITEM, AS A ROW - what used to be the Deck page's row, now drawn under its agent's row on the Dashboard (Tynn #730,
+ * the owner's option B; the Deck is not a page). Answered WHERE IT IS READ: inline options as buttons, an agent's questions as
+ * their form (QuestionForm), a forwarded one shown with the host it belongs to rather than a button that would mark it done while
+ * the real question waits forever.
  *
  * ## A question is READ here (the owner, 2026-10-15: "I can't read this")
  *
- * The row's title is the question's short header — plain text. The body is the question itself, rendered from its
- * Markdown by QuestionForm, the same form the question window shows: sans, 13px, a reading width, never a monospace
- * dump and never cut off. Every question has a note of its own, which travels with the answer AND with a Dismiss (the
- * owner: "I NEED THE ABILITY TO ADD NOTES TO ANY AND ALL QUESTIONS").
+ * The row's title is the question's short header - plain text. The body is the question itself, rendered from its Markdown by
+ * QuestionForm, the same form the question window shows. Every question has a note of its own, which travels with the answer AND
+ * with a Dismiss.
  *
  * ## Stale: kept, and said (the owner, 2026-10-15: "Keep, but mark stale")
  *
- * A question whose agent no longer waits — the agent is gone, its session ended, or an earlier run asked it — stays,
- * greyed, after the live rows of its section, labelled with why, with a one-click Dismiss; its form opens in place with
- * "Answer anyway". The header offers "Dismiss all stale" with how many. A stale question is not counted as waiting on
- * you: its agent is not waiting.
+ * A question whose agent no longer waits stays, greyed, labelled with why, with a one-click Dismiss; its form opens in place with
+ * "Answer anyway". A stale question is not counted as waiting on you: its agent is not waiting.
  *
- * ## Nothing waits forever
+ * ## An approval a toast carries is not answered here
  *
- * Every agent question can be Dismissed without an answer (its agent is told), and the header offers "Dismiss all older
- * than 1 day" when there are such.
- *
- * ## The only place badges exist
- *
- * Stated in `core/deck.ts` and repeated here because it is a rule about the whole application:
- * if a badge appears anywhere else, the design has failed.
- *
- * ## No Agents band
- *
- * The Dashboard absorbed it. Two boards claiming the same subject was the original design
- * error, and this one's subject is *decisions*.
+ * The approval toasts (core/approval-toasts.ts) are the one actionable place; this row shows a marker for them.
  */
-
-export interface DeckProps {
-    items: readonly DeckItem[];
-    signals: SignalState;
-    /** The answer in flight, if any — which agent's (core/approval-answering.ts): only THAT agent's row refuses a second press. */
-    answering: ApprovalAnswering | null;
-    /** `note`: the person's words with an approval's answer (beta.33 item 16); absent = none. */
-    onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
-    onOpenItem: (item: DeckItem) => void;
-    onNavigate: (route: string) => void;
-    /** The update signal's door is an action (§7): download, then install. */
-    onSignalAction?: ((action: SignalAction) => void) | undefined;
-    /** An agent's questions, answered IN PLACE: one array of labels per question, plus one note per question. */
-    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
-    /** The last refused form answer: said beside THAT item's Answer button, where the person clicked. */
-    formRefusal?: { itemId: string; reason: string } | null | undefined;
-    /** The item the reader was SENT to (`genie://deck?item=<id>`, a waiting Dashboard row): marked and scrolled to. */
-    focusId?: string | null | undefined;
-    /** Dismiss an agent's question without an answer, with the notes written in its form (none from a one-click Dismiss). Absent = not offered. */
-    onDismiss?: ((item: DeckItem, notes: string[]) => void) | undefined;
-    /** "Dismiss all older than 1 day" — the age, in ms, past which the questions go. Absent = not offered. */
-    onDismissOlder?: ((olderThanMs: number) => void) | undefined;
-    /** "Dismiss all stale" — exactly the ids shown marked stale. Absent = not offered. */
-    onDismissStale?: ((ids: string[]) => void) | undefined;
-    /** Trust an item's workspace, from its approval card (Tynn #618). Absent = not offered. */
-    onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
-    /** Items drawn opened (a test of the opened row; the Deck itself opens one on a click). */
-    initiallyExpanded?: readonly string[] | undefined;
-    /** The action in flight on one of Genie's own items: that button shows progress, its row takes no second press (Tynn #693). */
-    busy?: { itemId: string; optionId: string } | null | undefined;
-    /** The clock the ages are read against; now by default (tests pass a fixed one). */
-    now?: number | undefined;
-}
-
-const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
-
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now(), initiallyExpanded, busy = null, onTrustWorkspace }: DeckProps) {
-    const band = deckBand(items);
-    // The workspace sections hold what waits; the stale questions have their own band below (2026-11-08).
-    const sections = deckSections(items.filter((i) => !isStale(i)));
-    const earlier = earlierRuns(items);
-    const waiting = needsYouCount(items);
-    const staleItems = dismissableStale(band);
-    const staleCount = band.length - waiting;
-    const strip = signalStrip(signals);
-    const old = dismissableOlderThan(band, now, DAY_MS);
-    const focusRef = useRef<HTMLDivElement | null>(null);
-    useEffect(() => { focusRef.current?.scrollIntoView({ block: 'center' }); }, [focusId]);
-
-    return (
-        <div data-surface="deck" className="flex h-full min-h-0 flex-col">
-            <div data-view-header="" className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border-1)] pl-7 pr-5">
-                <h1 className="text-lg font-semibold tracking-tight">Deck</h1>
-                {/*
-                 * The count, and only when there is one. The Deck being empty is said by the
-                 * band below, in words — not by a zero in the header. Stale questions are not
-                 * waiting on anybody, so they are said beside it, not in it.
-                 */}
-                {waiting > 0 ? (
-                    <span data-deck-count={waiting} className="font-mono text-xs text-[var(--fg-3)]">
-                        {waiting} waiting on you
-                    </span>
-                ) : null}
-                {staleCount > 0 ? (
-                    <span data-deck-stale-count={staleCount} className="font-mono text-xs text-[var(--fg-4)]">
-                        {staleCount} stale
-                    </span>
-                ) : null}
-                <div className="ml-auto flex items-center gap-2">
-                    {/* The questions nobody waits for any more: exactly the ones on screen, put aside in one go. */}
-                    {onDismissStale && staleItems.length > 0 ? (
-                        <Button size="xs"
-                            type="button"
-                            data-action="deck-dismiss-stale"
-                            data-deck-stale={staleItems.length}
-                            onClick={() => onDismissStale(staleItems.map((i) => i.id))}
-                            title="Every question whose agent no longer waits; each agent is told"
-                            className={HEADER_BUTTON}
-                        >
-                            {`Dismiss all stale (${staleItems.length})`}
-                        </Button>
-                    ) : null}
-                    {/* The questions nobody is going to answer: put aside in one go, each agent told. Only when there are such. */}
-                    {onDismissOlder && old.length > 0 ? (
-                        <Button size="xs"
-                            type="button"
-                            data-action="deck-dismiss-older"
-                            data-deck-older={old.length}
-                            onClick={() => onDismissOlder(DAY_MS)}
-                            title="Each agent is told its question was dismissed without an answer"
-                            className={HEADER_BUTTON}
-                        >
-                            {`Dismiss all older than 1 day (${old.length})`}
-                        </Button>
-                    ) : null}
-                </div>
-            </div>
-            {/* "Dismiss all stale" or "Dismiss all older" refused: said under the header (Tynn #600). */}
-            {formRefusal && (formRefusal.itemId === 'deck:stale' || formRefusal.itemId === 'deck:older') ? (
-                <p data-deck-refusal={formRefusal.itemId} role="alert" className="px-7 pb-2 text-xs text-[var(--danger)]">{formRefusal.reason}</p>
-            ) : null}
-
-            {/*
-             * The signal strip — silent unless something is true, and every signal a door.
-             * Rendered above the band because it is context for it, and absent entirely when
-             * there is nothing to say.
-             */}
-            {strip.length > 0 ? (
-                <div data-signal-strip className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-7 py-2">
-                    {strip.map((signal) => (
-                        <Button size="xs"
-                            key={signal.kind}
-                            type="button"
-                            data-signal={signal.kind}
-                            data-nav={signal.route}
-                            data-action={signal.action}
-                            onClick={() => (signal.action ? onSignalAction?.(signal.action) : onNavigate(signal.route))}
-                            className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]"
-                        >
-                            {signal.label}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
-
-            <div className="min-h-0 flex-1 overflow-auto">
-                {/*
-                 * Empty, and it SAYS so.
-                 *
-                 * "Nothing needs you" is a real statement this surface is entitled to make —
-                 * unlike the Dashboard's first run, where "no workspaces" before the bridge
-                 * answers would be a claim about a machine nobody had looked at. Here the band
-                 * is the whole subject, and an empty band is the answer to the question the
-                 * surface asks.
-                 */}
-                {band.length === 0 ? (
-                    <div data-deck="empty" className="flex h-full items-center justify-center text-[13px] text-[var(--fg-3)]">
-                        Nothing needs you.
-                    </div>
-                ) : null}
-                {band.length > 0 && waiting === 0 ? (
-                    <p data-deck="only-stale" className="px-7 pt-3 text-[13px] text-[var(--fg-3)]">
-                        Nothing is waiting on you. The questions below were asked by agents that no longer wait for them.
-                    </p>
-                ) : null}
-
-                <div data-deck-band="needs-you">
-                    {sections.map((section) => (
-                        <DeckSectionView
-                            key={section.key}
-                            section={section}
-                            answering={answering}
-                            onAnswer={onAnswer}
-                            onOpenItem={onOpenItem}
-                            onAnswerForm={onAnswerForm}
-                            formRefusal={formRefusal}
-                            focusId={focusId}
-                            focusRef={focusRef}
-                            onDismiss={onDismiss}
-                            now={now}
-                            initiallyExpanded={initiallyExpanded}
-                            busy={busy}
-                            onTrustWorkspace={onTrustWorkspace}
-                        />
-                    ))}
-                </div>
-
-                {/*
-                  * EARLIER RUNS: STILL UNANSWERED (the owner, 2026-11-08). A question its agent no longer waits for — an
-                  * earlier run asked it, or the agent is gone — is never invisible: its own band, under its own heading,
-                  * each said in full with its workspace, Answer and Dismiss.
-                  */}
-                {earlier.length > 0 ? (
-                    <div data-deck-band="earlier-runs" className="mt-2">
-                        <h2 className="px-7 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-3)]">{EARLIER_RUNS_HEADING}</h2>
-                        {earlier.map((item) => (
-                            <div key={item.id}>
-                                <span data-deck-earlier-workspace={item.workspaceId ?? ''} className="block px-7 pt-2 text-[11px] text-[var(--fg-3)]">{item.workspaceId === null ? GENIE_SECTION : (item.workspaceName ?? UNNAMED_WORKSPACE)}</span>
-                                <DeckRow item={item} answering={answering} onAnswer={onAnswer} onOpenItem={onOpenItem} onAnswerForm={onAnswerForm} formRefusal={formRefusal} focusId={focusId} focusRef={focusRef} onDismiss={onDismiss} now={now} />
-                            </div>
-                        ))}
-                    </div>
-                ) : null}
-            </div>
-        </div>
-    );
-}
 
 export interface RowProps {
     answering: ApprovalAnswering | null;
@@ -286,20 +57,6 @@ export interface RowProps {
     toastIds?: ReadonlySet<string> | undefined;
 }
 
-/** One workspace's section: the Dashboard's group header (name, then how many wait and how many are stale), then its rows. */
-function DeckSectionView({ section, ...row }: RowProps & { section: DeckSection }) {
-    const summary = [section.live > 0 ? `${section.live} waiting` : null, section.stale > 0 ? `${section.stale} stale` : null].filter(Boolean).join(' · ');
-    return (
-        <section data-deck-section={section.key} data-deck-section-live={section.live} data-deck-section-stale={section.stale}>
-            <div className="flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
-                {/* The workspace's NAME (never its id — that is an attribute for tests); Genie's own items are Genie's. */}
-                <span data-deck-workspace={section.workspaceId ?? ''} className="font-semibold">{section.label}</span>
-                {summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{summary}</span> : null}
-            </div>
-            {section.items.map((item) => <DeckRow key={item.id} item={item} {...row} />)}
-        </section>
-    );
-}
 
 export function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded, busy, onTrustWorkspace, toastIds }: RowProps & { item: DeckItem }) {
     // A stale question's form is folded away until the person chooses to answer it anyway — its agent is not waiting.

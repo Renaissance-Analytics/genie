@@ -11,7 +11,7 @@ import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { sendKeyFrom } from '../core/send-key.js';
 import { setSendKey } from './send-key-store.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
-import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import type { AlertToast } from './components/AlertToasts.js';
 import { TERMINAL_NEEDS_YOU, showTerminalRoute } from '../core/terminal-surface.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
@@ -1099,7 +1099,7 @@ function DesktopApp({ bridge }: AppProps) {
     const showAlert = useCallback((toast: { title: string; body: string; color?: string; action?: AlertToast['action'] }) => {
         if (alertDelivery(typeof document !== 'undefined' && document.hasFocus()) === 'in-app') {
             const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            setAlertToasts((prev) => [...prev.slice(-3), { id, ...toast }]);
+            setAlertToasts((prev) => [...prev.slice(-7), { id, ...toast }]);
             setTimeout(() => dismissAlert(id), toast.action ? ALERT_ACTION_TOAST_MS : ALERT_TOAST_MS);
         } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
             try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
@@ -2005,6 +2005,8 @@ function DesktopApp({ bridge }: AppProps) {
             </div>
         ) : null}
         <Shell
+            alertToasts={alertToasts}
+            onDismissAlert={dismissAlert}
             pulsingWorkspaces={pulsingIds(pulses)}
             rowEmoji={rowEmoji}
             rateLimits={rateLimits}
@@ -2364,7 +2366,6 @@ function DesktopApp({ bridge }: AppProps) {
                 onRefresh={remote.reloadTynnWorkstations}
             />
         ) : null}
-        <AlertToasts toasts={alertToasts} onDismiss={dismissAlert} />
         </PanelHostContext.Provider>
         </PluginEditorsContext.Provider>
         </HostPathPickerContext.Provider>

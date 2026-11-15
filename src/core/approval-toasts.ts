@@ -42,6 +42,16 @@ export function isApprovalToast(item: DeckItem): boolean {
 /** The toastable items, most worth answering first (the Deck's rank). */
 const toastable = (items: readonly DeckItem[]): DeckItem[] => deckBand(items).filter(isApprovalToast);
 
+/**
+ * THE ONE RULE for every toast stack in the left column (approvals and Genie's own alerts): three are drawn, the rest are
+ * "+N more", and an expansion draws them all. An expansion over a stack that fits is nothing.
+ */
+export function limitStack<T>(items: readonly T[], expanded: boolean): { shown: readonly T[]; more: number; expanded: boolean } {
+    const open = expanded && items.length > TOAST_LIMIT;
+    const shown = open ? items : items.slice(0, TOAST_LIMIT);
+    return { shown, more: items.length - shown.length, expanded: open };
+}
+
 export interface ToastState {
     /** Every approval id seen so far, so an arrival is told from a request that was already there. */
     readonly seen: readonly string[];
@@ -101,15 +111,15 @@ export interface ToastStackView {
 
 export function toastView(state: ToastState, items: readonly DeckItem[]): ToastStackView {
     const all = toastable(items).filter((i) => !state.held.includes(i.id));
-    const expanded = state.expanded && all.length > TOAST_LIMIT;
-    const shown = expanded ? all : all.slice(0, TOAST_LIMIT);
-    return { shown, ids: all.map((i) => i.id), more: all.length - shown.length, total: all.length, expanded, answering: state.answering };
+    const { shown, more, expanded } = limitStack(all, state.expanded);
+    return { shown, ids: all.map((i) => i.id), more, total: all.length, expanded, answering: state.answering };
 }
 
 /**
- * Where the stack sits INSIDE THE PAGE COLUMN (the main content, beside the rail and before the chat dock): bottom-left,
+ * Where the toast column sits INSIDE THE PAGE COLUMN (the main content, beside the rail and before the chat dock): bottom-left,
  * a margin from both edges, never wider than the column less its margins. The chat — and its input — is a column AFTER
- * the page, so a stack that stays inside the page column cannot reach it, at any width.
+ * the page, so a column that stays inside the page column cannot reach it, at any width. Approvals and Genie's own alerts
+ * share it (renderer/components/ToastColumn.tsx): one flex column, so two toasts never overlap.
  */
 export function toastBox(regionWidth: number): { left: number; bottom: number; width: number } {
     return { left: TOAST_GAP, bottom: TOAST_GAP, width: Math.max(0, Math.min(TOAST_WIDTH, regionWidth - 2 * TOAST_GAP)) };

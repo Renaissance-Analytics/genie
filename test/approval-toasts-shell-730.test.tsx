@@ -141,9 +141,11 @@ describe('where the toasts are: bottom-left of the page column, never over the c
         expect(html.indexOf('data-rail')).toBeLessThan(region);
     });
 
-    it('bottom-left classes, and no right offset to slide it under the dock', () => {
+    it('the column is bottom-left, no wider than the page column, with no right offset to slide it under the dock', () => {
         const html = render('genie://dashboard', parked(1));
-        const open = html.match(/<div[^>]*data-approval-toasts=""[^>]*>/)![0];
+        const open = html.match(/<div[^>]*data-toast-column=""[^>]*>/)![0];
+        expect(open).toMatch(/\bw-\[372px\]/);
+        expect(open).toMatch(/max-w-\[calc\(100%-2rem\)\]/);
         expect(open).toMatch(/\bleft-4\b/);
         expect(open).toMatch(/\bbottom-4\b/);
         expect(open).not.toMatch(/\bright-/);

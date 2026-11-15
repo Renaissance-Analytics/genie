@@ -20,6 +20,8 @@ import { composerMeter } from '../core/composer.js';
 import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import { ApprovalToastStack, useApprovalToasts } from './components/ApprovalToasts.js';
+import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import { ToastColumn } from './components/ToastColumn.js';
 import { earlierRuns, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { turnStopOffered } from '../core/agent-view.js';
@@ -180,6 +182,9 @@ export interface ShellProps {
      */
     onAnswerApproval: (agentId: string, optionId: string, note?: string, approval?: Approval | null) => void;
     /** Answering from the DECK names its agent, because the route is not on that agent. */
+    /** Genie's own alert toasts (genie#1211), drawn in the same bottom-left column as the approvals, above them (Tynn #730). */
+    alertToasts?: readonly AlertToast[] | undefined;
+    onDismissAlert?: ((id: string) => void) | undefined;
     /** An inline answer on a Deck item. The ITEM travels, because which channel it takes is decided by its id. */
     onAnswerDeckItem: (item: DeckItem, optionId: string, note?: string) => void;
     /** A multi-part question's form, filled in place (§4.5): labels and one note per question. */
@@ -426,6 +431,8 @@ export function Shell({
     approvalRefusal = null,
     onAnswerApproval,
     onAnswerDeckItem,
+    alertToasts,
+    onDismissAlert,
     onAnswerDeckForm,
     deckFormRefusal,
     deckBusy,
@@ -1051,6 +1058,7 @@ export function Shell({
                         </div>
                     ) : null}
                 </main>
+                <ToastColumn>
                 {scoped ? null : <ErrorBoundary surface="Approvals">
                 <ApprovalToastStack
                     view={toasts.view}
@@ -1060,6 +1068,8 @@ export function Shell({
                     onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
                 />
                 </ErrorBoundary>}
+                {alertToasts && onDismissAlert ? <AlertToasts toasts={alertToasts} onDismiss={onDismissAlert} /> : null}
+                </ToastColumn>
                 </div>
 
                 {/*

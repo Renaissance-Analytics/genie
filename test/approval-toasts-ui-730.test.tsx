@@ -31,14 +31,9 @@ function html(list: DeckItem[], over: Partial<ApprovalToastStackProps> = {}, eve
 const count = (s: string, re: RegExp): number => s.match(re)?.length ?? 0;
 
 describe('where the toasts are', () => {
-    it('bottom-LEFT of the page column, a margin from both edges, never wider than the column — and never on the right', () => {
-        const out = html(items(1));
-        const open = out.match(/<div[^>]*data-approval-toasts=""[^>]*>/)![0];
-        expect(open).toMatch(/\bleft-4\b/);
-        expect(open).toMatch(/\bbottom-4\b/);
-        expect(open).toMatch(/\bw-\[372px\]/);
-        expect(open).toMatch(/max-w-\[calc\(100%-2rem\)\]/);
-        expect(open).not.toMatch(/\bright-/);
+    it('the stack only stacks: the shared bottom-left ToastColumn places it, so it has no position of its own to overlap the alerts', () => {
+        const open = html(items(1)).match(/<div[^>]*data-approval-toasts=""[^>]*>/)![0];
+        expect(open).not.toMatch(/\b(fixed|absolute|left-|right-|bottom-)/);
     });
 
     it('CONTROL: nothing waiting, nothing drawn', () => {

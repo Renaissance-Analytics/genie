@@ -79,7 +79,8 @@ export function ApprovalToastStack({ view, onAnswer, onExpand, onOpenAgent, onTr
             role="region"
             aria-label={`Approvals waiting: ${view.total}`}
             // The first toast is the one most worth answering: it sits in the corner, the rest stack above it, "+N more" on top.
-            className={`pointer-events-none absolute bottom-4 left-4 z-30 flex w-[372px] max-w-[calc(100%-2rem)] flex-col-reverse gap-2 ${view.expanded ? 'max-h-[calc(100%-2rem)] overflow-y-auto' : ''}`}
+            // In the toast column (ToastColumn): the column is placed, this stack only stacks.
+            className="pointer-events-none flex flex-col-reverse gap-2"
         >
             {view.shown.map((item) => (
                 <div key={item.id} className="pointer-events-auto">
