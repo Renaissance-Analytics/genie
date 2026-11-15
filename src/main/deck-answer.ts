@@ -24,6 +24,8 @@ export interface DeckAnswerPorts {
     readonly deferTrustCertificate?: () => void;
     readonly syncHosts?: () => Promise<HostsSyncResult>;
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
+    /** A rate-limit alert's kept notice (Tynn #748): Dismiss forgets it. */
+    readonly limitNotices?: { dismiss(id: string): boolean };
     readonly mainErrors?: { dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
 }
 
@@ -86,6 +88,10 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if ('error' in r) throw new Error(r.error);
             break;
         }
+        case 'dismiss-limit-alert':
+            if (!ports.limitNotices) throw new Error(NEEDS_WINDOW('dismissing a rate-limit alert'));
+            if (!ports.limitNotices.dismiss(command.id)) throw new Error(`no rate-limit notice ${command.id}`);
+            break;
         case 'dismiss-main-error':
             // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
             if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');

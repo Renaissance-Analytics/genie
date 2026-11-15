@@ -1,5 +1,6 @@
 import { SOUND_CHOICES, soundFile, type AlertSound } from './alerts.js';
 import { clockAmPm } from './clock-words.js';
+import type { DeckItem } from './deck.js';
 import type { AccountHeadroom } from './headroom-board.js';
 
 /**
@@ -160,6 +161,10 @@ export class LimitAlertWatcher {
 /** What the host tells its windows when an alert fires: the words, and the alert's own sound by name. */
 export interface LimitAlertSignal {
     readonly kind: 'limit-alert';
+    /** Unique per firing (alert, account, window, window instance): the key of its kept notice. */
+    readonly id: string;
+    readonly at: number;
+    readonly expiresAtMs: number;
     readonly alertId: string;
     readonly sound: string;
     readonly title: string;
@@ -177,6 +182,7 @@ export interface LimitAlertServiceOptions {
     readonly nameOf: (accountId: string, provider: string) => string;
     readonly save: (state: ArmedState) => void;
     readonly emit: (signal: LimitAlertSignal) => void;
+    readonly now?: () => number;
 }
 
 export class LimitAlertService {
@@ -198,7 +204,93 @@ export class LimitAlertService {
         if (now !== this.#saved) { this.#saved = now; this.#o.save(this.#watcher.snapshot()); }
         for (const f of fired) {
             const words = limitAlertWords(f, this.#o.nameOf(f.accountId, f.provider));
-            this.#o.emit({ kind: 'limit-alert', alertId: f.alert.id, sound: f.alert.sound, ...words });
+            this.#o.emit({ kind: 'limit-alert', id: `${LIMIT_NOTICE_DECK_PREFIX}${f.alert.id}:${f.accountId}:${f.window}:${f.resetsAtMs}`, at: (this.#o.now ?? Date.now)(), expiresAtMs: f.resetsAtMs, alertId: f.alert.id, sound: f.alert.sound, ...words });
         }
+    }
+}
+
+/** Ids of the Deck items a fired alert leaves (source `genie`): answered by Dismiss, never alerting a second time. */
+export const LIMIT_NOTICE_DECK_PREFIX = 'genie:limit-alert:';
+
+/**
+ * WHAT A FIRED ALERT LEAVES FOR A WINDOW THAT IS NOT OPEN (Tynn #748). The sound is a moment: it plays only in a window
+ * open when the alert fires, and is never replayed on open. The NOTICE is kept, as a Deck item, until the person dismisses
+ * it or its window resets (after which it is about a limit that no longer holds).
+ */
+export interface LimitNotice {
+    readonly id: string;
+    readonly title: string;
+    readonly body: string;
+    readonly at: number;
+    /** When the window it names resets; the notice is dropped from then on. */
+    readonly expiresAtMs: number;
+}
+
+/** The notices kept at most: the oldest go first. */
+export const LIMIT_NOTICE_CAP = 20;
+
+export function limitNoticeDeckItem(n: LimitNotice): DeckItem {
+    return {
+        id: n.id,
+        source: 'genie',
+        agentId: null,
+        agentName: null,
+        workspaceId: null,
+        title: n.title,
+        blocking: false,
+        priority: 'normal',
+        at: n.at,
+        answer: { kind: 'inline', options: [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' }] },
+        forwardedFrom: null,
+        detail: n.body,
+    };
+}
+
+function isNotice(v: unknown): v is LimitNotice {
+    if (typeof v !== 'object' || v === null) return false;
+    const r = v as Record<string, unknown>;
+    return typeof r['id'] === 'string' && r['id'].startsWith(LIMIT_NOTICE_DECK_PREFIX) && typeof r['title'] === 'string' && typeof r['body'] === 'string'
+        && typeof r['at'] === 'number' && typeof r['expiresAtMs'] === 'number';
+}
+
+export class LimitNoticeBook {
+    #notices: LimitNotice[];
+    readonly #save: (notices: readonly LimitNotice[]) => void;
+    readonly #listeners = new Set<() => void>();
+
+    constructor(load: () => unknown, save: (notices: readonly LimitNotice[]) => void) {
+        this.#save = save;
+        const saved = ((): unknown => { try { return load(); } catch { return []; } })();
+        this.#notices = Array.isArray(saved) ? saved.filter(isNotice) : [];
+    }
+
+    /** Keep a fired alert's notice (one per id; a repeat of the same id is the same notice). */
+    record(signal: LimitAlertSignal): void {
+        if (this.#notices.some((n) => n.id === signal.id)) return;
+        this.#notices = [...this.#notices, { id: signal.id, title: signal.title, body: signal.body, at: signal.at, expiresAtMs: signal.expiresAtMs }].slice(-LIMIT_NOTICE_CAP);
+        this.#changed();
+    }
+
+    dismiss(id: string): boolean {
+        const next = this.#notices.filter((n) => n.id !== id);
+        if (next.length === this.#notices.length) return false;
+        this.#notices = next;
+        this.#changed();
+        return true;
+    }
+
+    /** The Deck items now: a notice whose window has reset is not one. */
+    items(nowMs: number): DeckItem[] {
+        return this.#notices.filter((n) => n.expiresAtMs > nowMs).map(limitNoticeDeckItem);
+    }
+
+    onChange(listener: () => void): () => void {
+        this.#listeners.add(listener);
+        return () => { this.#listeners.delete(listener); };
+    }
+
+    #changed(): void {
+        this.#save(this.#notices);
+        for (const l of [...this.#listeners]) l();
     }
 }

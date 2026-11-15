@@ -46,7 +46,7 @@ import { providerBinary, realListModels, SessionHost } from './session-host.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
-import { LIMIT_ALERTS_SETTING, LimitAlertService, parseLimitAlerts } from '../core/limit-alerts.js';
+import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -1183,13 +1183,20 @@ async function main(): Promise<void> {
     // RATE-LIMIT ALERTS (Tynn #748, core/limit-alerts.ts): the person's thresholds are read at each reading; what fired is kept
     // on disk so a restart does not tell a crossing twice. The window plays the sound the alert names and shows the notice.
     const limitAlertsFile = join(home, 'limit-alerts-armed.json');
+    // What a fired alert leaves for a window that is not open (Tynn #748): a Deck item, kept on disk until dismissed or its
+    // window resets. The sound is only ever the live signal; opening a window later replays nothing.
+    const limitNoticesFile = join(home, 'limit-alert-notices.json');
+    const limitNotices = new LimitNoticeBook(
+        () => { try { return JSON.parse(readFileSync(limitNoticesFile, 'utf8')); } catch { return []; } },
+        (notices) => { try { writeFileSync(limitNoticesFile, JSON.stringify(notices)); } catch (error) { say(`rate-limit alerts: could not save the notices: ${error instanceof Error ? error.message : String(error)}`); } },
+    );
     const limitAlerts = new LimitAlertService({
         load: () => { try { return JSON.parse(readFileSync(limitAlertsFile, 'utf8')); } catch { return {}; } },
         accounts: () => headroomFeed.accounts(),
         alerts: () => parseLimitAlerts(settings.snapshot()[LIMIT_ALERTS_SETTING]),
         nameOf: (accountId, provider) => accounts.get(accountId)?.label ?? provider,
         save: (state) => { try { writeFileSync(limitAlertsFile, JSON.stringify(state)); } catch (error) { say(`rate-limit alerts: could not save what is armed: ${error instanceof Error ? error.message : String(error)}`); } },
-        emit: (signal) => engine.callback({ name: 'toolSignal', signal }),
+        emit: (signal) => { limitNotices.record(signal); engine.callback({ name: 'toolSignal', signal }); },
     });
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
@@ -1313,6 +1320,7 @@ async function main(): Promise<void> {
         workspaceName: workspaceNameFor,
         approvals: approvals.deckItems(),
         trust: hostingStack?.trustDeckItems() ?? [],
+        notices: limitNotices.items(Date.now()),
         attention: own.attention,
         inbox: own.inbox,
         agents: phoneAgents(), workspaceColor: path => workspaceColors.colorOf(path),
@@ -1472,7 +1480,7 @@ async function main(): Promise<void> {
         featureChanges.add(listener);
         const offs = [featureTynn.onEvent(listener), featureGithub.onEvent(listener), featureKeyring.onEvent(listener),
             pluginsService.onEvent(listener), catalogService.onEvent(listener), remoteAccessHost.onChange(listener),
-            own.attention.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
+            own.attention.onChange(listener), limitNotices.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
     hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
@@ -1504,6 +1512,7 @@ async function main(): Promise<void> {
         system: { safeMode: { leave: async () => { safeMode.leave(); return { ok: true }; } }, hangNotice: {
             dismiss: async () => { crashState.dismiss(); return { ok: true }; }, stopAll: async () => { await host.stopAll(); return { ok: true }; } } },
         deck: { attention: own.attention, approvals, inbox: own.inbox, deckItems: featureDeckItems,
+            limitNotices,
             deliverToAgent: (id, text) => host.deliver(id as AgentId, text, 'you'),
             ...(hostingStack ? { trustCertificate: () => hostingStack.trustCertificate(), deferTrustCertificate: () => hostingStack.deferTrustCertificate(), syncHosts: () => hostingStack.syncHosts() } : {}),
         },

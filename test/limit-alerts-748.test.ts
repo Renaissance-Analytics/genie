@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { AccountHeadroom } from '../src/core/headroom-board.js';
 import type { WindowReading } from '../src/core/headroom.js';
 import {
-    LimitAlertService, LimitAlertWatcher, limitAlertSound, limitAlertWords, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, windowMatches, type LimitAlertSignal, type RateLimitAlert,
+    LIMIT_NOTICE_DECK_PREFIX, LimitAlertService, LimitAlertWatcher, LimitNoticeBook, limitAlertSound, limitAlertWords, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, windowMatches, type LimitAlertSignal, type RateLimitAlert,
 } from '../src/core/limit-alerts.js';
+import { resolveDeckAnswer } from '../src/core/deck-resolve.js';
 import { SETTINGS } from '../src/core/settings.js';
 import { sectionOf } from '../src/core/settings-nav.js';
 
@@ -291,5 +292,79 @@ describe('the host service', () => {
         const service = new LimitAlertService({ load: () => { throw new Error('unreadable'); }, accounts: () => [account(A, live('5h', 95, reset))], alerts: () => [alert90], nameOf: () => 'Work account', save: () => {}, emit: (s) => said.push(s) });
         service.check();
         expect(said).toHaveLength(1);
+    });
+});
+
+describe('with no window open the notice is not lost', () => {
+    const reset = T0 + 2 * HOUR;
+    const fire = (book: LimitNoticeBook) => {
+        const service = new LimitAlertService({
+            load: () => ({}), accounts: () => [account(A, live('5h', 95, reset))], alerts: () => [alert90], nameOf: () => 'Work account', save: () => {},
+            emit: (signal) => book.record(signal), now: () => T0,
+        });
+        service.check();
+    };
+    const empty = () => ({ disk: [] as unknown, saved: [] as unknown[] });
+
+    it('a fired alert is kept as a Deck item naming the account, the window and the reset', () => {
+        const d = empty();
+        const book = new LimitNoticeBook(() => d.disk, (n) => { d.disk = JSON.parse(JSON.stringify(n)); });
+        fire(book);
+        const items = book.items(T0 + 1);
+        expect(items).toHaveLength(1);
+        expect(items[0]).toMatchObject({ source: 'genie', agentId: null, workspaceId: null, blocking: false, title: 'Work account: 95% of the 5-hour window used', at: T0 });
+        expect(items[0]!.id.startsWith(LIMIT_NOTICE_DECK_PREFIX)).toBe(true);
+        expect(items[0]!.detail).toMatch(/Resets .*(AM|PM)/);
+    });
+
+    it('it is still there when a window opens later: a book made from what was saved lists it', () => {
+        const d = empty();
+        fire(new LimitNoticeBook(() => d.disk, (n) => { d.disk = JSON.parse(JSON.stringify(n)); }));
+        const later = new LimitNoticeBook(() => d.disk, () => {});
+        expect(later.items(T0 + HOUR)).toHaveLength(1);
+    });
+
+    it('the sound is never kept: the item carries no sound, and opening a window emits nothing', () => {
+        const d = empty();
+        fire(new LimitNoticeBook(() => d.disk, (n) => { d.disk = JSON.parse(JSON.stringify(n)); }));
+        expect(JSON.stringify(d.disk)).not.toContain('alert-vega');
+        const later = new LimitNoticeBook(() => d.disk, () => {});
+        let heard = 0;
+        later.onChange(() => { heard++; });
+        later.items(T0 + HOUR);
+        expect(heard).toBe(0);
+        expect(Object.keys(later.items(T0 + HOUR)[0]!)).not.toContain('sound');
+    });
+
+    it('the same firing recorded twice is one notice', () => {
+        const d = empty();
+        const book = new LimitNoticeBook(() => d.disk, (n) => { d.disk = n; });
+        fire(book);
+        fire(book);
+        expect(book.items(T0 + 1)).toHaveLength(1);
+    });
+
+    it('Dismiss answers it: the deck command forgets it, and says so when it is gone', () => {
+        const d = empty();
+        const book = new LimitNoticeBook(() => d.disk, (n) => { d.disk = n; });
+        fire(book);
+        const item = book.items(T0 + 1)[0]!;
+        expect(resolveDeckAnswer(item, 'dismiss', '')).toEqual({ kind: 'dismiss-limit-alert', id: item.id });
+        expect(book.dismiss(item.id)).toBe(true);
+        expect(book.items(T0 + 1)).toEqual([]);
+        expect(book.dismiss(item.id)).toBe(false);
+    });
+
+    it('a notice about a window that has reset is no longer shown', () => {
+        const d = empty();
+        const book = new LimitNoticeBook(() => d.disk, (n) => { d.disk = n; });
+        fire(book);
+        expect(book.items(reset - 1)).toHaveLength(1);
+        expect(book.items(reset)).toEqual([]);
+    });
+
+    it('a notice file that cannot be read starts empty, and a junk row is dropped', () => {
+        expect(new LimitNoticeBook(() => { throw new Error('unreadable'); }, () => {}).items(T0)).toEqual([]);
+        expect(new LimitNoticeBook(() => [{ id: 'x' }, 7, null], () => {}).items(T0)).toEqual([]);
     });
 });
