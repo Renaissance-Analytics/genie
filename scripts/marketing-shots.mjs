@@ -66,7 +66,8 @@ const WORKSPACES = [
     { id: 'orbitapi', name: 'orbit-api', site: 'orbit-api.gen', title: 'Orbit API', blurb: 'Orders and inventory' },
     { id: 'lumendocs', name: 'lumen-docs', site: 'lumen-docs.gen', title: 'Lumen Docs', blurb: 'Guides and reference' },
 ];
-const hex = (n) => String(n).padStart(2, '0').repeat(16);
+// 32 hex characters, the shape core/identity.ts asAgentId accepts (a longer or non-hex id is dropped by the store, silently to the page).
+const hex = (n) => n.toString(16).padStart(2, '0').repeat(16);
 const AGENTS = [
     { key: 'meridian', ws: 'atlasweb', state: 'working', plan: [['Profile the checkout bundle', 'completed'], ['Split the cart route', 'in_progress'], ['Re-run the lighthouse pass', 'pending']] },
     { key: 'quill', ws: 'atlasweb', state: 'sleeping', plan: null },
@@ -75,6 +76,7 @@ const AGENTS = [
     { key: 'vesper', ws: 'lumendocs', state: 'idle', plan: null },
     { key: 'cobalt', ws: 'lumendocs', state: 'sleeping', plan: null },
 ].map((a, i) => ({ ...a, id: `agent_${hex(0xa1 + i)}` }));
+for (const a of AGENTS) if (!/^agent_[0-9a-f]{32}$/.test(a.id)) throw new Error(`seed id ${a.id} is not an agent id`);
 const by = (key) => AGENTS.find((a) => a.key === key);
 
 // One small server per site, so each hosted site points at something that answers.
@@ -251,6 +253,9 @@ try {
     await waitForPageProbe(cdp);
     await waitFor('the Dashboard', `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 60_000);
     await sizeWindow();
+    // The seed must have been READ before nine minutes are spent on it: the store drops a record it cannot parse, and the page just shows fewer.
+    const seen = JSON.parse(await ev(`window.genieTest.snapshot().then((s) => JSON.stringify({ workspaces: (s.workspaces ?? []).length, agents: (s.agents ?? []).filter((a) => a.name !== 'genie').length }))`));
+    if (seen.workspaces < WORKSPACES.length || seen.agents < AGENTS.length) throw new Error(`the seed was not read: the app lists ${JSON.stringify(seen)}`);
     say(`the app is up; ${WORKSPACES.length} workspaces and ${AGENTS.length} agents seeded under ${root}`);
 
     // 1. THE WORKING AGENTS FIRST, while the ticker marker names this live pid: a stub spawned now streams for ever.
@@ -324,7 +329,7 @@ try {
     // The chat last: a row click pins the agent's chat beside the page and it stays (genie#1209, #639).
     await go('genie://dashboard');
     await waitFor('the Dashboard', `Boolean(document.querySelector('[data-surface="dashboard"] [data-agent="${by('vesper').id}"]'))`, 30_000);
-    await ev(`document.querySelector('[data-surface="dashboard"] [data-agent="${by('vesper').id}"]').click(); true`);
+    await ev(`document.querySelector('[data-surface="dashboard"] [data-agent="${by('vesper').id}"]')?.click(); true`);
     await waitFor('vesper\'s chat', `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${by('vesper').id}"]'))`, 30_000);
     await go('genie://workspace/lumendocs');
     await waitFor('the workspace dashboard', `Boolean(document.querySelector('[data-surface="workspace"], [data-surface="dashboard"]')) && Boolean(document.querySelector('[data-chat-subject="${by('vesper').id}"]'))`, 30_000);
