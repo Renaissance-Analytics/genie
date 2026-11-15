@@ -70,6 +70,8 @@ const bridge: PreloadBridge = {
     chooseProviderProgram: (provider) =>
         ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
 
+    popOutTerminals: (workspaceId) => ipcRenderer.invoke('genie:terminals-popout', workspaceId) as Promise<void>,
+
     scratchTerminal: (workspaceId) =>
         ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<
             { ok: true; terminalId: string } | { ok: false; reason: string }

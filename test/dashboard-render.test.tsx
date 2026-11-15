@@ -64,7 +64,7 @@ describe('the grid is the board\u2019s, exactly', () => {
         // The template is a single constant on purpose. Transcribing it twice is how a header
         // and its body drift by a few pixels and nobody can say when it started.
         const html = render([row({ id: 'a' }), row({ id: 'b' }), row({ id: 'c' })]);
-        const template = 'grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px]';
+        const template = 'grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px_36px]';
 
         // 3 agent rows + 1 column header. COUNT, not "contains" — one row rendering a
         // different template would pass a `toContain`.
@@ -196,7 +196,10 @@ describe('the Dashboard resolves nothing', () => {
 
         // The question is SHOWN, as the status detail. It is answered on the Deck.
         expect(rowHtml(html, 'waiting-one')).toContain('Allow php artisan migrate --force?');
-        expect(rowHtml(html, 'waiting-one')).not.toContain('<button');
+        // The only button on a row is the windows menu (Tynn #706): it opens windows, it resolves nothing.
+        const withoutWindows = rowHtml(html, 'waiting-one').replace(/<button\b[^>]*data-windows-menu[\s\S]*?<\/button>/, '');
+        expect(withoutWindows).not.toContain('<button');
+        expect(rowHtml(html, 'waiting-one')).toContain('data-windows-menu="waiting-one"');
 
         // POSITIVE CONTROL: the surface does render buttons, so "no approve button" is not
         // passing on a build that renders no buttons at all. A broken row's fix route is not a
@@ -315,7 +318,8 @@ describe('the column headers cannot spill out of their row', () => {
          */
         const html = render([row()], [{ id: 'tynn', path: 'C:/x' }]);
 
-        const headerRow = html.slice(html.indexOf('uppercase'), html.indexOf('data-dashboard-list='));
+        // The windows column's header is an icon (Tynn #706), not a label: its own cell, asserted in dashboard-windows-706.test.tsx.
+        const headerRow = html.slice(html.indexOf('uppercase'), html.indexOf('data-dashboard-list=')).replace(/<div[^>]*data-column-header="windows"[\s\S]*?<\/div>/, '');
         const spans = [...headerRow.matchAll(/<span[^>]*>/g)];
 
         expect(spans.length).toBe(7);
