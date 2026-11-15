@@ -3025,7 +3025,7 @@ async function boot(): Promise<void> {
     // workflow: a question asked opens it; one answered in either place leaves both.
     questionWindow = new QuestionWindow({
         items: () => composed.deckItems(),
-        open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null }),
+        open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null, openInFiles: (workspaceId, path) => { revealMainWindow('question: Open in Files'); showToPerson({ activation: 'user-gesture', route: `genie://workspace/${encodeURIComponent(workspaceId)}?files=${encodeURIComponent(path)}`, reason: 'question: Open in Files' }); } }),
         answer: async (item, selections, notes) => { await questionAction({ kind: 'deck.answerForm', item, selections, notes, note: '' }); },
         // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told, with the
         // notes the person wrote in the form.

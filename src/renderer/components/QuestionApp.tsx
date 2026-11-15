@@ -4,6 +4,7 @@ import { genieClipboardWriter } from '../clipboard.js';
 import { CONTAINED_PROSE } from '../prose-contain.js';
 import { QUESTION_TABS_UNMEASURED, questionTabs, tabsThatFit } from '../../core/question-tabs.js';
 import { FileViewer } from '@particle-academy/fancy-code';
+import { sizeLabel, type QuestionMedia } from '../../core/question-media.js';
 import { extractFileRefs, splitByExistence, type AskFileRef } from '../../core/ask-file-refs.js';
 import { questionWindowAction } from '../../core/keys.js';
 import { ageLabel, type DeckItem } from '../../core/deck.js';
@@ -77,9 +78,11 @@ export interface QuestionAppProps {
      */
     readonly existing?: ReadonlySet<string> | null;
     /** The file open beside the question, or why it cannot be shown. Absent/`null` = closed. */
-    readonly drawer?: { readonly path: string; readonly text?: string; readonly line?: number | null; readonly error?: string } | null;
+    readonly drawer?: { readonly path: string; readonly text?: string; readonly media?: QuestionMedia; readonly line?: number | null; readonly error?: string } | null;
     readonly onOpenFile?: (ref: AskFileRef) => void;
     readonly onCloseFile?: () => void;
+    /** A file the drawer cannot draw (a PDF, a binary) opens in Genie's Files panel (Tynn #726). */
+    readonly onOpenInFiles?: (path: string) => void;
 }
 
 /** The extensions the drawer shows as prose (Genie 1's: what its Document plugin claimed, minus binary .docx). */
@@ -104,13 +107,40 @@ function DrawerBody({ path, text, line }: { path: string; text: string; line: nu
 }
 
 /**
+ * A file that is not text (Tynn #726). An image is drawn scaled to fit; a click zooms it to its own size (and back). It is
+ * always an <img> on a data: URL — an SVG too — so nothing in it runs. A PDF and any other binary are named with their
+ * size and opened in Files; the bytes never reach the page.
+ */
+function MediaBody({ path, media, onOpenInFiles }: { path: string; media: QuestionMedia; onOpenInFiles?: (path: string) => void }) {
+    const [zoomed, setZoomed] = useState(false);
+    const name = path.split(/[/\\]/).pop() ?? path;
+    if (media.kind === 'image') {
+        return (
+            <div data-question-drawer-image="" className={`min-h-0 flex-1 p-3 ${zoomed ? 'overflow-auto' : 'overflow-hidden'}`}>
+                <Button type="button" data-action="question-drawer-zoom" aria-pressed={zoomed} onClick={() => setZoomed((v) => !v)} title={zoomed ? 'Fit to the drawer' : 'Show at full size'}
+                    className={`justify-start rounded-md p-0 ${zoomed ? 'cursor-zoom-out' : 'h-full w-full cursor-zoom-in items-center justify-center'}`}>
+                    <img src={media.src} alt={name} className={zoomed ? 'max-w-none' : 'max-h-full max-w-full object-contain'} />
+                </Button>
+            </div>
+        );
+    }
+    return (
+        <div data-question-drawer-binary={media.kind} className="flex flex-col items-start gap-2 px-3 py-3 text-[12px]">
+            <span className="font-mono text-[13px]">{name}</span>
+            <span className="text-[var(--fg-3)]">{media.kind === 'pdf' ? 'PDF' : 'Binary file'} · {sizeLabel(media.size)}</span>
+            <Button size="xs" type="button" data-action="question-drawer-open-in-files" onClick={() => onOpenInFiles?.(path)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5">Open in Files</Button>
+        </div>
+    );
+}
+
+/**
  * The one app region in this window: the header strip. Nothing else says `no-drag` — nothing outside the strip needs
  * exempting from a drag, and a region in scrolled content is one the scroll can move (genie#1298). An interactive control
  * ever put IN the strip says `no-drag` itself (Genie 1's `.ask-head button`).
  */
 const DRAG = { WebkitAppRegion: 'drag' } as CSSProperties;
 
-export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile }: QuestionAppProps) {
+export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile, onOpenInFiles }: QuestionAppProps) {
     // ESC IS LATER (Tynn #759; Genie 1's "PARK, never kill"): the question stays in Pending Questions with its draft;
     // Dismiss, which tells the agent, is never a key. Re-bound every render so it acts on the question now shown.
     useEffect(() => {
@@ -186,6 +216,8 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                     </div>
                     {drawer.error !== undefined ? (
                         <p data-question-drawer-error="" className="px-3 py-2 text-[12px] text-[var(--danger)]">{drawer.error}</p>
+                    ) : drawer.media !== undefined ? (
+                        <MediaBody key={drawer.path} path={drawer.path} media={drawer.media} {...(onOpenInFiles ? { onOpenInFiles } : {})} />
                     ) : drawer.text !== undefined ? (
                         <DrawerBody key={drawer.path} path={drawer.path} text={drawer.text} line={drawer.line ?? null} />
                     ) : (
