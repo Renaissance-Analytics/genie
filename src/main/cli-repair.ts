@@ -1,6 +1,6 @@
-import { planCliRepair } from '../core/cli-repair.js';
+import { PROVIDER_TOOL, planCliRepair, planCliUpdate, type RepairStep } from '../core/cli-repair.js';
 import { providerName, type ProviderHealth } from '../core/provider-health.js';
-import { platformArgv, type Platform } from '../core/toolchain.js';
+import { platformArgv, repairOutcome, type Platform, type RepairOutcome } from '../core/toolchain.js';
 import type { EnvPort } from './toolchain-ops.js';
 
 /**
@@ -58,6 +58,52 @@ export function putOnPath(provider: string, ports: Pick<CliRepairPorts, 'platfor
 
 const lastLine = (text: string): string => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop()?.slice(0, 200) ?? '';
 
+/** Run each step with its own limit, said while it runs; the first that fails ends it, and is returned in words. `null` = all ran. */
+async function runSteps(steps: readonly RepairStep[], ports: CliRepairPorts): Promise<string | null> {
+    const lookup = { platform: ports.platform, env: { PATH: ports.env.get('PATH') ?? '', PATHEXT: ports.env.get('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD' } as NodeJS.ProcessEnv, isFile: ports.isFile };
+    for (const step of steps) {
+        ports.progress(step.label);
+        const [binary, args] = platformArgv(step.binary, step.args, ports.platform as Platform, lookup);
+        try {
+            const r = await ports.run(binary, args, { timeoutMs: step.timeoutMs });
+            if (r.exitCode !== 0) {
+                const said = lastLine(r.streams ? `${r.streams.stdout}\n${r.streams.stderr}` : r.stdout) || lastLine(r.stdout);
+                return `${step.label} failed (it exited ${r.exitCode})${said ? `: “${said}”` : ''}`;
+            }
+        } catch (error) {
+            const code = (error as { code?: unknown } | null)?.code;
+            if (code === 'ETIMEDOUT') return `${step.label} did not finish within ${Math.round(step.timeoutMs / 60_000)} minutes, and was ended with what it started`;
+            return `${step.label} could not run: ${error instanceof Error ? error.message : String(error)}`;
+        }
+    }
+    return null;
+}
+
+/**
+ * UPDATE one provider's CLI (Tynn #734): the program the agents run (the health check's resolution, as the launcher resolves
+ * it) is the one updated, and its version is read again from the same resolution — never a bare `claude` through cmd.exe,
+ * which could be another copy. Judged by the version measured after (the core's honest-repair rule).
+ */
+export async function runCliUpdate(provider: string, ports: CliRepairPorts): Promise<RepairOutcome | { readonly kind: 'refused'; readonly reason: string }> {
+    const name = providerName(provider);
+    try {
+        ports.progress(`Checking ${name}`);
+        const before = await ports.check(provider);
+        if (before === null) return { kind: 'unverified', reason: `${name} could not be checked, so Genie did not change anything` };
+        const steps = planCliUpdate({ provider, platform: ports.platform as Platform, health: before });
+        if (!Array.isArray(steps)) return { kind: 'refused', reason: steps.refused };
+        const failed = await runSteps(steps, ports);
+        if (failed !== null) return { kind: 'unchanged', installed: before.version, reason: failed };
+        await ports.refreshPath();
+        putOnPath(provider, ports);
+        ports.progress(`Checking that ${provider} answers`);
+        const after = await ports.check(provider);
+        return repairOutcome({ tool: PROVIDER_TOOL[provider] ?? provider, wanted: null, before: before.version, after: after?.installed ? after.version : null, exitCode: 0 });
+    } finally {
+        ports.progress(null);
+    }
+}
+
 /** Repair one provider's CLI. Never throws; the progress always ends with `null`. */
 export async function runCliRepair(provider: string, ports: CliRepairPorts): Promise<CliRepairOutcome> {
     const name = providerName(provider);
@@ -67,22 +113,8 @@ export async function runCliRepair(provider: string, ports: CliRepairPorts): Pro
         if (before === null) return { kind: 'failed', reason: `${name} could not be checked, so Genie did not change anything` };
         const steps = planCliRepair({ provider, platform: ports.platform as Platform, health: before });
         if (!Array.isArray(steps)) return { kind: 'refused', reason: steps.refused };
-        const lookup = { platform: ports.platform, env: { PATH: ports.env.get('PATH') ?? '', PATHEXT: ports.env.get('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD' } as NodeJS.ProcessEnv, isFile: ports.isFile };
-        for (const step of steps) {
-            ports.progress(step.label);
-            const [binary, args] = platformArgv(step.binary, step.args, ports.platform as Platform, lookup);
-            try {
-                const r = await ports.run(binary, args, { timeoutMs: step.timeoutMs });
-                if (r.exitCode !== 0) {
-                    const said = lastLine(r.streams ? `${r.streams.stdout}\n${r.streams.stderr}` : r.stdout) || lastLine(r.stdout);
-                    return { kind: 'failed', reason: `${step.label} failed (it exited ${r.exitCode})${said ? `: “${said}”` : ''}` };
-                }
-            } catch (error) {
-                const code = (error as { code?: unknown } | null)?.code;
-                if (code === 'ETIMEDOUT') return { kind: 'failed', reason: `${step.label} did not finish within ${Math.round(step.timeoutMs / 60_000)} minutes, and was ended with what it started` };
-                return { kind: 'failed', reason: `${step.label} could not run: ${error instanceof Error ? error.message : String(error)}` };
-            }
-        }
+        const failed = await runSteps(steps, ports);
+        if (failed !== null) return { kind: 'failed', reason: failed };
         await ports.refreshPath();
         putOnPath(provider, ports);
         ports.progress(`Checking that ${provider} answers`);
