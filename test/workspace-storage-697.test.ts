@@ -60,7 +60,10 @@ beforeEach(async () => {
     await writeFile(join(app, 'node_modules', 'pkg', 'coverage', 'x'), Buffer.alloc(7));
     // A symlink inside an artifact, to something big OUTSIDE the workspace: never followed, never counted.
     await writeFile(join(outside, 'big.bin'), Buffer.alloc(50_000));
-    await symlink(join(outside, 'big.bin'), join(app, 'ci-out', 'link-to-big'));
+    await mkdir(join(outside, 'big'));
+    await writeFile(join(outside, 'big', 'data.bin'), Buffer.alloc(50_000));
+    // A junction, not a file symlink: Windows lets a normal user make one (a file symlink is EPERM without the privilege), and it is what Windows tools leave behind.
+    await symlink(join(outside, 'big'), join(app, 'ci-out', 'link-to-big'), 'junction');
     // Worktrees: clean (its HEAD is on the remote), dirty, ahead (a commit no remote has), and one outside the workspace.
     await git(app, 'worktree', 'add', '--quiet', '-b', 'wt-clean', join(root, 'wt', 'clean'));
     await git(app, 'worktree', 'add', '--quiet', '-b', 'wt-dirty', join(root, 'wt', 'dirty'));
@@ -110,7 +113,7 @@ describe('measuring a workspace: categories', () => {
         expect(r.measuredAt).toBe(NOW);
     });
 
-    it('never follows a symlink: the artifact holding a link to 50 kB outside counts its own 1000 bytes', async () => {
+    it('never follows a symlink: the artifact holding a junction to 50 kB outside counts its own 1000 bytes', async () => {
         const r = await storage.measure(root, { chatFiles: [] });
         expect(byRel(r, 'repos/app/ci-out')!.bytes).toBe(1000);
         expect(r.totals['ci-artifacts']).toBe(1500 + 2000);
@@ -281,7 +284,7 @@ describe('Move to .trash', () => {
     });
 
     it('REFUSED: a .trash that is a symlink (it would leave the workspace)', async () => {
-        await symlink(outside, join(root, '.trash'));
+        await symlink(outside, join(root, '.trash'), 'junction');
         const r = await storage.moveToTrash(root, 'ci-artifacts:repos/app/ci-out', { chatFiles: [] });
         expect(r).toEqual({ ok: false, reason: 'This workspace’s .trash is a link, not a folder: Genie will not use it.' });
         expect(existsSync(join(root, 'repos', 'app', 'ci-out'))).toBe(true);

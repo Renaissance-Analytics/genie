@@ -392,7 +392,8 @@ export class WorkspaceStorage {
                     repos.add(repo);
                 }
             }
-            await rm(entry, { recursive: true, force: true });
+            // Retried: Windows answers EBUSY/EPERM for a moment after git or a scanner closes a handle.
+            await rm(entry, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         }
         for (const repo of repos) await git(repo, ['worktree', 'prune']);
         return { ok: true, deleted: trash.length, bytes: approval.bytes };
