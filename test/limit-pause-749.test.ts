@@ -129,6 +129,7 @@ describe('#749 a flow step whose agent hits the provider limit mid-turn', () => 
         const asked = prompterOf(f.port, timer)('claude:a', 'Write the report');
         await delivered();
         f.cutByLimit('agent_a', 'Section 1 of the rep');
+        await delivered(); // the prompter's own awaits run: a step the limit finished would be settled here, before the reset
         timer.advance(3 * HOUR); // the five-hour window: longer than FLOW_TURN_MAX_MS and FLOW_TURN_QUIET_MS
         f.reset('agent_a');
         f.finish('agent_a', 'Section 2 and the end.');
@@ -199,6 +200,7 @@ describe('#749 three lanes, one of them limited (the story\'s acceptance)', () =
         f.cutByLimit('agent_b', 'B: half of it');
         f.finish('agent_a', 'A done');
         f.finish('agent_c', 'C done');
+        await delivered();
         timer.advance(3 * HOUR);
         f.reset('agent_b');
         f.finish('agent_b', 'B: the rest');
