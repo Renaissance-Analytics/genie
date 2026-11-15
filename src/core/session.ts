@@ -1687,7 +1687,8 @@ export class AgentSession {
         void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
         this.#inTurn = true;
         this.#limitThisTurn = false;
-        void this.#emitRow(commandRow(text)); // A small row that the command ran, not your message (Tynn #702).
+        // The small row that it ran (not your message) comes once the provider ACCEPTED it; a refusal is only said (Tynn #702).
+        void accepted.then(() => { void this.#emitRow(commandRow(text)); }, () => {});
         this.#turnState = 'working';
         this.#stopCooling();
         this.#changed();
