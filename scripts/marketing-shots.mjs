@@ -34,7 +34,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -96,7 +96,8 @@ for (const w of WORKSPACES) {
 
 const wsPaths = {};
 for (const w of WORKSPACES) {
-    const path = join(root, 'work', w.name);
+    // A path that reads like a person's own: inside the VM user's home (the header shows it).
+    const path = join(homedir(), 'projects', w.name);
     mkdirSync(path, { recursive: true });
     wsPaths[w.id] = path;
     writeFileSync(join(path, 'project.json'), `${JSON.stringify({
@@ -243,6 +244,7 @@ async function clearOverlays(keepToasts = false) {
 }
 
 async function shot(name, what, clip, { keepToasts = false } = {}) {
+    if (!keepToasts) await ev(`document.querySelectorAll('[data-toast-later]').forEach((b) => b.click()); true`);
     await clearOverlays(keepToasts);
     await sleep(2500); // a render and its transitions settle; a fixed wait is a guess, so each shot also records what it held
     const held = await ev(`JSON.stringify({ route: document.querySelector('[data-route]')?.textContent ?? null, dark: document.documentElement.classList.contains('dark'), dpr: window.devicePixelRatio, inner: innerWidth + 'x' + innerHeight, overlays: document.querySelectorAll('[role="dialog"]').length,
@@ -400,8 +402,14 @@ try {
     await step('08-artboard-tab-dark', async () => {
         await go('genie://workspace/atlasweb');
         if (!await waitFor('the ArtBoard tab (Tynn #739)', `Boolean(document.querySelector('[data-workspace-tab="artboard"]'))`, 30_000)) throw new Error('the workspace has no ArtBoard tab on this line');
-        await ev(`document.querySelector('[data-workspace-tab="artboard"]').click(); true`);
-        await sleep(4000);
+        // A real pointer press at the tab's centre: react-fancy's Tabs answers a pointer, not a synthetic element.click().
+        const box = JSON.parse(await ev(`(() => { const r = document.querySelector('[data-workspace-tab="artboard"]').getBoundingClientRect(); return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 }); })()`));
+        for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await cdp.send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+        if (!await waitFor('the ArtBoard panel', `Boolean(document.querySelector('[data-artboard-post]'))`, 20_000)) {
+            await go('genie://workspace/atlasweb/artboard');
+            if (!await waitFor('the ArtBoard panel, by its route', `Boolean(document.querySelector('[data-artboard-post]'))`, 15_000)) throw new Error('the ArtBoard panel never showed');
+        }
+        await sleep(2500);
         await shot('08-artboard-tab-dark', 'The ArtBoard tab of atlas-web: three items from agents, one waiting for a verdict');
     });
     // The chat last: a row click pins the agent's chat beside the page and it stays (genie#1209, #639).
