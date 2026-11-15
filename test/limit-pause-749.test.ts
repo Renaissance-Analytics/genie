@@ -53,6 +53,8 @@ function farm() {
     const st = Object.fromEntries(IDS.map((id) => [id, { running: true, turnState: 'idle', pendingApproval: null as unknown, limit: { state: 'open' } as { state: string } }])) as Record<Id, { running: boolean; turnState: string; pendingApproval: unknown; limit: { state: string } }>;
     const rows = Object.fromEntries(IDS.map((id) => [id, [] as Array<{ event: unknown }>])) as Record<Id, Array<{ event: unknown }>>;
     const held = Object.fromEntries(IDS.map((id) => [id, false])) as Record<Id, boolean>;
+    /** The limit cut this agent's turn: only then does the reset send the nudge turn (session.ts `#cutByLimit`; an idle held agent is told nothing, Tynn #543). */
+    const cut = Object.fromEntries(IDS.map((id) => [id, false])) as Record<Id, boolean>;
     const waiting = Object.fromEntries(IDS.map((id) => [id, [] as Array<{ text: string; by: string }>])) as Record<Id, Array<{ text: string; by: string }>>;
     const listeners = new Set<(id: string) => void>();
     const tell = (id: Id) => { for (const l of listeners) l(id); };
@@ -76,6 +78,7 @@ function farm() {
             if (partial) rows[id].push({ event: { kind: 'message', speaker: 'agent', peerName: null, text: partial } });
             st[id].turnState = 'idle';
             held[id] = true;
+            cut[id] = true;
             st[id].limit = { state: 'paused' };
             tell(id);
         },
@@ -86,7 +89,9 @@ function farm() {
             held[id] = false;
             st[id].limit = { state: 'open' };
             const next = waiting[id].shift();
-            begin(id, next ? next.by : 'genie');
+            if (next) begin(id, next.by);
+            else if (cut[id]) begin(id, 'genie');
+            cut[id] = false;
             tell(id);
         },
         finish(id: Id, said: string) {
@@ -176,6 +181,7 @@ describe('#749 a flow step prompting an agent that is ALREADY held at the limit'
         await delivered();
         timer.advance(3 * HOUR);
         f.reset('agent_a');
+        await delivered(); // the held agent is idle again: the step's prompt goes now, as its own turn
         f.finish('agent_a', 'The report.');
         const r = await settledState(asked);
         expect(r.state).toBe('resolved');
