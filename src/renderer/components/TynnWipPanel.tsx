@@ -1,6 +1,7 @@
 import { Button, ContentRenderer, Icon, Sidebar } from '@particle-academy/react-fancy';
 import { startPlan, type BoardActionInput, type BoardClaims, type LiveState } from '../../core/tynn-board.js';
 import { WIP_LENSES, wipRef, wipWhen, type TynnPageState, type WipLens, type WipStory, type WipTask, type WipView } from '../../core/tynn-pages.js';
+import { genieClipboardWriter } from '../clipboard.js';
 import { Avatar, LiveMark, OpLine } from './TynnBoardPanel.js';
 
 /**
@@ -74,6 +75,7 @@ function Versions({ view, version, onVersion }: { view: WipView; version: string
                         <Icon name="circle-play" size="xs" />
                         <span className="font-mono">{v.number ?? ''}</span>
                         <span className="max-w-[160px] truncate">{v.title}</span>
+                        {v.total !== null ? <span data-wip-version-progress="" className="text-[10px] opacity-80">{`${v.done ?? 0}/${v.total}`}</span> : null}
                     </Button>
                 );
             })}
@@ -106,7 +108,7 @@ function Banner({ view, live }: { view: WipView; live: LiveState | undefined }) 
 
 /** A list card's last line: the PR (a chip, not a link: the card is itself a button) and when the story last changed. */
 function CardMeta({ story, now }: { story: WipStory; now: number }) {
-    const pr = wipRef(story.pr);
+    const pr = wipRef(story.pr, story.prUrl);
     const when = wipWhen(story.updatedAt, now);
     if (pr === null && when === null) return null;
     return (
@@ -224,13 +226,25 @@ function TaskCard({ task, claims, onAction, now }: { task: WipTask; claims: Boar
     );
 }
 
-function RefLink({ value, icon, kind }: { value: string | null; icon: string; kind: string }) {
-    const ref = wipRef(value);
+function RefLink({ value, url, icon, kind }: { value: string | null; url: string | null; icon: string; kind: string }) {
+    const ref = wipRef(value, url);
     if (ref === null) return null;
     const label = <><Icon name={icon} size="xs" /><span className="font-mono">{ref.label}</span></>;
     return ref.href !== null
         ? <Button variant="ghost" size="xs" labelClassName="contents" data-wip-ref={kind} href={ref.href} target="_blank" rel="noreferrer" title={ref.href} className="inline-flex w-fit items-center justify-start gap-1 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--accent)]">{label}<Icon name="external-link" size="xs" /></Button>
         : <span data-wip-ref={kind} className="inline-flex w-fit items-center gap-1 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)]">{label}</span>;
+}
+
+/** When the story started, went to QA and finished (Tynn's activity log); a step with no time is left out. */
+function Timeline({ story, now }: { story: WipStory; now: number }) {
+    const steps = ([['started', 'Started', story.startedAt], ['qa', 'Went to QA', story.qaAt], ['done', 'Finished', story.doneAt]] as const)
+        .flatMap(([key, label, at]) => { const when = wipWhen(at, now); return when === null ? [] : [{ key, label, when, at }]; });
+    if (steps.length === 0) return null;
+    return (
+        <ol data-wip-timeline="" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--fg-3)]">
+            {steps.map((s) => <li key={s.key} data-wip-time={s.key}>{`${s.label} `}<time dateTime={s.at ?? undefined}>{s.when}</time></li>)}
+        </ol>
+    );
 }
 
 function Tasks({ story, view, onAction, now }: { story: WipStory; view: WipView; onAction: TynnWipPanelProps['onAction']; now: number }) {
@@ -240,13 +254,14 @@ function Tasks({ story, view, onAction, now }: { story: WipStory; view: WipView;
             <h2 className="flex min-w-0 items-start gap-1.5 text-[15px] font-semibold break-words text-[var(--fg-1)] [overflow-wrap:anywhere]"><Icon name="book-open" size="sm" />{story.title}</h2>
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--fg-3)]">
                 <StatusChip status={story.status} />
-                <RefLink value={story.pr} icon="git-pull-request" kind="pr" />
-                <RefLink value={story.commit} icon="git-commit-horizontal" kind="commit" />
+                <RefLink value={story.pr} url={story.prUrl} icon="git-pull-request" kind="pr" />
+                <RefLink value={story.commit} url={story.commitUrl} icon="git-commit-horizontal" kind="commit" />
                 {when ? <span data-wip-changed="" className="inline-flex items-center gap-1"><Icon name="clock" size="xs" /><time dateTime={story.updatedAt ?? undefined}>{`Changed ${when}`}</time></span> : null}
             </div>
+            <Timeline story={story} now={now} />
             {story.description ? (
                 <div data-wip-description="" className="min-w-0 text-[12px] break-words text-[var(--fg-2)] [overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:overflow-x-auto">
-                    <ContentRenderer value={story.description} format="markdown" lineSpacing={1.5} />
+                    <ContentRenderer value={story.description} format="markdown" lineSpacing={1.5} clipboardWriter={genieClipboardWriter} />
                 </div>
             ) : null}
             {story.criteria.length > 0 ? (

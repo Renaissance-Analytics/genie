@@ -148,14 +148,14 @@ const publishedInSharedSchemas = (v: string) => compareVersions(v, LAST_SHARED_S
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
-    it('pins VIP, Features, Home, Releases, Issues and WIP to the 0.11.0 contract published by tynn.ai #386', () => {
+    it('pins VIP, Features, Home, Releases, Issues and WIP to the 0.12.0 contract published by tynn.ai #469', () => {
         expect(pin).toEqual({
             repository: 'Renaissance-Analytics/tynn.ai',
             contract: 'workspace-ux',
-            version: '0.11.0',
-            commit: 'feffcba864d438b38960778a33c25fcdf5207c8e',
-            path: 'contracts/workspace-ux/0.11.0/workspace-ux.json',
-            sha256: '2ec727c8f902feb07bd7ce2f883fc1770f1c92657ada84da9ee37d734250660c',
+            version: '0.12.0',
+            commit: '8adf9d9159bdd50166b043344c3872386bc3dbcd',
+            path: 'contracts/workspace-ux/0.12.0/workspace-ux.json',
+            sha256: '7b4758748779564b7381283b3674e62f045216b61948e5caf79b09acd56967fb',
         });
     });
 

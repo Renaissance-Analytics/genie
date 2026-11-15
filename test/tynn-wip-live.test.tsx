@@ -134,6 +134,39 @@ describe('the list cards', () => {
     });
 });
 
+describe('what workspace-ux 0.12.0 adds', () => {
+    const selected = story({
+        id: 's1', slug: 'one', story_number: 11, title: 'First', pr_id: '77', commit_id: 'abc1234def5678',
+        pr_url: 'https://github.com/o/r/pull/77', commit_url: 'https://github.com/o/r/commit/abc1234def5678',
+        started_at: '2026-11-15T08:00:00Z', qa_at: '2026-11-15T10:00:00Z', done_at: null,
+    });
+
+    it('links the PR and commit by Tynn\'s own urls, labelled by their numbers', () => {
+        const html = render(view({ selected_story: selected }));
+        expect(html).toMatch(/href="https:\/\/github.com\/o\/r\/pull\/77"/);
+        expect(html).toMatch(/href="https:\/\/github.com\/o\/r\/commit\/abc1234def5678"/);
+        expect(html).toContain('#77');
+        expect(html).toContain('abc1234');
+    });
+
+    it('says when the story started and went to QA, and leaves out a step with no time', () => {
+        const html = render(view({ selected_story: selected }));
+        expect(html).toContain('data-wip-timeline');
+        expect(html).toMatch(/data-wip-time="started"[^>]*>Started <time[^>]*>4 h ago/);
+        expect(html).toMatch(/data-wip-time="qa"/);
+        expect(html).not.toContain('data-wip-time="done"');
+    });
+
+    it('shows each version\'s stories done of all in the switcher', () => {
+        const html = render(view({ available_versions: [
+            { id: 'v17', number: '0.17.0', title: 'Hosting', status: 'active', story_count: 5, stories_done: 2 },
+            { id: 'v64', number: 'beta.64', title: 'The line', status: 'active', story_count: 3, stories_done: 3 },
+        ] }));
+        expect(html).toContain('>2/5<');
+        expect(html).toContain('>3/3<');
+    });
+});
+
 describe('when', () => {
     it('words a time the way a person says it', () => {
         expect(wipWhen('2026-11-15T11:59:40Z', NOW)).toBe('just now');
