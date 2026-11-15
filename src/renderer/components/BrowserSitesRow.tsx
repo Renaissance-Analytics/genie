@@ -9,6 +9,8 @@ export interface BrowserSitesRowProps {
     readonly onOpen: (address: string) => void;
     /** Force how many chips show (a render test; the window measures). */
     readonly fit?: number;
+    /** Each host's label from main (workspace name, and the site); a host without one falls back to a safe label. */
+    readonly labels?: Readonly<Record<string, string>>;
 }
 
 const GAP = 6;

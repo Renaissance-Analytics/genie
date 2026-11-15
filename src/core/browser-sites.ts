@@ -16,3 +16,5 @@ export function sitesThatFit(m: { widths: readonly number[]; available: number; 
     }
     return 0;
 }
+
+export function browserSiteLabels(_hosts: readonly string[], _sites: readonly { host: string; workspaceId: string; name: string }[], _workspaceNames: Readonly<Record<string, string>>): Record<string, string> { return {}; }
