@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { JsonObject } from '@particle-academy/prism-mcp';
 import { describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
@@ -28,7 +30,7 @@ function rig(options: { surface?: boolean | 'absent' } = {}) {
         onData: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     };
     const tools = moreGenieTools({
-        knowledge: KnowledgeStore.open(':memory:'),
+        knowledge: KnowledgeStore.open(mkdtempSync(join(tmpdir(), 'genie2-terminal-surface-722-'))),
         terminals: port,
         approve: async () => 'allowed',
         resolveCaller: () => atlas,
