@@ -1198,6 +1198,8 @@ async function main(): Promise<void> {
         save: (state) => { try { writeFileSync(limitAlertsFile, JSON.stringify(state)); } catch (error) { say(`rate-limit alerts: could not save what is armed: ${error instanceof Error ? error.message : String(error)}`); } },
         emit: (signal) => { limitNotices.record(signal); engine.callback({ name: 'toolSignal', signal }); },
     });
+    // Checked whenever the feed shows a reading (one inside its buffer reaches nothing), so onHeadroom below stays S5's wiring.
+    headroomFeed.subscribe(() => { limitAlerts.check(); });
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
     bootStep('lock identity', stepAt);
@@ -1234,7 +1236,7 @@ async function main(): Promise<void> {
             },
         },
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
-        onHeadroom: (provider, room, stamp) => { headroomFeed.offer(provider, room, stamp); limitAlerts.check(); engineHostOptions.onHeadroom(provider, room, stamp); },
+        onHeadroom: (provider, room, stamp) => { headroomFeed.offer(provider, room, stamp); engineHostOptions.onHeadroom(provider, room, stamp); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);
