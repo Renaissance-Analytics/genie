@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { DeckItem } from '../src/core/deck.js';
 import { Shell } from '../src/renderer/Shell.js';
 import { EMPTY_SNAPSHOT, type GenieSnapshot } from '../src/renderer/bridge.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 
 /**
  * THE DECK OPENS ON THE NAMED ITEM: `genie://deck?item=<id>` marks that item as the focus (the row the reader was
@@ -22,14 +22,14 @@ const form: DeckItem = {
 
 describe('the Deck with a named item', () => {
     it('marks it as the focus; its form is there; the others are untouched', () => {
-        const html = renderToStaticMarkup(<Deck items={[inline, form]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} focusId="q_7" />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[inline, form]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} focusId="q_7" />);
         expect(html).toMatch(/data-deck-item="q_7"[^>]*data-deck-focus="true"/);
         expect(html).toContain('data-deck-form="q_7"');
         expect(html).not.toMatch(/data-deck-item="approval:kai"[^>]*data-deck-focus/);
     });
 
     it('no item named → nothing focused; the question is still read in its form (no door to open first)', () => {
-        const html = renderToStaticMarkup(<Deck items={[inline, form]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[inline, form]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} />);
         expect(html).not.toContain('data-deck-focus');
         // COUNTED: one form, the question's — the approval is answered by its card, not a form.
         expect(html.match(/data-deck-form="/g) ?? []).toHaveLength(1);

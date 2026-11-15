@@ -14,7 +14,7 @@ import { useDashboardFilter, useNeedsYouFilter } from '../dashboard-filter.js';
 import { DAY_MS, deckBand, dismissableOlderThan, dismissableStale, signalStrip, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
 import type { ApprovalAnswering } from '../../core/approval-answering.js';
 import { groupWaiting, needsYouChipCount, needsYouRows, waitingBadges, type WaitingBadge, type WaitingKind } from '../../core/waiting.js';
-import { DeckRow, type RowProps } from './Deck.js';
+import { DeckRow, type RowProps } from './DeckRow.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import {
     commsOf,
@@ -501,6 +501,8 @@ export interface DashboardWaiting {
     toastIds?: ReadonlySet<string> | undefined;
     /** The item the reader was SENT to (`?item=<id>`): its agent's row is open on it, marked and scrolled to. */
     focusItemId?: string | null | undefined;
+    /** Items drawn opened in place (a long to-do or message shows its first line; this opens the whole text). */
+    initiallyExpanded?: readonly string[] | undefined;
     /** Rows drawn opened (a test of the opened row; the board itself opens one on a click): agent ids, or `genie:`. */
     initiallyOpen?: readonly string[] | undefined;
     /** The clock the ages are read against; now by default (tests pass a fixed one). */
@@ -540,7 +542,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     const rowProps: RowProps | null = waiting ? {
         answering: waiting.answering, onAnswer: waiting.onAnswer, onOpenItem: waiting.onOpenItem, onAnswerForm: waiting.onAnswerForm,
         formRefusal: waiting.formRefusal ?? null, focusId: focusItem, focusRef: focusRef as RefObject<HTMLDivElement | null>,
-        onDismiss: waiting.onDismiss, now: waiting.now ?? Date.now(), busy: waiting.busy, onTrustWorkspace: waiting.onTrustWorkspace, toastIds: waiting.toastIds,
+        onDismiss: waiting.onDismiss, now: waiting.now ?? Date.now(), busy: waiting.busy, onTrustWorkspace: waiting.onTrustWorkspace, toastIds: waiting.toastIds, initiallyExpanded: waiting.initiallyExpanded,
     } : null;
     const [ownFocus, setOwnFocus] = useState<string | null>(null);
     const focused = focusedId ?? ownFocus;

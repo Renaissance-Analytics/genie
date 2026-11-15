@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
 
 /**
@@ -30,9 +30,9 @@ const item = (over: Partial<DeckItem> = {}): DeckItem => ({
     ...over,
 });
 
-function render(over: Partial<Parameters<typeof Deck>[0]> = {}): string {
+function render(over: Partial<Parameters<typeof DeckOnDashboard>[0]> = {}): string {
     return renderToStaticMarkup(
-        <Deck
+        <DeckOnDashboard
             items={[item()]}
             signals={QUIET}
             answering={null}
@@ -117,22 +117,14 @@ describe('the signal strip', () => {
     });
 });
 
-describe('an empty Deck', () => {
-    it('says so, which is a claim this surface IS entitled to make', () => {
-        /**
-         * Unlike the Dashboard's first run, where "no workspaces" before the bridge answers
-         * would be a claim about a machine nobody had looked at. Here the band is the whole
-         * subject and an empty band is the answer to the question the surface asks.
-         */
+describe('the Needs you count', () => {
+    it('is zero with nothing waiting, and no badge is drawn', () => {
         const html = render({ items: [] });
-
-        expect(html).toContain('data-deck="empty"');
-        expect(html).toContain('Nothing needs you');
-        // And no count in the header: the Deck being empty is said in words, not with a zero.
-        expect(html).not.toContain('data-deck-count');
+        expect(html).toContain('Needs you 0');
+        expect(html).not.toContain('data-waiting-badge');
     });
 
-    it('counts in the header when there IS something', () => {
-        expect(render()).toContain('data-deck-count="1"');
+    it('counts what waits when there IS something', () => {
+        expect(render()).toContain('Needs you 1');
     });
 });

@@ -85,8 +85,8 @@ describe('the approval card, on every screen that uses it', () => {
         expect(card({ question: 'x', command: FAR })).toMatch(/data-approval-named=""[^>]*>\[400 spaces\]/);
     });
 
-    it('the Deck, the phone and the chat all draw this card, so a fix here is a fix there', () => {
-        for (const file of ['Deck', 'MobileShell', 'ChatFlyout', 'AgentView']) {
+    it('the waiting row, the phone and the chat all draw this card, so a fix here is a fix there', () => {
+        for (const file of ['DeckRow', 'MobileShell', 'ChatFlyout', 'AgentView']) {
             expect(readFileSync(`src/renderer/components/${file}.tsx`, 'utf8'), file).toMatch(/<ApprovalCard\b/);
         }
     });

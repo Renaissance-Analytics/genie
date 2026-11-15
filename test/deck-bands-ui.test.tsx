@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DeckItem } from '../src/core/deck.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 
 /**
  * THE DECK ON SCREEN: `Needs you` with its count in the header, and nothing below it for handoffs. A finished agent's
@@ -14,21 +14,22 @@ const question: DeckItem = {
     blocking: true, priority: 'normal', at: 10, answer: { kind: 'inline', options: [{ id: 'a', label: 'a', tone: 'neutral' }] }, forwardedFrom: null,
 };
 const render = (items: DeckItem[]) =>
-    renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} />);
+    renderToStaticMarkup(<DeckOnDashboard items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} />);
 
-describe('the Deck', () => {
-    it('a question in Needs you, counted; no band of handoffs to read, no mark read', () => {
+describe('what waits on the Dashboard (Tynn #730: the Deck is not a page)', () => {
+    it('a question on its agent, counted in the chip; no band of handoffs to read, no mark read', () => {
         const html = render([question]);
-        expect(html).toContain('data-deck-count="1"');
-        expect(html).toMatch(/data-deck-band="needs-you"[\s\S]*?data-deck-item="q_1"/);
+        expect(html).toMatch(/data-dashboard-filter="needsYou"[^>]*>[\s\S]*?Needs you 1/);
+        expect(html).toMatch(/data-waiting-items="kai"[\s\S]*?data-deck-item="q_1"/);
         expect(html).not.toContain('data-deck-band="since-you-looked"');
         expect(html).not.toContain('Since you looked');
         expect(html).not.toContain('>mark read<');
     });
 
-    it('nothing waiting: the band says so, no count', () => {
+    it('nothing waiting: no badges, no items, and the chip says 0', () => {
         const html = render([]);
-        expect(html).toContain('Nothing needs you');
-        expect(html).not.toContain('data-deck-count');
+        expect(html).toContain('Needs you 0');
+        expect(html).not.toContain('data-waiting-badge');
+        expect(html).not.toContain('data-waiting-items');
     });
 });
