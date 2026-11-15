@@ -100,6 +100,16 @@ else srv.kill('SIGKILL');
 const endAt = now();
 await gone;
 rec('server-stopped', { exited: srv.exitCode !== null || srv.signalCode !== null, ms: now() - endAt });
+// WHICH pid survived, and why: the process table after the kill, with the server's pid, so a survivor is named with its parent and command.
+if (win) {
+    const ps = "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'node|chrom|headless|playwright|cmd|conhost' } | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, ([string]$_.CommandLine).Substring(0, [Math]::Min(150, ([string]$_.CommandLine).Length)) }";
+    const t = spawnSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8' });
+    const rows = (t.stdout || '').split(/\r?\n/).filter(Boolean).map((l) => { const [pid, ppid, name, ...cmd] = l.split('|'); return { pid: Number(pid), ppid: Number(ppid), name, cmd: cmd.join('|') }; });
+    rec('after-stop-survivors', { serverPid: srv.pid, serverExitCode: srv.exitCode, serverSignal: srv.signalCode, readable: t.status === 0, serverPidStillThere: rows.some((r) => r.pid === srv.pid), ourDescendants: rows.filter((r) => r.ppid === srv.pid || r.ppid === process.pid || /playwright/i.test(r.cmd)) });
+} else {
+    const t = spawnSync('ps', ['-eo', 'pid,ppid,comm,args'], { encoding: 'utf8' });
+    rec('after-stop-survivors', { serverPid: srv.pid, serverExitCode: srv.exitCode, rows: (t.stdout || '').split('\n').filter((l) => /node|chrom|playwright/.test(l)).slice(0, 20) });
+}
 srv.stdout.destroy();
 srv.stderr.destroy();
 mkdirSync('ci-out', { recursive: true });
