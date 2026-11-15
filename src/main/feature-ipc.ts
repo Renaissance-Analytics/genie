@@ -110,6 +110,19 @@ export interface FeaturePorts {
     readonly issueWatch?: () => Readonly<Record<string, IssueWatchPanelView>>;
     /** Have Tynn read a workspace's repos now — the GitHub panel's Refresh. Absent = none (doctor mode). */
     readonly issueWatchRefresh?: (workspaceId: string) => Promise<unknown>;
+    /**
+     * Each workspace's storage (main/workspace-storage-host.ts, Tynn #697): its view, and the four things the Storage tab asks.
+     * Ids only: the port resolves the workspace and re-validates every item. `measure` starts a measure and returns; main pushes
+     * when it is done. Absent = this window cannot measure (doctor mode, a remote window without a host).
+     */
+    readonly storage?: {
+        views(): Readonly<Record<string, import('../core/workspace-storage.js').StorageView>>;
+        measure(workspaceId: string): void;
+        trash(workspaceId: string, itemId: string): Promise<void>;
+        cleanUp(workspaceId: string, itemIds: readonly string[]): Promise<void>;
+        restore(workspaceId: string, trashId: string): Promise<void>;
+        empty(workspaceId: string, approval: import('../core/workspace-storage.js').TrashApproval): Promise<void>;
+    };
     /** Set one repo's IssueWatch switch in Tynn (tynn.ai#307). Absent = none (doctor mode). */
     readonly issueWatchSetRepo?: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => Promise<unknown>;
     readonly toolchain?: {

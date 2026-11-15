@@ -18,7 +18,7 @@ export type MachineFeatureServices = Pick<WindowServices, 'remote' | 'pairing' |
     readonly workspaceTrust: Pick<WindowServices['workspaceTrust'], 'trust' | 'untrust'>;
 };
 export type MachineFeaturePorts = Pick<FeaturePorts, 'tynnAccount' | 'githubAccount' | 'keyring' | 'issueWatch'
-    | 'issueWatchRefresh' | 'issueWatchSetRepo' | 'tailscale' | 'firewall' | 'toolchain' | 'tynnWorkstation'
+    | 'issueWatchRefresh' | 'issueWatchSetRepo' | 'storage' | 'tailscale' | 'firewall' | 'toolchain' | 'tynnWorkstation'
     | 'remoteAccess' | 'appVersion' | 'whatsNew'>;
 
 /** The account, or a refusal in words: without one nothing pretends to sign in. */
@@ -51,11 +51,12 @@ function tynnIntegration(state: FeatureState, account: TynnAccountPort | undefin
 
 /** Identical machine facts for the window and the host, with caller state supplied explicitly. */
 export function machineFeatureSnapshot(services: MachineFeatureServices, state: FeatureState, ports: MachineFeaturePorts):
-    Pick<FeatureData, 'integrations' | 'issueWatch' | 'version' | 'whatsNew' | 'plugins' | 'remote'> {
+    Pick<FeatureData, 'integrations' | 'issueWatch' | 'storage' | 'version' | 'whatsNew' | 'plugins' | 'remote'> {
     return {
         // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
         integrations: { ...tynnIntegration(state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null, ...(ports.keyring?.notice?.() ? { keyringNotice: ports.keyring.notice!() } : {}) },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
+        storage: ports.storage ? ports.storage.views() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
         plugins: { dir: services.pluginsDir, publisherChecksOff: services.settings.snapshot().publisher_checks_off === true, entries: services.plugins.list(), panels: catalogPanels(services.catalogDefinitions()) as never, editors: catalogEditors(services.catalogDefinitions()) },
@@ -90,6 +91,19 @@ export async function applyMachineFeatureAction(services: MachineFeatureServices
                 ...(typeof action.includeUpstream === 'boolean' ? { includeUpstream: action.includeUpstream } : {}),
             });
             break;
+        case 'storage.measure':
+        case 'storage.trash':
+        case 'storage.cleanUp':
+        case 'storage.restore':
+        case 'storage.emptyTrash': {
+            if (!ports.storage) throw new Error('this window cannot measure storage');
+            if (action.kind === 'storage.measure') ports.storage.measure(action.workspaceId);
+            else if (action.kind === 'storage.trash') await ports.storage.trash(action.workspaceId, action.itemId);
+            else if (action.kind === 'storage.cleanUp') await ports.storage.cleanUp(action.workspaceId, action.itemIds);
+            else if (action.kind === 'storage.restore') await ports.storage.restore(action.workspaceId, action.trashId);
+            else await ports.storage.empty(action.workspaceId, action.approval);
+            break;
+        }
         case 'issueWatch.refresh':
             // The GitHub panel's Refresh: Tynn reads the workspace's repos now and pushes what it finds.
             await ports.issueWatchRefresh?.(action.workspaceId);
