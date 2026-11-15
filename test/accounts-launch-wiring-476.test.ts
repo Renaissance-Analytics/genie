@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BROWSER_LINK_LABEL } from '../src/core/engine-protocol.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import { SessionEngineClient, type EngineClientOptions } from '../src/main/session-engine-client.js';
@@ -9,7 +9,7 @@ import { TakeOverHost } from '../src/main/take-over-host.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 
 const close: Array<() => void> = [];
-afterEach(() => { for (const fn of close.splice(0)) fn(); });
+afterEach(() => { for (const fn of close.splice(0)) fn(); vi.unstubAllEnvs(); });
 async function connection(extra: Partial<EngineServerOptions> = {}, local = true, options: EngineClientOptions = {}) {
     const server = new SessionEngineServer({ token: 'fixture', build: 'fixture', ...extra });
     const client = new SessionEngineClient(options), [host, window] = memoryPair();
@@ -19,10 +19,10 @@ async function connection(extra: Partial<EngineServerOptions> = {}, local = true
 }
 
 describe('S3: the persisted home reaches the existing login without opening an account book in the window', () => {
-    it('the local window gets only the persisted legacy id/provider/home, before agent sessions exist', async () => {
+    it('the local window gets only the persisted legacy id/provider/home and inheritance flag, before agent sessions exist', async () => {
         const client = await connection({ providerAccount: provider => provider === 'claude'
-            ? { id: 'account_legacy_claude', provider: 'claude', home: '/profile/custom claude', label: 'not needed by login' } as never : null });
-        expect(await client.providerAccount('claude')).toEqual({ id: 'account_legacy_claude', provider: 'claude', home: '/profile/custom claude' });
+            ? { id: 'account_legacy_claude', provider: 'claude', home: '/profile/custom claude', legacy: true, label: 'not needed by login' } as never : null });
+        expect(await client.providerAccount('claude')).toEqual({ id: 'account_legacy_claude', provider: 'claude', home: '/profile/custom claude', legacy: true });
         expect(await client.providerAccount('unknown')).toBeNull();
     });
     it('an unavailable book gives an explicit refusal and the client keeps the account unknown', async () => {
@@ -61,11 +61,11 @@ describe('S3: the persisted home reaches the existing login without opening an a
 
 
 describe('S3: the observed Take Over TUI keeps the bound account', () => {
-    function fixture(provider: 'claude' | 'codex', selected: 'matching' | 'missing' | 'mismatched' = 'matching', mcp = true) {
+    function fixture(provider: 'claude' | 'codex', selected: 'matching' | 'missing' | 'mismatched' = 'matching', mcp = true, legacy = false) {
         const opened: Array<{ env?: Readonly<Record<string, string>> | undefined }> = [];
         const record = { ...agentRecord({ id: mintAgentId(), name: 'fixture', provider, workspaceId: 'fixture' }), accountId: `account_${'a'.repeat(32)}` };
         const account = { provider: selected === 'mismatched' ? (provider === 'claude' ? 'codex' as const : 'claude' as const) : provider,
-            home: `/genie/accounts/${provider}/selected` };
+            home: `/genie/accounts/${provider}/selected`, legacy };
         const host = new TakeOverHost({ accountFor: () => selected === 'missing' ? null : account,
             terminals: { open: (options: (typeof opened)[number]) => { opened.push(options); return { id: 'fixture-terminal' }; },
                 close: () => true, onData: () => () => {}, onExit: () => () => {} } as never,
@@ -91,5 +91,15 @@ describe('S3: the observed Take Over TUI keeps the bound account', () => {
         expect(f.host.start(f.record, '/fixture', 'claude')).toMatchObject({ ok: true });
         expect(f.opened[0]!.env).toEqual({ CLAUDE_CONFIG_DIR: f.account.home });
         expect(f.host.callers()).toEqual({});
+    });
+    it.each(['claude', 'codex'] as const)('%s legacy Take Over keeps an unset home unset beside its MCP attribution', provider => {
+        vi.stubEnv('CLAUDE_CONFIG_DIR', undefined); vi.stubEnv('CODEX_HOME', undefined);
+        const f = fixture(provider, 'matching', true, true);
+        expect(f.host.start(f.record, '/fixture', provider)).toMatchObject({ ok: true });
+        const env = f.opened[0]!.env!;
+        expect(env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+        expect(env).not.toHaveProperty('CODEX_HOME');
+        expect(env.GENIE_MCP_TOKEN).toBe('fixture-bearer');
+        expect(f.host.callerFor(env.GENIE_TERMINAL_ID!)).toMatchObject({ agentId: f.record.id });
     });
 });

@@ -91,9 +91,10 @@ describe('S3: one account home environment', () => {
         const first = accountEnv(a, injected), second = accountEnv(b, first);
         selected(first, a); selected(second, b);
     });
-    it('a legacy home is the persisted custom path, never a newly guessed provider default', () => {
+    it('a legacy account retains its inherited custom path without guessing a provider default', () => {
         const a = { ...account('codex'), id: 'account_legacy_codex', legacy: true, home: '/profile/custom codex home' };
-        selected(accountEnv(a, injected), a);
+        const parent = { PATH: '/bin', CODEX_HOME: a.home };
+        expect(accountEnv(a, parent)).toEqual(parent);
     });
     it('an invalid home is refused instead of falling back to the process account', () => {
         for (const home of ['', 'relative/home', '/home/with\0nul']) expect(() => accountEnv({ provider: 'claude', home }, {})).toThrow(/home/i);
@@ -118,10 +119,13 @@ describe('S3: the actual driver allow-list', () => {
         if (configured?.endsWith('.mjs')) expect(opts).toMatchObject({ binary: '/fixture/runtime', binaryArgs: [configured] });
         if (electron) expect(env.ELECTRON_RUN_AS_NODE).toBe('1');
     });
-    it.each(['claude', 'codex'] as const)('CONTROL: %s legacy account produces exactly the existing child environment', provider => {
-        vi.stubEnv('CLAUDE_CONFIG_DIR', '/profile/legacy-claude');
-        vi.stubEnv('CODEX_HOME', '/profile/legacy-codex');
-        const a = { ...account(provider), id: `account_legacy_${provider}`, legacy: true, home: process.env[variable(provider)]! };
+    it.each([
+        ['claude', 'set'], ['codex', 'set'], ['claude', 'unset'], ['codex', 'unset'],
+    ] as const)('CONTROL: %s legacy with home variables %s produces exactly the existing child environment', (provider, presence) => {
+        vi.stubEnv('CLAUDE_CONFIG_DIR', presence === 'set' ? '/profile/legacy-claude' : undefined);
+        vi.stubEnv('CODEX_HOME', presence === 'set' ? '/profile/legacy-codex' : undefined);
+        const a = { ...account(provider), id: `account_legacy_${provider}`, legacy: true,
+            home: process.env[variable(provider)] ?? `/profile/.${provider}` };
         const runtime = { execPath: '/fixture/runtime', electron: false };
         const old = providerLaunchOptions(undefined, { DB_PORT: '4312' }, runtime);
         const next = launch(undefined, { DB_PORT: '4312' }, runtime, a);
@@ -130,7 +134,11 @@ describe('S3: the actual driver allow-list', () => {
         const child = (opts: ReturnType<typeof providerLaunchOptions>) => childEnv(opts.parentEnv ?? process.env,
             { allow: [variable(provider), ...(opts.allowEnv ?? [])] }).env;
         expect(child(next)).toEqual(child(old));
-        expect(child(next)[variable(provider)]).toBe(a.home);
+        if (presence === 'set') expect(child(next)[variable(provider)]).toBe(a.home);
+        else {
+            expect(child(next)).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+            expect(child(next)).not.toHaveProperty('CODEX_HOME');
+        }
     });
     it('CONTROL: normal service variables still pass through the SDK allow-list', () => {
         const options = serviceEnvDriverOptions({ DB_PORT: '4312' });
@@ -223,5 +231,60 @@ describe('S3: provider-owned status and model probes', () => {
             isFile: p => p === '/bin/claude', readText: () => '', readHead: () => elf, realpath: p => p,
             chosen: () => null, now: () => 1, run: async (_b, a) => { args.push([...a]); return { exitCode: 0, stdout: '1.0.0' }; } });
         expect(args).toEqual([['--version'], ['auth', 'status']]);
+    });
+});
+
+describe('S3: an unset legacy home stays unset at every provider entry point', () => {
+    function inherited(provider: AcpProvider): AccountRecord {
+        vi.stubEnv('CLAUDE_CONFIG_DIR', undefined);
+        vi.stubEnv('CODEX_HOME', undefined);
+        return { ...account(provider), id: `account_legacy_${provider}`, legacy: true, home: `/profile/.${provider}` };
+    }
+    function noHome(env: Env) {
+        expect(env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+        expect(env).not.toHaveProperty('CODEX_HOME');
+    }
+    it.each(['claude', 'codex'] as const)('%s pure legacy environment preserves an unset home instead of setting its resolved directory', provider => {
+        const a = inherited(provider), parent = Object.freeze({ PATH: '/bin', FIXTURE: 'kept' });
+        expect(accountEnv(a, parent)).toEqual(parent);
+        noHome(accountEnv(a, parent));
+    });
+    it.each(['claude', 'codex'] as const)('%s legacy agent launch ignores workspace home overrides and keeps the host home unset', async provider => {
+        const a = inherited(provider), dir = await directory(), f = hostFixture(dir, a);
+        const record = { ...agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider, name: 'fixture' }), accountId: a.id };
+        expect(f.host.start(record, dir)).toEqual({ ok: true });
+        await vi.waitFor(() => expect(f.seen).toHaveLength(1));
+        noHome(f.seen[0]!.env);
+        expect(f.seen[0]!.env.DB_PORT).toBe('4312');
+    });
+    it.each(['claude', 'codex'] as const)('%s legacy login and completion status keep the home unset', async provider => {
+        const a = inherited(provider), scratch = await directory();
+        const opened: Array<{ env?: Env }> = [], statuses: Env[] = [];
+        let exit: ((id: string, code: number) => void) | undefined;
+        const login = new LoginHost({ accountFor: () => a, scratch: () => scratch,
+            terminals: { open: o => { opened.push(o); return { id: 'login', pid: 1, shell: 'sh' }; },
+                onExit: listener => { exit = listener; return () => {}; } } as LoginHostOptions['terminals'],
+            openWindow: () => {}, onSignedIn: () => {},
+            runStatus: async (_command, _cwd, env) => { statuses.push(env ?? {}); return 0; } });
+        expect(login.start(provider)).toMatchObject({ ok: true });
+        exit!('login', 0);
+        await vi.waitFor(() => expect(statuses).toHaveLength(1));
+        noHome(opened[0]!.env ?? {}); noHome(statuses[0]!);
+    });
+    it.each(['claude', 'codex'] as const)('%s legacy health and status probes keep the home unset', async provider => {
+        const a = inherited(provider), envs: Env[] = [], elf = new Uint8Array(64);
+        elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]); elf[18] = 0x3e;
+        await checkProviderHealth(provider, { platform: 'linux', arch: 'x64', env: { PATH: '/bin' },
+            isFile: p => p === `/bin/${provider}`, readText: () => '', readHead: () => elf,
+            realpath: p => p, chosen: () => null, now: () => 1,
+            run: async (_binary, args, options) => { envs.push(options?.env ?? {});
+                return { exitCode: 0, stdout: args.includes('--version') ? '1.0.0' : 'Logged in' }; } }, a);
+        expect(envs).toHaveLength(2);
+        for (const env of envs) noHome(env);
+    });
+    it.each(['claude', 'codex'] as const)('%s legacy model probe keeps the home unset through the real child allow-list', provider => {
+        const a = inherited(provider);
+        const opts = listModelsOptionsFor(provider, {}, { execPath: '/fixture/runtime', electron: false }, undefined, a);
+        noHome(childEnv(opts.parentEnv ?? {}, { allow: [variable(provider), ...(opts.allowEnv ?? [])] }).env);
     });
 });
