@@ -2307,7 +2307,7 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
             </label>
             <label className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">This screen’s name</span>
-                <Input name="label" placeholder="glenn’s laptop" />
+                <Input name="label" placeholder="Office laptop" />
             </label>
             <Button size="xs" type="submit" className={button}>Connect</Button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
