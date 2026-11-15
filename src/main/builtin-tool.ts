@@ -10,13 +10,14 @@ export interface BuiltinTool {
     readonly name: string;
     readonly title: string;
     readonly description: string;
+    readonly summary: string;
     readonly inputSchema: JsonObject;
     readonly annotations?: JsonObject;
 }
 
 /** In ToolDefinition's own argument order, so a declaration reads as the definition it replaced. */
 export function declareBuiltinTool(name: string, description: string, inputSchema: JsonObject, title: string, annotations?: JsonObject): BuiltinTool {
-    return { name, title, description, inputSchema, ...(annotations === undefined ? {} : { annotations }) };
+    return { name, title, description, summary: '', inputSchema, ...(annotations === undefined ? {} : { annotations }) };
 }
 
 /** The MCP definition a declaration goes out as. */
