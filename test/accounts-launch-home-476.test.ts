@@ -259,7 +259,7 @@ describe('S3: an unset legacy home stays unset at every provider entry point', (
     });
     it.each(['claude', 'codex'] as const)('%s legacy login and completion status keep the home unset', async provider => {
         const a = inherited(provider), scratch = await directory();
-        const opened: Array<{ env?: Env }> = [], statuses: Env[] = [];
+        const opened: Array<{ env?: Env | undefined }> = [], statuses: Env[] = [];
         let exit: ((id: string, code: number) => void) | undefined;
         const login = new LoginHost({ accountFor: () => a, scratch: () => scratch,
             terminals: { open: o => { opened.push(o); return { id: 'login', pid: 1, shell: 'sh' }; },
