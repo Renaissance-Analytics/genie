@@ -16,6 +16,8 @@
  * board: one bad post must not cost the others. Nothing here throws.
  */
 
+import { formatRoute, parseRoute } from './route.js';
+
 /** The board's directory, at the workspace root. Self-describing, and a single
  *  place to gitignore or delete. */
 export const BOARD_DIR = '.artboard';
@@ -28,13 +30,13 @@ export const BOARD_INDEX = 'index.json';
  * — an unknown kind is a post nothing can draw, and listing it would put a
  * permanently broken card on the board.
  *
- * Two kinds, both chosen deliberately: a rendered HTML mockup (the case this
- * exists for) and an image the agent generated. `video` is RESERVED for when the
+ * Four kinds: a rendered HTML mockup (a component, a page or a site — the case this exists for), an image the agent
+ * generated, and two documents, Markdown and PDF (Tynn #739). `video` is RESERVED for when the
  * Remotion GApp can produce one — Remotion is then a consumer of this board for
  * storyboarding, not a second review surface. Adding it is a new entry here plus
  * a renderer in the panel; nothing else in the format changes.
  */
-export const POST_KINDS = ['html', 'image'] as const;
+export const POST_KINDS = ['html', 'image', 'markdown', 'pdf'] as const;
 export type PostKind = (typeof POST_KINDS)[number];
 
 export interface BoardPost {
@@ -71,7 +73,43 @@ export interface BoardPost {
     /** The human's decision, once made. Absent means "not reviewed yet", which
      *  is what the panel shows as awaiting review. */
     review?: Review;
+    /** Who posted the latest version, by name (stamped host-side with `agentId`). */
+    agentName?: string;
+    /** The size an HTML item was made for, in CSS pixels: shown at that size, scaled to fit. Absent = fill the panel. */
+    width?: number;
+    height?: number;
+    /**
+     * EVERY revision (Tynn #739): re-posting an id appends a version instead of replacing the item. Absent on an item stored
+     * before versions existed — read it through {@link versionsOf}, which counts it as version 1.
+     */
+    versions?: PostVersion[];
+    /** The paper trail: every verdict and every agent reply, in the order they happened. Kept for as long as the workspace is. */
+    trail?: TrailEntry[];
+    /** The person kept this item in the default view after a verdict. Absent = not pinned. */
+    pinned?: boolean;
 }
+
+/** One revision of an item: its own file, so an earlier version is still there to look at beside the later one. */
+export interface PostVersion {
+    n: number;
+    file: string;
+    kind: PostKind;
+    title: string;
+    createdAt: string;
+    note?: string;
+    agentId?: string;
+    agentName?: string;
+    width?: number;
+    height?: number;
+}
+
+/** A verdict or a reply, against the version it was about. Verdicts are APPENDED — {@link BoardPost.review} is only the latest. */
+export type TrailEntry =
+    | { type: 'verdict'; version: number; verdict: 'approved' | 'rejected'; comment?: string; at: string; by?: string }
+    | { type: 'reply'; version: number; text: string; at: string; agentId?: string; agentName?: string };
+
+export type PostStatus = 'waiting' | 'approved' | 'rejected' | 'shown';
+export type BoardFilter = 'waiting' | 'decided' | 'all';
 
 /**
  * A decision on one post.
@@ -86,10 +124,16 @@ export interface Review {
     at: string;
 }
 
-/** How many posts a board keeps. A looping agent must not be able to grow this
- *  without bound, and the NEWEST are the ones worth keeping — an agent posting
- *  repeatedly should push out its own old drafts. */
-const MAX_POSTS = 100;
+/**
+ * How many posts a board keeps. A looping agent must not be able to grow this without bound, and the NEWEST are the ones worth
+ * keeping — an agent posting repeatedly should push out its own old drafts. But an item with a trail (a verdict, a reply, a
+ * second version) or a pin is NEVER pushed out: the paper trail lasts as long as the workspace does (Tynn #739).
+ */
+const MAX_POSTS = 500;
+
+/** A comment in the trail is cut here; the person's whole comment still went to the agent that was waiting on it. */
+export const TRAIL_COMMENT_MAX = 20_000;
+const CUT = ' … [cut]';
 
 /** A literal backslash, named so codegen and heredocs cannot mangle it. */
 const BACKSLASH = String.fromCharCode(92);
@@ -111,6 +155,50 @@ function isBareFilename(v: unknown): v is string {
     return true;
 }
 
+const sizeValue = (v: unknown): number | undefined => (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 10_000 ? v : undefined);
+function sizeOf(r: Record<string, unknown>): { width?: number; height?: number } {
+    const width = sizeValue(r.width), height = sizeValue(r.height);
+    return { ...(width ? { width } : {}), ...(height ? { height } : {}) };
+}
+
+function toVersion(raw: unknown): PostVersion | null {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.n !== 'number' || !Number.isInteger(r.n) || r.n < 1) return null;
+    if (!isBareFilename(r.file) || !isPostKind(r.kind)) return null;
+    if (typeof r.createdAt !== 'string' || !r.createdAt || typeof r.title !== 'string' || !r.title) return null;
+    const v: PostVersion = { n: r.n, file: r.file, kind: r.kind, title: r.title, createdAt: r.createdAt };
+    if (typeof r.note === 'string' && r.note) v.note = r.note;
+    if (typeof r.agentId === 'string' && r.agentId) v.agentId = r.agentId;
+    if (typeof r.agentName === 'string' && r.agentName) v.agentName = r.agentName;
+    const size = sizeOf(r);
+    if (size.width) v.width = size.width;
+    if (size.height) v.height = size.height;
+    return v;
+}
+
+function toTrailEntry(raw: unknown): TrailEntry | null {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.version !== 'number' || !Number.isInteger(r.version) || r.version < 1) return null;
+    if (typeof r.at !== 'string' || !r.at) return null;
+    if (r.type === 'verdict') {
+        if (r.verdict !== 'approved' && r.verdict !== 'rejected') return null;
+        const e: TrailEntry = { type: 'verdict', version: r.version, verdict: r.verdict, at: r.at };
+        if (typeof r.comment === 'string' && r.comment) e.comment = r.comment;
+        if (typeof r.by === 'string' && r.by) e.by = r.by;
+        return e;
+    }
+    if (r.type === 'reply') {
+        if (typeof r.text !== 'string' || !r.text.trim()) return null;
+        const e: TrailEntry = { type: 'reply', version: r.version, text: r.text, at: r.at };
+        if (typeof r.agentId === 'string' && r.agentId) e.agentId = r.agentId;
+        if (typeof r.agentName === 'string' && r.agentName) e.agentName = r.agentName;
+        return e;
+    }
+    return null;
+}
+
 function toPost(raw: unknown): BoardPost | null {
     if (typeof raw !== 'object' || raw === null) return null;
     const r = raw as Record<string, unknown>;
@@ -129,6 +217,19 @@ function toPost(raw: unknown): BoardPost | null {
     if (typeof r.note === 'string' && r.note) post.note = r.note;
     if (typeof r.agentId === 'string' && r.agentId) post.agentId = r.agentId;
     if (typeof r.askVerdict === 'boolean') post.askVerdict = r.askVerdict;
+    if (typeof r.agentName === 'string' && r.agentName) post.agentName = r.agentName;
+    const size = sizeOf(r);
+    if (size.width) post.width = size.width;
+    if (size.height) post.height = size.height;
+    if (r.pinned === true) post.pinned = true;
+    if (Array.isArray(r.versions)) {
+        const versions = r.versions.map(toVersion).filter((v): v is PostVersion => v !== null);
+        if (versions.length > 0) post.versions = versions;
+    }
+    if (Array.isArray(r.trail)) {
+        const trail = r.trail.map(toTrailEntry).filter((e): e is TrailEntry => e !== null);
+        if (trail.length > 0) post.trail = trail;
+    }
     const rev = r.review;
     if (typeof rev === 'object' && rev !== null) {
         const v = (rev as Record<string, unknown>).verdict;
@@ -166,25 +267,160 @@ export function parseBoard(raw: string): BoardPost[] {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-/** PURE. Add or REPLACE a post, newest first, capped. */
-export function addPost(board: BoardPost[], post: BoardPost): BoardPost[] {
-    const rest = board.filter((p) => p.id !== post.id);
-    return [post, ...rest].slice(0, MAX_POSTS);
+/** An item's versions, oldest first. An item stored before versions existed is one version: itself. */
+export function versionsOf(post: BoardPost): PostVersion[] {
+    if (post.versions && post.versions.length > 0) return post.versions;
+    return [versionFrom(post, 1)];
+}
+
+function versionFrom(post: BoardPost, n: number): PostVersion {
+    return {
+        n, file: post.file, kind: post.kind, title: post.title, createdAt: post.createdAt,
+        ...(post.note ? { note: post.note } : {}),
+        ...(post.agentId ? { agentId: post.agentId } : {}),
+        ...(post.agentName ? { agentName: post.agentName } : {}),
+        ...(post.width ? { width: post.width } : {}),
+        ...(post.height ? { height: post.height } : {}),
+    };
+}
+
+const latestVersion = (post: BoardPost): number => versionsOf(post).at(-1)?.n ?? 1;
+
+/** The number the next post of this id will be — what its file is named by, so an earlier version's file is never overwritten. */
+export function nextVersionNumber(board: BoardPost[], id: string): number {
+    const existing = board.find((p) => p.id === id);
+    return existing ? latestVersion(existing) + 1 : 1;
+}
+
+/** `id.html` for version 1 (what every earlier board has), `id.v2.html` after — one file per version. */
+export function versionFile(id: string, n: number, ext: string): string {
+    return n <= 1 ? `${id}${ext}` : `${id}.v${n}${ext}`;
+}
+
+/** Items that must outlive the cap: they carry a decision, a conversation, a revision or the person's pin. */
+const isKept = (p: BoardPost): boolean => p.pinned === true || p.review !== undefined || (p.trail?.length ?? 0) > 0 || (p.versions?.length ?? 0) > 1;
+
+function capped(board: BoardPost[]): BoardPost[] {
+    if (board.length <= MAX_POSTS) return board;
+    let room = Math.max(0, MAX_POSTS - board.filter(isKept).length);
+    return board.filter((p) => isKept(p) || room-- > 0);
 }
 
 /**
- * PURE. Record a decision on one post.
- *
- * REPLACES any earlier verdict rather than appending: the board answers "what
- * was decided", and two verdicts on one post cannot answer it. A reviewer who
- * changes their mind is the normal case, not an edge one.
- *
- * A verdict for a post that is not on the board is a no-op — it is what a stale
- * panel or a deleted post produces, and inventing a post to hang it on would be
- * worse than dropping it.
+ * PURE. Add a post, newest first. A post with an id already on the board is a REVISION: it becomes the item's newest version
+ * (the earlier ones stay, each with its own file), the item awaits a verdict again, and its trail and pin carry over
+ * (Tynn #739 — it used to replace, which threw the history away).
  */
-export function applyVerdict(board: BoardPost[], id: string, review: Review): BoardPost[] {
-    return board.map((p) => (p.id === id ? { ...p, review } : p));
+export function addPost(board: BoardPost[], post: BoardPost): BoardPost[] {
+    const existing = board.find((p) => p.id === post.id);
+    const rest = board.filter((p) => p.id !== post.id);
+    const prior = existing ? versionsOf(existing) : [];
+    const next: BoardPost = { ...post, versions: [...prior, versionFrom(post, (prior.at(-1)?.n ?? 0) + 1)] };
+    delete next.review;
+    delete next.trail;
+    delete next.pinned;
+    if (existing?.trail) next.trail = existing.trail;
+    if (existing?.pinned) next.pinned = true;
+    return capped([next, ...rest]);
+}
+
+const cut = (text: string): string => (text.length > TRAIL_COMMENT_MAX ? text.slice(0, TRAIL_COMMENT_MAX) + CUT : text);
+
+/**
+ * PURE. Record a decision on one post: it becomes the item's `review` (what was decided, latest) AND is appended to its trail
+ * (what was decided, ever). A reviewer who changes their mind leaves both verdicts on the record.
+ *
+ * A verdict for a post that is not on the board is a no-op — it is what a stale panel or a deleted post produces, and
+ * inventing a post to hang it on would be worse than dropping it.
+ */
+export function applyVerdict(board: BoardPost[], id: string, review: Review, by = 'person'): BoardPost[] {
+    return board.map((p) => {
+        if (p.id !== id) return p;
+        const entry: TrailEntry = { type: 'verdict', version: latestVersion(p), verdict: review.verdict, ...(review.comment ? { comment: cut(review.comment) } : {}), at: review.at, by };
+        return { ...p, review, trail: [...(p.trail ?? []), entry] };
+    });
+}
+
+/** PURE. An agent's reply to what the person said, against the version it was written for. Blank is nothing to keep. */
+export function addReply(board: BoardPost[], id: string, reply: { text: string; at: string; agentId?: string; agentName?: string }): BoardPost[] {
+    const text = reply.text.trim();
+    if (!text) return board;
+    return board.map((p) => {
+        if (p.id !== id) return p;
+        const entry: TrailEntry = { type: 'reply', version: latestVersion(p), text: cut(text), at: reply.at, ...(reply.agentId ? { agentId: reply.agentId } : {}), ...(reply.agentName ? { agentName: reply.agentName } : {}) };
+        return { ...p, trail: [...(p.trail ?? []), entry] };
+    });
+}
+
+/** PURE. Keep an item in the default view after its verdict, or let it hide again. */
+export function setPinned(board: BoardPost[], id: string, pinned: boolean): BoardPost[] {
+    return board.map((p) => {
+        if (p.id !== id) return p;
+        const { pinned: _was, ...rest } = p;
+        return pinned ? { ...rest, pinned: true } : rest;
+    });
+}
+
+export function postStatus(post: Pick<BoardPost, 'askVerdict' | 'review'>): PostStatus {
+    if (post.review) return post.review.verdict;
+    return wantsVerdict(post) ? 'waiting' : 'shown';
+}
+
+/**
+ * PURE. What the board shows. `waiting` (the default) hides what has been decided — unless the person pinned it, or a link
+ * points straight at it (`focusId`). `decided` is the decided; `all` is everything. Order is the board's own.
+ */
+export function visiblePosts<T extends { id: string; review?: unknown; pinned?: boolean | undefined }>(posts: readonly T[], filter: BoardFilter, focusId: string | null = null): T[] {
+    if (filter === 'all') return [...posts];
+    if (filter === 'decided') return posts.filter((p) => p.review !== undefined);
+    return posts.filter((p) => p.review === undefined || p.pinned === true || p.id === focusId);
+}
+
+/** The tab's badge: items that asked for a verdict and have none. Pinning a decided item does not make it wait again. */
+export function waitingCount(posts: readonly { askVerdict?: boolean | undefined; review?: unknown }[]): number {
+    return posts.filter((p) => p.askVerdict !== false && p.review === undefined).length;
+}
+
+export type TimelineEvent =
+    | { kind: 'version'; version: number; at: string; by?: string; note?: string }
+    | { kind: 'verdict'; version: number; at: string; verdict: 'approved' | 'rejected'; comment?: string; by?: string }
+    | { kind: 'reply'; version: number; at: string; text: string; by?: string };
+
+/** PURE. Everything that happened to an item, oldest first: each version posted, each verdict, each reply. */
+export function trailTimeline(post: BoardPost): TimelineEvent[] {
+    const events: TimelineEvent[] = [
+        ...versionsOf(post).map((v): TimelineEvent => ({ kind: 'version', version: v.n, at: v.createdAt, ...(v.agentName ? { by: v.agentName } : {}), ...(v.note ? { note: v.note } : {}) })),
+        ...(post.trail ?? []).map((e): TimelineEvent => e.type === 'verdict'
+            ? { kind: 'verdict', version: e.version, at: e.at, verdict: e.verdict, ...(e.comment ? { comment: e.comment } : {}), ...(e.by ? { by: e.by } : {}) }
+            : { kind: 'reply', version: e.version, at: e.at, text: e.text, ...(e.agentName ? { by: e.agentName } : {}) }),
+    ];
+    return events.map((e, i) => ({ e, i })).sort((a, b) => a.e.at.localeCompare(b.e.at) || a.i - b.i).map(({ e }) => e);
+}
+
+/** PURE. What an agent is told when it reads an item's trail: its status, the last verdict (with its comment), and the whole history. */
+export function trailOf(post: BoardPost) {
+    const lastEntry = [...(post.trail ?? [])].reverse().find((e): e is Extract<TrailEntry, { type: 'verdict' }> => e.type === 'verdict');
+    const lastVerdict = lastEntry
+        ? { verdict: lastEntry.verdict, version: lastEntry.version, at: lastEntry.at, ...(lastEntry.comment ? { comment: lastEntry.comment } : {}) }
+        : post.review ? { verdict: post.review.verdict, version: latestVersion(post), at: post.review.at, ...(post.review.comment ? { comment: post.review.comment } : {}) } : null;
+    return {
+        id: post.id,
+        title: post.title,
+        kind: post.kind,
+        status: postStatus(post),
+        askedForVerdict: wantsVerdict(post),
+        pinned: post.pinned === true,
+        currentVersion: latestVersion(post),
+        lastVerdict,
+        versions: versionsOf(post).map((v) => ({ version: v.n, title: v.title, postedAt: v.createdAt, ...(v.agentName ? { by: v.agentName } : {}), ...(v.note ? { note: v.note } : {}) })),
+        events: trailTimeline(post),
+    };
+}
+
+/** The link that opens the workspace on its ArtBoard tab, on one item — what a question or notification about a post carries. */
+export function artboardItemRoute(workspaceId: string, postId: string): string {
+    const base = parseRoute(`genie://workspace/${encodeURIComponent(workspaceId)}`);
+    return base.surface === 'workspace' ? formatRoute({ ...base, view: 'artboard', artboardItem: postId }) : `genie://workspace/${encodeURIComponent(workspaceId)}`;
 }
 
 /**
