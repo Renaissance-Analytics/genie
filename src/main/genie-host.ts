@@ -101,6 +101,7 @@ import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain } from './host-keychain.js';
+import { startProofOfDone } from './proof-of-done-host.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
@@ -1490,6 +1491,20 @@ async function main(): Promise<void> {
     let processBookNow: ProcessBook | null = null;
     /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
     const clocks: Array<{ stop(): void }> = [marketplacePlugins];
+    // PROOF-OF-DONE (Tynn #742): this host's key signs for the signed-in Tynn user; a HITL claim waits on the Deck as an approval.
+    const podCaller: import('./mcp-tools.js').Caller = { agentId: 'genie-proof-of-done' as AgentId, agentName: 'Genie', workspaceId: '', workspacePath: '' };
+    void tynnOpening.then((account) => {
+        clocks.push(startProofOfDone({
+            file: join(home, 'proof-of-done-notes.json'),
+            keychain,
+            tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), request: (path, init) => account.request(path, init) },
+            approve: async (request) => (await approvals.gate(podCaller, 'pod.sign', request.detail)) === 'allowed' ? 'allowed' : 'denied',
+            workspaces: () => hostRegistry.listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
+            label: () => hostname(),
+            log: say,
+            onAccountChange: (listener) => account.onChange(listener),
+        }));
+    }, () => {});
     /** The clocks to plan again when the person leaves safe mode — arming what may fire later, and starting nothing now. */
     const planners: Array<{ plan(): void }> = [];
     safeMode.onChange((view) => { if (!view.active) for (const p of planners) p.plan(); });
