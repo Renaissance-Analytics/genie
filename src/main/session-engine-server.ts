@@ -639,6 +639,16 @@ export class SessionEngineServer {
             const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
             return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
         }
+        if (method === 'engine.login') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            if (!this.#options.login) throw new Error('Sign-in is not ready in the host yet.');
+            return this.#options.login(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'string' ? args[1] : undefined);
+        }
+        if (method === 'engine.cancelLogin') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            this.#options.cancelLogin?.(typeof args[0] === 'string' ? args[0] : '');
+            return true;
+        }
         if (method === 'engine.refreshAccountIdentity') {
             if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');
             await this.#options.refreshAccountIdentity?.(typeof args[0] === 'string' ? args[0] : '');
