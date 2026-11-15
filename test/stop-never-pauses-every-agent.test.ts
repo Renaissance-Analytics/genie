@@ -7,7 +7,7 @@ import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import { openDurableStore } from '../src/core/thread-store.js';
-import { AgentSession, CANCEL_STATE_UNCERTAIN, LIMIT_RESUME_PROMPT, type DriverEvents, type SessionDriverFactory, type TurnOutcomeLike } from '../src/core/session.js';
+import { AgentSession, CANCEL_STATE_UNCERTAIN, limitResumePrompt, type DriverEvents, type SessionDriverFactory, type TurnOutcomeLike } from '../src/core/session.js';
 import { RateLimitGate } from '../src/core/rate-limit-gate.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { processTable } from './support/process-table.js';
@@ -129,7 +129,7 @@ describe("one agent's breach holds only that agent unless the provider's reading
         expect(host.probe(b.id)?.limit).toMatchObject({ state: 'paused' });
         advanceTo(now + 62 * MIN);
         expect(sent.get('wren')).toEqual(['hello']);
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', limitResumePrompt('build it')]);
     });
 });
 

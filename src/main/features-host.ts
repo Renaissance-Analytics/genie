@@ -85,6 +85,8 @@ export interface HostFeaturesPorts {
     readonly mailRefusal: (address: string) => string | null;
     readonly workspaceIds: () => readonly string[];
     readonly runFlow: (id: string) => Promise<unknown>;
+    /** Resume now for the provider limit holding this agent's login (Tynn #749). */
+    readonly resumeAgentLimit?: (agentId: string) => void;
     readonly refreshPlugins: () => Promise<void>;
     readonly applyRemote: () => Promise<void>;
     readonly hosting?: HostFeatureHostingPorts;
@@ -141,6 +143,7 @@ export class HostFeatures {
             agentAddresses: () => ports.roster().map(record => ({ address: agentAddress(record, ports.workspaceSlugs?.() ?? new Map()), agentId: record.id, name: record.name })),
             resolveAddress: address => ports.resolveAddress(address), mailRefusal: address => ports.mailRefusal(address),
             workspaceIds: () => ports.workspaceIds(), flowScheduler: { runNow: id => ports.runFlow(id) },
+            ...(ports.resumeAgentLimit ? { resumeAgentLimit: (id: string) => ports.resumeAgentLimit!(id) } : {}),
             pluginsRefresh: () => ports.refreshPlugins(),
         };
         const h = ports.hosting;

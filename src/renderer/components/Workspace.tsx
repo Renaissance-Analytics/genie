@@ -19,7 +19,9 @@ import { SitePanel } from './SitePanel.js';
 import { siteWebviewLayerFor, tabsChanged, type SeenTabs } from '../site-webview-layer.js';
 import { TerminalCell } from './TerminalCell.js';
 import { TrustStep } from './TrustStep.js';
-import type { TrustStepView } from '../features.js';
+import type { FeatureAction, TrustStepView } from '../features.js';
+import type { StorageView } from '../../core/workspace-storage.js';
+import { StoragePanel } from './StoragePanel.js';
 import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, sitePanelKeys, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
@@ -194,6 +196,9 @@ export interface WorkspaceProps {
     issueWatch?: IssueWatchPanelView | null | undefined;
     /** The GitHub panel's Refresh (Tynn reads the repos now). Absent = no Refresh. */
     onRefreshIssueWatch?: (() => void) | undefined;
+    /** The Storage tab (Tynn #697): this workspace's view, as main holds it, and how it asks main. Absent `onStorageAction` = no tab. */
+    storage?: StorageView | null | undefined;
+    onStorageAction?: ((action: FeatureAction) => void) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
     tynnBoard?: TynnTabHost | undefined;
     /** The Tynn tab's Issues page (genie#1295 I1); absent = the tab has no Issues page. */
@@ -260,7 +265,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], artboardItem = null, pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], artboardItem = null, pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, storage = null, onStorageAction, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -724,6 +729,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                 canDesign={canDesign}
                 hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
                 github={issueWatch?.linked === true}
+                storage={onStorageAction !== undefined}
                 tynn={issueWatch?.linked === true && tynnBoard !== undefined}
                 artboardWaiting={artboardWaiting}
                 // Files is the open files (`?files=`); any other tab is a view, and choosing it leaves the files (Shell).
@@ -977,6 +983,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             ) : null}
             {onScreen === 'terminals' ? <ErrorBoundary surface="Terminals" resetKeys={[workspace.id]}>{terminalsBody}</ErrorBoundary> : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
+            {onScreen === 'storage' && onStorageAction ? <div data-workspace-body="storage" className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Storage" resetKeys={[workspace.id]}><StoragePanel workspaceId={workspace.id} view={storage} onAction={onStorageAction} /></ErrorBoundary></div> : null}
             {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="GitHub" resetKeys={[workspace.id]}><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></ErrorBoundary></div> : null}
             {/* THE TYNN TAB (genie#1295): the linked project's workspace (its pages, the board among them), natively — no user menu, no project picker. */}
             {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnTab workspaceId={workspace.id} host={tynnBoard} issues={tynnIssues} /></ErrorBoundary></div> : null}

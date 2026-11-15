@@ -254,8 +254,10 @@ export class FlowScheduler {
         const file = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
         if (this.#running.has(flow.id)) {
             // A previous run whose prompt waits in an agent's queue (Tynn #704) is still going: this fire is not stacked behind it.
-            const queued = Object.values(this.#deps.store.get(flow.id)?.inFlight?.nodes ?? {}).includes('queued');
-            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: queued ? `the previous run of "${flow.name}" is still queued behind its agent's current turn; this fire was not stacked behind it` : `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
+            const inFlightNodes = Object.values(this.#deps.store.get(flow.id)?.inFlight?.nodes ?? {});
+            const queued = inFlightNodes.includes('queued');
+            const paused = inFlightNodes.includes('paused');
+            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: paused ? `the previous run of "${flow.name}" is paused at its agent's provider limit and goes on when it resets; this fire was not stacked behind it` : queued ? `the previous run of "${flow.name}" is still queued behind its agent's current turn; this fire was not stacked behind it` : `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
             this.#records.add(held);
             const done = (): void => { this.#records.delete(held); };
             held.then(done, done);
@@ -278,11 +280,13 @@ export class FlowScheduler {
         const entry = trigger?.nodeId;
         const at = new Date(startedAt).toISOString();
         const fileOf = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
+        let pause: { resumesAtMs: number | null; agentId: string; agent: string } | null = null;
         const observer: RunObserver = {
             nodes: (outcomes) => {
                 nodes = outcomes;
-                void this.#deps.store.markInFlight(flow.id, { at, trigger: kind, ...fileOf, nodes: outcomes, outputs: { ...outputs }, ...(entry ? { entry } : {}) }).catch(() => {});
+                void this.#deps.store.markInFlight(flow.id, { at, trigger: kind, ...fileOf, nodes: outcomes, outputs: { ...outputs }, ...(entry ? { entry } : {}), ...(pause ? { pause } : {}) }).catch(() => {});
             },
+            paused: (info) => { pause = info; },
             output: (nodeId, value) => { outputs[nodeId] = value; },
             log: (_nodeId, line) => { log.push(line); },
         };

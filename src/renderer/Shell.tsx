@@ -999,6 +999,7 @@ export function Shell({
                             tynnBoard={tynnBoard}
                             tynnIssues={tynnIssues}
                             onRefreshIssueWatch={() => onFeature({ kind: 'issueWatch.refresh', workspaceId: parsed.workspaceId })}
+                            {...(features.storage ? { storage: features.storage[parsed.workspaceId] ?? null, onStorageAction: onFeature } : {})}
                             onSetIssueWatchRepo={(owner, repo, change) => onFeature({ kind: 'issueWatch.setRepo', workspaceId: parsed.workspaceId, owner, repo, ...change })}
                             rows={snapshot.agents}
                             // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Dashboard, on its agent's row.

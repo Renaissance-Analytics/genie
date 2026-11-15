@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { RateLimitGate } from '../src/core/rate-limit-gate.js';
-import { LIMIT_RESUME_PROMPT, type DriverEvents, type SessionDriverFactory } from '../src/core/session.js';
+import { limitResumePrompt, type DriverEvents, type SessionDriverFactory } from '../src/core/session.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -93,7 +93,7 @@ describe('a no-reset retry, once it has fired', () => {
         expect(host.probe(a.id)?.limit).toMatchObject({ state: 'retrying', attempt: 1, nextTryAtMs: now + 15 * MIN });
         const ran = advanceTo(now + 15 * MIN);
         expect(ran).toBeLessThanOrEqual(2);
-        expect(sent.get('kai')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('kai')).toEqual(['build it', limitResumePrompt('build it')]);
         expect(liveTimers().every((x) => x.at > now)).toBe(true);
         // The retry is in flight: nothing is held, so nothing says "retrying" with a past time.
         expect(host.probe(a.id)?.limit).toEqual({ state: 'open' });
@@ -108,7 +108,7 @@ describe('a no-reset retry, once it has fired', () => {
         allowedReading('kai');
         replied('kai');
         host.prompt(a.id, 'next thing', 'you');
-        expect(sent.get('kai')).toEqual(['build it', LIMIT_RESUME_PROMPT, 'next thing']);
+        expect(sent.get('kai')).toEqual(['build it', limitResumePrompt('build it'), 'next thing']);
         expect(host.probe(a.id)?.limit).toEqual({ state: 'open' });
     });
 

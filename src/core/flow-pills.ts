@@ -9,6 +9,8 @@ export interface LiveFlow {
     readonly workspaceId: string;
     /** When the run started (ISO). */
     readonly at: string;
+    /** The run is PAUSED at its agent's provider limit (Tynn #749): when it resumes (`null` = no time is stated). */
+    readonly pause?: { readonly resumesAtMs: number | null; readonly agent: string } | undefined;
 }
 
 export interface EndedFlow {
@@ -25,7 +27,17 @@ export interface FlowPill {
     /** What the pill says: the flow's own name, or "Unnamed flow" — never its id. */
     readonly name: string;
     readonly workspaceId: string;
-    readonly state: 'running' | 'failed' | 'held';
+    readonly state: 'running' | 'paused' | 'failed' | 'held';
+    /** A `paused` pill: when its limit resumes (`null` = no time is stated). */
+    readonly resumesAtMs?: number | null;
+}
+
+/**
+ * WHAT A LIMIT-PAUSED RUN SAYS (Tynn #749): never Failed or Broken. `clock` formats a time of day (HH:MM) the way the
+ * surface shows times.
+ */
+export function pausedWords(resumesAtMs: number | null | undefined, clock: (ms: number) => string): string {
+    return resumesAtMs === null || resumesAtMs === undefined ? 'Paused · limit, resume time not stated' : `Paused · limit, resumes ${clock(resumesAtMs)}`;
 }
 
 /** The words for a flow with no name of its own, or one whose name is only its id. */
@@ -46,7 +58,7 @@ export const NARROW_PILLS_SHOWN = 1;
 
 export function flowPills(input: { live: readonly LiveFlow[]; ended: readonly EndedFlow[]; now: number; workspaceId?: string | null | undefined; max?: number | undefined }): { shown: FlowPill[]; more: FlowPill[] } {
     const mine = (w: { workspaceId: string }): boolean => input.workspaceId == null || w.workspaceId === input.workspaceId;
-    const running = input.live.filter(mine).map((f): FlowPill => ({ flowId: f.flowId, name: label(f.flowId, f.name), workspaceId: f.workspaceId, state: 'running' }));
+    const running = input.live.filter(mine).map((f): FlowPill => ({ flowId: f.flowId, name: label(f.flowId, f.name), workspaceId: f.workspaceId, ...(f.pause ? { state: 'paused' as const, resumesAtMs: f.pause.resumesAtMs } : { state: 'running' as const }) }));
     const runningIds = new Set(running.map((p) => p.flowId));
     const recent = input.ended
         .filter((e) => mine(e) && !runningIds.has(e.flowId) && input.now - Date.parse(e.endedAt) <= PILL_LINGER_MS)
