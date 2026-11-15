@@ -377,7 +377,8 @@ describe('where it is wired', () => {
 
     it('Settings says which proxy, and that the sign-in stands', () => {
         expect(unreachableThroughMessage('a.example:8080')).toMatch(/a\.example:8080[\s\S]*sign-in is kept/);
-        expect(strip(readFileSync('src/main/feature-ipc.ts', 'utf8'))).toMatch(/through \? unreachableThroughMessage\(through\)/);
+        expect(strip(readFileSync('src/main/feature-ipc.ts', 'utf8'))).toMatch(/\.\.\.machineFeatureSnapshot\(services, state, ports\)/);
+        expect(strip(readFileSync('src/main/feature-machine.ts', 'utf8'))).toMatch(/through \? unreachableThroughMessage\(through\)/);
     });
 
     it('main asks at each connect and at wake, and genie-host uses what it remembers', () => {

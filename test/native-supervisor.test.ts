@@ -23,9 +23,11 @@ const onWindows = <T>(run: () => Promise<T>): Promise<T> => {
     return run().finally(() => Object.defineProperty(process, 'platform', real));
 };
 
-describe('prism-acp 0.41, shipped and signed', () => {
-    it('pins 0.41.1, signed by Renaissance Analytics', () => {
-        expect((JSON.parse(read('package.json')) as { dependencies: Record<string, string> }).dependencies['@particle-academy/prism-acp']).toBe('0.41.1');
+describe('prism-acp, shipped and signed', () => {
+    it('pins 0.42.0, signed by Renaissance Analytics', () => {
+        // Adoption evidence: both native images in the integrity-verified 0.42.0 npm artifact have a Valid,
+        // timestamped Renaissance Analytics Authenticode signature. The packaging gate checks the signed tree below.
+        expect((JSON.parse(read('package.json')) as { dependencies: Record<string, string> }).dependencies['@particle-academy/prism-acp']).toBe('0.42.0');
     });
 
     it('unpacks the prebuilt supervisors from the asar (the package picks by the machine, so an x64 Genie on ARM64 needs both)', () => {

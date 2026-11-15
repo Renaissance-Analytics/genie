@@ -1,5 +1,8 @@
+import { LatestPush } from '../core/latest-push.js';
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
+import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
+import { AgentPush } from './agent-push.js';
 import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
@@ -67,7 +70,14 @@ const REMOTE_ATTACHMENT_MAX_BYTES = 512 * 1024;
  * transport is a port — fancy-ws on a real socket, an in-memory pair in tests.
  */
 
+/** An agent's detail as the host builds it: its rows, and whatever else the window shows. */
+export type LocalAgentDetail = { readonly rows: readonly unknown[] };
+
 export interface HostApi {
+    /** The owned aggregator is supplied; its reads and events must not be answered by a window replica (Tynn #720). */
+    readonly ownsFeatures?: boolean;
+    /** Release transient view state for this admitted connection; never an invocation from the wire. */
+    releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
     readonly gapps?: () => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
@@ -86,6 +96,8 @@ export interface HostApi {
     workspaceOfTerminal?(terminalId: string): string | null;
     /** Each workspace's folder on this host — how far a guest may browse (Tynn #835). Absent = a guest browses nothing. */
     workspacePaths?(): Readonly<Record<string, string>>;
+    /** What this machine's own windows watch per view (Tynn #564): a detail is built only for an agent a view shows. */
+    readonly localAgents?: { detailFor(agentId: string): LocalAgentDetail | null; onChanged(listener: (agentId: string) => void): () => void };
     /** A TUI started for another machine's Take Over window is done with: its window closed, or never came (Tynn #529 A). */
     takeOverEnded?(terminalId: string): void;
 }
@@ -104,6 +116,11 @@ const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'termi
 // 'workspaces.create' too: New can create a repository under the host owner's GitHub and declare it on their Tynn (Add workspace parity 11).
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
 const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke'];
+
+/** What a guest of ONE workspace may never do, whichever workspace it names: the workstation's roster (Tynn #688). */
+const GUEST_ROSTER_METHODS: readonly string[] = ['workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.setGoverns'];
+/** Methods whose FIRST argument is a terminal id: a guest of one workspace reaches only its own terminals (Tynn #688). */
+const GUEST_TERMINAL_ID_METHODS: readonly string[] = ['terminals.write', 'terminals.resize', 'terminals.close'];
 
 /** `/`-separated, `..` resolved — so `/w/tynn/../fancy` is judged as `/w/fancy`. */
 function normalizedPath(p: string): string {
@@ -141,6 +158,8 @@ interface Connection {
     profile: 'mobile' | null;
     /** Only the local frame door proves this; a hello alone never does. */
     local: boolean;
+    /** The agents this window's views show, and the rows it holds of each (Tynn #564). */
+    agentPush: AgentPush<LocalAgentDetail, unknown> | null;
     /** A phone's windows on the agents it watches (core/mobile-wire.ts). */
     readonly watching: Map<string, WindowState<WireRow>>;
     /** Independent activity views belonging to this admitted local window. */
@@ -211,6 +230,7 @@ function withoutPairRequests(value: unknown): unknown {
 const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' && args[0] !== null && (args[0] as { kind?: unknown }).kind === 'remote.answerPair';
 
 export class RemoteHost {
+    readonly #featurePushes = new Map<string, LatestPush<unknown>>();
     readonly #api: HostApi;
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
@@ -245,6 +265,9 @@ export class RemoteHost {
     /** Take over tickets not yet presented (Tynn #529 part A): by ticket, the window that asked and its terminal. */
     readonly #tickets = new Map<string, { parentId: string; terminalId: string; started: boolean; expiresAt: number; cancel: () => void }>();
     readonly #schedule: (ms: number, fn: () => void) => () => void;
+    #stopLocalAgents: (() => void) | null = null;
+    #snapshotRevision = 0;
+    #featuresRevision = 0;
 
     /**
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
@@ -299,6 +322,9 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        this.#featurePushes.delete(connection.id);
+        connection.agentPush?.stop();
+        connection.agentPush = null;
         const marketplace = this.#marketplaces.get(connection);
         if (marketplace) { this.#marketplaces.delete(connection); void marketplace.close().catch(() => console.warn('[genie] Marketplace review cleanup failed')); }
         this.#localTerminals?.dropOwner(connection.id);
@@ -317,10 +343,16 @@ export class RemoteHost {
             connection.pendingPair = null;
         }
         const was = this.#connections.delete(connection.id);
+        if (was && connection.auth !== null) {
+            try { this.#api.releaseCaller?.(this.#callContext(connection)); }
+            catch { console.warn('[genie] feature caller cleanup failed'); }
+        }
         if (was && connection.auth !== null && !connection.local) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();
         this.#stopListening = null;
+        this.#stopLocalAgents?.();
+        this.#stopLocalAgents = null;
     }
 
     /**
@@ -470,7 +502,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -506,7 +538,15 @@ export class RemoteHost {
     }
 
     #send(connection: Connection, message: WireMessage): void {
-        connection.socket.send(JSON.stringify(message));
+        const text = JSON.stringify(message);
+        // Another device (Tynn #579): a frame over the cap ends its connection at the transport, so it is a refusal or not sent.
+        if (connection.local) return connection.socket.send(text);
+        const fit = fitRemoteFrame(text);
+        if (fit.text === null) {
+            console.warn(`[genie] a ${message.kind} to another device was over ${REMOTE_FRAME_MAX_BYTES} bytes and was not sent`);
+            return;
+        }
+        connection.socket.send(fit.text);
     }
 
     #refuse(connection: Connection, reason: string, close: boolean): void {
@@ -601,6 +641,8 @@ export class RemoteHost {
             host: this.#hostName,
             isOwner: connection.auth.isOwner,
             workspaceId: connection.auth.workspaceId,
+            // What the window may offer (Tynn #688): read-only is the host's word, from the grant, never the client's.
+            readonly: connection.auth.readonly,
             ...(token ? { token } : {}),
             // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
             protocol: REMOTE_PROTOCOL,
@@ -743,8 +785,10 @@ export class RemoteHost {
                 this.unlock(connection.id);
                 return ok({ locked: false });
             case 'agent.watch':
+                if (connection.local) return this.#watchLocalAgent(connection, String(args[0] ?? ''), true) ? ok({ watching: true }) : refuse('this host does not offer agent details');
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
             case 'agent.unwatch': {
+                if (connection.local) return ok({ unwatched: this.#watchLocalAgent(connection, String(args[0] ?? ''), false) });
                 const unwatched = connection.watching.delete(String(args[0] ?? ''));
                 // What the forwarding window sends follows (Tynn #662).
                 if (unwatched) this.#changed();
@@ -866,7 +910,7 @@ export class RemoteHost {
             // paired devices and the connections. Only an owner sees them.
             // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
             // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
-            if (connection.local && (method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
+            if (connection.local && (method === 'snapshot' || method === 'agentDetail' || method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
             // ONE KEPT IMAGE (Tynn #642): a sent image can be up to 5 MB, so this machine's window takes it as a blob, never
             // a frame over the door's cap; another device takes one whose reply is at most REMOTE_ATTACHMENT_MAX_BYTES
             // (512 KB), and is told plainly when it is larger.
@@ -978,10 +1022,67 @@ export class RemoteHost {
         }
         if (WORKSPACE_SCOPED_METHODS.includes(method) && String(args[0] ?? '') !== workspaceId) return `${String(args[0])} is not the workspace this link shares`;
         if (method === 'features.act' || method.startsWith('updates.')) return `${method} changes ${this.#hostName} itself; a shared workspace cannot`;
+        // THE WORKSTATION'S OWN (Tynn #688): its features (settings, processes, sites, services, flows, hosting, toolchain)
+        // and its update state are the machine's, not the workspace this link shares.
+        if (method === 'features.snapshot') return `${method} is ${this.#hostName}'s own, not part of the workspace this link shares`;
+        // The workstation's roster: hibernating, waking or removing a workspace, or making one govern others.
+        if (GUEST_ROSTER_METHODS.includes(method)) return `${method} changes ${this.#hostName}'s workspaces; the workspace this link shares cannot`;
+        // By terminal id: one the host places in this workspace, never another's or one it cannot place.
+        if (GUEST_TERMINAL_ID_METHODS.includes(method)) {
+            const terminalId = String(args[0] ?? '');
+            if (this.#api.workspaceOfTerminal?.(terminalId) !== workspaceId) return `${terminalId} is not a terminal of the workspace this link shares`;
+        }
+        // A file to one of ITS agents, by id: an address the host would resolve across every workspace is not this link's.
+        if (method === 'inbox.sendFile') {
+            const to = String(args[0] ?? '');
+            if (this.#api.workspaceOfAgent(to) !== workspaceId) return `${to} is not an agent of the workspace this link shares`;
+        }
+        // Naming an agent: only one of this workspace's.
+        if (method === 'workspaces.setDefaultAgent' && typeof args[1] === 'string' && args[1] !== '' && this.#api.workspaceOfAgent(args[1]) !== workspaceId) return `${args[1]} is not in the workspace this link shares`;
+        if (method === 'agents.setAccessAgents' && Array.isArray(args[1])) {
+            const outside = args[1].find((id) => this.#api.workspaceOfAgent(String(id)) !== workspaceId);
+            if (outside !== undefined) return `${String(outside)} is not in the workspace this link shares`;
+        }
         return null;
     }
 
+    /** Whether the host offers it. Watching starts with the whole ledger; patches follow (core/agent-push-wire.ts). */
+    #watchLocalAgent(connection: Connection, agentId: string, on: boolean): boolean {
+        const source = this.#api.localAgents;
+        if (!source) return false;
+        connection.agentPush ??= new AgentPush<LocalAgentDetail, unknown>({
+            detailFor: (id) => source.detailFor(id),
+            send: (id, payload) => this.#sendLocalAgent(connection, id, payload),
+            schedule: this.#schedule,
+            now: this.#now,
+        });
+        this.#stopLocalAgents ??= source.onChanged((id) => { for (const c of this.#connections.values()) c.agentPush?.changed(id); });
+        connection.agentPush.watch(agentId, on);
+        return true;
+    }
+
+    /** A patch inline; a full ledger or a huge row through a blob the window reads, so no frame reaches the door's cap. */
+    #sendLocalAgent(connection: Connection, agentId: string, payload: unknown): void {
+        try {
+            this.#send(connection, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.agent, payload: { agentId, payload: this.#content(connection).jsonResult(payload, 'an agent detail') } });
+        } catch (error) {
+            // Nothing it could apply was sent: it starts again from a whole ledger at the next interval.
+            console.warn(`[genie] an agent's detail could not be held for its window: ${error instanceof Error ? error.message : String(error)}`);
+            if (this.#connections.has(connection.id)) connection.agentPush?.watch(agentId, true);
+        }
+    }
+
+    /** The snapshot to this machine's own windows: inline when it fits a frame, else a revision they re-read (Tynn #564). */
+    #pushLocalSnapshot(snapshot: unknown): void {
+        const windows = [...this.#connections.values()].filter((c) => c.auth !== null && c.local);
+        if (windows.length === 0) return;
+        const revision = ++this.#snapshotRevision;
+        const inline = Buffer.byteLength(JSON.stringify(snapshot)) <= LOCAL_EVENT_MAX_BYTES;
+        for (const c of windows) this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.snapshot, payload: inline ? { revision, snapshot } : { revision } });
+    }
+
     #broadcast(channel: string, payload: unknown): void {
+        if (channel === LOCAL_EVENT_CHANNELS.snapshot) return this.#pushLocalSnapshot(payload);
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
             if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;
@@ -996,6 +1097,26 @@ export class RemoteHost {
                 const e = payload as TynnWatchEvent;
                 if (![...c.tynnWatches.values()].some((w) => w.kind === e.kind && w.workspaceId === e.workspaceId)) continue;
             }
+            if (channel === 'features' && this.#api.ownsFeatures && !c.local) {
+                // Each admitted reader gets its own retained view, coalesced; no other caller's form/query is broadcast.
+                if (!c.auth.isOwner && c.auth.workspaceId !== null) continue;
+                let push = this.#featurePushes.get(c.id);
+                if (!push) {
+                    push = new LatestPush({ build: () => this.#api.invoke('features.snapshot', [], this.#callContext(c)), deliver: value => {
+                        if (this.#connections.get(c.id) !== c || c.auth === null) return;
+                        let answer = withoutPairRequests(value);
+                        if (!c.auth.isOwner) answer = this.#forNonOwner('features', answer, c.auth.workspaceId);
+                        if (answer !== NOT_SENT && c.profile === 'mobile') answer = this.#forPhone(c, 'features', answer);
+                        if (answer !== NOT_SENT) {
+                            const payload = Buffer.byteLength(JSON.stringify(answer)) > REMOTE_FRAME_MAX_BYTES - 4 * 1024
+                                ? { revision: ++this.#featuresRevision } : answer;
+                            this.#send(c, { kind: 'event', channel: 'features', payload });
+                        }
+                    } });
+                    this.#featurePushes.set(c.id, push);
+                }
+                push.request(); continue;
+            }
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);
@@ -1003,6 +1124,8 @@ export class RemoteHost {
             if (out === NOT_SENT) continue;
             // THE GUARD (P4 family 11): a frame over the door's cap ends a window's whole connection, so a local event that
             // large is dropped and said, never sent. Local events are signals; content crosses through a read.
+            // Another device the same (Tynn #579): the whole features snapshot only when it fits, else a revision it reads.
+            if (!c.local && channel === 'features' && Buffer.byteLength(JSON.stringify(out)) > REMOTE_FRAME_MAX_BYTES - 4 * 1024) out = { revision: ++this.#featuresRevision };
             if (c.local && Buffer.byteLength(JSON.stringify(out)) > LOCAL_EVENT_MAX_BYTES) {
                 console.warn(`[genie] the local event ${channel} was too large to send and was dropped`);
                 continue;

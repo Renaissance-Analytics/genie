@@ -25,14 +25,14 @@ export interface HostTool {
      * A tool with its own updater (rustup), its own distribution (npm), or its VENDOR'S INSTALLER (Tynn #698: the agent CLIs,
      * `VENDOR_INSTALLERS`) ignores the OS package manager.
      */
-    readonly ownUpdater?: { readonly manager: 'rustup' | 'npm' | 'vendor'; readonly command: string };
+    readonly ownUpdater?: { readonly manager: 'rustup' | 'npm' | 'vendor' | 'composer'; readonly command: string };
     /** The npm package an agent CLI is published as: what `npm outdated -g` names, and what a repair removes when that copy is broken. */
     readonly npmPackage?: string;
 }
 
 export const HOST_TOOLS: readonly HostTool[] = [
     { name: 'php', probe: { binary: 'php', args: ['--version'] }, packages: { winget: 'PHP.PHP.8.4', brew: 'php', apt: 'php', dnf: 'php' } },
-    { name: 'composer', probe: { binary: 'composer', args: ['--version'] }, packages: { winget: 'Composer.Composer', brew: 'composer', apt: 'composer', dnf: 'composer' } },
+    { name: 'composer', probe: { binary: 'composer', args: ['--version'] }, packages: { winget: 'Composer.Composer', brew: 'composer', apt: 'composer', dnf: 'composer' }, ownUpdater: { manager: 'composer', command: 'composer self-update' } },
     { name: 'node', probe: { binary: 'node', args: ['--version'] }, packages: { winget: 'OpenJS.NodeJS.LTS', brew: 'node', apt: 'nodejs', dnf: 'nodejs' } },
     { name: 'npm', probe: { binary: 'npm', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g npm@latest' } },
     { name: 'python', probe: { binary: 'python', args: ['--version'] }, packages: { winget: 'Python.Python.3.13', brew: 'python', apt: 'python3', dnf: 'python3' } },
@@ -174,11 +174,17 @@ const PROVIDER_TOOL: Readonly<Record<string, string>> = { claude: 'claude-code',
  * its version print said (an npm placeholder answers nothing; another copy on PATH answered 2.1.316). Signed out is a login
  * matter, not the tool's state: that row keeps its tone and is marked `signedOut` ("Not signed in", Log in).
  */
-export function withProviderHealth<T extends ToolStatus>(statuses: readonly T[], health: ReadonlyArray<{ readonly provider: string; readonly installed: boolean; readonly signedIn: boolean | null; readonly words: string | null } | null>): T[] {
+export function withProviderHealth<T extends ToolStatus>(statuses: readonly T[], health: ReadonlyArray<{ readonly provider: string; readonly installed: boolean; readonly signedIn: boolean | null; readonly words: string | null; readonly version?: string | null } | null>): T[] {
     return statuses.map((status) => {
         const found = health.find((h) => h !== null && PROVIDER_TOOL[h.provider] === status.tool) ?? null;
         if (found === null) return status;
-        if (found.installed) return found.signedIn === false ? { ...status, signedOut: true } : status;
+        if (found.installed) {
+            // The version of the program the AGENTS run (Tynn #734), not of whichever `claude` cmd.exe found first: with two copies
+            // on one machine the row read the old one while the agent refused to start on it.
+            const measured = found.version ?? null;
+            const row: T = measured === null || measured === status.installed ? status : { ...status, installed: measured, tone: status.latest === null ? 'unknown' : compareVersions(status.latest, measured) > 0 ? 'update-available' : 'up-to-date' };
+            return found.signedIn === false ? { ...row, signedOut: true } : row;
+        }
         return { ...status, tone: 'broken', ...(found.words ? { problem: found.words } : {}) };
     });
 }
@@ -251,7 +257,7 @@ export function vendorInstaller(tool: string, platform: Platform): { readonly ar
 }
 
 export type UpdatePlan =
-    | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' | 'vendor'; readonly argv?: readonly string[] }
+    | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' | 'vendor' | 'composer'; readonly argv?: readonly string[] }
     | { readonly refused: string };
 
 /** The update command for THIS platform, from Genie's own tables — never a guess. */

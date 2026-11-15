@@ -58,6 +58,8 @@ export interface GenieToolParts {
     readonly terminals: TerminalsPort;
     /** The env a terminal in a workspace gets — the Terminals tab's own (hosting-actions.ts `terminalEnvFor`). Absent = none. */
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
+    /** Puts a terminal that needs the person in front of them (Tynn #722); answers whether a window got it. Absent = nothing can be shown. */
+    readonly surfaceTerminal?: (request: { workspaceId: string; terminalId: string; agentName: string; reason: string }) => boolean;
     /** The services and sites the agents' `services` / `sites` tools act on. Absent = this Genie has none (doctor mode), and the tools say so. */
     readonly hosting?: HostingServices;
     /** Genie's browser, for the agents' `sites open` — the pane the Hosting tab's Open uses. Absent = none (doctor mode), and the tool says so. */
@@ -112,6 +114,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             approve: (caller, action, detail, call) => p.approve(caller, action, detail, call),
             resolveCaller: p.resolveCaller,
             ...(p.terminalEnv ? { envFor: p.terminalEnv } : {}),
+            ...(p.surfaceTerminal ? { surface: p.surfaceTerminal } : {}),
         },
         hosting: {
             resolveCaller: p.resolveCaller,

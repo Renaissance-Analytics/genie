@@ -162,6 +162,31 @@ export interface KnowledgeAdded {
 }
 
 /** Remote access (§6.8) as the host sees it. Sharing is a Tynn link (tynn-share-links.ts), not part of this section. */
+/**
+ * ONE RULE AS WINDOWS REPORTED IT (main/remote-firewall.ts `parseShowRule`, Tynn #685). `fields` is every line netsh printed
+ * for the rule, label and value in Windows' own words and order. The named facts are read from English labels only; on a
+ * Windows in another language they are `null` (never guessed), and `fields` still says everything.
+ */
+export interface FirewallRuleFacts {
+    readonly fields: readonly { readonly label: string; readonly value: string }[];
+    readonly enabled: boolean | null;
+    readonly inbound: boolean | null;
+    readonly allow: boolean | null;
+    readonly protocol: string | null;
+    readonly localPort: string | null;
+    readonly remoteIp: string | null;
+    readonly profiles: string | null;
+}
+
+/**
+ * Genie's firewall rule on this machine: `present` with each rule by that name and whether one lets remote access's `port`
+ * in (`covers`; `null` = Windows answered in words Genie cannot read), `absent`, or `unknown` with the reason in words.
+ */
+export type FirewallRuleView =
+    | { readonly state: 'present'; readonly port: number; readonly covers: boolean | null; readonly rules: readonly FirewallRuleFacts[] }
+    | { readonly state: 'absent' }
+    | { readonly state: 'unknown'; readonly reason: string };
+
 export interface RemoteSection {
     readonly host: string;
     readonly url: string | null;
@@ -177,7 +202,9 @@ export interface RemoteSection {
     readonly enabled: boolean;
     /** Windows: the firewall rule can be added here (Genie 1's allowFirewall). */
     readonly firewall: boolean;
-    /** What the last Allow through the firewall did, in words; absent = not tried. */
+    /** Windows: Genie's firewall rule as main last read it from Windows (Tynn #685); absent/`null` = not read yet. */
+    readonly firewallRule?: FirewallRuleView | null | undefined;
+    /** What the last Allow or Remove through the firewall did, in words; absent = not tried. */
     readonly firewallOutcome?: string | null | undefined;
     /** Where Tailscale stands on this machine (main/tailscale-cli.ts, Tynn #821); absent/`null` = not read yet. */
     readonly tailscale?: TailscaleStatus | null | undefined;
@@ -209,7 +236,7 @@ export interface IntegrationsSection {
     readonly gated: readonly AnnotatedRow[];
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
     /** Genie's own MCP server (§6.9): where it listens, and whether a real server/discover answered at boot (§6.4). */
-    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly { name: string; description: string }[] };
+    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly import('../core/mcp-tool-summaries.js').McpToolRow[] };
     /** What the sync last did to each workspace's agent files: current, upgraded, or failed (absent before the first sync). */
     readonly agentFiles?: readonly AgentFilesReport[];
     /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
@@ -255,6 +282,17 @@ export interface ToolchainRefusal {
     readonly retry?: string;
 }
 
+/** One row's state in a "Check for updates" run (Tynn #714). `failed` carries its reason. */
+export type ToolCheckState =
+    | { readonly state: 'waiting' | 'checking' | 'up-to-date' | 'update-available' }
+    | { readonly state: 'failed'; readonly reason: string };
+
+/** A "Check for updates" run: each tool checked one at a time, each row's own state. Absent = no run has been shown. */
+export interface ToolchainCheckRun {
+    readonly running: boolean;
+    readonly rows: Readonly<Record<string, ToolCheckState>>;
+}
+
 export interface ToolchainSection {
     readonly tools: readonly ToolStatus[];
     readonly checkedAt: number | null;
@@ -269,6 +307,8 @@ export interface ToolchainSection {
     /** The last update that took: its row says so, with the version now answering. */
     readonly updated?: { readonly tool: string; readonly version: string };
     readonly result?: string;
+    /** The last or current "Check for updates" run (Tynn #714). */
+    readonly checkRun?: ToolchainCheckRun;
     /** Each refused or failed action, one per row, until that row's next action. Absent when there is none. */
     readonly refusals?: readonly ToolchainRefusal[];
     /** T4: Genie-managed PHP versions (with the sites pinned to each), the PATH PHP, and what can be installed. */
@@ -389,6 +429,8 @@ export type FeatureAction =
     | { kind: 'storage.measure'; workspaceId: string }
     | { kind: 'storage.trash'; workspaceId: string; itemId: string }
     | { kind: 'storage.restore'; workspaceId: string; trashId: string }
+    /** The one-click clean-up: the host moves only those of these ids that a fresh measure still suggests. */
+    | { kind: 'storage.cleanUp'; workspaceId: string; itemIds: string[] }
     | { kind: 'storage.emptyTrash'; workspaceId: string; approval: TrashApproval }
     /** One repo's IssueWatch switch in Tynn (watch it; include a fork's upstream) — one field at a time. */
     | { kind: 'issueWatch.setRepo'; workspaceId: string; owner: string; repo: string; enabled?: boolean; includeUpstream?: boolean }
@@ -476,6 +518,9 @@ export type FeatureAction =
     | { kind: 'services.logs'; serviceId: string; tail?: number }
     | { kind: 'services.hideLogs' }
     | { kind: 'toolchain.check'; force?: boolean }
+    /** Tynn #714: re-check every installed tool one at a time (installs nothing); and stop it after the tool in flight. */
+    | { kind: 'toolchain.checkUpdates' }
+    | { kind: 'toolchain.stopCheck' }
     /**
      * `confirmed`: the person read the warning (Docker's restart, what runs on the old PHP) and chose to go ahead. A
      * REFUSAL is never confirmable. `version` (genie#1306): the version the button names — a language's patch or another
@@ -568,6 +613,10 @@ export type FeatureAction =
     | { kind: 'remote.restart' }
     /** Windows: add the tailnet-scoped inbound rule for the port, one UAC prompt (Genie 1's allowFirewall). */
     | { kind: 'remote.allowFirewall' }
+    /** Windows: delete Genie's own firewall rule, by its exact name, one UAC prompt (Tynn #685). */
+    | { kind: 'remote.removeFirewall' }
+    /** Windows: read Genie's firewall rule from Windows again (the page opened, or its window focused); debounced in main. */
+    | { kind: 'remote.readFirewall' }
     /** Bring this machine onto the tailnet (`tailscale up`); a sign-in link opens in the browser (Genie 1's tailscale.up). */
     | { kind: 'tailscale.up' }
     /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */

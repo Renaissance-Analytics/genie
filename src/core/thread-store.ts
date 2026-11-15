@@ -889,11 +889,6 @@ function mayMatter(line: Buffer, runToken: Buffer | null, before: number | undef
 }
 
 /**
- * WHERE THE STORE KEEPS AN AGENT'S THREAD LOG: prism-harness FileSessionStore writes `<key digest>.jsonl` beside its payload,
- * the digest being the first 32 hex characters of the key's SHA-256. A durable on-disk name (changing it would orphan every
- * thread ever written), pinned against the real store by test/thread-history-bounded.test.ts.
- */
-/**
  * The images an agent's thread keeps (Tynn #697, the Storage tab's "files shared in chat"): each by its id, where it is,
  * and its size, as the thread's attachment index lists them. Read-only; a missing or unreadable index lists none.
  */
@@ -911,6 +906,11 @@ export async function threadAttachmentFiles(directory: string, agentId: AgentId)
     return out;
 }
 
+/**
+ * WHERE THE STORE KEEPS AN AGENT'S THREAD LOG: prism-harness FileSessionStore writes `<key digest>.jsonl` beside its payload,
+ * the digest being the first 32 hex characters of the key's SHA-256. A durable on-disk name (changing it would orphan every
+ * thread ever written), pinned against the real store by test/thread-history-bounded.test.ts.
+ */
 export function threadLogFile(directory: string, agentId: AgentId): string {
     return join(directory, `${createHash('sha256').update(threadKeyFor(agentId)).digest('hex').slice(0, 32)}.jsonl`);
 }

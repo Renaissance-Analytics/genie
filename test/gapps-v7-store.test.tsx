@@ -438,7 +438,7 @@ describe('the actions cross to the host only from a local window', () => {
     it('the shell gives the title bar the store\'s actions (source guard)', () => {
         const shell = readFileSync(join('src', 'renderer', 'Shell.tsx'), 'utf8');
         expect(shell).not.toMatch(/NO_GAPPS/);
-        expect(shell).toMatch(/gapps=\{gappStore\}/);
+        expect(shell).toMatch(/gapps=\{scoped \? undefined : gappStore\}/);
     });
 });
 

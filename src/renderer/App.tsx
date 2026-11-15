@@ -12,10 +12,13 @@ import { sendKeyFrom } from '../core/send-key.js';
 import { setSendKey } from './send-key-store.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import { TERMINAL_NEEDS_YOU, showTerminalRoute } from '../core/terminal-surface.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
+/** A toast with a button (Show terminal) waits longer: a person fetching a 2FA code is not at the screen for 8 seconds. */
+const ALERT_ACTION_TOAST_MS = 60_000;
 const noLocalState = () => null;
 const noLocalSubscription = () => () => {};
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
@@ -32,6 +35,7 @@ import { rewrittenAddress, routeFor, windowBridge } from './window-address.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
+import { chatSubjectInScope, routeInScope, windowScopeOf } from '../core/workspace-window.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import { RemoteRefusalBar } from './components/RemoteRefusalBar.js';
 import { FilesWindow } from './components/FilesWindow.js';
@@ -1028,8 +1032,15 @@ function DesktopApp({ bridge }: AppProps) {
     const addressContext: AddressContext | null = snapshot.workstation && snapshot.workspaces
         ? { workstation: snapshot.workstation.name, workspaces: snapshot.workspaces, agents: snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents, tabsOf: (id) => tabsByWorkspace.get(id) }
         : null;
+    // WHAT THIS WINDOW MAY SHOW (Tynn #690): the host's welcome, never a flag of this client's — a guest the host admitted to
+    // one workspace gets a window of that workspace, and every route outside it (a deep link included) lands on its page.
+    const windowScope = windowScopeOf(remote.state);
     // Not readable yet (no snapshot): an old internal route is used as it is; an address waits on the Dashboard.
-    const route = routeFor(address, addressContext);
+    const askedRoute = routeFor(address, addressContext);
+    const route = routeInScope(askedRoute, windowScope, snapshot.agents);
+    useEffect(() => {
+        if (route !== askedRoute) window.location.replace(`#${addressContext ? addressOf(route, addressContext) : route}`);
+    }, [route, askedRoute]);
     /*
      * WHERE AN AGENT ACTED (genie#1265; the owner, 2026-10-27): an agent's file, tab or site never moves this window — its
      * workspace is marked, and the rail row (and the Dashboard's header) pulses until the person ARRIVES there; the arrival
@@ -1084,16 +1095,23 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's toast (genie#1211): Genie in front → its own, bottom-left, clear of the chat; behind → the OS notification.
     const [alertToasts, setAlertToasts] = useState<readonly AlertToast[]>([]);
     const dismissAlert = useCallback((id: string) => setAlertToasts((prev) => prev.filter((t) => t.id !== id)), []);
-    const showAlert = useCallback((toast: { title: string; body: string; color?: string }) => {
+    const showAlert = useCallback((toast: { title: string; body: string; color?: string; action?: AlertToast['action'] }) => {
         if (alertDelivery(typeof document !== 'undefined' && document.hasFocus()) === 'in-app') {
             const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             setAlertToasts((prev) => [...prev.slice(-3), { id, ...toast }]);
-            setTimeout(() => dismissAlert(id), ALERT_TOAST_MS);
+            setTimeout(() => dismissAlert(id), toast.action ? ALERT_ACTION_TOAST_MS : ALERT_TOAST_MS);
         } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
             try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
         }
     }, [dismissAlert]);
     useAlerts(snapshot, features.settings.values, showAlert);
+    // A TERMINAL AN AGENT STARTED NEEDS THE PERSON (Tynn #722): main sends it to the window in use. A one-click Show terminal
+    // opens that workspace's Terminals tab; nothing moves on its own (core/view-requests.ts).
+    useEffect(() => resolvedBridge?.onAction?.((action) => {
+        if (action.kind !== TERMINAL_NEEDS_YOU || !action.workspaceId) return;
+        const route = showTerminalRoute(action.workspaceId);
+        showAlert({ title: `${action.agentName ?? 'An agent'} needs you in a terminal`, body: 'A terminal is waiting for you: a login, a code or a question.', action: { label: 'Show terminal', run: () => { window.location.hash = `#${route}`; } } });
+    }), [resolvedBridge, showAlert]);
     useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     // The send key, to every open composer, the moment the setting changes (Tynn issue #697).
@@ -1154,7 +1172,8 @@ function DesktopApp({ bridge }: AppProps) {
     const [chatPick, setChatPick] = useState<string | null>(null);
     const routeAgent = parsed.surface === 'agent' ? parsed.agentId : null;
     useEffect(() => { setChatPick((pick) => chatPickAfter(parsed, chatRoster, pick)); }, [routeAgent, chatRoster]);
-    const chatSubject = visibleAgentSubject(snapshot, chatSubjectFor(parsed, chatRoster, chatPick));
+    // A workspace window's chat is one of ITS agents, never Genie's own or another workspace's (Tynn #690).
+    const chatSubject = chatSubjectInScope(visibleAgentSubject(snapshot, chatSubjectFor(parsed, chatRoster, chatPick)), windowScope, snapshot.agents, snapshot.workspaces);
     // The chat SUBJECT's detail — never the route's `chat=` alone (the owner, 2026-10-19, three times: "THE CHAT DOES NOT
     // EVER CLOSE"). The subject is permanent (the route's, else the agent the view says); loading only for `chat=` left
     // every page reached without it showing an empty chat, which reads as a closed one. The flyout's transcript is derived
@@ -1844,7 +1863,7 @@ function DesktopApp({ bridge }: AppProps) {
             const action = hotkeyAction(press, bindings, promptPlatform);
             if (action === 'open-palette') {
                 e.preventDefault();
-                setPaletteOpen(true);
+                if (windowScope.kind === 'workstation') setPaletteOpen(true);
                 return;
             }
             if (paletteOpen) return;
@@ -2174,6 +2193,7 @@ function DesktopApp({ bridge }: AppProps) {
                 // The route says where the panel is: on this workspace, `?files=detached`.
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address) : undefined}
+            onPopOutTerminals={resolvedBridge?.popOutTerminals ? (id) => { void resolvedBridge.popOutTerminals!(id); } : undefined}
             onBringBackFiles={(id) => moveFilePanel(() => filesWindows?.bringBack(id), () => {
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address)}
@@ -2208,9 +2228,11 @@ function DesktopApp({ bridge }: AppProps) {
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
             onOpenPalette={() => setPaletteOpen(true)}
+            windowScope={windowScope}
         />
         <CommandWindow
-            open={paletteOpen}
+            // The Command Window jumps across the workstation: not in a workspace window (Tynn #690).
+            open={paletteOpen && windowScope.kind === 'workstation'}
             items={paletteItems}
             onClose={() => setPaletteOpen(false)}
             onActivate={(item) => {
@@ -2221,7 +2243,7 @@ function DesktopApp({ bridge }: AppProps) {
             }}
         />
         {/* What's New, once per version (Tynn #762): closing records the version as seen. */}
-        {features.whatsNew ? (
+        {features.whatsNew && windowScope.kind === 'workstation' ? (
             <WhatsNewWindow
                 whatsNew={features.whatsNew}
                 onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
@@ -2229,7 +2251,7 @@ function DesktopApp({ bridge }: AppProps) {
         ) : null}
         {/* ADD A WORKSPACE (Genie 1's modal). Before the picker, so Browse opens on top of it. */}
         <AddWorkspaceModal
-            open={addOpen}
+            open={addOpen && windowScope.kind === 'workstation'}
             primaryWorkspace={primaryWorkspace}
             sep={hostSep}
             browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
@@ -2305,7 +2327,7 @@ function DesktopApp({ bridge }: AppProps) {
                 onCancel={() => { pickerAsk.resolve(null); setPickerAsk(null); }}
             />
         ) : null}
-        {share && shares ? (
+        {share && shares && windowScope.kind === 'workstation' ? (
             <ShareWorkspaceModal
                 workspaceName={share.name}
                 workstation={share.workspaceId === null}
@@ -2326,7 +2348,7 @@ function DesktopApp({ bridge }: AppProps) {
                 }}
             />
         ) : null}
-        {connectDialog ? (
+        {connectDialog && windowScope.kind === 'workstation' ? (
             <ConnectDialog
                 key={connectDialog}
                 mode={connectDialog}

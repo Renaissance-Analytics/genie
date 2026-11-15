@@ -27,6 +27,7 @@ import {
     alive, attach, check, cleanQuit, failures, finish, gone, hostLogSince, hostPid, killHard, launch, makeHome,
     readOr, refuseOffTestMachines, running, sleep, step, stubPids, tickerOn, ticksOf, twoStreamingAgents, until, whyOf,
 } from './crash-cdp-lib.mjs';
+import { freshProviderGauge } from './provider-ticks.mjs';
 
 // Agent commands are on the page's own bridge now: window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
@@ -145,13 +146,23 @@ try {
     // ------------------------------------------------------------------ Start one; leave
     const [first, second] = agents;
     step('E1', `Start on ${first.name}`);
+    const ticksAtStart = await ticksOf(session.cdp, first.id);
+    const startedAt = Date.now();
+    const gauge = freshProviderGauge({ startedAt, before: ticksAtStart.ticks });
     await session.cdp.evaluate(`document.querySelector('[data-safe-mode] [data-action="safe-mode-start"][data-kind="agent"][data-id=${JSON.stringify(first.id)}]').click(); true`, 10_000);
     const startedAgain = await until(() => running(session.cdp, first.id), 45_000);
     check(startedAgain === true, `E1. ${first.name} runs again (the host says so)`, startedAgain === true ? '' : await whyOf(session.cdp, first.id));
     check(await until(() => session.cdp.evaluate(`document.querySelector('[data-safe-mode-outcome=${JSON.stringify(`agent:${first.id}`)}]')?.textContent === 'Started'`, 10_000), 30_000) === true, 'E2. the banner says Started for it');
     await session.cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(first.id)}, 'Stream ticks until stopped.')`, 15_000).catch(() => null);
-    const streaming = await until(async () => { const x = await ticksOf(session.cdp, first.id); return x.last !== null && !providersBefore.has(x.last) && alive(x.last) ? x : null; }, 45_000);
-    check(streaming !== null, `E3. ${first.name}'s new provider streams`, streaming ? `pid ${streaming.last}` : 'none');
+    let rejected = null;
+    const streaming = await until(async () => {
+        const x = await ticksOf(session.cdp, first.id);
+        rejected = x;
+        const accepted = gauge.observe(x, alive);
+        return accepted ? { ...x, last: accepted.pid, generation: accepted.generation, tick: accepted.tick } : null;
+    }, 45_000);
+    if (!streaming) console.log(`  E3 rejected ticks: ${JSON.stringify({ ...gauge.diagnostics(), legacy: rejected && { max: rejected.max, last: rejected.last, pids: rejected.pids } })}`);
+    check(streaming !== null, `E3. ${first.name}'s new provider streams`, streaming ? `pid ${streaming.last} generation ${streaming.generation} tick ${streaming.tick}` : gauge.diagnostics().reason);
     check(await running(session.cdp, second.id) === false, `E4. ${second.name} is still not running: the Start was for that one only`);
 
     step('F1', 'Leave safe mode');

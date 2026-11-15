@@ -25,6 +25,7 @@ function fakeStorage() {
         views: () => ({ ws1: VIEW }),
         measure: (id) => { calls.push(['measure', id]); },
         trash: async (id, item) => { calls.push(['trash', id, item]); },
+        cleanUp: async (id, ids) => { calls.push(['cleanUp', id, ids]); },
         restore: async (id, trashId) => { calls.push(['restore', id, trashId]); },
         empty: async (id, approval) => { calls.push(['empty', id, approval]); },
     };
@@ -55,8 +56,9 @@ describe('storage in the snapshot and its actions', () => {
         const approval = { ids: ['genie-1-abc'], bytes: 10 };
         await handleFeatureAction(services, { kind: 'storage.measure', workspaceId: 'ws1' }, state(), { storage: s.port });
         await handleFeatureAction(services, { kind: 'storage.trash', workspaceId: 'ws1', itemId: 'worktrees:wt/clean' }, state(), { storage: s.port });
+        await handleFeatureAction(services, { kind: 'storage.cleanUp', workspaceId: 'ws1', itemIds: ['worktrees:wt/clean'] }, state(), { storage: s.port });
         await handleFeatureAction(services, { kind: 'storage.restore', workspaceId: 'ws1', trashId: 'genie-1-abc' }, state(), { storage: s.port });
         await handleFeatureAction(services, { kind: 'storage.emptyTrash', workspaceId: 'ws1', approval }, state(), { storage: s.port });
-        expect(s.calls).toEqual([['measure', 'ws1'], ['trash', 'ws1', 'worktrees:wt/clean'], ['restore', 'ws1', 'genie-1-abc'], ['empty', 'ws1', approval]]);
+        expect(s.calls).toEqual([['measure', 'ws1'], ['trash', 'ws1', 'worktrees:wt/clean'], ['cleanUp', 'ws1', ['worktrees:wt/clean']], ['restore', 'ws1', 'genie-1-abc'], ['empty', 'ws1', approval]]);
     });
 });

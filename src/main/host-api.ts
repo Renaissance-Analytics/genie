@@ -94,6 +94,8 @@ export interface HostApiDeps {
     subscribeSnapshot(listener: (snapshot: GenieSnapshot) => void): () => void;
     /** Which agent's RECORD changed (a saved setting) — its detail is pushed, as for a session event. */
     subscribeAgentRecords(listener: (agentId: string) => void): () => void;
+    /** Inbox messages and receipts change the participants' chats without changing their session or saved record. */
+    subscribeAgentChat?(listener: (agentId: string) => void): () => void;
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
@@ -264,13 +266,17 @@ export interface HostApiDeps {
     };
     retryPausedAccount?(provider: string): void;
     features: {
-        snapshot(): Promise<FeatureData>;
+        /** The admitted caller, so view state can stay with the connection that requested it (Tynn #720). */
+        snapshot(context: CallContext): Promise<FeatureData>;
         act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
         /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
         soundData?(key: string): Promise<string | null>;
         /** What the host's own file picker picked, from this machine's window: the only host paths a send may attach (genie#1354). */
-        picked?(paths: unknown[]): void;
-        onChange(listener: (data: FeatureData) => void): () => void;
+        picked?(paths: unknown[], context: CallContext): void | Promise<void>;
+        /** Connection teardown, supplied internally by the protocol owner. */
+        releaseCaller?(context: CallContext): void;
+        onChange?(listener: (data: FeatureData) => void): () => void;
+        onInvalidated?(listener: () => void): () => void;
     };
     updates: {
         state(): UpdateState;
@@ -661,11 +667,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.terminals.list().filter((t) => t.workspaceId === workspaceId).map(({ id, pid, shell }) => ({ id, pid, shell }));
             }
             case 'features.snapshot':
-                return deps.features.snapshot();
+                if (!context.connectionId) throw new Error('features.snapshot needs an admitted caller before reading its state');
+                return deps.features.snapshot(context);
             case 'features.soundData':
                 return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
             case 'features.picked':
-                if (context.origin === 'local-window' && Array.isArray(args[0])) deps.features.picked?.(args[0] as unknown[]);
+                if (context.origin === 'local-window' && Array.isArray(args[0])) await deps.features.picked?.(args[0] as unknown[], context);
                 return null;
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction, context);
@@ -716,7 +723,16 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
 
     const terminalWorkspaces = new Map<string, string>();
     return {
+        localAgents: {
+            detailFor: (agentId) => deps.detailFor(agentId),
+            onChanged: (listener) => {
+                const offHost = deps.host.subscribe(listener), offRecords = deps.subscribeAgentRecords(listener);
+                const offChat = deps.subscribeAgentChat?.(listener);
+                return () => { offHost(); offRecords(); offChat?.(); };
+            },
+        },
         invoke,
+        releaseCaller: context => deps.features.releaseCaller?.(context),
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
@@ -742,7 +758,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             const wants = options?.wantsAgent ?? (() => true);
             const agents = new Coalescer<string>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: (agentId) => { if (wants(agentId)) listener(`agent:${agentId}`, deps.detailFor(agentId)); }, schedule: deps.schedule ?? realSchedule, now: deps.now ?? (() => Date.now()) });
             const offs = [
-                deps.subscribeSnapshot((s) => listener('snapshot', s)),
+                // This machine's own windows on their own channel: inline when it fits a frame, else a revision (Tynn #564).
+                deps.subscribeSnapshot((s) => { listener('snapshot', s); listener(LOCAL_EVENTS.snapshot, s); }),
                 deps.host.subscribe((agentId) => agents.request(agentId)),
                 deps.subscribeAgentRecords((agentId) => agents.request(agentId)),
                 () => agents.stop(),
@@ -750,7 +767,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 // A remote window hears the snapshot; this machine's own hears that it changed, and re-reads (P4 family 11):
                 // no local event carries a whole snapshot, which has no bound and could end the door's connection.
-                deps.features.onChange((data) => { listener('features', data); listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }),
+                deps.features.onChange?.((data) => { listener('features', data); listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }) ?? (() => {}),
+                deps.features.onInvalidated?.(() => { listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }) ?? (() => {}),
                 deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),

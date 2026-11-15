@@ -127,9 +127,8 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(oldInvoke).not.toHaveBeenCalled();
-        expect(await bridge.snapshot()).toEqual({ workspaces: null });
         expect(await bridge.takeOver('sample')).toEqual({ ok: false, reason: 'agent still working' });
-        expect(snapshot).toHaveBeenCalledTimes(1); expect(hibernate).toHaveBeenCalledExactlyOnceWith('sample');
+        expect(hibernate).toHaveBeenCalledExactlyOnceWith('sample');
     });
     it.each(rows)('$name retires its matching native handler, preload forwarding and inventory row', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');

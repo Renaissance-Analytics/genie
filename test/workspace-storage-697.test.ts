@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { approvalFor, parseWorktreeList, type StorageReport } from '../src/core/workspace-storage.js';
+import { approvalFor, parseWorktreeList, suggestedCleanup, type StorageReport } from '../src/core/workspace-storage.js';
 import { sizeOf } from '../src/main/dir-size.js';
 import { WorkspaceStorage, type ChatFile } from '../src/main/workspace-storage-host.js';
 
@@ -27,6 +27,8 @@ import { WorkspaceStorage, type ChatFile } from '../src/main/workspace-storage-h
 const run = promisify(execFile);
 const git = (cwd: string, ...args: string[]) => run('git', ['-C', cwd, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'init.defaultBranch=main', ...args]);
 const NOW = 1_763_000_000_000;
+const DAY = 24 * 60 * 60 * 1000;
+const slash = (p: string) => p.split('\\').join('/');
 
 let root: string;
 let outside: string;
@@ -68,6 +70,17 @@ beforeEach(async () => {
     await git(join(root, 'wt', 'ahead'), 'add', '.');
     await git(join(root, 'wt', 'ahead'), 'commit', '--quiet', '-m', 'unpushed');
     await git(app, 'worktree', 'add', '--quiet', '-b', 'wt-out', join(outside, 'wt-out'));
+    // Clean and pushed to a branch of its own, which is not the line: not merged yet.
+    await git(app, 'worktree', 'add', '--quiet', '-b', 'wt-unmerged', join(root, 'wt', 'unmerged'));
+    await writeFile(join(root, 'wt', 'unmerged', 'feature.txt'), 'x\n');
+    await git(join(root, 'wt', 'unmerged'), 'add', '.');
+    await git(join(root, 'wt', 'unmerged'), 'commit', '--quiet', '-m', 'feature');
+    await git(join(root, 'wt', 'unmerged'), 'push', '--quiet', 'origin', 'wt-unmerged');
+    // The envelope's downloaded test results: one queue item, two days old.
+    await mkdir(join(root, '.ai', 'sandbox', 'azure', 'queue', '1114-130339-aaaaaa'), { recursive: true });
+    await writeFile(join(root, '.ai', 'sandbox', 'azure', 'queue', '1114-130339-aaaaaa', 'item.log'), Buffer.alloc(2000));
+    const old = new Date(NOW - 2 * DAY);
+    for (const f of [join(root, '.ai', 'sandbox', 'azure', 'queue', '1114-130339-aaaaaa', 'item.log'), join(app, 'coverage', 'lcov.info')]) await utimes(f, old, old);
     // One image shared in chat, where the thread store keeps it.
     const ledger = join(sessions, 'abc123');
     await mkdir(ledger, { recursive: true });
@@ -88,8 +101,9 @@ describe('measuring a workspace: categories', () => {
         const r = await storage.measure(root, { chatFiles: chat });
         expect(items(r, 'repos').map((i) => i.rel)).toEqual(['repos/app']);
         expect(items(r, 'repos')[0]!.reclaimable).toBe(false);
-        expect(items(r, 'ci-artifacts').map((i) => i.rel).sort()).toEqual(['repos/app/ci-out', 'repos/app/coverage']);
-        expect(items(r, 'worktrees').map((i) => i.rel).sort()).toEqual(['wt/ahead', 'wt/clean', 'wt/dirty']);
+        expect(items(r, 'ci-artifacts').map((i) => i.rel).sort()).toEqual(['.ai/sandbox/azure/queue/1114-130339-aaaaaa', 'repos/app/ci-out', 'repos/app/coverage']);
+        const outReal = slash(await realpath(join(outside, 'wt-out')));
+        expect(items(r, 'worktrees').map((i) => i.rel).sort()).toEqual([outReal, 'wt/ahead', 'wt/clean', 'wt/dirty', 'wt/unmerged'].sort());
         expect(items(r, 'chat-files').map((i) => i.label)).toEqual(['kai: img1 (att-img1.png)']);
         expect(r.totals['chat-files']).toBe(300);
         expect(r.totals.trash).toBe(0);
@@ -99,7 +113,7 @@ describe('measuring a workspace: categories', () => {
     it('never follows a symlink: the artifact holding a link to 50 kB outside counts its own 1000 bytes', async () => {
         const r = await storage.measure(root, { chatFiles: [] });
         expect(byRel(r, 'repos/app/ci-out')!.bytes).toBe(1000);
-        expect(r.totals['ci-artifacts']).toBe(1500);
+        expect(r.totals['ci-artifacts']).toBe(1500 + 2000);
     });
 
     it('a clean, pushed worktree is reclaimable; the others say why not, in words', async () => {
@@ -107,12 +121,67 @@ describe('measuring a workspace: categories', () => {
         expect(byRel(r, 'wt/clean')).toMatchObject({ reclaimable: true, refusal: null });
         expect(byRel(r, 'wt/dirty')).toMatchObject({ reclaimable: false, refusal: expect.stringContaining('uncommitted') });
         expect(byRel(r, 'wt/ahead')).toMatchObject({ reclaimable: false, refusal: expect.stringContaining('1 commit no remote has') });
-        expect(r.reclaimableBytes).toBe(byRel(r, 'wt/clean')!.bytes + 1500);
+        expect(r.reclaimableBytes).toBe(r.items.filter((i) => i.reclaimable).reduce((n, i) => n + i.bytes, 0));
+        expect(byRel(r, 'wt/dirty')!.bytes).toBeGreaterThan(0);
     });
 
-    it('never leaves the workspace: a worktree outside it is not listed, and nothing outside is measured', async () => {
+    it('worktree states: clean and merged, clean and not merged yet, dirty, unpushed', async () => {
         const r = await storage.measure(root, { chatFiles: [] });
-        expect(r.items.some((i) => i.rel.includes('wt-out') || i.rel.startsWith('..'))).toBe(false);
+        expect(byRel(r, 'wt/clean')!.state).toBe('merged');
+        expect(byRel(r, 'wt/unmerged')!.state).toBe('unmerged');
+        expect(byRel(r, 'wt/dirty')!.state).toBe('dirty');
+        expect(byRel(r, 'wt/ahead')!.state).toBe('unpushed');
+        // the unmerged one is pushed, so it may be moved; it just is not suggested.
+        expect(byRel(r, 'wt/unmerged')).toMatchObject({ reclaimable: true, refusal: null });
+    });
+
+    it('a worktree an agent made OUTSIDE the workspace is listed, marked external, sized; only its own repo’s git is asked', async () => {
+        const r = await storage.measure(root, { chatFiles: [] });
+        const out = r.items.find((i) => i.category === 'worktrees' && i.external === true)!;
+        expect(out.rel).toBe(slash(await realpath(join(outside, 'wt-out'))));
+        expect(out).toMatchObject({ state: 'merged', reclaimable: true, bytes: expect.any(Number) });
+        expect(out.bytes).toBeGreaterThan(0);
+        // Nothing else from outside: the 50 kB file and the bare remote are not in any category.
+        expect(r.items.some((i) => i.rel.includes('remote.git') || i.rel.includes('big.bin'))).toBe(false);
+    });
+
+    it('artifacts carry their newest file’s time; a queue item is an artifact by where it is', async () => {
+        const r = await storage.measure(root, { chatFiles: [] });
+        expect(byRel(r, '.ai/sandbox/azure/queue/1114-130339-aaaaaa')!.newest).toBeLessThan(NOW - DAY);
+        expect(byRel(r, 'repos/app/ci-out')!.newest).toBeGreaterThan(NOW - 365 * DAY);
+    });
+});
+
+describe('the one-click clean-up suggestion preselects only what is safe', () => {
+    it('merged quiet worktrees and test results older than a day; never unmerged, dirty, unpushed, a chat file or a fresh result', async () => {
+        const r = await storage.measure(root, { chatFiles: chat });
+        // The worktrees were just made, so "now" for the suggestion is a day and a half later: they are quiet by then.
+        const later = Date.now() + 36 * 60 * 60 * 1000;
+        const ids = suggestedCleanup(r.items, later);
+        const outId = r.items.find((i) => i.external === true)!.id;
+        expect(ids.sort()).toEqual([outId, 'worktrees:wt/clean', 'ci-artifacts:.ai/sandbox/azure/queue/1114-130339-aaaaaa', 'ci-artifacts:repos/app/ci-out', 'ci-artifacts:repos/app/coverage'].sort());
+        for (const never of ['worktrees:wt/unmerged', 'worktrees:wt/dirty', 'worktrees:wt/ahead', 'chat-files:kai/img1', 'repos:repos/app']) expect(ids).not.toContain(never);
+    });
+
+    it('CONTROL: right after they were touched, nothing recent is suggested (an agent may be using it)', async () => {
+        const r = await storage.measure(root, { chatFiles: chat });
+        const ids = suggestedCleanup(r.items, Date.now());
+        expect(ids).toEqual(expect.arrayContaining(['ci-artifacts:.ai/sandbox/azure/queue/1114-130339-aaaaaa', 'ci-artifacts:repos/app/coverage']));
+        expect(ids).not.toContain('ci-artifacts:repos/app/ci-out');
+        expect(ids).not.toContain('worktrees:wt/clean');
+    });
+
+    it('cleanUp moves only what a FRESH measure still suggests: a dirty worktree, an unmerged one and a chat file in the list are skipped', async () => {
+        const fresh = new WorkspaceStorage({ now: () => Date.now() + 36 * 60 * 60 * 1000 });
+        const asked = ['worktrees:wt/clean', 'worktrees:wt/dirty', 'worktrees:wt/unmerged', 'chat-files:kai/img1', 'ci-artifacts:.ai/sandbox/azure/queue/1114-130339-aaaaaa', 'nonsense'];
+        const done = await fresh.cleanUp(root, asked, { chatFiles: chat });
+        expect(done.moved.sort()).toEqual(['ci-artifacts:.ai/sandbox/azure/queue/1114-130339-aaaaaa', 'worktrees:wt/clean']);
+        expect(done.skipped.sort()).toEqual(['chat-files:kai/img1', 'nonsense', 'worktrees:wt/dirty', 'worktrees:wt/unmerged']);
+        expect(done.failed).toEqual([]);
+        expect(existsSync(join(root, 'wt', 'dirty', 'scratch.txt'))).toBe(true);
+        expect(existsSync(join(root, 'wt', 'unmerged'))).toBe(true);
+        expect(existsSync(chat[0]!.path)).toBe(true);
+        expect(existsSync(join(root, 'wt', 'clean'))).toBe(false);
     });
 });
 
@@ -140,7 +209,20 @@ describe('Move to .trash', () => {
         expect(trashed.locked).toBe(true);
         const [dir] = await trashDirs();
         const record = JSON.parse(await readFile(join(root, '.trash', dir!, 'genie-trash.json'), 'utf8'));
-        expect(record.origin).toEqual({ kind: 'worktree', repoRel: 'repos/app', rel: 'wt/clean', branch: 'wt-clean' });
+        expect(record.origin).toEqual({ kind: 'worktree', repoRel: 'repos/app', rel: 'wt/clean', branch: 'wt-clean', head: expect.stringMatching(/^[0-9a-f]{40}$/), external: false });
+    });
+
+    it('an external worktree goes into this workspace’s .trash through git, and Restore puts it back at its own absolute place', async () => {
+        const r = await storage.measure(root, { chatFiles: [] });
+        const out = r.items.find((i) => i.external === true)!;
+        const place = join(outside, 'wt-out');
+        expect(await storage.moveToTrash(root, out.id, { chatFiles: [] })).toMatchObject({ ok: true });
+        expect(existsSync(place)).toBe(false);
+        const [dir] = await trashDirs();
+        const record = JSON.parse(await readFile(join(root, '.trash', dir!, 'genie-trash.json'), 'utf8'));
+        expect(record.origin).toMatchObject({ kind: 'worktree', branch: 'wt-out', external: true, rel: out.rel });
+        expect(await storage.restore(root, dir!)).toMatchObject({ ok: true });
+        expect(existsSync(join(place, 'README.md'))).toBe(true);
     });
 
     it('Restore puts a worktree back where it was, unlocked, as git’s worktree again', async () => {
@@ -185,7 +267,9 @@ describe('Move to .trash', () => {
         expect(await refused('worktrees:wt/dirty')).toContain('uncommitted');
         expect(await refused('worktrees:wt/ahead')).toContain('commit no remote has');
         expect(await refused('worktrees:repos/app')).toContain('not a worktree Genie may move');
-        expect(await refused(`worktrees:${join(outside, 'wt-out')}`)).toContain('not a worktree Genie may move');
+        // A path that git does not list for this workspace's repos is never moved, inside or outside.
+        expect(await refused(`worktrees:${slash(outside)}`)).toContain('not a worktree Genie may move');
+        expect(await refused(`worktrees:${slash(join(outside, 'remote.git'))}`)).toContain('not a worktree Genie may move');
         expect(await refused('ci-artifacts:repos/app/README.md')).toContain('not a CI or test artifact');
         expect(await refused('ci-artifacts:../escape/ci-out')).toContain('not a CI or test artifact');
         expect(await refused('ci-artifacts:repos/app/node_modules/pkg/coverage')).toContain('not a CI or test artifact');
@@ -242,12 +326,24 @@ describe('Empty trash — permanent, only with approval, only inside .trash', ()
     });
 });
 
+describe('Empty trash and symlinks', () => {
+    it('a junction or symlink INSIDE .trash is removed as a link: what it points at survives', async () => {
+        await mkdir(join(root, '.trash'), { recursive: true });
+        await symlink(outside, join(root, '.trash', 'link-out'), 'junction');
+        const trash = (await storage.measure(root, { chatFiles: [] })).trash;
+        expect(trash.map((t) => t.id)).toEqual(['link-out']);
+        expect(trash[0]!.bytes).toBe(0);
+        expect(await storage.emptyTrash(root, approvalFor(trash))).toMatchObject({ ok: true, deleted: 1 });
+        expect(existsSync(join(outside, 'big.bin'))).toBe(true);
+    });
+});
+
 describe('the size walk (off the main thread)', () => {
     it('runs in a worker, never follows a link, and says when it stopped early', async () => {
         let started = 0;
         const a = await sizeOf(join(root, 'repos', 'app', 'ci-out'), { startWorker: (source, data) => { started += 1; return new Worker(source, { eval: true, workerData: data }); } });
         expect(started).toBe(1);
-        expect(a).toEqual({ bytes: 1000, files: 1, truncated: false });
+        expect(a).toMatchObject({ bytes: 1000, files: 1, truncated: false, newest: expect.any(Number) });
         const capped = await sizeOf(join(root, 'repos', 'app'), { maxEntries: 3 });
         expect(capped.truncated).toBe(true);
     });

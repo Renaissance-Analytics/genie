@@ -56,7 +56,8 @@ export class LocalFilesContent {
     }
     #heldJson(value: unknown, kind: 'terminal-json' | 'features-json', label: string): { ref: string; blob: string } | null {
         const json = JSON.stringify(value);
-        if (json === undefined || Buffer.byteLength(json) <= FILES_INLINE_BYTES) return null;
+        // JSON's UTF-8 bytes cannot be shorter than its UTF-16 length. Known-large JSON needs no extra size scan.
+        if (json === undefined || (json.length <= FILES_INLINE_BYTES && Buffer.byteLength(json) <= FILES_INLINE_BYTES)) return null;
         const ref = this.begin(label);
         try {
             const bytes = Buffer.from(json), scope = this.#scope(ref);

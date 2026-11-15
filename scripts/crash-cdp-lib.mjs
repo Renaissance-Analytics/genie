@@ -14,6 +14,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { providerTicks } from './provider-ticks.mjs';
 
 export const WIN = process.platform === 'win32';
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -195,19 +196,19 @@ export async function attach({ port, inspect, label }) {
 
 // ---------------------------------------------------------------- agents
 export async function ticksOf(cdp, agentId) {
-    const json = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ running: d?.session?.running ?? null, rows: d?.rows ?? [] }))`, 15_000);
+    const json = await cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ running: d?.session?.running ?? null, rows: d?.rows ?? [] }))`, 15_000);
     const detail = JSON.parse(json);
     const ticks = new Map();
     for (const m of JSON.stringify(detail.rows).matchAll(/tick (\d+) pid (\d+)/g)) ticks.set(Number(m[1]), Number(m[2]));
     const pids = [...new Set(ticks.values())];
-    return { running: detail.running === true, max: ticks.size === 0 ? 0 : Math.max(...ticks.keys()), pids, last: ticks.size === 0 ? null : ticks.get(Math.max(...ticks.keys())) };
+    return { running: detail.running === true, max: ticks.size === 0 ? 0 : Math.max(...ticks.keys()), pids, last: ticks.size === 0 ? null : ticks.get(Math.max(...ticks.keys())), ticks: providerTicks(detail.rows) };
 }
 /** Why an agent is or is not running, as the host says: its session, a start's refusal, the provider's last stderr. */
-export const whyOf = (cdp, agentId) => cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ session: d?.session ? { running: d.session.running, starting: d.session.starting ?? null, inTurn: d.session.inTurn ?? null, turnState: d.session.turnState, failure: d.session.failure ?? null } : null, refusal: d?.refusal ?? null, log: (d?.log ?? []).slice(-4) }))`, 15_000).catch((e) => `(unread: ${e?.message ?? e})`);
-export const running = (cdp, agentId) => cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => d?.session?.running === true)`, 15_000);
+export const whyOf = (cdp, agentId) => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ session: d?.session ? { running: d.session.running, starting: d.session.starting ?? null, inTurn: d.session.inTurn ?? null, turnState: d.session.turnState, failure: d.session.failure ?? null } : null, refusal: d?.refusal ?? null, log: (d?.log ?? []).slice(-4) }))`, 15_000).catch((e) => `(unread: ${e?.message ?? e})`);
+export const running = (cdp, agentId) => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(agentId)}).then((d) => d?.session?.running === true)`, 15_000);
 /** Two codex agents, each started and prompted, streaming ticks (mid-turn). */
 export async function twoStreamingAgents(cdp, tag) {
-    const snap = await cdp.evaluate('window.genie.snapshot()', 15_000);
+    const snap = await cdp.evaluate('window.genieTest.snapshot()', 15_000);
     const workspaceId = snap?.workspaces?.[0]?.id ?? null;
     if (typeof workspaceId !== 'string') throw new Error('no workspace in this home');
     const agents = [];

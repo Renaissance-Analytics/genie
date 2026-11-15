@@ -41,6 +41,8 @@ export interface GenieBrowserWindowOptions {
     readonly caPem: string | null;
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
+    /** Each local host's label: its workspace's name, never its id (core/browser-sites.ts). */
+    readonly siteLabels?: () => Readonly<Record<string, string>>;
     readonly log?: (line: string) => void;
     /** With these, this machine's tabs use the workspace stores of `side: 'browser'`. */
     readonly genieHome?: string;
@@ -314,6 +316,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         });
         const b = new GenieBrowser({
             enabledHosts: () => hostsOf(key),
+            ...(options.siteLabels && (key === LOCAL || key.startsWith(SINGLE)) ? { siteLabels: options.siteLabels } : {}),
             newTabId: () => `tab-${++seq}`,
             createView: (id, events, url) => createView(window, key, id, events, url),
             ...(key === LOCAL || key.startsWith(SINGLE) ? { storeOf } : {}),

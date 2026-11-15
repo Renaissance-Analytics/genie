@@ -225,7 +225,9 @@ describe('service update through the UI and MCP', () => {
         expect(first.services?.updating?.dependents.join(' ')).toContain('project');
         expect(d.calls.filter((a) => ['pull', 'stop', 'rename', 'create', 'rm'].includes(a[0]!))).toEqual([]);
         const html = renderToStaticMarkup(createElement(HostingSurface, { data: first, tab: 'services', workspaces: [{ id: 'project', path: '/project' }], onAction: () => {}, onNavigate: () => {} }));
-        expect(html).toContain('data-service-update="existing"');
+        // The update's own confirmation on the row (Update image… itself waits in the row menu since Tynn #708): the person sees
+        // the image and what it interrupts, and the request makes no change until Update and interrupt is pressed.
+        expect(html).toContain('data-service-update-confirm="existing"');
         expect(html).toContain('registry.example/team/postgres:17');
         expect(html).toContain('Update and interrupt');
         const after = await handleFeatureAction(s, { kind: 'services.update', serviceId: instance.id, consent: true, confirmed: true }, { ...state, serviceUpdating: first.services?.updating });

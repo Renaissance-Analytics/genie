@@ -210,15 +210,15 @@ check(glyphs > 0, '6. icons rendered as real SVG, not empty spans', `${glyphs} g
 
 // 7. The renderer got its bridge. Without the preload, `window.genie` is simply absent and the
 //    app opens looking like a Dashboard with no agents rather than like a broken bridge.
-const bridge = await cdp.evaluate('typeof window.genie === "object" && typeof window.genie.snapshot === "function"');
+const bridge = await cdp.evaluate('typeof window.genie === "object" && typeof window.genieTest?.snapshot === "function"');
 check(bridge === true, '7. the preload bridge reached the renderer');
 
 /*
- * 8. The main process answers over IPC.
+ * 8. The main process answers through the page's actual protocol bridge.
  *
  * The first version of this read:
  *
- *     cdp.evaluate('window.genie ? JSON.stringify(await window.genie.snapshot()) : null')
+ *     cdp.evaluate('window.genie ? JSON.stringify(await window.genieTest.snapshot()) : null')
  *         .catch(() => null)
  *
  * `await` at the top level of a non-async expression is a SyntaxError, the `.catch` swallowed
@@ -230,12 +230,12 @@ check(bridge === true, '7. the preload bridge reached the renderer');
  */
 const snapshot = await cdp.evaluate(`
     (async () => {
-        if (!window.genie) return null;
-        const s = await window.genie.snapshot();
+        if (!window.genieTest) return null;
+        const s = await window.genieTest.snapshot();
         return JSON.stringify({ workspaces: s.workspaces.length, agents: s.agents.length, workstation: s.workstation });
     })()
 `);
-check(typeof snapshot === 'string', '8. the main process answers a snapshot over IPC', String(snapshot));
+check(typeof snapshot === 'string', '8. the main process answers a snapshot over the protocol', String(snapshot));
 
 /*
  * 9. And the answer came from the REAL registry, not from the renderer's empty default.
@@ -246,8 +246,8 @@ check(typeof snapshot === 'string', '8. the main process answers a snapshot over
  */
 const named = await cdp.evaluate(`
     (async () => {
-        if (!window.genie) return false;
-        const s = await window.genie.snapshot();
+        if (!window.genieTest) return false;
+        const s = await window.genieTest.snapshot();
         return Boolean(s.workstation && typeof s.workstation.name === 'string' && s.workstation.name.length > 0);
     })()
 `);
@@ -624,7 +624,7 @@ if (!approvalEnabled) {
     if (!parked) {
         const state = await cdp.evaluate(`
             (async () => {
-                const d = await window.genie.agentDetail(${JSON.stringify(codexRow)});
+                const d = await window.genieTest.agentDetail(${JSON.stringify(codexRow)});
                 return JSON.stringify({
                     running: d?.session?.running ?? null,
                     turnState: d?.session?.turnState ?? null,
@@ -676,7 +676,7 @@ if (!approvalEnabled) {
          */
         await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
         const onBoard = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"] [data-agent="${codexRow}"]'))`, 'the waiting codex row on the Dashboard');
-        const blocking = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.deckItems ?? []).some((i) => i.agentId === '${codexRow}' && i.source === 'agent-question' && i.blocking))`);
+        const blocking = await cdp.evaluate(`window.genieTest.snapshot().then((s) => (s.deckItems ?? []).some((i) => i.agentId === '${codexRow}' && i.source === 'agent-question' && i.blocking))`);
         const waitingOnBoard = onBoard && blocking === true;
         const topBefore = await cdp.evaluate(`document.querySelector('[data-surface="dashboard"]')?.getBoundingClientRect().top ?? null`);
         await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent="${codexRow}"]').click(); true`);
@@ -700,7 +700,7 @@ if (!approvalEnabled) {
          * nothing else), and `chatBefore` is read on the workspace dashboard itself, just before the click: the pick
          * survived the navigation there, as #639 says it must.
          */
-        const codexWs = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.agents ?? []).find((a) => a.id === '${codexRow}')?.workspaceId ?? null)`);
+        const codexWs = await cdp.evaluate(`window.genieTest.snapshot().then((s) => (s.agents ?? []).find((a) => a.id === '${codexRow}')?.workspaceId ?? null)`);
         const otherRow = `[...document.querySelectorAll('[data-surface="dashboard"] [data-agent]')].find((e) => e.getAttribute('data-agent') !== '${codexRow}')`;
         const chatOffCodex = async (why) => {
             await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
@@ -712,7 +712,7 @@ if (!approvalEnabled) {
         await cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(String(codexWs))}; true`);
         const onLane = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'))`, 'the codex lane on its workspace dashboard');
         const chatBefore = await cdp.evaluate(`document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null`);
-        const stillBlocking = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.deckItems ?? []).some((i) => i.agentId === '${codexRow}' && i.source === 'agent-question' && i.blocking))`);
+        const stillBlocking = await cdp.evaluate(`window.genieTest.snapshot().then((s) => (s.deckItems ?? []).some((i) => i.agentId === '${codexRow}' && i.source === 'agent-question' && i.blocking))`);
         await cdp.evaluate(`document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]').click(); true`);
         const toTab = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'the codex agent tab with its chat docked');
         await new Promise((r) => setTimeout(r, 750));
@@ -1268,7 +1268,7 @@ if (!approvalEnabled) {
 
     // OPEN, from a flow's row: a flow saved through the canvas's own door (flows.saveGraph), then its row's Open.
     const saved = JSON.parse(await cdp.evaluate(`(async () => {
-        const ws = (await window.genie.snapshot?.())?.workspaces?.[0]?.id ?? 'tynn';
+        const ws = (await window.genieTest.snapshot?.())?.workspaces?.[0]?.id ?? 'tynn';
         const document_ = { $schema: 'https://particle.academy/schemas/workflow/v1.json', version: 1, graph: {
             nodes: [
                 { id: 'trigger', kind: '@particle-academy/manual_trigger', position: { x: 0, y: 0 }, config: {} },

@@ -82,6 +82,8 @@ describe('P4 local authentication', () => {
             kind: 'welcome', connectionId: expect.any(String), host: 'local-contract-host', isOwner: true, workspaceId: null,
             // P10.1e's version handshake, additive; a host given no build says 'dev'.
             protocol: protocol.REMOTE_PROTOCOL, build: 'dev',
+            // Tynn #688: the welcome says whether the principal may write; the owner may.
+            readonly: false,
         });
         expect(devices.list()).toEqual([]);
     });

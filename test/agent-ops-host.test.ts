@@ -53,7 +53,6 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
         ...(over.models ? { models: { get: async (provider: string) => over.models![provider] ?? { ok: false, provider, reason: 'no list' } } } : {}),
         cwdFor: () => '/w/tynn',
         workspacePathFor: () => '/w/tynn',
-        readManifest: async () => over.manifest ?? null,
         removeDir: async (path) => { calls.push(`rmdir:${path}`); },
         // The filesystem's own answer for where a path really is (symlinks followed); `null` = nothing there.
         realPath: async (path) => (over.realPaths && resolve(path) in over.realPaths ? over.realPaths[resolve(path)]! : resolve(path)),

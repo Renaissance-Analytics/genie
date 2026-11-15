@@ -2,6 +2,7 @@ import { callerFrom } from './mcp-callers.js';
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import type { KnowledgeStore, MemoryClass, Scope, ScopeFilter } from './knowledge-store.js';
+import { needsPerson, visibilityNote, type TerminalVisibility } from '../core/terminal-surface.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 
 /**
@@ -35,6 +36,8 @@ export interface TerminalsPort {
     scrollback(id: string): string | undefined;
     /** The engine's scrollback cap in characters; a buffer at the cap has been cut. */
     readonly scrollbackCap: number;
+    /** Watches every terminal's output (the host's own). Absent = a terminal's output cannot be watched for a prompt. Returns the stop. */
+    onData?(listener: (id: string, data: string) => void): () => void;
 }
 
 export interface MoreToolsDeps {
@@ -47,6 +50,11 @@ export interface MoreToolsDeps {
      * `terminalEnvFor`: the workspace's service engines, then Genie's MCP endpoint). Absent = none (doctor mode).
      */
     readonly envFor?: (workspaceId: string) => Readonly<Record<string, string>>;
+    /**
+     * Puts a terminal that needs the person in front of them: a Show terminal notice in the window they are using, on that
+     * workspace (Tynn #722). Answers whether a window got it. Absent = nothing can be shown.
+     */
+    readonly surface?: (request: { workspaceId: string; terminalId: string; agentName: string; reason: string }) => boolean;
 }
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
@@ -137,7 +145,26 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                     const env = deps.envFor?.(caller.workspaceId) ?? {};
                     const wanted = { workspaceId: caller.workspaceId, cwd: str(args.cwd) ?? caller.workspacePath, ...(command ? { command, shell: true } : {}), ...(Object.keys(env).length > 0 ? { env } : {}) };
                     const opened = deps.terminals.openReady ? await deps.terminals.openReady(wanted) : deps.terminals.open(wanted);
-                    return ok({ ok: true, terminal: { id: opened.id, pid: opened.pid, shell: opened.shell } });
+                    // THE PERSON, FOR WHAT NEEDS THEM (Tynn #722): asked for (`forPerson`), or the moment its output asks them for
+                    // something (a 2FA code, a password, a yes/no). The result says plainly what was done: an agent that
+                    // believed the terminal was on screen told the person so when it was not.
+                    const request = (reason: string) => ({ workspaceId: caller.workspaceId, terminalId: opened.id, agentName: caller.agentName, reason });
+                    const shown = args.forPerson === true ? (deps.surface?.(request('the agent asked for the person')) ?? false) : false;
+                    if (args.forPerson !== true && deps.surface && deps.terminals.onData) {
+                        const surface = deps.surface;
+                        let tail = '';
+                        const stop = deps.terminals.onData((id, data) => {
+                            // A terminal that ended asks nobody for anything: stop watching it.
+                            if (deps.terminals.finished?.(opened.id)) { stop(); return; }
+                            if (id !== opened.id) return;
+                            tail = (tail + data).slice(-400);
+                            if (!needsPerson(tail)) return;
+                            stop();
+                            surface(request('its output is waiting for the person'));
+                        });
+                    }
+                    const visibility: TerminalVisibility = shown ? 'offered' : 'background';
+                    return ok({ ok: true, terminal: { id: opened.id, pid: opened.pid, shell: opened.shell }, visibility, onScreen: false, note: visibilityNote(visibility) });
                 }
                 case 'write': {
                     const id = str(args.id);
@@ -200,7 +227,7 @@ export const KNOWLEDGE_TOOL: BuiltinTool = declareBuiltinTool(
 );
 export const MANAGE_TERMINALS_TOOL: BuiltinTool = declareBuiltinTool(
     'manageTerminals',
-    'Your workspace’s terminals: list; create (approval-gated; runs a command or opens a shell — with the workspace’s service variables already set); write (approval-gated; multi-line text is bracketed-pasted and Enter is sent separately — pass enter:false to hold it); read (the scrollback; `dropped: true` means it was cut at the cap). Databases, Redis and other engines are the `services` tool’s, and sites are the `sites` tool’s: never run `docker` in a terminal for them.',
+    'Your workspace’s terminals: list; create (approval-gated; runs a command or opens a shell — with the workspace’s service variables already set; pass forPerson:true when it needs the person, a login or a 2FA code, and read `visibility` in the result: a terminal is only on the person’s screen if the result says so); write (approval-gated; multi-line text is bracketed-pasted and Enter is sent separately — pass enter:false to hold it); read (the scrollback; `dropped: true` means it was cut at the cap). Databases, Redis and other engines are the `services` tool’s, and sites are the `sites` tool’s: never run `docker` in a terminal for them.',
     {
         type: 'object',
         properties: {
@@ -211,6 +238,7 @@ export const MANAGE_TERMINALS_TOOL: BuiltinTool = declareBuiltinTool(
             cwd: { type: 'string' },
             text: { type: 'string' },
             enter: { type: 'boolean' },
+            forPerson: { type: 'boolean' },
         },
         required: ['action'],
     },

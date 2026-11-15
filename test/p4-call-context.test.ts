@@ -202,8 +202,11 @@ describe('main wires it', () => {
         expect(main).toMatch(/localProtocolDoor\(ipcMain, \{ windowKind: [^\n]*isRemoteWindow\(/);
     });
     it('the feature action decides by the host\'s context, and a forwarded call reaches it', () => {
-        expect(main).toMatch(/act: \(action, context\) => runFeatureAction\(action, context\)/);
-        expect(main).toMatch(/handleFeatureAction\(composed, action, featureState, featurePorts, featureOriginOf\(context, hostPicks\)\)/);
+        expect(main).toContain('features: featureReplica(() => agentEngineLink!.client, context => {');
+        const replica = readFileSync('src/main/feature-replica.ts', 'utf8');
+        expect(replica).toContain("act: (action, context) => call('act', [action], context)");
+        expect(replica).toContain("[method, args, context, context ? browser(context) : null]");
+        expect(readFileSync('src/main/features-host.ts', 'utf8')).toContain('featureOriginOf(context, caller.picks)');
         expect(main).toMatch(/onRemoteInvoke: \(method: string, args: unknown\[\], context: CallContext\) =>[^\n]*, args, context\)/);
     });
 });

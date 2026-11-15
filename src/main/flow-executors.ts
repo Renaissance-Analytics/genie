@@ -21,8 +21,14 @@ import type { MemoryClass, Scope } from './knowledge-store.js';
  * missing path renders EMPTY — never the literal braces, which an agent would read as instructions.
  */
 
+/** What a prompt for a busy agent tells its run as it goes (Tynn #704): it was queued, and then its turn began. */
+export interface PromptHooks {
+    queued?(note: string): void;
+    started?(): void;
+}
+
 export interface FlowPorts {
-    promptAgent(address: string, text: string): Promise<string>;
+    promptAgent(address: string, text: string, hooks?: PromptHooks): Promise<string>;
     /** This agent's folder skills are off, so a value in its prompt must not name one back in. */
     escapesPromptValues?(address: string): boolean;
     runCommand(workspaceId: string, command: string, cwd: string | undefined): Promise<{ exitCode: number; output: string }>;

@@ -44,7 +44,7 @@ afterEach(async () => {
 describe('the remote section', () => {
     it('is MEASURED at boot: the host name, no URL until a transport listens, unlocked, no PIN, no devices, no links, nobody connected', async () => {
         const snap = await featureSnapshot(services, state());
-        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], connections: [], enabled: false, firewall: false, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null, pairRequests: [] });
+        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], connections: [], enabled: false, firewall: false, firewallRule: null, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null, pairRequests: [] });
     });
 
     it('carries this machine’s Tynn registration as main reads it (Tynn #836)', async () => {

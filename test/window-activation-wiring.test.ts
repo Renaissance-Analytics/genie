@@ -60,7 +60,7 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
         // ...through agentOpensSite, which also pulses the site's workspace (genie#1265).
         expect(main).toMatch(/hosting: composed,\s*openInBrowser: agentOpensSite,/);
         expect(main).toMatch(/const agentOpensSite: OpenInBrowser = async \(url\) => \{\s*const r = await openInBrowserFor\('background'\)\(url\);/);
-        expect(main).toMatch(/\.\.\.processPorts\(\),\s*openInBrowser: openInBrowserFor\('user-gesture'\),/);
+        expect(main).toMatch(/featureWindow\(localDoor, \{[\s\S]*?openInBrowser: openInBrowserFor\('user-gesture'\),/);
     });
 
     it('a page in a site panel opening a window (window.open, a script, an agent driving the page) is background', () => {

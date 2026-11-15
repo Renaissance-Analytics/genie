@@ -87,7 +87,7 @@ describe('every enabled react-fancy Button shows the pointer', () => {
 
 describe('Imported agents (the workspace’s agents to adopt) draws only react-fancy Buttons', () => {
     it('Adopt per agent and Open workspace', () => {
-        const agents = importedAgents({ files: [{ folder: 'atlas', text: '' }, { folder: 'bolt', text: '' }], registered: [] });
+        const agents = importedAgents({ files: [{ folder: 'atlas' }, { folder: 'bolt' }], registered: [] });
         const html = renderToStaticMarkup(<ImportedAgentsView workspaceName="Acme" path="/w/acme.agi" agents={agents} busy={null} notice={null} error={null} onAdopt={noop} onOpen={noop} />);
         expect(buttonTags(html).length).toBe(3);
         expect(notFancy(html)).toEqual([]);

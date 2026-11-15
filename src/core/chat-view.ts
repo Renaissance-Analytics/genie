@@ -1,4 +1,6 @@
 import { limitTitle, limitWords } from './limit-words.js';
+import { chatPlanView, type ChatPlanView } from './chat-plan.js';
+import { planSteps } from './agent-view.js';
 import { isSleeping } from './agent-status.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
@@ -131,6 +133,8 @@ export interface ChatContext {
     tone: 'ok' | 'warn' | 'bad' | 'muted' | 'cool';
     /** The hover: the full date and time a rate-limit hold resumes. Absent = no hover. */
     title?: string;
+    /** `Working · Plan n/m`: the plan's open items, listed when the line is hovered (Tynn #703). Absent = no plan to list. */
+    planView?: ChatPlanView;
 }
 
 export interface ChatThreadView {
@@ -174,7 +178,9 @@ export function chatContext(detail: ChatDetail): ChatContext {
     // COMING UP (q_04ce323c): its first message waits for the start, and the line says why.
     if (s.running && s.starting === true && s.turnState !== 'working') return { text: 'Starting', tone: 'muted' };
     if (s.running && s.turnState === 'working') {
-        return { text: s.plan ? `Working · Plan ${s.plan.step}/${s.plan.of} · ${s.plan.doing}` : 'Working', tone: 'ok' };
+        if (!s.plan) return { text: 'Working', tone: 'ok' };
+        const planView = chatPlanView(s.planSteps && s.planSteps.length > 0 ? s.planSteps : planSteps(detail.rows));
+        return { text: `Working · Plan ${s.plan.step}/${s.plan.of} · ${s.plan.doing}`, tone: 'ok', ...(planView ? { planView } : {}) };
     }
     // Waiting on the Claude Design login (#1081): the line's `Log in to Claude Design` fixes it.
     if (s.designLogin) return { text: 'Claude Design login needed', tone: 'warn' };

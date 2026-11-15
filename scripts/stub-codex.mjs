@@ -33,6 +33,8 @@
 import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { providerTickLine } from './provider-ticks.mjs';
 
 // Opt-in protocol-test journal: public method names only, never frame params or credentials.
 const methodLogIndex = process.argv.indexOf('--record-methods');
@@ -58,6 +60,22 @@ const TICKER = (() => {
     if (!Number.isInteger(owner) || owner <= 0) return false;
     try { process.kill(owner, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 })();
+// One identity per actual stub process, even when Windows reuses another process's PID.
+const TICKER_PROCESS = TICKER ? { pid: process.pid, generation: randomUUID(), bornAt: Date.now() } : null;
+/**
+ * MEASURE MODE (scripts/agent-reads-measure.mjs, Tynn #564): while `<tmpdir>/genie-stub-codex-measure` names a live pid, a turn
+ * writes `rows` whole messages (each its own ledger row) and then streams `rate` events a second. Read at each turn, so the
+ * measuring script sets what the next agent does. Without the file nothing below changes.
+ */
+function measureScript() {
+    const marker = join(tmpdir(), 'genie-stub-codex-measure');
+    if (!existsSync(marker)) return null;
+    try {
+        const script = JSON.parse(readFileSync(marker, 'utf8'));
+        process.kill(script.owner, 0);
+        return script;
+    } catch { return null; }
+}
 /**
  * RECORD MODE (scripts/agent-key-no-window-cdp.mjs, genie#1457): while `<tmpdir>/genie-stub-codex-record-servers` exists, a
  * thread's start appends the MCP servers this provider was REALLY given, the bearer read from the variable Genie bound it to.
@@ -295,10 +313,24 @@ function handle(frame) {
                 return;
             }
 
+            const measure = measureScript();
+            if (measure && (measure.rows > 0 || measure.rate > 0)) {
+                let row = 0, tick = 0;
+                const stream = () => { if (measure.rate > 0) setInterval(() => { tick += 1; delta(`tick ${tick} pid ${process.pid}\n`); }, 1000 / measure.rate); };
+                if (measure.rows === 0) { stream(); return; }
+                const burst = setInterval(() => {
+                    for (let n = 0; n < 200 && row < measure.rows; n += 1, row += 1) {
+                        send({ jsonrpc: '2.0', method: 'item/completed', params: { threadId, turnId: TURN_ID, item: { type: 'agentMessage', id: `stub_measure_${row}`, text: `row ${row} of the measured ledger, about as long as a line of a reply` } } });
+                    }
+                    if (row >= measure.rows) { clearInterval(burst); stream(); }
+                }, 10);
+                return;
+            }
+
             if (TICKER) {
                 let tick = 0;
                 note(`ticker: streaming as pid ${process.pid}`);
-                setInterval(() => { tick += 1; delta(`tick ${tick} pid ${process.pid}\n`); }, 250);
+                setInterval(() => { tick += 1; delta(providerTickLine(tick, TICKER_PROCESS)); }, 250);
                 return;
             }
 

@@ -3,8 +3,8 @@ import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm, unlink
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveProgram } from '../core/program-lookup.js';
 import {
-    ARTIFACT_WALK_SKIP, STORAGE_CATEGORIES, approvalMatches, isArtifactName, parseWorktreeList, worktreeRefusal,
-    type StorageCategory, type StorageItem, type StorageReport, type TrashApproval, type TrashEntry, type TrashOrigin,
+    ARTIFACT_WALK_SKIP, STORAGE_CATEGORIES, approvalMatches, isArtifactPath, suggestedCleanup, mergedIntoLine, parseWorktreeList, worktreeRefusal, worktreeState,
+    type StorageCategory, type StorageItem, type StorageReport, type TrashApproval, type TrashEntry, type TrashOrigin, type WorktreeState,
 } from '../core/workspace-storage.js';
 import { sizeOf as defaultSizeOf, type DirSize } from './dir-size.js';
 import { gitExecFile } from './git-exec.js';
@@ -16,8 +16,10 @@ import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
  * `.trash` with each item's origin recorded, put it back, and empty `.trash` only with the person's approval.
  *
  * THE RULES THIS FILE KEEPS:
- *  - It never leaves the workspace: every path is resolved under the workspace's real path; a worktree elsewhere, an id
- *    with `..`, a `.trash` that is a link, are refused. Measuring never follows a link (main/dir-size.ts).
+ *  - It never leaves the workspace, with one exception that is only READ: git lists a repo's own registered worktrees,
+ *    some of which agents made elsewhere (C:/_Projects/_wt/...), and those are shown and may be moved into .trash by git.
+ *    Every other path is resolved under the workspace's real path; an id with `..`, a `.trash` that is a link, a worktree
+ *    that is itself a link, are refused. Measuring never follows a link (main/dir-size.ts).
  *  - The window sends ids, never paths, and every id is re-validated against a fresh reading before anything moves.
  *  - A worktree goes to .trash only when git says it is safe: not the main checkout, not locked, no uncommitted changes,
  *    no commit that no remote has. It is moved BY GIT (`git worktree move`) and locked there, so git still knows it and
@@ -104,7 +106,7 @@ async function pooled<T, R>(list: readonly T[], n: number, fn: (t: T) => Promise
     return out;
 }
 
-interface WorktreeFound { rel: string; abs: string; repoAbs: string; repoRel: string; branch: string | null; refusal: string | null }
+interface WorktreeFound { id: string; rel: string; abs: string; repoAbs: string; repoRel: string; branch: string | null; head: string | null; external: boolean; state: WorktreeState; refusal: string | null }
 
 export class WorkspaceStorage {
     readonly #now: () => number;
@@ -130,7 +132,10 @@ export class WorkspaceStorage {
         return out;
     }
 
-    /** The worktrees of the workspace's repositories that sit inside it (never the main checkout, never one in .trash). */
+    /**
+     * Every worktree git lists for the workspace's repositories, inside the workspace or not (never a main checkout, never one
+     * in .trash, never one that is itself a link), each with its state: dirty, unpushed, clean and merged, clean and unmerged.
+     */
     async #worktrees(rootReal: string): Promise<WorktreeFound[]> {
         const out: WorktreeFound[] = [];
         const trashReal = join(rootReal, '.trash');
@@ -141,14 +146,18 @@ export class WorkspaceStorage {
             for (const w of list.slice(1)) {
                 if (w.bare) continue;
                 let real: string;
-                try { real = await realpath(w.path); } catch { continue; }
-                const rel = inside(rootReal, real);
-                if (rel === null || inside(trashReal, real) !== null || real === trashReal) continue;
+                try { if ((await lstat(w.path)).isSymbolicLink()) continue; real = await realpath(w.path); } catch { continue; }
+                if (real === rootReal || inside(trashReal, real) !== null || real === trashReal) continue;
+                const inRoot = inside(rootReal, real);
+                const rel = inRoot ?? toSlash(real);
                 const status = await git(real, ['status', '--porcelain']);
                 const ahead = await git(real, ['rev-list', '--count', 'HEAD', '--not', '--remotes']);
                 const unpushed = ahead.ok && /^\d+\s*$/.test(ahead.out) ? Number(ahead.out.trim()) : null;
-                const refusal = worktreeRefusal({ locked: w.locked, dirty: !status.ok || status.out.trim() !== '', unpushed });
-                out.push({ rel, abs: real, repoAbs: repo.abs, repoRel: repo.rel, branch: w.branch, refusal: !status.ok ? `Genie could not read its status: ${status.error}` : refusal });
+                const contains = await git(real, ['for-each-ref', '--contains', 'HEAD', '--format=%(refname)', 'refs/remotes']);
+                const dirty = !status.ok || status.out.trim() !== '';
+                const merged = contains.ok && mergedIntoLine(contains.out.split(/\r?\n/).filter((l) => l !== ''));
+                const refusal = !status.ok ? `Genie could not read its status: ${status.error}` : worktreeRefusal({ locked: w.locked, dirty, unpushed });
+                out.push({ id: `worktrees:${rel}`, rel, abs: real, repoAbs: repo.abs, repoRel: repo.rel, branch: w.branch, head: w.head, external: inRoot === null, state: worktreeState({ locked: w.locked, dirty, unpushed, merged }), refusal });
             }
         }
         return out.sort((a, b) => a.rel.localeCompare(b.rel));
@@ -167,7 +176,8 @@ export class WorkspaceStorage {
             for (const e of list) {
                 if (e.isSymbolicLink() || !e.isDirectory() || ARTIFACT_WALK_SKIP.includes(e.name)) continue;
                 const full = join(dir, e.name);
-                if (isArtifactName(e.name)) { const rel = inside(rootReal, full); if (rel) found.push(rel); continue; }
+                const rel = inside(rootReal, full);
+                if (rel !== null && isArtifactPath(rel)) { found.push(rel); continue; }
                 if (depth + 1 < ARTIFACT_DEPTH) queue.push({ dir: full, depth: depth + 1 });
             }
         }
@@ -213,16 +223,16 @@ export class WorkspaceStorage {
         const items: StorageItem[] = [];
         const repoItems = await pooled(repos.filter((r) => r.rel !== '.'), WALKS_AT_ONCE, async (r) => {
             const s = await sized(r.abs);
-            return { id: `repos:${r.rel}`, category: 'repos' as const, label: r.rel, rel: r.rel, ...s, reclaimable: false, refusal: null };
+            return { id: `repos:${r.rel}`, category: 'repos' as const, label: r.rel, rel: r.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: false, refusal: null };
         });
         items.push(...repoItems);
         items.push(...await pooled(worktrees, WALKS_AT_ONCE, async (w) => {
             const s = await sized(w.abs);
-            return { id: `worktrees:${w.rel}`, category: 'worktrees' as const, label: w.branch ? `${w.rel} (${w.branch})` : w.rel, rel: w.rel, ...s, reclaimable: w.refusal === null, refusal: w.refusal };
+            return { id: w.id, category: 'worktrees' as const, label: w.branch ? `${w.rel} (${w.branch})` : w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external };
         }));
         items.push(...await pooled(artifacts, WALKS_AT_ONCE, async (rel) => {
             const s = await sized(join(rootReal, ...rel.split('/')));
-            return { id: `ci-artifacts:${rel}`, category: 'ci-artifacts' as const, label: rel, rel, ...s, reclaimable: true, refusal: null };
+            return { id: `ci-artifacts:${rel}`, category: 'ci-artifacts' as const, label: rel, rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: true, refusal: null };
         }));
         for (const c of input.chatFiles) {
             const file = basename(c.path);
@@ -247,7 +257,7 @@ export class WorkspaceStorage {
         if (category === 'ci-artifacts') {
             const notArtifact = { ok: false as const, reason: 'That is not a CI or test artifact Genie found in this workspace.' };
             const segments = rest.split('/');
-            if (rest === '' || isAbsolute(rest) || segments.some((s) => s === '' || s === '.' || s === '..' || ARTIFACT_WALK_SKIP.includes(s)) || !isArtifactName(segments.at(-1)!)) return notArtifact;
+            if (rest === '' || isAbsolute(rest) || segments.some((s) => s === '' || s === '.' || s === '..' || ARTIFACT_WALK_SKIP.includes(s)) || !isArtifactPath(rest)) return notArtifact;
             const abs = join(rootReal, ...segments);
             try {
                 const s = await lstat(abs);
@@ -256,15 +266,15 @@ export class WorkspaceStorage {
             } catch { return notArtifact; }
             plan = { origin: { kind: 'path', category: 'ci-artifacts', rel: rest }, label: rest, run: (payload) => rename(abs, payload) };
         } else if (category === 'worktrees') {
-            const w = (await this.#worktrees(rootReal)).find((x) => x.rel === rest);
-            if (!w) return { ok: false, reason: 'That is not a worktree Genie may move: only one of this workspace’s own, other than a repository’s main checkout.' };
+            const w = (await this.#worktrees(rootReal)).find((x) => x.id === itemId);
+            if (!w) return { ok: false, reason: 'That is not a worktree Genie may move: only one registered with a repository of this workspace, other than its main checkout.' };
             if (w.refusal) return { ok: false, reason: w.refusal };
             plan = {
-                origin: { kind: 'worktree', repoRel: w.repoRel, rel: w.rel, branch: w.branch },
+                origin: { kind: 'worktree', repoRel: w.repoRel, rel: w.rel, branch: w.branch, head: w.head, external: w.external },
                 label: w.rel,
                 run: async (payload) => {
                     const moved = await git(w.repoAbs, ['worktree', 'move', w.abs, payload]);
-                    if (!moved.ok) throw new Error(`git did not move the worktree: ${moved.error}`);
+                    if (!moved.ok) throw new Error(`git did not move the worktree into .trash (it cannot across drives, nor with submodules): ${moved.error}`);
                     const locked = await git(w.repoAbs, ['worktree', 'lock', '--reason', 'In the workspace .trash (Genie)', payload]);
                     if (!locked.ok) throw new Error(`git moved the worktree but did not lock it: ${locked.error}`);
                 },
@@ -291,6 +301,24 @@ export class WorkspaceStorage {
         return { ok: true, trashId, label: plan.label };
     }
 
+    /**
+     * THE ONE-CLICK CLEAN-UP: move several items, but only those that a FRESH measure still suggests (a merged, quiet
+     * worktree; a test result older than a day). The window's list is a request, never the authority: an id that is not
+     * suggested now (dirty since, newer, unmerged, a chat file) is skipped and said so.
+     */
+    async cleanUp(root: string, itemIds: readonly string[], input: { chatFiles: readonly ChatFile[] }): Promise<{ moved: string[]; skipped: string[]; failed: string[] }> {
+        const report = await this.measure(root, input);
+        const allowed = new Set(suggestedCleanup(report.items, this.#now()));
+        const out = { moved: [] as string[], skipped: [] as string[], failed: [] as string[] };
+        // One at a time: two git worktree moves in one repository would race for its lock.
+        for (const id of [...new Set(itemIds)]) {
+            if (!allowed.has(id)) { out.skipped.push(id); continue; }
+            const r = await this.moveToTrash(root, id, input);
+            (r.ok ? out.moved : out.failed).push(id);
+        }
+        return out;
+    }
+
     /** Put one of Genie's .trash entries back where it came from; never over something already there. */
     async restore(root: string, trashId: string): Promise<StorageResult<{ label: string }>> {
         const rootReal = await realpath(root);
@@ -312,9 +340,11 @@ export class WorkspaceStorage {
                 await mkdir(dirname(target), { recursive: true });
                 await rename(payload, target);
             } else if (o.kind === 'worktree') {
-                const target = join(rootReal, ...o.rel.split('/'));
+                // A worktree that was outside the workspace goes back to its absolute place; one inside, to its relative one.
+                const target = o.external === true ? o.rel : join(rootReal, ...o.rel.split('/'));
                 const repo = o.repoRel === '.' ? rootReal : join(rootReal, ...o.repoRel.split('/'));
-                if (inside(rootReal, target) !== o.rel || (o.repoRel !== '.' && inside(rootReal, repo) !== o.repoRel)) return cannot;
+                if (o.external === true ? !isAbsolute(o.rel) : inside(rootReal, target) !== o.rel) return cannot;
+                if (o.repoRel !== '.' && inside(rootReal, repo) !== o.repoRel) return cannot;
                 if (await exists(target)) return taken(o.rel);
                 await mkdir(dirname(target), { recursive: true });
                 const unlocked = await git(repo, ['worktree', 'unlock', payload]);

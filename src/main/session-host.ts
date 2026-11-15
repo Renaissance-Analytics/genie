@@ -133,7 +133,7 @@ import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIE
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
-import { slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
+import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
@@ -1403,7 +1403,13 @@ export class SessionHost {
         const unsupported = unsupportedSlashCommand(text, entry.session.extensions, reportsCommandsFor(entry.provider));
         if (unsupported !== null) return { ok: false, reason: unsupported };
         const command = slashCommandOf(text);
-        if (command === null || !entry.session.runsCommands) return null;
+        if (command === null) return null;
+        // A CLI that runs its commands from the prompt (Claude): the command goes alone, so it is run, not read (Tynn #702).
+        if (!entry.session.runsCommands) {
+            if (withFiles || !isProviderCommand(text, entry.session.extensions, entry.provider) || !entry.session.promptCommand(text.trim(), by)) return null;
+            this.#emit(agentId);
+            return { ok: true };
+        }
         if (command.args || withFiles) return { ok: false, reason: `/${command.name} was not sent: it takes no arguments here.` };
         const refused = entry.session.runCommand(command.name, text.trim(), by);
         this.#emit(agentId);
@@ -1637,6 +1643,20 @@ export class SessionHost {
     /** `context`: what the prompt's ledger row carries beyond its text — a Genie notice's mail (the inbox push). */
     prompt(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): boolean {
         return this.handOff(agentId, text, by, context) !== null;
+    }
+
+    /** A flow's prompt for a busy agent, held in its queue for the turn's end (Tynn #704; `AgentSession.queueForTurnEnd`). `null` = no session to take it. */
+    queueFlowPrompt(agentId: AgentId, text: string, by: string, replacing: string | null): { id: string } | null {
+        const entry = this.#running.get(agentId);
+        if (!entry || !entry.session.running) return null;
+        const id = entry.session.queueForTurnEnd(text, by, replacing);
+        this.#emit(agentId);
+        return { id };
+    }
+
+    /** Whether a prompt `queueFlowPrompt` held is still waiting for its turn. */
+    isPromptQueued(agentId: AgentId, promptId: string): boolean {
+        return this.#running.get(agentId)?.session.hasQueuedPrompt(promptId) ?? false;
     }
 
     /**

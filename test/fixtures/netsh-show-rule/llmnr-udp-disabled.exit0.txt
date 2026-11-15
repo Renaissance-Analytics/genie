@@ -1,0 +1,16 @@
+
+Rule Name:                            File and Printer Sharing (LLMNR-UDP-In)
+----------------------------------------------------------------------
+Enabled:                              No
+Direction:                            In
+Profiles:                             Domain,Private,Public
+Grouping:                             File and Printer Sharing
+LocalIP:                              Any
+RemoteIP:                             LocalSubnet
+Protocol:                             UDP
+LocalPort:                            5355
+RemotePort:                           Any
+Edge traversal:                       No
+Action:                               Allow
+Ok.
+

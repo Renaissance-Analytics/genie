@@ -121,6 +121,7 @@ describe('the wiring', () => {
     });
 
     it('a checkbox is a feature action that sets Tynn’s switch', () => {
-        expect(src('../src/main/feature-ipc.ts')).toMatch(/case 'issueWatch\.setRepo':/);
+        expect(src('../src/main/feature-ipc.ts')).toMatch(/await applyMachineFeatureAction\(services, action, state, next, ports\)/);
+        expect(src('../src/main/feature-machine.ts')).toMatch(/case 'issueWatch\.setRepo':/);
     });
 });

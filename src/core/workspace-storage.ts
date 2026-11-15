@@ -19,8 +19,18 @@ export const CATEGORY_LABEL: Readonly<Record<StorageCategory, string>> = {
  * are the Azure queue's fetch folders; `coverage`, `.nyc_output`, `test-results` and `playwright-report` the runners').
  * A folder is an artifact by its NAME and nothing else: source, `dist`, `node_modules` never are.
  */
-export const ARTIFACT_NAMES: readonly string[] = ['ci-out', 'smoke-out', 'coverage', '.nyc_output', 'test-results', 'playwright-report'];
+export const ARTIFACT_NAMES: readonly string[] = ['ci-out', 'smoke-out', 'coverage', '.nyc_output', 'test-results', 'playwright-report', '.vite', '.turbo', '.parcel-cache', '.pytest_cache'];
 export const isArtifactName = (name: string): boolean => ARTIFACT_NAMES.includes(name);
+/**
+ * The envelope's downloaded test results: each item the Azure queue fetched is a folder directly under
+ * `.ai/sandbox/azure/queue` (hundreds of MB each; they filled the owner's drive). Artifacts by WHERE they are.
+ */
+const QUEUE_ITEM = /(^|\/)\.ai\/sandbox\/azure\/queue\/[^/]+$/;
+export const isArtifactPath = (rel: string): boolean => isArtifactName(rel.split('/').at(-1) ?? '') || QUEUE_ITEM.test(rel);
+/** Test results older than this are what the one-click clean-up offers. */
+export const STALE_ARTIFACT_MS = 24 * 60 * 60 * 1000;
+/** A worktree touched within this long may be an agent's, in use right now: the clean-up leaves it alone. */
+export const QUIET_WORKTREE_MS = 60 * 60 * 1000;
 /** Never looked inside for artifacts: dependencies, git's own folder, and the trash. */
 export const ARTIFACT_WALK_SKIP: readonly string[] = ['node_modules', '.git', '.trash'];
 
@@ -38,12 +48,68 @@ export interface StorageItem {
     readonly reclaimable: boolean;
     /** Why it may not be moved to .trash, in words; `null` when it may, or when it is never offered (a repository). */
     readonly refusal: string | null;
+    /** A worktree's state (the story's four, plus locked/unknown); absent for everything else. */
+    readonly state?: WorktreeState | null;
+    /** A worktree git lists for one of the workspace's repos but that sits outside the workspace (rel is then its absolute path). */
+    readonly external?: boolean;
+    /** The newest file's modification time in it, ms; null when it holds no file. */
+    readonly newest?: number | null;
+}
+
+/**
+ * A worktree, as the person should read it: dirty (uncommitted changes), unpushed (commits no remote has), clean and merged
+ * (its HEAD is already in the repo's default or release line, so nothing is lost), clean and unmerged (pushed to a branch
+ * of its own, not yet in the line).
+ */
+export type WorktreeState = 'merged' | 'unmerged' | 'dirty' | 'unpushed' | 'locked' | 'unknown';
+export const WORKTREE_STATE_LABEL: Readonly<Record<WorktreeState, string>> = {
+    merged: 'Clean, merged', unmerged: 'Clean, not merged yet', dirty: 'Uncommitted changes', unpushed: 'Unpushed commits', locked: 'Locked', unknown: 'Unknown',
+};
+
+/**
+ * The branches a worktree must be in to count as MERGED: the repo's default (main, master, develop, trunk), a release/*, and
+ * a release line next/<name>. A story branch is next/<number>-<name>, so a name that starts with a digit is NOT a line: a
+ * branch pushed on its own contains its own HEAD and must not read as merged.
+ */
+export function isLineBranch(name: string): boolean {
+    if (['main', 'master', 'develop', 'trunk'].includes(name)) return true;
+    if (/^releases?\/.+/.test(name)) return true;
+    return /^next\/[^0-9/][^/]*$/.test(name);
+}
+
+/** From git for-each-ref --contains HEAD refs/remotes: whether any remote branch that has this commit is a line branch. */
+export function mergedIntoLine(remoteRefs: readonly string[]): boolean {
+    return remoteRefs.some((ref) => {
+        const m = /^refs\/remotes\/[^/]+\/(.+)$/.exec(ref.trim());
+        return m !== null && m[1] !== 'HEAD' && isLineBranch(m[1]!);
+    });
+}
+
+export function worktreeState(w: { locked: boolean; dirty: boolean; unpushed: number | null; merged: boolean }): WorktreeState {
+    if (w.dirty) return 'dirty';
+    if (w.unpushed === null) return 'unknown';
+    if (w.unpushed > 0) return 'unpushed';
+    if (w.locked) return 'locked';
+    return w.merged ? 'merged' : 'unmerged';
+}
+
+/**
+ * THE ONE-CLICK CLEAN-UP: which items to preselect. Only what is safe and what regenerates: a worktree that is clean AND
+ * merged into the line and quiet for an hour (an agent may be working in it), and CI/test artifacts untouched for a day. Never an unmerged worktree, never a chat file,
+ * never a repository, never anything that has a refusal.
+ */
+export function suggestedCleanup(items: readonly StorageItem[], now: number): string[] {
+    return items.filter((i) => i.reclaimable && i.refusal === null && (
+        (i.category === 'worktrees' && i.state === 'merged' && (typeof i.newest !== 'number' || now - i.newest > QUIET_WORKTREE_MS))
+        || (i.category === 'ci-artifacts' && typeof i.newest === 'number' && now - i.newest > STALE_ARTIFACT_MS)
+    )).map((i) => i.id);
 }
 
 /** Where something in .trash came from, so it can be put back. */
 export type TrashOrigin =
     | { readonly kind: 'path'; readonly category: StorageCategory; readonly rel: string }
-    | { readonly kind: 'worktree'; readonly repoRel: string; readonly rel: string; readonly branch: string | null }
+    /** `rel` is workspace-relative, or absolute for a worktree outside the workspace (`external`); `head` is its commit, to find it again. */
+    | { readonly kind: 'worktree'; readonly repoRel: string; readonly rel: string; readonly branch: string | null; readonly head?: string | null; readonly external?: boolean }
     | { readonly kind: 'chat-file'; readonly agentId: string; readonly attachmentId: string; readonly path: string }
     /** Put in .trash by someone other than Genie: listed and emptied with the rest, never restored. */
     | { readonly kind: 'unknown'; readonly name: string };

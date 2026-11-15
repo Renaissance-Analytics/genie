@@ -1,12 +1,13 @@
 import { deviceExpiryText, isExpiringSoon } from '../../core/device-expiry.js';
 import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
-import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
+import { useHostPathPicker } from './HostPathPicker.js';
 import { PluginsPage } from './PluginsPage.js';
 import { MarketplacePane } from './MarketplacePane.js';
 import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, Kbd, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { McpServerPanel } from './McpServerPanel.js';
+import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, QrCode, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
 import { HotkeyCapture } from './HotkeyCapture.js';
@@ -14,12 +15,13 @@ import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePro
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
+import { patchWithinLine } from '../../core/toolchain-update.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, soundPickerList, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
-import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
+import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -33,11 +35,13 @@ import type { Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { mailpitInboxUrl } from '../../core/mailpit-name.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
-import { AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
+import { AddKnowledgeForm, AddProcessForm, AddServiceForm, AddSiteForm } from './AddForms.js';
+import { RowIconButton, RowMenu } from './RowMenu.js';
+import { engineChoiceActions, engineName, processActions, scheduledActions, serviceActions, siteActions as siteRowActions, type RowAction } from './hosting-rows.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
 import { flowSummary } from '../../core/flow-canvas.js';
-import { PROCESS_SCHEDULE_PRESETS, describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
+import { describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
@@ -354,12 +358,12 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
  * once, is never sent twice, and ends in success or the reason with Retry. The Hosting tab and a workspace's Sites modal
  * both draw this, so the rule cannot differ between them. The one place the rows hold state; SiteRow stays hook-free.
  */
-export function SiteList({ sites, editing, onAction }: { sites: readonly HostedSite[]; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
+export function SiteList({ sites, editing, onAction, workspaces = [] }: { sites: readonly HostedSite[]; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; workspaces?: readonly { id: string; path: string; name?: string | undefined }[] }) {
     const siteActions = useSiteActions(onAction);
     return (
         <ul className="divide-y divide-[var(--border-1)]">
             {sites.map((s) => (
-                <SiteRow key={s.id} site={s} editing={editing?.siteId === s.id ? editing : null} pending={siteActions.pending(s.id)} refusal={siteActions.refusal(s.id)} onAction={(a) => { siteActions.click(a); }} />
+                <SiteRow key={s.id} site={s} editing={editing?.siteId === s.id ? editing : null} pending={siteActions.pending(s.id)} refusal={siteActions.refusal(s.id)} onAction={(a) => { siteActions.click(a); }} {...(workspaces.length > 0 ? { workspace: workspaceLabel(workspaces, s.workspaceId) } : {})} />
             ))}
         </ul>
     );
@@ -413,13 +417,16 @@ function siteStep(s: HostedSite, pending: SitePending | null): SiteRowStep | nul
  * starting (slow) past the first window, with Retry. It ends green (running) or red (failed or exited: the reason, and
  * Retry). A refused click says why on the row, with Retry. Icons, not words: each control is an icon named by its label.
  */
-export function SiteRow({ site: s, editing, onAction, pending = null, refusal = null }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; pending?: SitePending | null; refusal?: SiteRefusal | null }) {
+export function SiteRow({ site: s, editing, onAction, pending = null, refusal = null, workspace }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; pending?: SitePending | null; refusal?: SiteRefusal | null; workspace?: string }) {
     const step = siteStep(s, pending);
     const busy = pending !== null;
     const up = s.state === 'running' || s.state === 'restarting' || s.state === 'external';
-    const starting = s.state === 'starting';
     // Failed (no answer past the ceiling, or the supervisor gave up) or exited: Retry starts it again on fresh ports.
     const down = (s.state === 'failed' || s.state === 'exited') && s.processIds.length > 0;
+    const rowActions = siteRowActions(s, { editing: editing !== null });
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
+    // A click whose control waits in the menu (Restart) spins the menu's button: progress is never invisible.
+    const menuInFlight = busy && !rowActions.primary.some((a) => a.acts.some((x) => x.kind === PENDING_ACTION[pending!])) && rowActions.menu.some((a) => a.acts.some((x) => x.kind === PENDING_ACTION[pending!]));
     const status = step !== null ? 'progress' : up ? 'running' : down ? 'failed' : s.state === 'unservable' ? 'unservable' : 'stopped';
     // Every control is react-fancy's Button (the owner, 2026-11-01): an icon-only circle named by its label. The one whose
     // action is in flight spins (`loading`); every other lifecycle control is disabled until main answers.
@@ -457,7 +464,8 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
                     <span className="text-[var(--fg-4)]"><Icon name="circle" size="sm" /></span>
                 )}
             </span>
-            <span className="font-mono">{s.host}</span>
+            <span className="text-sm font-medium">{s.host}</span>
+            {workspace ? <Badge variant="soft" size="sm">{workspace}</Badge> : null}
             {/* The step in words: only while something is happening, and only the words needed. */}
             {step !== null ? <span className={`text-xs ${step === 'slow' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{STEP_WORDS[step]}</span> : null}
             {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
@@ -469,15 +477,10 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
                     {control('retry-refused', 'Retry', 'rotate-ccw', refusal.action, 'red')}
                 </span>
             ) : null}
-            {s.state === 'unservable' ? null : (
+            {rowActions.primary.length + rowActions.menu.length === 0 ? null : (
                 <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {up ? control('open', 'Open', 'external-link', { kind: 'hosting.openSite', siteId: s.id }) : null}
-                    {up && s.state !== 'external' ? control('restart', 'Restart', 'rotate-cw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
-                    {down || (starting && s.step === 'slow') ? control('retry', 'Retry', 'rotate-ccw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
-                    {up || starting || (s.state === 'failed' && s.processIds.length > 0)
-                        ? control('stop', 'Stop', 'square', { kind: 'hosting.stopSite', siteId: s.id })
-                        : down ? null : control('start', 'Start', 'play', { kind: 'hosting.startSite', siteId: s.id })}
-                    {editing ? null : control('edit', 'Edit', 'pencil', { kind: 'hosting.editSite', siteId: s.id })}
+                    {rowActions.primary.map((a) => control(a.id, a.label, a.icon, a.acts[0]!))}
+                    <RowMenu items={rowActions.menu} onRun={run} disabled={busy} loading={menuInFlight} />
                 </span>
             )}
             {/* It has not run on this machine: exactly what Start runs, whole, before anyone presses it. */}
@@ -526,15 +529,6 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
                     <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{log.text}</pre>
                 </details>
             ))}
-            {s.state === 'unservable' ? null : (
-                <details data-site-remove={s.id} className="basis-full text-xs">
-                    <summary className="cursor-pointer text-[var(--fg-3)]">Remove…</summary>
-                    <div className="mt-1 flex items-center gap-3">
-                        <span>Remove {s.host}? It is stopped and taken out of this workspace’s project.json. Its folder and files are not touched.</span>
-                        <Button type="button" size="sm" color="red" data-site-action="remove" onClick={() => onAction({ kind: 'hosting.removeSite', siteId: s.id })}>Remove site</Button>
-                    </div>
-                </details>
-            )}
         </li>
     );
 }
@@ -600,7 +594,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             {hosting.sites.length === 0 ? (
                                 <Empty>No sites yet. Add a site to serve a repo at its own .gen name.</Empty>
                             ) : (
-                                <SiteList sites={hosting.sites} editing={hosting.editing ?? null} onAction={onAction} />
+                                <SiteList sites={hosting.sites} editing={hosting.editing ?? null} onAction={onAction} workspaces={workspaces} />
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
@@ -680,54 +674,15 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
 export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
-    const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
-    const button = 'text-[13px]';
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
+    const wsName = (id: string) => (workspaces.length > 0 ? workspaceLabel(workspaces, id) : null);
     return (
         <div className="flex flex-col">
-            <form
-                data-form="add-process"
-                className="flex flex-wrap items-center gap-2 px-5 py-2"
-                onSubmit={(e) => {
-                    e.preventDefault();
-                    const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace');
-                    if (!w) return;
-                    const f = new FormData(e.currentTarget);
-                    const folder = String(f.get('folder') ?? '').trim();
-                    // A schedule makes it a SCHEDULED TASK (genie#1204, Genie 1's form): a preset, or a typed expression.
-                    const preset = String(f.get('schedule') ?? '');
-                    const schedule = (preset === 'custom' ? String(f.get('scheduleCustom') ?? '') : preset).trim();
-                    onAction({
-                        kind: 'hosting.createProcess',
-                        workspaceId: w.id,
-                        workspacePath: w.path,
-                        name: String(f.get('name') ?? ''),
-                        command: String(f.get('command') ?? ''),
-                        ...(folder ? { folder } : {}),
-                        restart: String(f.get('restart') ?? 'on-failure') as 'never' | 'on-failure' | 'always',
-                        ...(schedule ? { schedule } : {}),
-                    });
-                }}
-            >
-                <WorkspacePick workspaces={workspaces} name="workspace" />
-                <Input name="name" required placeholder="Name (queue worker)" aria-label="Name" />
-                <Input name="command" required placeholder="Command (php artisan queue:work)" aria-label="Command" />
-                <Input name="folder" placeholder="Folder in the workspace (optional)" aria-label="Folder" />
-                <PathBrowse name="folder" root={() => { const chosen = (document.querySelector('[data-form="add-process"] [name="workspace"]') as HTMLInputElement | HTMLSelectElement | null)?.value ?? workspaces[0]?.id; return workspaces.find((w) => w.id === chosen)?.path ?? null; }} />
-                <select name="restart" defaultValue="on-failure" aria-label="Restart" className={field}>
-                    <option value="on-failure">Restart on failure</option>
-                    <option value="always">Always restart</option>
-                    <option value="never">Never restart</option>
-                </select>
-                <select name="schedule" defaultValue="" aria-label="Schedule" className={field}>
-                    {PROCESS_SCHEDULE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
-                <Input name="scheduleCustom" placeholder="Custom schedule (0 3 * * *)" aria-label="Custom schedule" />
-                <Button size="xs" type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
-                    Add a process
-                </Button>
-            </form>
+            <div className="flex items-center justify-end px-5 py-2">
+                <AddProcessButton workspaces={workspaces} onAction={onAction} />
+            </div>
             {commandRun && !processes.some((p) => p.commandRun && p.id === commandRun.processId && p.workspaceId === commandRun.workspaceId) ? (
-                <p role="status" className="px-5 py-2 text-sm text-[var(--fg-3)]">This command is not in the current process history.</p>
+                <p role="status" className="px-5 py-1 text-xs text-[var(--fg-3)]">This command is not in the current process history.</p>
             ) : null}
             {processes.length === 0 ? (
                 <Empty>No background processes yet. Add one — a queue worker, a watcher, a dev server — and Genie keeps it running and brings it back after a restart.</Empty>
@@ -736,19 +691,19 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                     {processes.map((p) => {
                         const up = p.state === 'running' || p.state === 'restarting';
                         // Drawn in place (no hooks): the row's own buttons stay in this list's element tree.
-                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now: now ?? Date.now(), onAction })}</Fragment>;
+                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now: now ?? Date.now(), onAction, workspace: wsName(p.workspaceId) })}</Fragment>;
+                        const acts = processActions(p);
                         return (
                             <ProcessRow key={p.id} id={p.id} selected={Boolean(p.commandRun && commandRun?.processId === p.id && commandRun.workspaceId === p.workspaceId)}>
-                                <span className="font-medium">{p.name}</span>
+                                <span className="text-sm font-medium">{p.name}</span>
+                                {wsName(p.workspaceId) ? <Badge variant="soft" size="sm">{wsName(p.workspaceId)}</Badge> : null}
                                 <Badge variant="soft" size="sm">{p.state}</Badge>
-                                {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+                                {p.command ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
                                 {p.commandRun ? <CommandRunFacts process={p} now={now} /> : null}
-                                {p.reason ? <span className="text-sm text-[var(--danger)]">{p.reason}</span> : null}
-                                <span className="ml-auto flex shrink-0 items-center gap-3">
-                                    {up ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.stopProcess', processId: p.id })}>Stop</Button> : null}
-                                    {!p.commandRun && (up || !p.durable) ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</Button> : null}
-                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</Button> : null}
-                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
+                                {p.reason ? <span className="text-xs text-[var(--danger)]">{p.reason}</span> : null}
+                                <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                    {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
+                                    <RowMenu items={acts.menu} onRun={run} />
                                 </span>
                                 {p.commandRun || (p.log && p.log.lines > 0) ? (
                                     <details data-process-log={p.id} className="basis-full">
@@ -764,6 +719,22 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                 </ul>
             )}
         </div>
+    );
+}
+
+/** "Add process": a button that opens the labelled form in a modal. The only hook in the Processes tab, kept out of the panel. */
+function AddProcessButton({ workspaces, onAction }: { workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
+    const [open, setOpen] = useState(false);
+    return (
+        <>
+            <Button type="button" size="sm" icon="plus" data-action="add-process" disabled={workspaces.length === 0} onClick={() => setOpen(true)}>Add process</Button>
+            <Modal open={open} onClose={() => setOpen(false)} size="md">
+                <Modal.Header>Add process</Modal.Header>
+                <Modal.Body>
+                    <AddProcessForm workspaces={workspaces} onCancel={() => setOpen(false)} onSubmit={(a) => { onAction(a); setOpen(false); }} />
+                </Modal.Body>
+            </Modal>
+        </>
     );
 }
 
@@ -810,22 +781,22 @@ function CommandRunFacts({ process: p, now }: { process: NonNullable<FeatureData
  * v0.7.0-beta.342): the "scheduled" badge; "Running now", "Scheduled" or "Paused — not firing"; the schedule in words, the
  * next and the last run; for a nudge, whom it prompts and with what. Run now, Pause schedule / Enable schedule, Remove.
  */
-function scheduledRow({ p, up, now, onAction }: { p: NonNullable<FeatureData['hosting']>['processes'][number]; up: boolean; now: number; onAction: SurfaceProps['onAction'] }) {
+function scheduledRow({ p, up, now, onAction, workspace = null }: { p: NonNullable<FeatureData['hosting']>['processes'][number]; up: boolean; now: number; onAction: SurfaceProps['onAction']; workspace?: string | null }) {
     const s = p.schedule!;
     const nudge = s.kind === 'agent-nudge';
     const status = up ? 'Running now' : s.enabled ? 'Scheduled' : 'Paused — not firing';
+    const acts = scheduledActions(p);
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     return (
         <li data-process={p.id} data-process-scheduled={s.enabled ? 'enabled' : 'paused'} className="flex flex-wrap items-center gap-3 px-5 py-2">
-            <span className="font-medium">{p.name}</span>
+            <span className="text-sm font-medium">{p.name}</span>
+            {workspace ? <Badge variant="soft" size="sm">{workspace}</Badge> : null}
             <Badge variant="soft" size="sm">scheduled</Badge>
-            <span className="text-sm text-[var(--fg-2)]">{status}</span>
-            {!nudge && p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
-            <span className="ml-auto flex shrink-0 items-center gap-3">
-                <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.runScheduledNow', processId: p.id })}>Run now</Button>
-                {s.enabled
-                    ? <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.pauseSchedule', processId: p.id })}>Pause schedule</Button>
-                    : <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.enableSchedule', processId: p.id })}>Enable schedule</Button>}
-                {!up ? <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
+            <span className="text-xs text-[var(--fg-2)]">{status}</span>
+            {!nudge && p.command ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
+                <RowMenu items={acts.menu} onRun={run} />
             </span>
             <span className="basis-full text-xs text-[var(--fg-3)]">
                 {describeSchedule(s.cron)} · Next run: {formatNextRun(s.nextRunAt, now)} · Last run: {formatLastRun(s.lastRunAt, s.lastRunStatus, now)}
@@ -914,32 +885,25 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                         const scope = i.scope;
                         const inbox = inboxUrlOf(i);
                         const myLog = logs?.serviceId === i.id ? logs : null;
+                        const acts = serviceActions(i, status, { warning: warning !== null, logsOpen: myLog !== null });
+                        // Navigate first (Open inbox shows Genie's browser), then send; "delete data" opens ITS OWN confirmation on the row.
+                        const run = (a: RowAction) => {
+                            if (a.confirm === 'inline') { setConfirming(confirming === i.id ? null : i.id); return; }
+                            if (a.navigate) onNavigate(a.navigate);
+                            for (const act of a.acts) onAction(act);
+                        };
                         return (
                             <li key={i.id} data-service={i.id} data-service-status={status} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
                                 <div className="flex items-center gap-3">
-                                    <span className="font-mono">{i.engine}{i.variant ? ` (${i.variant})` : ''} {i.version}{i.kind ? ` · a ${i.kind}` : ''}</span>
+                                    <span className="text-sm font-medium">{engineName(i)}</span>
                                     <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : workspaceLabel(workspaces, scope.workspaceId)}</Badge>
                                     <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
                                     <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
-                                    {i.engine === 'custom' && i.image ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
-                                    <span className="ml-auto flex gap-3 text-[13px]">
-                                        {warning !== null && scope.kind === 'dedicated' ? (
-                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.use', workspaceId: scope.workspaceId, serviceId: i.id })}>Make active</Button>
-                                        ) : null}
-                                        {inbox ? (
-                                            // In Genie's own browser: the surface first (it reports the box the page is placed in), then the page.
-                                            <Button size="xs" type="button" data-open-inbox={inbox} onClick={() => { onNavigate('genie://browser'); onAction({ kind: 'browser.navigate', url: inbox }); }}>Open inbox</Button>
-                                        ) : null}
-                                        {status === 'running' ? (
-                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.stop', serviceId: i.id })}>Stop</Button>
-                                        ) : (
-                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</Button>
-                                        )}
-                                        <Button size="xs" type="button" data-service-logs-button={i.id} onClick={() => onAction({ kind: 'services.logs', serviceId: i.id })}>{myLog ? 'Refresh logs' : 'Logs'}</Button>
-                                        <Button size="xs" type="button" data-service-update={i.id} disabled={status === 'docker-not-running' || status === 'absent'} onClick={() => onAction({ kind: 'services.update', serviceId: i.id })}>Update image…</Button>
-                                        <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</Button>
-                                        <Button size="xs" type="button" data-delete-data={i.id} className="text-[var(--danger)]" onClick={() => setConfirming(confirming === i.id ? null : i.id)}>Remove and delete data…</Button>
+                                    {i.engine === 'custom' && i.image ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
+                                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                        {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} {...(a.id === 'open-inbox' ? { 'data-open-inbox': inbox ?? '' } : {})} />)}
+                                        <RowMenu items={acts.menu} onRun={run} />
                                     </span>
                                 </div>
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
@@ -989,25 +953,35 @@ export function EngineChoices({ instances, workspaces, onAction }: { instances: 
             .map((c) => ({ workspace: w, choice: c }));
     });
     if (rows.length === 0) return null;
+    const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     return (
-        <div data-engine-choices className="flex flex-col gap-1 border-t border-[var(--border-1)] px-5 py-2 text-sm">
-            <span className="font-medium">In use</span>
-            {rows.map(({ workspace: w, choice: c }) => (
-                <div key={`${w.id}:${c.kind}`} data-engine-choice={`${w.id}:${c.kind}`} data-chosen={c.chosen?.id ?? ''} className="flex flex-wrap items-center gap-3">
-                    <span>{workspaceLabel(workspaces, w.id)} · {c.kind}:</span>
-                    <span className="font-mono">{c.chosen ? label(c.chosen) : 'none'}</span>
-                    <span className="ml-auto flex flex-wrap gap-3 text-[13px]">
-                        {c.candidates.filter((x) => x.instance.id !== c.chosen?.id).map((x) => (
-                            <Button size="xs" key={x.instance.id} type="button" data-use={x.instance.id} onClick={() => onAction({ kind: 'services.use', workspaceId: w.id, serviceId: x.instance.id })}>
-                                {x.detached ? `Attach ${label(x.instance)}` : `Use ${label(x.instance)}`}
-                            </Button>
-                        ))}
-                        {c.chosen && c.chosen.scope.kind === 'shared' ? (
-                            <Button size="xs" type="button" data-detach={c.chosen.id} onClick={() => onAction({ kind: 'services.detach', workspaceId: w.id, serviceId: c.chosen!.id })}>Detach {label(c.chosen)} (keeps its data)</Button>
-                        ) : null}
-                    </span>
-                </div>
-            ))}
+        <div data-engine-choices className="flex flex-col gap-1 border-t border-[var(--border-1)] px-5 py-3">
+            <span className="text-sm font-medium">In use</span>
+            <Table>
+                <Table.Head>
+                    <Table.Row>
+                        <Table.Column label="Workspace" className="px-2 py-1.5 text-xs" />
+                        <Table.Column label="Service" className="px-2 py-1.5 text-xs" />
+                        <Table.Column label="Version" className="px-2 py-1.5 text-xs" />
+                        <Table.Column label="" aria-label="Actions" className="w-10 px-2 py-1.5" />
+                    </Table.Row>
+                </Table.Head>
+                <Table.Body>
+                    {rows.map(({ workspace: w, choice: c }) => (
+                        <Table.Row key={`${w.id}:${c.kind}`} data-engine-choice={`${w.id}:${c.kind}`} data-chosen={c.chosen?.id ?? ''}>
+                            <Table.Cell className="px-2 py-1.5 text-sm">{workspaceLabel(workspaces, w.id)}</Table.Cell>
+                            <Table.Cell className="px-2 py-1.5 text-sm">{c.kind}</Table.Cell>
+                            <Table.Cell className="px-2 py-1.5 text-sm">
+                                <span className="inline-flex items-center gap-2">
+                                    {c.chosen ? `${c.chosen.variant ? `${c.chosen.variant} ` : ''}${c.chosen.version}` : 'none'}
+                                    {c.chosen && c.chosen.scope.kind === 'shared' ? <Badge variant="soft" size="sm">shared</Badge> : null}
+                                </span>
+                            </Table.Cell>
+                            <Table.Cell className="px-2 py-1.5 text-right"><RowMenu items={engineChoiceActions(w.id, c, label)} onRun={run} /></Table.Cell>
+                        </Table.Row>
+                    ))}
+                </Table.Body>
+            </Table>
         </div>
     );
 }
@@ -1108,6 +1082,81 @@ export function ToolchainUpdateWarning({ warning, busy, onAction }: { warning: N
     );
 }
 
+/** The languages Genie installs side by side: each has its own section, never also a single-version row (Tynn #713). */
+const SIDE_BY_SIDE = ['php', 'node', 'python', 'java'] as const;
+type SideBySide = (typeof SIDE_BY_SIDE)[number];
+const LANG_TITLE: Record<SideBySide, string> = { php: 'PHP', node: 'Node', python: 'Python', java: 'Java' };
+const INSTALL_KIND = { php: 'toolchain.installPhp', node: 'toolchain.installNode', python: 'toolchain.installPython', java: 'toolchain.installJava' } as const;
+
+/**
+ * A SIDE-BY-SIDE LANGUAGE'S INSTALLED VERSIONS AS CHIPS (Tynn #713), the default marked, and a patch update PER version -
+ * the newest build on that version's own line (8.4.24 to 8.4.27). The patch is an Install beside the old version: it never
+ * switches the default, and a workspace pinned to the old one keeps it. Hook-free: what it renders is what is tested.
+ */
+export function LanguageVersionChips({ lang, managed, current, available, busy, onAction }: { lang: SideBySide; managed: readonly string[]; current: string | null; available: ReadonlyArray<{ readonly version: string; readonly installed: boolean }>; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    if (managed.length === 0) return null;
+    return (
+        <div data-version-chips={lang} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2">
+            {managed.map((v) => {
+                const isDefault = v === current;
+                const patch = patchWithinLine(lang, v, available);
+                return (
+                    <span key={v} data-version-chip={`${lang}:${v}`} data-default={isDefault ? 'true' : 'false'} className="inline-flex items-center gap-1">
+                        <Badge variant="soft" size="sm" {...(isDefault ? { color: 'blue' as const } : {})}>{isDefault ? <Icon name="star" size="xs" /> : null}{v}</Badge>
+                        {patch !== null ? (
+                            <Button size="xs" type="button" data-patch-update={`${lang}:${v}`} data-version={patch} disabled={busy} title={`Install ${LANG_TITLE[lang]} ${patch}, beside ${v}`} className="text-[12px]" onClick={() => onAction({ kind: INSTALL_KIND[lang], version: patch, consent: true })}>
+                                <Icon name="arrow-up" size="xs" />{patch}
+                            </Button>
+                        ) : null}
+                    </span>
+                );
+            })}
+        </div>
+    );
+}
+
+/** One row's state in a "Check for updates" run (Tynn #714): an icon and a word, the reason when it failed. */
+export function CheckStateMark({ tool, check }: { tool: string; check: ToolCheckState }) {
+    const look = {
+        waiting: { icon: 'circle', word: 'Waiting', tone: 'text-[var(--fg-4)]' },
+        checking: { icon: 'loader-circle', word: 'Checking', tone: 'text-[var(--fg-3)]' },
+        'up-to-date': { icon: 'circle-check', word: 'Up to date', tone: 'text-[var(--success)]' },
+        'update-available': { icon: 'circle-arrow-up', word: 'Update available', tone: 'text-[var(--warning)]' },
+        failed: { icon: 'circle-x', word: 'Failed', tone: 'text-[var(--danger)]' },
+    }[check.state];
+    return (
+        <span data-check-state={check.state} data-check-tool={tool} className={`inline-flex items-center gap-1 text-xs ${look.tone}`}>
+            <Icon name={look.icon} size="xs" {...(check.state === 'checking' ? { className: 'animate-spin' } : {})} />
+            {look.word}{check.state === 'failed' ? <span className="text-[var(--danger)]">: {check.reason}</span> : null}
+        </span>
+    );
+}
+
+/**
+ * THE CHECK'S CONTROLS (Tynn #714): "Check for updates" re-checks every row one at a time and installs nothing; while it
+ * runs the same place says Stop; and the last-checked time sits beside it. Opening the page never starts this.
+ */
+export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    const running = tc?.checkRun?.running === true;
+    const at = tc?.checkedAt ?? null;
+    return (
+        <>
+            <span data-toolchain-checked={at ?? ''} className="ml-auto text-xs text-[var(--fg-3)]" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
+                {at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`}
+            </span>
+            {running ? (
+                <Button size="xs" type="button" color="red" data-action="toolchain-check-stop" onClick={() => onAction({ kind: 'toolchain.stopCheck' })}>
+                    <Icon name="square" size="xs" />Stop
+                </Button>
+            ) : (
+                <Button size="xs" type="button" data-action="toolchain-check-updates" disabled={busy} onClick={() => onAction({ kind: 'toolchain.checkUpdates' })}>
+                    <Icon name="refresh-cw" size="xs" />Check for updates
+                </Button>
+            )}
+        </>
+    );
+}
+
 export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
     const tc = data.toolchain;
     const busy = tc?.busy ?? null;
@@ -1128,7 +1177,11 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
             onAction({ kind: 'toolchain.check' });
         }
     }, [tc, onAction]);
-    const missing = tc ? tc.tools.filter((t) => t.tone === 'not-installed') : [];
+    // A language Genie installs side by side has its own section below; it is not also a single-version row (Tynn #713).
+    const hasSection = (tool: string): boolean => (SIDE_BY_SIDE as readonly string[]).includes(tool) && tc?.[tool as SideBySide] !== undefined;
+    const singles = tc ? tc.tools.filter((t) => !hasSection(t.tool)) : [];
+    const checkRows = tc?.checkRun?.rows ?? {};
+    const missing = singles.filter((t) => t.tone === 'not-installed');
     // A refused or failed action, drawn on the row it was for (who or what is busy, verbatim); a PHP version's goes to
     // PHP versions, and one for a tool with no row (a prerequisite such as vcredist) is said above the rows, never dropped.
     const refusals = tc?.refusals ?? [];
@@ -1137,11 +1190,9 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
     return (
         <div data-surface="toolchain" className="flex h-full min-h-0 flex-col">
             <Header title="Toolchain">
-                <Button size="xs" type="button" disabled={busy !== null} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
+                <Button size="xs" type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
                     Check and repair
-                </Button>
-                <Button size="xs" type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.check' })}>
-                    Check again
                 </Button>
             </Header>
             {busy !== null ? <p data-toolchain-busy="" className="px-5 py-2 text-sm text-[var(--fg-2)]">{busy}</p> : null}
@@ -1166,14 +1217,14 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                 <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
             ))}
             {tc?.machinePath ? <MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /> : null}
-            {tc?.php ? <PhpVersions php={tc.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
-            {tc?.node ? <NodeVersions node={tc.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
+            {tc?.php ? <PhpVersions php={tc.php} check={checkRows.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
+            {tc?.node ? <NodeVersions node={tc.node} check={checkRows.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
             {tc?.go ? <GoVersions go={tc.go} current={tc.defaults?.go ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
-            {tc?.python ? <PythonVersions python={tc.python} current={tc.defaults?.python ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'python' && r.version !== undefined)} /> : null}
+            {tc?.python ? <PythonVersions python={tc.python} check={checkRows.python} current={tc.defaults?.python ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'python' && r.version !== undefined)} /> : null}
             {tc?.dotnet ? <DotnetVersions dotnet={tc.dotnet} current={tc.defaults?.dotnet ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'dotnet' && r.version !== undefined)} /> : null}
             {tc?.rust ? <RustVersions rust={tc.rust} current={tc.defaults?.rust ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'rust' && r.version !== undefined)} /> : null}
             {tc?.ruby ? <RubyVersions ruby={tc.ruby} current={tc.defaults?.ruby ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'ruby' && r.version !== undefined)} /> : null}
-            {tc?.java ? <JavaVersions java={tc.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
+            {tc?.java ? <JavaVersions java={tc.java} check={checkRows.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -1184,7 +1235,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                         </p>
                     ) : null}
                     {/* GROUPED BY TYPE (the owner, 2026-10-18): languages, package managers, version control, containers, agent CLIs. */}
-                    {groupTools(tc.tools).map((g) => (
+                    {groupTools(singles).map((g) => (
                     <section key={g.group} data-tool-group={g.group}>
                     <h3 className="px-5 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-[var(--fg-3)]">{g.label}</h3>
                     <ul className="divide-y divide-[var(--border-1)]">
@@ -1196,6 +1247,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                 <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                     <span className="font-medium">{t.tool}</span>
                                     {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
+                                    {checkRows[t.tool] ? <CheckStateMark tool={t.tool} check={checkRows[t.tool]!} /> : null}
                                     {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
                                     {t.tone === 'security-update' ? (
                                         <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
@@ -1238,11 +1290,15 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
  * button says why before it is pressed), the PATH PHP an unpinned site runs, and the versions this release can install —
  * each Install is the person's consent. Where Genie installs none (macOS/Linux) it says so instead of offering a button.
  */
-function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function PhpVersions({ php, current = null, busy, onAction, refusals = [], check }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = php.available.filter((a) => !a.installed);
     return (
         <section data-php-versions={php.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">PHP versions</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">PHP versions</h3>
+                {check ? <CheckStateMark tool="php" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="php" managed={php.managed.map((m) => m.version)} current={current} available={php.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`php` is PHP {current}, Genie's default.</span>
@@ -1290,11 +1346,15 @@ function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { p
  * PATH, and an Install per version this release offers — each Install is the person's consent. Where Genie installs none
  * it says so instead of offering a button.
  */
-function NodeVersions({ node, current = null, busy, onAction, refusals = [] }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function NodeVersions({ node, current = null, busy, onAction, refusals = [], check }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = node.available.filter((a) => !a.installed);
     return (
         <section data-node-versions={node.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Node versions</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Node versions</h3>
+                {check ? <CheckStateMark tool="node" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="node" managed={node.managed.map((m) => m.version)} current={current} available={node.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`node` is Node {current}, Genie's default.</span>
@@ -1382,11 +1442,15 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
  * GENIE'S OWN JAVA (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6d): the Temurin JDKs Genie manages, the java on
  * PATH, and an Install per LTS line (its release for this OS) — or, on macOS, why not.
  */
-function JavaVersions({ java, current = null, busy, onAction, refusals = [] }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function JavaVersions({ java, current = null, busy, onAction, refusals = [], check }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = java.available.filter((a) => !a.installed);
     return (
         <section data-java-versions={java.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Java (Temurin JDKs)</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Java (Temurin JDKs)</h3>
+                {check ? <CheckStateMark tool="java" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="java" managed={java.managed.map((m) => m.version)} current={current} available={java.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`java` and `javac` are Java {current}, Genie's default.</span>
@@ -1569,11 +1633,15 @@ function DotnetVersions({ dotnet, current = null, busy, onAction, refusals = [] 
  * and an Install per supported line on Windows — each Install is the person's consent. Where python.org publishes no
  * build Genie can install (macOS, Linux until TC4b), it says so instead of offering buttons.
  */
-function PythonVersions({ python, current = null, busy, onAction, refusals = [] }: { python: NonNullable<NonNullable<FeatureData['toolchain']>['python']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function PythonVersions({ python, current = null, busy, onAction, refusals = [], check }: { python: NonNullable<NonNullable<FeatureData['toolchain']>['python']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = python.available.filter((a) => !a.installed);
     return (
         <section data-python-versions={python.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Python versions</h3>
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Python versions</h3>
+                {check ? <CheckStateMark tool="python" check={check} /> : null}
+            </div>
+            <LanguageVersionChips lang="python" managed={python.managed.map((m) => m.version)} current={current} available={python.available} busy={busy} onAction={onAction} />
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`python` and `pip` are Python {current}, Genie's default.</span>
@@ -1836,7 +1904,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'agent-mcp' ? (
                                 <>
                                     <SetSection title="Genie’s MCP server" desc="What every agent session is given." data-settings-mcp=""><McpServerBlock integrations={data.integrations} /></SetSection>
-                                    <SetSection title="Agent files in workspaces" desc="Which harness configs Genie writes into every workspace when it starts and when one is added. Each workspace’s status, and a Sync now, are in that workspace’s Settings." data-workspace-files-note="">{rows('agent-mcp')}</SetSection>
+                                    <SetSection title="Agent files in workspaces" desc="Which harness configs Genie writes into every workspace when it starts and when one is added. Each workspace’s status, and a Sync now for it, are in each workspace’s own Settings." data-workspace-files-note="">{rows('agent-mcp')}</SetSection>
                                 </>
                             ) : null}
                             {active === 'plugins' ? (
@@ -2239,7 +2307,7 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
             </label>
             <label className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">This screen’s name</span>
-                <Input name="label" placeholder="glenn’s laptop" />
+                <Input name="label" placeholder="Office laptop" />
             </label>
             <Button size="xs" type="submit" className={button}>Connect</Button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
@@ -2255,18 +2323,6 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
  * section says so (the owner, 2026-10-13: a picker here, above Genie start's record of every workspace, read as
  * "I chose one workspace but it updated all workspaces").
  */
-/** Every tool Genie's MCP serves, with what it does — what every agent session is given (the owner: "no way to check"). */
-export function mcpToolsList(tools: readonly { name: string; description: string }[]) {
-    if (tools.length === 0) return <p data-mcp-tools="0" className="text-sm text-[var(--fg-3)]">No tools are registered.</p>;
-    return (
-        <ul data-mcp-tools={tools.length} className="mt-1 flex flex-col gap-1">
-            {tools.map((t) => (
-                <li key={t.name} data-mcp-tool={t.name} className="text-sm"><span className="font-mono text-xs">{t.name}</span>{t.description ? <span className="text-[var(--fg-3)]"> — {t.description}</span> : null}</li>
-            ))}
-        </ul>
-    );
-}
-
 /**
  * SIGN IN TO TYNN — Genie 1's card (the owner, 2026-10-19: "this is not how we handle tynn logins. Look at Genie 1").
  * One button opens Tynn in the browser; the host is shown; the code comes back by itself (genie://) or is pasted. The
@@ -2369,38 +2425,7 @@ function SetSection({ title, desc, children, ...rest }: { title: string; desc?: 
 /** AGENT MCP (§6.4, §6.9): where Genie's own MCP server listens, whether the boot probe answered, the tools every agent gets. */
 function McpServerBlock({ integrations }: { integrations: FeatureData['integrations'] }) {
     if (integrations === null) return <div data-integrations=""><Skeletons rows={3} /></div>;
-    return (
-        <div data-integrations="" className="flex flex-col gap-3">
-                    {/* THE TRANSPORT, VERIFIED AT BOOT (§6.4, §6.9): where Genie's own MCP server listens and whether a real server/discover answered. */}
-                    <div>
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Genie’s MCP server</h3>
-                        {integrations.mcp.url === null ? (
-                            <p data-mcp-status="off" className="text-sm text-[var(--fg-3)]">Not listening — agents in terminals have no Genie tools until it does.</p>
-                        ) : integrations.mcp.verified?.ok ? (
-                            <p data-mcp-status="verified" className="flex flex-wrap items-center gap-2 text-sm">
-                                <span className="font-mono text-xs">{integrations.mcp.url}</span>
-                                <span className="text-[var(--fg-3)]">verified at boot — serves {integrations.mcp.verified.versions.join(', ')}</span>
-                            </p>
-                        ) : (
-                            <p data-mcp-status="unverified" className="flex flex-wrap items-center gap-2 text-sm">
-                                <span className="font-mono text-xs">{integrations.mcp.url}</span>
-                                <span className="text-[var(--danger)]">listening, but the boot probe did not answer: {integrations.mcp.verified ? integrations.mcp.verified.reason : 'not probed yet'}</span>
-                            </p>
-                        )}
-                    </div>
-                    {/* What every agent gets from it: the tools, each with what it does. */}
-                    {integrations.mcp.url !== null && integrations.mcp.tools ? (
-                        <div data-mcp-tool-list="">
-                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tools every agent session is given</h3>
-                            {mcpToolsList(integrations.mcp.tools)}
-                        </div>
-                    ) : null}
-                    <div data-workspace-files-note="">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Workspace agent files</h3>
-                        <p className="text-sm text-[var(--fg-3)]">Genie writes its MCP endpoint and its agent instructions into every workspace when it starts and when a workspace is added; the switches above choose which harness configs it writes. Each workspace’s status, and a Sync now for it, are in each workspace’s own Settings.</p>
-                    </div>
-        </div>
-    );
+    return <McpServerPanel url={integrations.mcp.url} verified={integrations.mcp.verified} tools={integrations.mcp.tools ?? []} />;
 }
 
 /**
@@ -2558,6 +2583,78 @@ function HostUpgradeRow({ host, upgrade, onUpgradeHost }: { host: string; upgrad
 }
 
 /**
+ * THE WINDOWS FIREWALL ROW (Tynn #685; the owner: "If it's already allowed I should see that it is already allowed and I
+ * should have a button for clearing that rule"). It draws main's reading of Genie's rule from Windows:
+ *  - there and letting the port in: "Allowed", with what Windows reports, and Remove;
+ *  - there but not letting it in (turned off, blocking, another port): why, Allow to put it right, and Remove;
+ *  - there, in words Genie cannot read: its lines as Windows printed them, and Remove;
+ *  - absent, unreadable or not read yet: Allow (offer the fix rather than hide a missing rule).
+ * Allow is offered only while Remote access is on (there is nothing to let in otherwise); the rule and Remove are shown
+ * whatever the switch says, because the rule outlives it.
+ */
+function FirewallRow({ rule, enabled, outcome, onAction, button }: { rule: FirewallRuleView | null; enabled: boolean; outcome: string | null; onAction: SurfaceProps['onAction']; button: string }) {
+    // What Windows has NOW: ask main to read again when the page opens and when its window regains focus (Tynn #685).
+    // Main debounces the read, so this never spawns netsh in a burst. Once per mount, not per snapshot.
+    const askRead = useRef(onAction);
+    askRead.current = onAction;
+    useEffect(() => {
+        const read = (): void => { askRead.current({ kind: 'remote.readFirewall' }); };
+        read();
+        window.addEventListener('focus', read);
+        return () => window.removeEventListener('focus', read);
+    }, []);
+    const present = rule?.state === 'present' ? rule : null;
+    const state = !present ? (rule?.state === 'absent' ? 'absent' : rule?.state === 'unknown' ? 'unknown' : 'unread')
+        : present.covers === true ? 'allowed' : present.covers === false ? 'not-allowing' : 'present';
+    const allowButton = <Button size="xs" type="button" icon="shield-check" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</Button>;
+    const removeButton = <Button size="xs" type="button" icon="trash-2" data-action="remote-firewall-remove" className={button} onClick={() => onAction({ kind: 'remote.removeFirewall' })}>Remove</Button>;
+    const reported = (r: FirewallRuleFacts): string => [
+        `${r.protocol ?? ''} ${r.localPort ?? ''}`.trim(),
+        r.remoteIp ? `from ${r.remoteIp}` : '',
+        r.profiles ? `profiles ${r.profiles}` : '',
+    ].filter(Boolean).join(', ');
+    const why = (r: FirewallRuleFacts, port: number): string =>
+        r.enabled === false ? 'it is turned off'
+            : r.allow === false ? 'it blocks the port'
+            : r.inbound === false ? 'it is for outgoing traffic'
+            : r.protocol !== null && r.protocol !== 'TCP' && r.protocol !== 'Any' ? `it is for ${r.protocol}, not TCP`
+            : r.localPort !== null ? `it lets in ${r.localPort}, and remote access uses ${port}` : 'Windows does not say';
+    return (
+        <div data-firewall-rule={state} className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="font-medium">Windows Firewall</span>
+            {state === 'allowed' && present ? (
+                <>
+                    <span className="flex items-center gap-1.5 text-[var(--success)]"><Icon name="shield-check" size="sm" />Allowed through Windows Firewall</span>
+                    <span data-firewall-reported="" className="font-mono text-xs text-[var(--fg-3)]">{present.rules.map(reported).join('; ')}</span>
+                    {removeButton}
+                </>
+            ) : state === 'not-allowing' && present ? (
+                <>
+                    <span className="text-[var(--warning)]">{`Genie’s rule does not let remote access in: ${present.rules.map((r) => why(r, present.port)).join('; ')}.`}</span>
+                    <span data-firewall-reported="" className="font-mono text-xs text-[var(--fg-3)]">{present.rules.map(reported).join('; ')}</span>
+                    {enabled ? allowButton : null}
+                    {removeButton}
+                </>
+            ) : state === 'present' && present ? (
+                <>
+                    <span>Windows has Genie’s rule:</span>
+                    <span data-firewall-reported="" className="font-mono text-xs text-[var(--fg-3)]">{present.rules.map((r) => r.fields.map((f) => `${f.label} ${f.value}`).join(' · ')).join('; ')}</span>
+                    {enabled ? allowButton : null}
+                    {removeButton}
+                </>
+            ) : (
+                <>
+                    {state === 'absent' ? <span className="text-[var(--fg-2)]">No rule lets remote access through yet.</span> : null}
+                    {rule?.state === 'unknown' ? <span className="text-[var(--fg-2)]">{`Windows Firewall could not be read: ${rule.reason}`}</span> : null}
+                    {enabled ? allowButton : null}
+                </>
+            )}
+            {outcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{outcome}</span> : null}
+        </div>
+    );
+}
+
+/**
  * REMOTE ACCESS (§6.8) — the PIN this screen shows, the paired devices (Revoke each), who is connected
  * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
  * link, made from a workspace's Share (ShareWorkspaceModal); the old local share link here was removed (audit M-d).
@@ -2591,9 +2688,9 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                         <Switch checked={remote.enabled} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: 'remote_access', value: checked })} aria-label="Let your other machines reach this Genie" />
                         <span>{remote.enabled ? `Your other machines can reach ${remote.host} through Tynn, and devices on your tailnet.` : `Remote access is off: your other machines cannot reach ${remote.host} through Tynn or your tailnet.`}</span>
                         {remote.enabled ? <Button size="xs" type="button" data-action="remote-restart" className={button} onClick={() => onAction({ kind: 'remote.restart' })}>Restart</Button> : null}
-                        {remote.enabled && remote.firewall ? <Button size="xs" type="button" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</Button> : null}
-                        {remote.firewallOutcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.firewallOutcome}</span> : null}
                     </div>
+                    {/* WINDOWS FIREWALL (Tynn #685): whether Genie's rule is there, as Windows reports it; Remove when it is. */}
+                    {remote.firewall ? <FirewallRow rule={remote.firewallRule ?? null} enabled={remote.enabled} outcome={remote.firewallOutcome ?? null} onAction={onAction} button={button} /> : null}
                     {/* TAILSCALE (Tynn #821; Genie 1's tailscale.status / install / up): remote access runs over the tailnet, so
                         where Tailscale stands, and the one action that moves it on. */}
                     {remote.tailscale ? (

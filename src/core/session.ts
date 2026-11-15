@@ -39,8 +39,8 @@ export interface SessionDriver {
     start(): void;
     /** Deferred drivers surround the actual synchronous spawn with the session's ownership snapshot. */
     startTracked?(aroundSpawn: (spawn: () => void) => void): void;
-    /** Text, or ACP prompt content blocks when files are attached (prism-acp's `prompt`). */
-    prompt(content: string | readonly PromptBlock[]): void;
+    /** Text or ACP content blocks; Claude's prompt id (prism-acp 0.42), absent for a driver without prompt ids. */
+    prompt(content: string | readonly PromptBlock[]): string | void;
     kill(signal?: NodeJS.Signals): void;
     /**
      * CLOSE THE PROVIDER'S STDIN — prism-acp's `endInput()`: "tells the CLI no more turns are coming". Claude ends on its
@@ -138,6 +138,10 @@ export interface SteerRecordLike {
 
 /** A turn's outcome, as `prism-acp` reports it. */
 export interface TurnOutcomeLike {
+    /** The prompt id returned by ClaudeDriver.prompt (prism-acp 0.42); other drivers may omit it. */
+    readonly turnId?: string;
+    /** This prompt was consumed by the named turn, rather than becoming another turn. Its other fields repeat that outcome. */
+    readonly foldedInto?: string;
     /**
      * `null` when the turn did NOT finish cleanly.
      *
@@ -497,7 +501,7 @@ export class AgentSession {
      * Each prompt still waiting for its turn, oldest first: who sent it (`by`, as `prompt` takes it), and what it was, so
      * one Claude DROPS at a Stop (prism-acp 0.37.0, `#dropped`) can be sent again or kept as a draft.
      */
-    #queued: Array<{ by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
+    #queued: Array<{ turnId?: string; by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
     /**
      * THE DRIVER STOPPED ITSELF and will take no prompt again (prism-acp 0.37.0: Claude's cancel state uncertain,
      * `CANCEL_STATE_UNCERTAIN`). Not Broken — nothing about the agent is wrong — but this run is over: the person's next
@@ -1196,6 +1200,21 @@ export class AgentSession {
         return this.#afterTurn.map((p) => p.id);
     }
 
+    /**
+     * A FLOW'S PROMPT FOR A BUSY AGENT (Tynn #704): held in this queue — the one typed messages and mail wait in, kept in
+     * the thread, so it survives a restart as they do — and sent as its OWN turn when the current one ends, never folded
+     * into it (`deliver` would hand a Claude run the prompt mid-turn, where it can no longer be replaced). `replacing`:
+     * the prompt an earlier fire left waiting, dropped first so one waits, never two. Answers the id it waits under.
+     */
+    queueForTurnEnd(text: string, by: string | null, replacing: string | null = null): string {
+        if (!this.running) throw new Error('session is not running');
+        if (replacing !== null && this.hasQueuedPrompt(replacing)) this.discardPrompt(replacing);
+        const id = this.#queuePrompt(text, by, null, {});
+        // A turn that ended since the caller looked: it goes now.
+        if (!this.#inTurn) this.#flushAfterTurn();
+        return id;
+    }
+
     hasQueuedPrompt(id: string): boolean {
         return this.#afterTurn.some((p) => p.id === id);
     }
@@ -1453,183 +1472,7 @@ export class AgentSession {
                     }),
                 onTurnEnd: (outcome) => {
                     if (this.#ended) { this.#straggler(); return; }
-                    this.#clearCancelWait();
-                    // Two turns are two replies even with nothing between them. Without this a
-                    // whole conversation would accumulate into one unbounded row.
-                    this.#closeMessage();
-                    // An echo that never came is not still expected: a `you` row after this turn is a message, never
-                    // the prompt's echo (see `#handle`).
-                    this.#echo = null;
-                    this.#echoSeen = '';
-
-                    /*
-                     * A PROMPT THE STOP DROPPED (prism-acp 0.37.0, genie#1565): Claude's interrupt sends `cancel_queued`,
-                     * so a prompt it took mid-turn never runs; each ends on its own, cancelled, AFTER the stopped turn (raw
-                     * `dropped by cancel`, or `cancel accounting mismatch` when the receipt could not be trusted). It was
-                     * never a turn: no marker, no `stopped` row, no count. Ended while Genie holds no turn open with a
-                     * prompt still waiting for one, cancelled — a prompt that did start ran as a turn and opened it.
-                     */
-                    if (!this.#inTurn && outcome.stopReason === 'cancelled' && !outcome.isError && this.#queued.length > 0) {
-                        this.#dropped(this.#queued.shift()!);
-                        this.#changed();
-                        return;
-                    }
-
-                    // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
-                    // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
-                    // turn, and it opens nothing, as before.
-                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
-
-                    this.#turns += 1;
-                    this.#endedThisRun += 1;
-                    this.#inTurn = false;
-                    // Arm before queued mail is flushed. This never sends input or starts a turn by itself.
-                    this.#rateWarningPending = rateLimitWarning(this.#latestHeadroom, this.#now()) !== null;
-
-                    // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
-                    // idle would present a crashed turn as a completed one, which is the
-                    // quietest way to lose work: the agent stops, the board says nothing is
-                    // wrong, and nobody looks.
-                    //
-                    // A CANCELLED turn is the exception and is idle: cancelling is something
-                    // the human did, and painting it as a fault blames the agent for being
-                    // stopped.
-                    const crashed = outcome.stopReason === null || outcome.isError;
-                    // ENDED BY A STOP (Tynn #556): the person's Stop, the driver ending its CLI after one it could not confirm,
-                    // or this run's own stop. Whatever the dying CLI reported, that is not a limit, a sign-out or a fault.
-                    const endedByStop = crashed && (this.#stopWindow || this.#needsNewDriver || this.#ended);
-                    const failed = crashed && !endedByStop;
-                    // Ended by the limit: a reading said so during the turn, or the turn's own failure does (Tynn #791).
-                    const readingSaidSo = this.#limitThisTurn;
-                    const stoppedAtLimit = readingSaidSo && this.#stopWindow;
-                    const byLimit = failed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
-                    // Ended by the LOGIN (the owner, 2026-10-18): the provider says this account is not signed in.
-                    // Ended by the ACCOUNT (the owner, 2026-10-21: a payment failure paused it): checked before the login,
-                    // because prism-acp files `oauth_org_not_allowed` under `auth` and logging in does not fix it.
-                    const paused = failed && !byLimit ? accountPauseOf(outcome.failure) : null;
-                    const bySignOut = failed && !byLimit && paused === null && outcome.failure?.kind === 'auth';
-                    // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
-                    const byOverload = failed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
-                    this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : failed ? 'failed' : outcome.stopReason === 'cancelled' || endedByStop ? 'stopped' : 'replied';
-                    // The carry-over this turn took: gone with a reply; otherwise the next prompt carries it again (Tynn story #380).
-                    if (this.#carryInFlight !== null) {
-                        const carried = this.#carryInFlight;
-                        this.#carryInFlight = null;
-                        if (this.#lastTurnEnd === 'replied') this.#options.onCarryOverSent?.();
-                        else this.#carryOver ??= carried;
-                    }
-                    this.#limitThisTurn = false;
-                    if (stoppedAtLimit && !byLimit) this.#sayStoppedAtLimit();
-                    if (byLimit) {
-                        // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
-                        // Broken; the agent waits for the limit to reset and is resumed then.
-                        this.#turnState = 'idle';
-                        this.#failure = null;
-                        this.#failedAt = null;
-                        this.#held = true;
-                        // ITS turn was cut off: at the reset it is told to continue, once (Tynn #543).
-                        this.#cutByLimit = true;
-                        void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
-                        // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
-                        if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
-                    } else if (byOverload) {
-                        const ms = OVERLOAD_RETRY_MS[this.#overloads]!;
-                        this.#overloads += 1;
-                        this.#turnState = 'idle';
-                        this.#failure = null;
-                        this.#failedAt = null;
-                        this.#held = true;
-                        void this.#emitRow({ kind: 'notice', level: 'warning', message: `The provider is overloaded (${outcome.failure?.reason ?? 'overloaded'}). Genie retries in ${Math.round(ms / 1000)} s (attempt ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}); anything you send meanwhile goes then.` });
-                        this.#overloadCancel = this.#later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
-                    } else if (paused !== null) {
-                        // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
-                        // words with what to do; main alerts once per login and `Try again` brings every agent on it back.
-                        this.#turnState = 'idle';
-                        this.#failure = null;
-                        this.#failedAt = null;
-                        this.#accountPaused = paused;
-                        void this.#emitRow({ kind: 'notice', level: 'warning', message: `Account paused: ${paused.words} (${paused.reason}). Check the subscription and its billing with the provider, then use "Try again".` });
-                    } else if (bySignOut) {
-                        // SIGNED OUT, not Broken: nothing about the agent is wrong; its provider's login is. The header and
-                        // the chat offer `Log in`, and a successful login brings it back (main/login-host.ts).
-                        this.#turnState = 'idle';
-                        this.#failure = null;
-                        this.#failedAt = null;
-                        this.#signedOut = true;
-                        void this.#emitRow({ kind: 'notice', level: 'warning', message: `Signed out: the provider refused this login (${outcome.failure?.reason ?? 'auth'}). Use "Log in" above; Genie brings this agent back once you are signed in.` });
-                    } else if (endedByStop) {
-                        // Stopped, as the person asked: idle, nothing Broken and nothing held.
-                        this.#turnState = 'idle';
-                        this.#failure = null;
-                        this.#failedAt = null;
-                    } else if (failed) {
-                        this.#turnState = 'failed';
-                        // The provider's own reason (`authentication_failed`, `overloaded`…) says more than the CLI's generic one.
-                        const reason = outcome.failure?.reason ?? outcome.raw;
-                        this.#failure = reason === null ? null : providerProblemWords(reason);
-                        this.#failedAt = this.#now();
-                    } else {
-                        this.#turnState = 'idle';
-                        this.#failure = null;
-                        this.#failedAt = null;
-                        this.#overloads = 0;
-                        // A turn that went through: whatever login it ran on is signed in, and its account is in order.
-                        this.#signedOut = false;
-                        this.#accountPaused = null;
-                    }
-                    // A STOPPED TURN SAYS SO, in the ledger and the chat: `Stopped by you`. ACP reports a cancelled turn
-                    // and nothing more, so without this row a stopped turn read exactly like one that finished — the
-                    // reply simply ending mid-way. Who stopped it is whoever asked (`cancel`), and nobody when no one
-                    // here did.
-                    const stopper = this.#stopAskedBy;
-                    const intent = this.#stopIntent;
-                    this.#stopAskedBy = null;
-                    this.#stopIntent = 'stop';
-                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once. Only the
-                    // person's STOP latches: an interrupt-and-send cancels the turn so their message runs next, and that
-                    // message is the next work, so Genie's notices are not held for them to type again (Tynn #672 part 3).
-                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you' && intent === 'stop';
-                    if (stoppedByYou) this.#stoppedByYou = true;
-                    // A turn that ends cleanly closes the interrupt; one ended by its run's own stop keeps it (Tynn #702).
-                    if (!this.#needsNewDriver) this.#interruptAsked = false;
-                    // No "Stopped" for a run an unconfirmed interrupt ended: the agent starts again at once, and says so.
-                    if (outcome.stopReason === 'cancelled' && !outcome.isError && !this.#carryQueue) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
-                    // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
-                    // never the agent's last handoff, which a session answering in chat never files.
-                    if (this.#lastTurnEnd === 'replied') void this.#emitRow({ kind: 'finished', n: Math.max(this.#marked, this.#turns) });
-                    // COOLING (COOLING_MS): only a turn that REPLIED — a failed, stopped, held or signed-out turn keeps its
-                    // own state. Started before the flush below: a prompt that waited opens a turn there, which ends it.
-                    if (this.#lastTurnEnd === 'replied') this.#startCooling();
-                    else this.#stopCooling();
-                    // A QUEUED PROMPT IS NOT ASSUMED TO BECOME A TURN (the owner, 2026-10-20: idle agents not woken by
-                    // mail). Claude Code FOLDS a prompt sent mid-turn into the running turn; opening its turn here left a
-                    // phantom one that never ended — moic `working` for 36 minutes while idle, so no inbox notice and the
-                    // owner's next message queued behind it. The agent is idle now; a turn opens when the PROVIDER starts
-                    // one (its first activity, credited to the oldest queued sender) or ends one silently (above). After a
-                    // crashed turn nothing is assumed to run: the queue is dropped and the failure stands.
-                    if (crashed) this.#queued = [];
-                    // After a stop nothing is assumed either: since prism-acp 0.37.0 Claude DROPS what it took mid-turn,
-                    // and each such prompt ends on its own after this one (`#dropped`). It used to run it after the
-                    // interrupt, and its turn was opened here.
-                    // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
-                    if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
-                    // EXCEPT after the person's own Stop (genie#1565; the owner's Codex agent, beta.58: "Stopped by you",
-                    // then at once a new turn for an inbox notice held mid-turn). Only what the PERSON queued goes on
-                    // (genie#1143: cancelling a turn preserves their queue; Claude runs theirs after the interrupt too),
-                    // and its going is them acting. Genie's notice is dropped for its book to tell once they act;
-                    // anyone else's message is left as a draft for them to send.
-                    else if (stoppedByYou) {
-                        this.#keepOnlyYours();
-                        if (this.#afterTurn.length > 0) {
-                            this.#stoppedByYou = false;
-                            if (!this.#inTurn) this.#flushAfterTurn();
-                        }
-                    }
-                    else if (!this.#inTurn) this.#flushAfterTurn();
-                    // Announced AFTER the state is set: announced before, every listener read `working` and nothing
-                    // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
-                    // Working (found in the first doctor trial, 2026-10-13).
-                    this.#changed();
+                    this.#onDriverTurnEnd(outcome);
                 },
                 onStopVerdict: (verdict) => { this.#nativeVerdict = verdict; },
                 onExit: (code, signal) => {
@@ -1790,6 +1633,19 @@ export class AgentSession {
         return null;
     }
 
+    /**
+     * A PROVIDER COMMAND FOR A CLI THAT RUNS IT FROM THE PROMPT (Claude, Tynn #702): handed over ALONE, with nothing of
+     * Genie's ahead of it, and shown as a small row. `false` = not now (a turn running, work held, still starting): the
+     * caller sends it the ordinary way.
+     */
+    promptCommand(text: string, by: string | null): boolean {
+        if (!this.#driver || !this.running) return false;
+        if (this.#inTurn || this.#held || this.#starting || this.#afterTurn.length > 0 || this.#needsNewDriver || this.#options.mayTakeWork?.() === false) return false;
+        if (by === 'you') this.resumeAfterStop();
+        this.#send(text, by, null, true, {}, true);
+        return true;
+    }
+
     /** Whether this agent's provider runs its commands as commands (`SessionDriver.runCommand`), not as prompt text. */
     get runsCommands(): boolean {
         return typeof this.#driver?.runCommand === 'function';
@@ -1820,7 +1676,8 @@ export class AgentSession {
         void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
         this.#inTurn = true;
         this.#limitThisTurn = false;
-        void this.#emitRow(promptRow(text, by, null, {}));
+        // The small row that it ran (not your message) comes once the provider ACCEPTED it; a refusal is only said (Tynn #702).
+        void accepted.then(() => { void this.#emitRow(commandRow(text)); }, () => {});
         this.#turnState = 'working';
         this.#stopCooling();
         this.#changed();
@@ -1875,31 +1732,33 @@ export class AgentSession {
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
-    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false, context: PromptContext = {}): void {
+    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false, context: PromptContext = {}, command = false): void {
         if (!this.#driver) throw new Error('session is not started');
         // The provider takes it FIRST: a prompt it refuses (Codex while a turn runs, a driver that throws) writes nothing
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
         // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
-        const carry = this.#carryOver;
-        const redockAt = this.#inTurn ? null : this.#redockAt;
+        // A PROVIDER COMMAND GOES ALONE (Tynn #702): the CLI runs /compact only at the start of the prompt, so nothing of
+        // Genie's goes ahead of it; all of it waits, still pending, for the next ordinary prompt.
+        const carry = command ? null : this.#carryOver;
+        const redockAt = this.#inTurn || command ? null : this.#redockAt;
         const redock = redockAt === null ? null : redockReorientation(redockAt);
         // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
-        const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
+        const rateWarning = this.#rateWarningPending && !command ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
         const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
-        const held = this.#inTurn ? null : this.#heldForNextWork;
+        const held = this.#inTurn || command ? null : this.#heldForNextWork;
         const heldShownAs = held === null ? null : this.#heldShownAs;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
-        this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        const turnId = this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
         if (redockAt !== null) {
             this.#redockAt = null;
             this.#options.onRedockSent?.(redockAt);
         }
-        this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
+        if (!command) this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;
@@ -1910,7 +1769,7 @@ export class AgentSession {
         }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
-        if (this.#inTurn) this.#queued.push({ by, text, sent, context });
+        if (this.#inTurn) this.#queued.push({ ...(typeof turnId === 'string' ? { turnId } : {}), by, text, sent, context });
         else {
             // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
             this.#queued = [];
@@ -1928,7 +1787,8 @@ export class AgentSession {
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
         // Instruction text is never drawn: one line says it was sent (Tynn #615).
         if (held !== null) void this.#emitRow(heldShownAs !== null ? { kind: 'notice', level: 'info', message: heldShownAs } : promptRow(held, 'genie', null, {}));
-        if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
+        if (record && command) void this.#emitRow(commandRow(text));
+        else if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
         // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
         this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
@@ -2493,6 +2353,198 @@ export class AgentSession {
         this.#options.onStateChange?.();
     }
 
+    /** A joined prompt shares its parent's result; only an outcome for a turn of its own ends a turn here. */
+    #onDriverTurnEnd(outcome: TurnOutcomeLike): void {
+        if (outcome.foldedInto !== undefined) {
+            // The driver proves the join from Claude's result list. A listener may already have started newer work
+            // while the parent ended: do not close that turn, clear its queue, repeat a failure or restart Cooling.
+            if (outcome.turnId !== undefined) this.#queued = this.#queued.filter((p) => p.turnId !== outcome.turnId);
+            return;
+        }
+        this.#turnEnded(outcome);
+    }
+
+    /** A turn ended: the driver's actual outcome, including its own stop reason and failure. */
+    #turnEnded(outcome: TurnOutcomeLike): void {
+        this.#clearCancelWait();
+        // Two turns are two replies even with nothing between them. Without this a
+        // whole conversation would accumulate into one unbounded row.
+        this.#closeMessage();
+        // An echo that never came is not still expected: a `you` row after this turn is a message, never
+        // the prompt's echo (see `#handle`).
+        this.#echo = null;
+        this.#echoSeen = '';
+
+        /*
+         * A PROMPT THE STOP DROPPED (prism-acp 0.37.0, genie#1565): Claude's interrupt sends `cancel_queued`,
+         * so a prompt it took mid-turn never runs; each ends on its own, cancelled, AFTER the stopped turn (raw
+         * `dropped by cancel`, or `cancel accounting mismatch` when the receipt could not be trusted). It was
+         * never a turn: no marker, no `stopped` row, no count. Ended while Genie holds no turn open with a
+         * prompt still waiting for one, cancelled — a prompt that did start ran as a turn and opened it.
+         */
+        if (!this.#inTurn && outcome.stopReason === 'cancelled' && !outcome.isError && this.#queued.length > 0) {
+            this.#dropped(this.#queued.shift()!);
+            this.#changed();
+            return;
+        }
+
+        // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
+        // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
+        // turn, and it opens nothing, as before.
+        if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
+
+        this.#turns += 1;
+        this.#endedThisRun += 1;
+        this.#inTurn = false;
+        // Arm before queued mail is flushed. This never sends input or starts a turn by itself.
+        this.#rateWarningPending = rateLimitWarning(this.#latestHeadroom, this.#now()) !== null;
+
+        // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
+        // idle would present a crashed turn as a completed one, which is the
+        // quietest way to lose work: the agent stops, the board says nothing is
+        // wrong, and nobody looks.
+        //
+        // A CANCELLED turn is the exception and is idle: cancelling is something
+        // the human did, and painting it as a fault blames the agent for being
+        // stopped.
+        const crashed = outcome.stopReason === null || outcome.isError;
+        // ENDED BY A STOP (Tynn #556): the person's Stop, the driver ending its CLI after one it could not confirm,
+        // or this run's own stop. Whatever the dying CLI reported, that is not a limit, a sign-out or a fault.
+        const endedByStop = crashed && (this.#stopWindow || this.#needsNewDriver || this.#ended);
+        const failed = crashed && !endedByStop;
+        // Ended by the limit: a reading said so during the turn, or the turn's own failure does (Tynn #791).
+        const readingSaidSo = this.#limitThisTurn;
+        const stoppedAtLimit = readingSaidSo && this.#stopWindow;
+        const byLimit = failed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
+        // Ended by the LOGIN (the owner, 2026-10-18): the provider says this account is not signed in.
+        // Ended by the ACCOUNT (the owner, 2026-10-21: a payment failure paused it): checked before the login,
+        // because prism-acp files `oauth_org_not_allowed` under `auth` and logging in does not fix it.
+        const paused = failed && !byLimit ? accountPauseOf(outcome.failure) : null;
+        const bySignOut = failed && !byLimit && paused === null && outcome.failure?.kind === 'auth';
+        // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
+        const byOverload = failed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
+        this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : failed ? 'failed' : outcome.stopReason === 'cancelled' || endedByStop ? 'stopped' : 'replied';
+        // The carry-over this turn took: gone with a reply; otherwise the next prompt carries it again (Tynn story #380).
+        if (this.#carryInFlight !== null) {
+            const carried = this.#carryInFlight;
+            this.#carryInFlight = null;
+            if (this.#lastTurnEnd === 'replied') this.#options.onCarryOverSent?.();
+            else this.#carryOver ??= carried;
+        }
+        this.#limitThisTurn = false;
+        if (stoppedAtLimit && !byLimit) this.#sayStoppedAtLimit();
+        if (byLimit) {
+            // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
+            // Broken; the agent waits for the limit to reset and is resumed then.
+            this.#turnState = 'idle';
+            this.#failure = null;
+            this.#failedAt = null;
+            this.#held = true;
+            // ITS turn was cut off: at the reset it is told to continue, once (Tynn #543).
+            this.#cutByLimit = true;
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
+            // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
+            if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
+        } else if (byOverload) {
+            const ms = OVERLOAD_RETRY_MS[this.#overloads]!;
+            this.#overloads += 1;
+            this.#turnState = 'idle';
+            this.#failure = null;
+            this.#failedAt = null;
+            this.#held = true;
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The provider is overloaded (${outcome.failure?.reason ?? 'overloaded'}). Genie retries in ${Math.round(ms / 1000)} s (attempt ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}); anything you send meanwhile goes then.` });
+            this.#overloadCancel = this.#later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
+        } else if (paused !== null) {
+            // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
+            // words with what to do; main alerts once per login and `Try again` brings every agent on it back.
+            this.#turnState = 'idle';
+            this.#failure = null;
+            this.#failedAt = null;
+            this.#accountPaused = paused;
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `Account paused: ${paused.words} (${paused.reason}). Check the subscription and its billing with the provider, then use "Try again".` });
+        } else if (bySignOut) {
+            // SIGNED OUT, not Broken: nothing about the agent is wrong; its provider's login is. The header and
+            // the chat offer `Log in`, and a successful login brings it back (main/login-host.ts).
+            this.#turnState = 'idle';
+            this.#failure = null;
+            this.#failedAt = null;
+            this.#signedOut = true;
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `Signed out: the provider refused this login (${outcome.failure?.reason ?? 'auth'}). Use "Log in" above; Genie brings this agent back once you are signed in.` });
+        } else if (endedByStop) {
+            // Stopped, as the person asked: idle, nothing Broken and nothing held.
+            this.#turnState = 'idle';
+            this.#failure = null;
+            this.#failedAt = null;
+        } else if (failed) {
+            this.#turnState = 'failed';
+            // The provider's own reason (`authentication_failed`, `overloaded`…) says more than the CLI's generic one.
+            const reason = outcome.failure?.reason ?? outcome.raw;
+            this.#failure = reason === null ? null : providerProblemWords(reason);
+            this.#failedAt = this.#now();
+        } else {
+            this.#turnState = 'idle';
+            this.#failure = null;
+            this.#failedAt = null;
+            this.#overloads = 0;
+            // A turn that went through: whatever login it ran on is signed in, and its account is in order.
+            this.#signedOut = false;
+            this.#accountPaused = null;
+        }
+        // A STOPPED TURN SAYS SO, in the ledger and the chat: `Stopped by you`. ACP reports a cancelled turn
+        // and nothing more, so without this row a stopped turn read exactly like one that finished — the
+        // reply simply ending mid-way. Who stopped it is whoever asked (`cancel`), and nobody when no one
+        // here did.
+        const stopper = this.#stopAskedBy;
+        const intent = this.#stopIntent;
+        this.#stopAskedBy = null;
+        this.#stopIntent = 'stop';
+        // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once. Only the
+        // person's STOP latches: an interrupt-and-send cancels the turn so their message runs next, and that
+        // message is the next work, so Genie's notices are not held for them to type again (Tynn #672 part 3).
+        const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you' && intent === 'stop';
+        if (stoppedByYou) this.#stoppedByYou = true;
+        // A turn that ends cleanly closes the interrupt; one ended by its run's own stop keeps it (Tynn #702).
+        if (!this.#needsNewDriver) this.#interruptAsked = false;
+        // No "Stopped" for a run an unconfirmed interrupt ended: the agent starts again at once, and says so.
+        if (outcome.stopReason === 'cancelled' && !outcome.isError && !this.#carryQueue) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
+        // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
+        // never the agent's last handoff, which a session answering in chat never files.
+        if (this.#lastTurnEnd === 'replied') void this.#emitRow({ kind: 'finished', n: Math.max(this.#marked, this.#turns) });
+        // COOLING (COOLING_MS): only a turn that REPLIED — a failed, stopped, held or signed-out turn keeps its
+        // own state. Started before the flush below: a prompt that waited opens a turn there, which ends it.
+        if (this.#lastTurnEnd === 'replied') this.#startCooling();
+        else this.#stopCooling();
+        // A QUEUED PROMPT IS NOT ASSUMED TO BECOME A TURN (the owner, 2026-10-20: idle agents not woken by
+        // mail). Claude Code FOLDS a prompt sent mid-turn into the running turn; opening its turn here left a
+        // phantom one that never ended — moic `working` for 36 minutes while idle, so no inbox notice and the
+        // owner's next message queued behind it. The agent is idle now; a turn opens when the PROVIDER starts
+        // one (its first activity, credited to the oldest queued sender) or ends one silently (above). After a
+        // crashed turn nothing is assumed to run: the queue is dropped and the failure stands.
+        if (crashed) this.#queued = [];
+        // After a stop nothing is assumed either: since prism-acp 0.37.0 Claude DROPS what it took mid-turn,
+        // and each such prompt ends on its own after this one (`#dropped`). It used to run it after the
+        // interrupt, and its turn was opened here.
+        // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
+        if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
+        // EXCEPT after the person's own Stop (genie#1565; the owner's Codex agent, beta.58: "Stopped by you",
+        // then at once a new turn for an inbox notice held mid-turn). Only what the PERSON queued goes on
+        // (genie#1143: cancelling a turn preserves their queue; Claude runs theirs after the interrupt too),
+        // and its going is them acting. Genie's notice is dropped for its book to tell once they act;
+        // anyone else's message is left as a draft for them to send.
+        else if (stoppedByYou) {
+            this.#keepOnlyYours();
+            if (this.#afterTurn.length > 0) {
+                this.#stoppedByYou = false;
+                if (!this.#inTurn) this.#flushAfterTurn();
+            }
+        }
+        else if (!this.#inTurn) this.#flushAfterTurn();
+        // Announced AFTER the state is set: announced before, every listener read `working` and nothing
+        // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
+        // Working (found in the first doctor trial, 2026-10-13).
+        this.#changed();
+    }
+
     async #ingest(update: Record<string, unknown>): Promise<void> {
         /*
          * Checked BEFORE the early return below, and that ordering is the whole thing.
@@ -2758,6 +2810,8 @@ export interface PromptContext {
  * A prompt's own message row: yours (`you`, or nobody said), or the sender's as a peer — with its files, and, for a
  * Genie notice, the mail it told about. Absent fields are left off, never written empty.
  */
+/** prism-acp's `META_USAGE`: a Claude `result` frame's usage, `scope: 'turn'` (a Codex reading is the THREAD's, mid-turn). */
+const USAGE_META = 'particle.academy/usage';
 /**
  * A REPLAYED UPDATE (genie#1249), by prism-acp's mark (`REPLAY_META`): `null` when the update is not history. `summary` is
  * the one sentence Genie says for the whole replay, from the summary notice that ends it (`REPLAY_SUMMARY_META`); every
@@ -2772,6 +2826,11 @@ function replayOf(update: Record<string, unknown>): { summary: string | null } |
     const count = (n: unknown, one: string) => `${typeof n === 'number' ? n : '?'} ${one}${n === 1 ? '' : 's'}`;
     const ended = complete === false ? '; it stopped before the end' : '';
     return { summary: `Resumed the thread: the provider replayed ${count(turns, 'turn')} (${count(items, 'item')}) of its history${ended}; not recorded again (already in this history).` };
+}
+
+/** The small row that a provider command ran (Tynn #702): a notice, not a message of yours. */
+function commandRow(text: string): StreamEvent {
+    return { kind: 'notice', level: 'info', message: `Ran ${text.trim()}` };
 }
 
 function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext, kept: readonly AttachmentRef[] = []): StreamEvent {

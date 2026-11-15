@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseRoute } from '../src/core/route.js';
-import { approvalFor, approvalMatches, formatBytes, isArtifactName, parseWorktreeList, type StorageReport, type StorageView } from '../src/core/workspace-storage.js';
+import { approvalFor, approvalMatches, formatBytes, isArtifactName, isArtifactPath, isLineBranch, mergedIntoLine, parseWorktreeList, suggestedCleanup, worktreeState, type StorageReport, type StorageView } from '../src/core/workspace-storage.js';
 import { tabStrip } from '../src/core/workspace-tabs.js';
 import { StoragePanel } from '../src/renderer/components/StoragePanel.js';
 import type { FeatureAction } from '../src/renderer/features.js';
@@ -23,9 +23,11 @@ const report: StorageReport = {
     reclaimableBytes: 1_001_500,
     items: [
         { id: 'repos:repos/app', category: 'repos', label: 'repos/app', rel: 'repos/app', bytes: 5_000_000, files: 10, truncated: false, reclaimable: false, refusal: null },
-        { id: 'worktrees:wt/clean', category: 'worktrees', label: 'wt/clean (wt-clean)', rel: 'wt/clean', bytes: 1_000_000, files: 3, truncated: false, reclaimable: true, refusal: null },
-        { id: 'worktrees:wt/dirty', category: 'worktrees', label: 'wt/dirty (wt-dirty)', rel: 'wt/dirty', bytes: 1_000_000, files: 3, truncated: false, reclaimable: false, refusal: 'It has uncommitted changes.' },
-        { id: 'ci-artifacts:repos/app/ci-out', category: 'ci-artifacts', label: 'repos/app/ci-out', rel: 'repos/app/ci-out', bytes: 1500, files: 1, truncated: false, reclaimable: true, refusal: null },
+        { id: 'worktrees:wt/clean', category: 'worktrees', label: 'wt/clean (wt-clean)', rel: 'wt/clean', bytes: 1_000_000, files: 3, truncated: false, reclaimable: true, refusal: null, state: 'merged', newest: 1_762_000_000_000 },
+        { id: 'worktrees:wt/dirty', category: 'worktrees', label: 'wt/dirty (wt-dirty)', rel: 'wt/dirty', bytes: 1_000_000, files: 3, truncated: false, reclaimable: false, refusal: 'It has uncommitted changes.', state: 'dirty', newest: 1_762_000_000_000 },
+        { id: 'worktrees:/elsewhere/wt-agent', category: 'worktrees', label: '/elsewhere/wt-agent (wt-agent)', rel: '/elsewhere/wt-agent', bytes: 2_000_000, files: 3, truncated: false, reclaimable: true, refusal: null, state: 'unmerged', external: true, newest: 1_762_000_000_000 },
+        { id: 'ci-artifacts:repos/app/ci-out', category: 'ci-artifacts', label: 'repos/app/ci-out', rel: 'repos/app/ci-out', bytes: 1500, files: 1, truncated: false, reclaimable: true, refusal: null, newest: 1_762_000_000_000 },
+        { id: 'ci-artifacts:repos/app/coverage', category: 'ci-artifacts', label: 'repos/app/coverage', rel: 'repos/app/coverage', bytes: 500, files: 1, truncated: false, reclaimable: true, refusal: null, newest: 1_762_172_740_000 },
     ],
     trash: [
         { id: 'genie-1-abc', origin: { kind: 'path', category: 'ci-artifacts', rel: 'repos/app/coverage' }, movedAt: 1_762_000_000_000, bytes: 2_097_152 },
@@ -89,7 +91,84 @@ describe('the pure pieces', () => {
     });
 });
 
+describe('worktree states and the clean-up suggestion (pure)', () => {
+    it('the line: default branches, release/*, next/<name>; a story branch next/<number>-… is NOT a line', () => {
+        for (const n of ['main', 'master', 'develop', 'release/1.2', 'next/host-split-tms']) expect(isLineBranch(n), n).toBe(true);
+        for (const n of ['next/697-workspace-storage', 'feature/x', 'wt-clean', 'next', 'next/a/b']) expect(isLineBranch(n), n).toBe(false);
+    });
+
+    it('merged = some remote branch that has the commit is a line branch (its own pushed branch does not count; origin/HEAD does not)', () => {
+        expect(mergedIntoLine(['refs/remotes/origin/main', 'refs/remotes/origin/wt-x'])).toBe(true);
+        expect(mergedIntoLine(['refs/remotes/origin/next/697-workspace-storage'])).toBe(false);
+        expect(mergedIntoLine(['refs/remotes/origin/HEAD'])).toBe(false);
+        expect(mergedIntoLine([])).toBe(false);
+    });
+
+    it('states: dirty beats everything, then unknown, unpushed, locked; clean is merged or unmerged', () => {
+        const base = { locked: false, dirty: false, unpushed: 0, merged: true };
+        expect(worktreeState(base)).toBe('merged');
+        expect(worktreeState({ ...base, merged: false })).toBe('unmerged');
+        expect(worktreeState({ ...base, dirty: true, unpushed: 3 })).toBe('dirty');
+        expect(worktreeState({ ...base, unpushed: 2 })).toBe('unpushed');
+        expect(worktreeState({ ...base, unpushed: null })).toBe('unknown');
+        expect(worktreeState({ ...base, locked: true })).toBe('locked');
+    });
+
+    it('queue items are artifacts by where they are; a file of the same name elsewhere is not', () => {
+        expect(isArtifactPath('.ai/sandbox/azure/queue/1114-130339-556f66')).toBe(true);
+        expect(isArtifactPath('x/.ai/sandbox/azure/queue/item')).toBe(true);
+        expect(isArtifactPath('.ai/sandbox/azure/queue')).toBe(false);
+        expect(isArtifactPath('.ai/sandbox/azure/queue/a/b')).toBe(false);
+        expect(isArtifactPath('repos/app/ci-out')).toBe(true);
+        expect(isArtifactPath('repos/app/src')).toBe(false);
+    });
+
+    it('the suggestion: merged quiet worktrees and stale test results ONLY', () => {
+        const now = 1_762_000_000_000 + 2 * 24 * 60 * 60 * 1000;
+        expect(suggestedCleanup(report.items, now).sort()).toEqual(['ci-artifacts:repos/app/ci-out', 'worktrees:wt/clean']);
+        // the unmerged external one, the dirty one and the repo are never in it
+        expect(suggestedCleanup(report.items, now)).not.toContain('worktrees:/elsewhere/wt-agent');
+        // a result touched a minute ago is not stale; a merged worktree touched a minute ago may be in use
+        expect(suggestedCleanup(report.items, now)).not.toContain('ci-artifacts:repos/app/coverage');
+        const justNow = report.items.map((i) => (i.id === 'worktrees:wt/clean' ? { ...i, newest: now - 60_000 } : i));
+        expect(suggestedCleanup(justNow, now)).not.toContain('worktrees:wt/clean');
+    });
+});
+
 describe('the Storage tab', () => {
+    it('a worktree row shows its state in words, and that it is outside this workspace', () => {
+        draw(view());
+        expect(q('[data-storage-item="worktrees:wt/clean"] [data-worktree-state="merged"]')?.textContent).toBe('Clean, merged');
+        expect(q('[data-storage-item="worktrees:wt/dirty"] [data-worktree-state="dirty"]')?.textContent).toBe('Uncommitted changes');
+        expect(q('[data-storage-item="worktrees:/elsewhere/wt-agent"] [data-worktree-state="unmerged"]')?.textContent).toContain('outside this workspace');
+    });
+
+    it('Clean up: names exactly the suggested items and their size first; Cancel sends nothing; confirm sends those ids only', () => {
+        const stale = { ...report, measuredAt: 1_762_000_000_000 + 2 * 24 * 60 * 60 * 1000 };
+        draw(view({ report: stale }));
+        const open = q('[data-action="storage-cleanup"]');
+        expect(open?.querySelector('[data-react-fancy-icon]')).not.toBeNull();
+        expect(open?.textContent).toContain('Clean up merged worktrees and old test results');
+        click(open);
+        const confirm = q('[data-storage-confirm-cleanup]');
+        expect(confirm?.textContent).toContain('wt/clean');
+        expect(confirm?.textContent).toContain('repos/app/ci-out');
+        expect(confirm?.textContent).not.toContain('wt-agent');
+        expect(confirm?.textContent).not.toContain('wt/dirty');
+        expect(confirm?.textContent).toContain('Nothing is deleted until you empty the trash');
+        click(q('[data-action="storage-cleanup-cancel"]'));
+        expect(actions.some((a) => a.kind === 'storage.cleanUp')).toBe(false);
+        click(q('[data-action="storage-cleanup"]'));
+        click(q('[data-action="storage-cleanup-confirm"]'));
+        expect(actions.at(-1)).toEqual({ kind: 'storage.cleanUp', workspaceId: 'ws1', itemIds: ['worktrees:wt/clean', 'ci-artifacts:repos/app/ci-out'] });
+    });
+
+    it('CONTROL: nothing suggested (everything recent) offers no Clean up', () => {
+        draw(view({ report: { ...report, measuredAt: 1_762_000_000_000 } }));
+        expect(q('[data-action="storage-cleanup"]')).toBeNull();
+    });
+
+
     it('never measured: asks main to measure, once, and says it is measuring', () => {
         draw(null);
         expect(actions).toEqual([{ kind: 'storage.measure', workspaceId: 'ws1' }]);

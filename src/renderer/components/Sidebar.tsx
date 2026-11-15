@@ -2,9 +2,13 @@ import { Button, Icon, Sidebar as FancySidebar, type SidebarDotColor } from '@pa
 import { countRender } from '../render-count.js';
 import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
+import { dashboardRows, shownState, statusOf, type AgentRow } from '../../core/dashboard-view.js';
+import { useDashboardFilter, type DashboardFilter } from '../dashboard-filter.js';
 import { deckBadge, filterRail, type RailItem, type RailSurface } from '../../core/rail-view.js';
 import { folderName } from '../../core/workspace-name.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
+import { agentStatusStyle } from '../agent-status-color.js';
+import { ProviderLogo } from './ProviderLogo.js';
 
 export type { RailSurface };
 
@@ -88,6 +92,18 @@ export interface SidebarProps {
      * naming the device and the date (core/device-expiry.ts `deviceExpiryAlert`). Absent or `null` = no mark.
      */
     settingsAlert?: { readonly label: string } | null | undefined;
+    /**
+     * THE AGENT LIST (Tynn #687; the owner, 2026-11-13: "I need a way to quickly select agents without switching
+     * workspaces"): the roster the rail's Agents view lists — only agents of a workspace on the rail that is awake are
+     * drawn (a hibernated workspace's agents are ghosts). Absent = no Agents view, and no toggle for one.
+     */
+    agents?: readonly AgentRow[] | undefined;
+    /** An agent row's click: that agent's chat, beside whatever is on screen — the Dashboard's row click (genie#1209). */
+    onChatAgent?: ((agentId: string) => void) | undefined;
+    /** An agent row's terminal button (Tynn #733): that agent's terminal in a NEW window, never a navigation. Absent = the button is disabled. */
+    onOpenAgentTerminal?: ((agentId: string) => void) | undefined;
+    /** An agent row's folder button (Tynn #733): that workspace's Files in a NEW window, never a navigation. Absent = the button is disabled. */
+    onOpenWorkspaceFiles?: ((workspaceId: string) => void) | undefined;
 }
 
 
@@ -203,11 +219,112 @@ function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
 /** Where the rail remembers whether hibernated workspaces are shown — this device's preference, not the host's. */
 const SHOW_ASLEEP_KEY = 'genie.rail.showHibernated';
 
+/** Where the rail remembers which list it shows, Workspaces or Agents (Tynn #687) — beside its collapsed state. */
+const VIEW_KEY = 'genie.rail.view';
+type RailView = 'workspaces' | 'agents';
+const VIEW_LABEL: Record<RailView, string> = { workspaces: 'Workspaces', agents: 'Agents' };
+
+/**
+ * The agents the Agents view lists: those of an awake workspace on the rail, through the DASHBOARD'S Sleeping / Stopped
+ * filter (Tynn #733; `show` is its state, shared in renderer/dashboard-filter.ts), then narrowed by the typed text, by
+ * name (the Dashboard's order).
+ */
+export function railAgents(agents: readonly AgentRow[], workspaces: readonly RailItem[], query = '', show: DashboardFilter = { sleeping: true, stopped: true }): AgentRow[] {
+    const awake = new Set(workspaces.filter((w) => w.asleep !== true).map((w) => w.id));
+    const q = query.trim().toLowerCase();
+    return dashboardRows(agents.filter((a) => awake.has(a.workspaceId) && (q === '' || a.name.toLowerCase().includes(q))), show) as AgentRow[];
+}
+
+/**
+ * ONE AGENT IN THE RAIL (Tynn #687): the same row style as a workspace's, its own content — the provider's logo, the name,
+ * a status dot in the Dashboard's colours with no word (the status is its accessible name and tooltip), the shells it has
+ * running, and two icon buttons beside the row: open its workspace, its settings. None of the workspace row's controls.
+ * A click opens its chat; the page on screen stays.
+ */
+function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigate, onOpenTerminal, onOpenFiles }: {
+    agent: AgentRow;
+    workspaceName: string;
+    active: boolean;
+    compact: boolean;
+    onChat: (agentId: string) => void;
+    onNavigate: (route: string) => void;
+    onOpenTerminal: ((agentId: string) => void) | undefined;
+    onOpenFiles: ((workspaceId: string) => void) | undefined;
+}) {
+    const state = shownState(agent);
+    const word = statusOf(agent).word;
+    // Shells and tasks still running (core/agent-shells.ts `count`); `null` = never reported, which draws nothing.
+    const shells = typeof agent.background === 'number' ? agent.background : null;
+    const dot = (
+        <span data-agent-status={state} role="img" aria-label={word} title={word} style={agentStatusStyle(state)}
+            className={`size-2 shrink-0 rounded-full bg-[var(--agent-status)]${compact ? ' absolute -right-0.5 -top-0.5' : ''}`} />
+    );
+    if (compact) {
+        return (
+            <FancySidebar.Item
+                data-rail-agent={agent.id}
+                active={active}
+                onClick={() => onChat(agent.id)}
+                aria-label={`${agent.name} · ${word}`}
+                icon={<span className="relative inline-flex"><ProviderLogo provider={agent.provider} />{dot}</span>}
+                className={RAIL_ITEM_COMPACT}
+            >
+                {agent.name}
+            </FancySidebar.Item>
+        );
+    }
+    const shellsTitle = shells === null ? '' : `${shells} shell${shells === 1 ? '' : 's'} running`;
+    const workspaceLabel = `Open ${workspaceName} Files in a new window`;
+    const terminalLabel = `Open ${agent.name}’s terminal in a new window`;
+    const settingsLabel = `${agent.name} settings`;
+    return (
+        <div data-rail-agent-unit="" className="relative">
+            <FancySidebar.Item
+                data-rail-agent={agent.id}
+                active={active}
+                onClick={() => onChat(agent.id)}
+                icon={<ProviderLogo provider={agent.provider} />}
+                badge={
+                    <span className="flex shrink-0 items-center gap-1.5">
+                        {dot}
+                        {shells !== null ? (
+                            <span data-agent-shells={shells} title={shellsTitle} className="flex items-center gap-0.5 font-mono text-[11px] tabular-nums text-[var(--fg-4)]">
+                                <Icon name="square-terminal" size="xs" />
+                                {shells}
+                            </span>
+                        ) : null}
+                        {/* Room for the two buttons, which sit OVER this end of the item (below). */}
+                        <span aria-hidden="true" className="w-[58px]" />
+                    </span>
+                }
+                className={RAIL_ITEM}
+            >
+                <span title={`${agent.name} · ${workspaceName}`} className="truncate">{agent.name}</span>
+            </FancySidebar.Item>
+            {/* REAL buttons beside the row, never nested in its button (the workspace row's runtime pill does the same). */}
+            <span className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
+                <Button type="button" variant="ghost" size="xs" data-agent-open-terminal={agent.id} aria-label={terminalLabel} title={terminalLabel}
+                    disabled={!onOpenTerminal} onClick={() => onOpenTerminal?.(agent.id)} className="size-4 p-0 text-[var(--fg-3)]">
+                    <Icon name="square-terminal" size="xs" />
+                </Button>
+                <Button type="button" variant="ghost" size="xs" data-agent-open-workspace={agent.workspaceId} aria-label={workspaceLabel} title={workspaceLabel}
+                    disabled={!onOpenFiles} onClick={() => onOpenFiles?.(agent.workspaceId)} className="size-4 p-0 text-[var(--fg-3)]">
+                    <Icon name="folder-open" size="xs" />
+                </Button>
+                <Button type="button" variant="ghost" size="xs" data-agent-settings={agent.id} aria-label={settingsLabel} title={settingsLabel}
+                    onClick={() => onNavigate(`genie://agent/${agent.id}?tab=settings`)} className="size-4 p-0 text-[var(--fg-3)]">
+                    <Icon name="settings" size="xs" />
+                </Button>
+            </span>
+        </div>
+    );
+}
+
 function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
+export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null, agents, onChatAgent, onOpenAgentTerminal, onOpenWorkspaceFiles }: SidebarProps) {
     countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
@@ -217,6 +334,16 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
         setCollapsed(next);
         try { storage?.setItem(COLLAPSED_KEY, next ? '1' : '0'); } catch { /* a preference that cannot be saved still applies now */ }
     };
+    // WORKSPACES OR AGENTS (Tynn #687): which list the rail shows; remembered on this device like the collapsed state.
+    const [view, setViewState] = useState<RailView>(() => { try { return storage?.getItem(VIEW_KEY) === 'agents' ? 'agents' : 'workspaces'; } catch { return 'workspaces'; } });
+    const setView = (next: RailView): void => {
+        setViewState(next);
+        // One filter box, two lists: a workspace's name typed into it does not carry over to the agents.
+        setQuery('');
+        try { storage?.setItem(VIEW_KEY, next); } catch { /* a preference that cannot be saved still applies now */ }
+    };
+    const canListAgents = has('workspace') && agents !== undefined;
+    const agentView = canListAgents && view === 'agents';
     // THE FILTER (Genie 1's "Search workspaces…", Tynn #282): narrows the workspace rows by name or path.
     const [query, setQuery] = useState('');
     // Hibernated workspaces are hidden by default; the one being looked at is never hidden from under the reader.
@@ -233,18 +360,43 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
     const shown = filterRail(workspaces.filter((w) => showAsleep || w.asleep !== true).map((workspace) => workspace.asleep
         ? { id: workspace.id, path: workspace.path, ...(workspace.name ? { name: workspace.name } : {}), asleep: true, count: null, alert: null }
         : workspace), collapsed ? '' : query);
+    // THE DASHBOARD'S FILTER (Tynn #733): one state, read here and on the Dashboard; the typed text narrows within it.
+    const { filter: dashboardFilter } = useDashboardFilter();
+    const listed = agentView ? railAgents(agents ?? [], workspaces, collapsed ? '' : query, dashboardFilter) : [];
+    const workspaceNameOf = (id: string): string => {
+        const w = workspaces.find((x) => x.id === id);
+        return w ? w.name ?? folderName(w.path) : id;
+    };
+    // Without the window's chat pick (a remote window, a test), a row opens the agent's page — as the Dashboard's does.
+    const chatAgent = onChatAgent ?? ((agentId: string) => onNavigate(`genie://agent/${agentId}`));
+    const agentRows = (compact: boolean) => listed.map((a) => (
+        <AgentRailRow key={a.id} agent={a} workspaceName={workspaceNameOf(a.workspaceId)} active={current === `genie://agent/${a.id}`} compact={compact}
+            onChat={chatAgent} onNavigate={onNavigate} onOpenTerminal={onOpenAgentTerminal} onOpenFiles={onOpenWorkspaceFiles} />
+    ));
+    // THE TOGGLE (Tynn #687): two icons, no words — each named by its tooltip and accessible name.
+    const viewToggle = canListAgents ? (
+        <span data-rail-view-toggle="" role="group" aria-label="Sidebar list" className={`flex items-center gap-0.5${collapsed ? ' flex-col' : ''}`}>
+            {(['workspaces', 'agents'] as const).map((v) => (
+                <Button key={v} variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-view={v} aria-label={VIEW_LABEL[v]} title={VIEW_LABEL[v]} aria-pressed={view === v} onClick={() => setView(v)}
+                    className={`${ICON_BUTTON}${view === v ? ' bg-[var(--bg-2)] text-[var(--fg-1)]' : ''}`}>
+                    {v === 'agents' ? <Icon name="bot" size="sm" /> : <Icon name="folder" size="sm" />}
+                </Button>
+            ))}
+        </span>
+    ) : null;
     const openWorkspace = (workspace: RailItem): void => {
         if (workspace.asleep) onWakeWorkspace?.(workspace.id);
         else onNavigate(`genie://workspace/${workspace.id}`);
     };
     const asleepLabel = `${showAsleep ? 'Hide' : 'Show'} ${asleepCount} hibernated workspace${asleepCount === 1 ? '' : 's'}`;
     // THE HIBERNATED TOOL (Tynn #282): an eye, no words — its count and action are its name and tooltip.
-    const asleepTool = asleepCount > 0 ? (
+    // The workspace list's own tools are not the agent list's (the owner: "The workspace UI and buttons are not carried over").
+    const asleepTool = asleepCount > 0 && !agentView ? (
         <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="hibernated" data-toggle-asleep={showAsleep ? 'hide' : 'show'} aria-label={asleepLabel} title={asleepLabel} aria-pressed={showAsleep} onClick={toggleAsleep} className={ICON_BUTTON}>
             <Icon name={showAsleep ? 'eye' : 'eye-off'} size="sm" />
         </Button>
     ) : null;
-    const addTool = onAddWorkspace ? (
+    const addTool = onAddWorkspace && !agentView ? (
         <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="add-workspace" aria-label="Add workspace" title="Add workspace" onClick={() => onAddWorkspace()} className={ICON_BUTTON}>
             <Icon name="plus" size="sm" />
         </Button>
@@ -258,10 +410,11 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
 
     if (collapsed) {
         return (
-            <div data-rail="collapsed" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
+            <div data-rail="collapsed" className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
                 <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="expand" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => setRail(false)} className={ICON_BUTTON}>
                     <Icon name="panel-left-open" size="sm" />
                 </Button>
+                {viewToggle}
                 <FancySidebar embedded collapsed collapseMode="icons" navLabel="Genie" keyboardNav className="w-full items-center gap-1">
                 {has('deck') ? (
                     <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} compact {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
@@ -276,7 +429,8 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                     <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label, dotTooltip: true } : {})} />
                 ) : null}
                 {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
-                {(has('workspace') ? shown : []).map((w) => {
+                {agentView ? agentRows(true) : null}
+                {(has('workspace') && !agentView ? shown : []).map((w) => {
                     const route_ = `genie://workspace/${w.id}`;
                     const active = current === route_ || w.id === currentWorkspaceId;
                     const name = w.name ?? folderName(w.path);
@@ -320,7 +474,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
     return (
         <div
             data-rail="expanded"
-            className="flex w-52 shrink-0 flex-col gap-2 border-r border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-2.5"
+            className="flex min-h-0 w-52 shrink-0 flex-col gap-2 border-r border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-2.5"
         >
             {/* THE TOOLS, all at the top (Genie 1's rail header; the owner, 2026-10-19: "Move these icons to the top"): collapse,
                 System, hibernated workspaces and add. */}
@@ -329,6 +483,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                     <Icon name="panel-left" size="sm" />
                 </Button>
                 {systemTool}
+                {viewToggle}
                 {has('workspace') ? (
                     <span className="ml-auto flex items-center gap-0.5">
                         {asleepTool}
@@ -336,7 +491,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                     </span>
                 ) : null}
             </div>
-            <FancySidebar embedded navLabel="Genie" keyboardNav className="gap-0.5">
+            <FancySidebar embedded navLabel="Genie" keyboardNav className="shrink-0 gap-0.5">
             {has('deck') ? (
                 <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})}>
                 {/*
@@ -406,14 +561,23 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                         data-rail-filter=""
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Filter workspaces…"
-                        aria-label="Filter workspaces"
+                        placeholder={agentView ? 'Filter agents…' : 'Filter workspaces…'}
+                        aria-label={agentView ? 'Filter agents' : 'Filter workspaces'}
                         className="mx-1 rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-[12px] text-[var(--fg-1)] placeholder:text-[var(--fg-4)] focus:border-[var(--accent)] focus:outline-none"
                     />
                 </>
             ) : null}
+            </FancySidebar>
 
-            {(has('workspace') ? shown : []).map((w) => {
+            {/*
+             * THE LIST SCROLLS ON ITS OWN (Tynn #733): the rows above and the filter stay put, and the agents (or workspaces)
+             * below them are reached with a visible scroll bar — min-h-0 lets the flex column shrink the list instead of
+             * pushing the last rows off the window.
+             */}
+            <div data-rail-list="" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <FancySidebar embedded navLabel={agentView ? 'Agents' : 'Workspaces'} keyboardNav className="shrink-0 gap-0.5">
+            {agentView ? agentRows(false) : null}
+            {(has('workspace') && !agentView ? shown : []).map((w) => {
                 const route_ = `genie://workspace/${w.id}`;
                 const active = route.split('?')[0] === route_ || w.id === currentWorkspaceId;
                 const pulsed = pulsing?.has(w.id) === true;
@@ -488,6 +652,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                 );
             })}
             </FancySidebar>
+            </div>
         </div>
     );
 }

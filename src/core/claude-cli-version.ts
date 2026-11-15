@@ -13,7 +13,7 @@ export const CLAUDE_CLI_MINIMUM = '2.1.295';
 
 export const CLAUDE_CLI_TOO_OLD =
     `Claude Code did not report version ${CLAUDE_CLI_MINIMUM} or later, which Genie needs to ask before this agent's shell ` +
-    `commands. Update Claude Code to ${CLAUDE_CLI_MINIMUM} or later (run \`claude update\`), then restart this agent.`;
+    `commands. Update Claude Code to ${CLAUDE_CLI_MINIMUM} or later (Settings, Toolchain, Agent CLIs, Update), then restart this agent.`;
 
 /** prism-acp 0.30.0's refusal of a Claude Code whose `initialize` version is older than 2.1.295 or missing. */
 const VERSION_REFUSAL = /permission prompts require an initialize version of 2\.1\.295 or later/i;

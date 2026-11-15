@@ -131,6 +131,9 @@ export const ENGINE_METHODS = [
     'engine.updater',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
+    'engine.features',
+    'engine.featureQuestion',
+    'client.featureEffect',
     'engine.processes',
     // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
     // Their state is sent as `plugins.event` before `engine.ready` and again on every change.

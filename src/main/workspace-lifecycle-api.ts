@@ -6,6 +6,7 @@ import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { parseTynnProjectInput } from '../core/tynn.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
+import { nodeAgentConfigFs } from './agent-config-host.js';
 import type { AgentEngine } from './agent-engine.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
@@ -119,6 +120,8 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
         agentsOf: (id) => w.registry()?.agentsOf(id) ?? [],
         listDirs: async (dir) => (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name),
         readText: async (path) => { try { return await readFile(path, 'utf8'); } catch { return null; } },
+        // The one write: the move of old AGENT.md front matter into project.json (Tynn #694), temp + rename.
+        writeTextAtomic: nodeAgentConfigFs().writeTextAtomic,
         register: async (input) => { const record = await registry().register(input); return { id: record.id, name: record.name }; },
         sacredName: async (workspaceId) => {
             const folder = w.registry()?.workspace(workspaceId)?.path;
