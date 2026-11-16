@@ -68,8 +68,9 @@ describe('the protocol', () => {
         expect(await api.invoke('workspaces.save', ['acme', {}])).toMatchObject({ ok: false, written: [] });
     });
 
-    it('the lifecycle wiring in genie-host and in the window carries them', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts', 'src/main/genie-host.ts']) expect(src(file), file).toContain('workspaceSaveOps(');
+    it('the window and genie-host build the ops, and the standalone host hands them to the lifecycle wiring', () => {
+        for (const file of ['src/main/main.ts', 'src/main/genie-host.ts']) expect(src(file), file).toContain('workspaceSaveOps(');
+        expect(src('src/main/host-alone-api.ts')).toContain('ports.workspaceSave');
     });
 
     it('the window reaches them through the local session and the remote bridge', () => {

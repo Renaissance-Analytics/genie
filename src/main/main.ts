@@ -245,6 +245,7 @@ import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
+import { nodeSaveGit, WORKSPACE_SAVE_UNAVAILABLE, workspaceSaveOps, type WorkspaceSaveOps } from './workspace-save-host.js';
 import { nestGoverned } from '../core/rail-view.js';
 import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
 
@@ -614,6 +615,8 @@ let retryPausedAccount: ((provider: string) => void) | null = null;
 let registry: Registry | null = null;
 /** Each workspace's colour (genie#1300): read from and written to its project.json. */
 let workspaceColors: WorkspaceColors | null = null;
+/** Save to repo (Tynn #756): this workspace's project.json and repo files, saved against upstream. */
+let workspaceSaver: WorkspaceSaveOps | null = null;
 /**
  * ISSUEWATCH (Tynn #806; the host split, P5c): genie-host hears Tynn and holds the state — the latest entry per project,
  * when it arrived, what happened lately, the repo switches, the client's state. This window reads it through the replica
@@ -1432,6 +1435,7 @@ async function boot(): Promise<void> {
     // without a colour (one just added), and at most every 5 s otherwise, so an agent's edit of the colour is picked up.
     const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
     workspaceColors = colors;
+    workspaceSaver = workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => theRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true });
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
     let colorPassAt = 0;
     let colorPassQueued = false;
@@ -2490,7 +2494,10 @@ async function boot(): Promise<void> {
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
                 ...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage),
-                ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry?.touch(), (id, color) => setWorkspaceColor(id, color)),
+                ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry?.touch(), (id, color) => setWorkspaceColor(id, color), {
+                    savePreview: (id) => (workspaceSaver ?? WORKSPACE_SAVE_UNAVAILABLE).savePreview(id),
+                    save: (id, choices) => (workspaceSaver ?? WORKSPACE_SAVE_UNAVAILABLE).save(id, choices),
+                }),
                 // The live tab's reads (P4 family 12): what changed since a cursor, never the whole board or queue.
                 tynnBoardChanges: (id, scope, cursor, ids) => readTynnBoardChanges(tynnBoardPorts(), id, (scope ?? {}) as BoardScope, cursor, ids),
                 tynnIssueChanges: (id, filters, cursor, ids) => readTynnIssueChanges(tynnBoardPorts(), id, filters ?? {}, cursor, ids),
