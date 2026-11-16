@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { saveDialogView, type SaveDialogView } from '../src/core/save-dialog-view.js';
-import type { MergeDecision, SavePreview } from '../src/core/workspace-save.js';
+import type { MergeDecision, SavePlan, SavePreview } from '../src/core/workspace-save.js';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { SaveToRepoView } from '../src/renderer/components/SaveToRepoDialog.js';
 import { Workspace } from '../src/renderer/components/Workspace.js';
@@ -17,7 +17,7 @@ import { control } from './helpers/control-markup.js';
  * fetch is a warning that does not block. Interaction is a claim about a live DOM, so the clicks render in happy-dom.
  */
 
-const okPlan = { ok: true, files: [{ path: 'project.json', text: '{}' }], backups: [], stampedTo: null } as const;
+const okPlan: SavePlan = { ok: true, files: [{ path: 'project.json', text: '{}' }], backups: [], stampedTo: null };
 const preview = (over: Partial<SavePreview> = {}): SavePreview => ({ plan: okPlan, files: [{ path: 'project.json', status: 'changed' }], upstream: { fetched: true, ref: 'origin/main' }, decisions: [], conflicts: [], ...over });
 const d = (id: string, kind: MergeDecision['kind'], local: unknown, incoming: unknown): MergeDecision => ({ id, kind, base: undefined, local, incoming });
 const viewOf = (p: SavePreview, choices: Record<string, 'local' | 'incoming'> = {}): SaveDialogView => saveDialogView({ preview: p, choices, busy: false, error: null, saved: null });

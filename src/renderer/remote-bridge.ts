@@ -469,8 +469,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
             setMcpServer: (workspaceId, name, on) => answer('workspaces.setMcpServer', workspaceId, name, on),
             setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
-            savePreview: (workspaceId) => answer('workspaces.savePreview', workspaceId),
-            save: (workspaceId, choices) => answer('workspaces.save', workspaceId, choices),
+            savePreview: (workspaceId) => answer<SavePreviewReply>('workspaces.savePreview', workspaceId),
+            save: (workspaceId, choices) => answer<SaveReply>('workspaces.save', workspaceId, choices),
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),

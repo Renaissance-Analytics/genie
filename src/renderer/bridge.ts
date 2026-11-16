@@ -53,7 +53,7 @@ import type { RepoListing } from '../core/github.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
-import type { SaveChoices, SavePreview, SaveResult } from '../core/workspace-save.js';
+import type { SaveChoices, SavePreviewReply, SaveReply } from '../core/workspace-save.js';
 
 /**
  * THE RENDERER'S ONLY WINDOW ONTO THE MAIN PROCESS.
@@ -416,9 +416,9 @@ export interface GenieBridge {
         /** Its colour (genie#1300), written to its project.json as `appearance.color`. Optional: an older host has none. */
         setColor?(workspaceId: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Save to repo (Tynn #756): fetch, then what a save would write, what teammates changed and what conflicts. Optional: an older host has none. */
-        savePreview?(workspaceId: string): Promise<SavePreview>;
+        savePreview?(workspaceId: string): Promise<SavePreviewReply>;
         /** Write the preview's files, with each conflict settled by `choices`. Never commits. */
-        save?(workspaceId: string, choices: SaveChoices): Promise<SaveResult>;
+        save?(workspaceId: string, choices: SaveChoices): Promise<SaveReply>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */

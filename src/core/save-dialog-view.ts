@@ -77,7 +77,7 @@ export function saveDialogView(input: SaveDialogInput): SaveDialogView {
         : saved.length === 1 ? 'Saved 1 file. It is an ordinary change in git: review and commit it.'
         : `Saved ${saved.length} files. They are ordinary changes in git: review and commit them.`;
     const empty = { loading: false, refusal: null, warning: null, info: null, files: [], incoming: [], conflicts: [], canSave: false, saveLabel: busy ? 'Saving…' : 'Save', note: null, error, done } satisfies SaveDialogView;
-    if (preview === null) return { ...empty, loading: true };
+    if (preview === null) return { ...empty, loading: error === null };
 
     const upstream = preview.upstream;
     const warning = upstream.fetched ? null : `Could not check for your teammates' changes${upstream.reason ? ` (${upstream.reason})` : ''}. You can still save; what is shown is what was last fetched.`;

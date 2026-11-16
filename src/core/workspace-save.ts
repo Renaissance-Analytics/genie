@@ -222,5 +222,9 @@ export interface SavePreview {
 
 export type SaveResult = { ok: true; written: string[] } | { ok: false; reason: string; written: string[] };
 
+/** What a bridge answers: the result, or a host's refusal in words (an older host, a guest, a closed link). */
+export type SavePreviewReply = SavePreview | { ok: false; reason: string };
+export type SaveReply = SaveResult | { ok: false; reason: string };
+
 /** A conflict's settlement: the side the person kept. */
 export type SaveChoices = Readonly<Record<string, 'local' | 'incoming'>>;

@@ -27,7 +27,7 @@ function rig(projectJson: string | null, options: { mayRead?: boolean } = {}) {
         async writeTextAtomic(path) { calls.push(`write ${path}`); },
     };
     const git: SaveGit = {
-        async fetch() { calls.push('fetch'); return { ok: true }; },
+        async fetchUpstream() { calls.push('fetch'); return { ok: true }; },
         async upstream() { return null; },
         async mergeBase() { return null; },
         async show() { return null; },

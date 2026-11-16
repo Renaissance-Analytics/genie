@@ -1232,7 +1232,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [newAgentFor, setNewAgentFor] = useState<string | null>(null);
     /** Save to repo (Tynn #756): the workspace whose dialog is open. */
     const [saveFor, setSaveFor] = useState<string | null>(null);
-    const loadSavePreview = useCallback(() => (saveFor !== null && resolvedBridge?.workspaces.savePreview ? resolvedBridge.workspaces.savePreview(saveFor) : Promise.reject(new Error('this host cannot save to the repo'))), [saveFor, resolvedBridge]);
+    const loadSavePreview = useCallback(() => (saveFor !== null && resolvedBridge?.workspaces.savePreview ? resolvedBridge.workspaces.savePreview(saveFor) : Promise.resolve({ ok: false as const, reason: 'this host cannot save to the repo' })), [saveFor, resolvedBridge]);
     const offerAgentsRef = useRef<(id: string) => void>(() => {});
     offerAgentsRef.current = (id) => {
         const read = resolvedBridge?.workspaces.importedAgents;

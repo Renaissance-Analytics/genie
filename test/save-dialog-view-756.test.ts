@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { elementLabel, fileLabel, saveDialogView, type SaveDialogInput } from '../src/core/save-dialog-view.js';
-import type { MergeDecision, SavePreview } from '../src/core/workspace-save.js';
+import type { MergeDecision, SavePlan, SavePreview } from '../src/core/workspace-save.js';
 
 /**
  * THE SAVE TO REPO DIALOG'S VIEW MODEL (Tynn #756 UI; the owner, 2026-11-16: a "Save to repo" button with a diff that is
@@ -9,7 +9,7 @@ import type { MergeDecision, SavePreview } from '../src/core/workspace-save.js';
  * warning that does not block. Fixtures are invented names.
  */
 
-const okPlan = { ok: true, files: [{ path: 'project.json', text: '{}' }], backups: [], stampedTo: null } as const;
+const okPlan: SavePlan = { ok: true, files: [{ path: 'project.json', text: '{}' }], backups: [], stampedTo: null };
 const preview = (over: Partial<SavePreview> = {}): SavePreview => ({
     plan: okPlan,
     files: [{ path: 'project.json', status: 'changed' }],

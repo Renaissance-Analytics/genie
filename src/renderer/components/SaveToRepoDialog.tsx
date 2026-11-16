@@ -1,7 +1,7 @@
 import { Button, Modal } from '@particle-academy/react-fancy';
 import { useEffect, useMemo, useState } from 'react';
 import { saveDialogView, type SaveDialogView } from '../../core/save-dialog-view.js';
-import type { SaveChoices, SavePreview, SaveResult } from '../../core/workspace-save.js';
+import type { SaveChoices, SavePreview, SavePreviewReply, SaveReply } from '../../core/workspace-save.js';
 
 /**
  * SAVE TO REPO (Tynn #756 UI; the owner, 2026-11-16: a "Save to repo" button with a diff that is upstream-aware). Each file's
@@ -91,9 +91,9 @@ export function SaveToRepoView({ workspaceName, view, onChoose, onSave, onClose 
 export function SaveToRepoDialog({ workspaceName, load, save, onClose }: {
     readonly workspaceName: string;
     /** The host's preview: it fetches first, then reads. */
-    readonly load: () => Promise<SavePreview>;
+    readonly load: () => Promise<SavePreviewReply>;
     /** The host's save, with the conflicts settled. */
-    readonly save: (choices: SaveChoices) => Promise<SaveResult>;
+    readonly save: (choices: SaveChoices) => Promise<SaveReply>;
     readonly onClose: () => void;
 }) {
     const [preview, setPreview] = useState<SavePreview | null>(null);
@@ -103,7 +103,7 @@ export function SaveToRepoDialog({ workspaceName, load, save, onClose }: {
     const [saved, setSaved] = useState<readonly string[] | null>(null);
     useEffect(() => {
         let live = true;
-        load().then((p) => { if (live) setPreview(p); }, (e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)); });
+        load().then((p) => { if (!live) return; if ('plan' in p) setPreview(p); else setError(p.reason); }, (e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)); });
         return () => { live = false; };
     }, [load]);
     const view = useMemo(() => saveDialogView({ preview, choices, busy, error, saved }), [preview, choices, busy, error, saved]);
