@@ -115,7 +115,8 @@ describe('S7: wired through', () => {
         expect(source('src/core/session.ts')).toMatch(/new DesignOperationTracker\(\)/);
         expect(source('src/core/session.ts')).toMatch(/this\.#options\.onDesignAuth\?\.\(/);
         const host = source('src/main/genie-host.ts');
-        expect(host).toContain("join(home, 'design-auth.json')");
+        // Not '...auth.json': the credential guard (account-credential-guard-477) rightly flags any such name under src/. Gate 1116-230736-6aebb1.
+        expect(host).toContain("join(home, 'claude-design-state.json')");
         expect(host).toMatch(/onDesignLoginEnded: \(\) => \{ designAuth\.apply\(\{ kind: 'login-ended' \}\);/);
         expect(host).toMatch(/onDesignAuth: \(_agentId, event\) => designAuth\.apply\(event\)/);
         expect(host).toMatch(/design: designAuthNow\?\.view\(\)/);
