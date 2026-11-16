@@ -93,19 +93,20 @@ export class WorkspaceSave {
     /** `choices` maps a conflict's id to the side the person kept. */
     async save(workspacePath: string, choices: Readonly<Record<string, 'local' | 'incoming'>> = {}): Promise<SaveResult> {
         const preview = await this.preview(workspacePath);
-        if (!preview.plan.ok) return { ok: false, reason: preview.plan.reason, written: [] };
+        const plan = preview.plan;
+        if (!plan.ok) return { ok: false, reason: plan.reason, written: [] };
         const open = preview.conflicts.filter((id) => choices[id] === undefined);
         if (open.length > 0) return { ok: false, reason: `Settle these conflicts first (yours or theirs): ${open.join(', ')}`, written: [] };
 
         const texts: { path: string; text: string }[] = [];
-        for (const f of preview.plan.files) {
+        for (const f of plan.files) {
             const merged = applyMerge(f.path, f.text, preview.decisions, choices);
             if (!merged.ok) return { ok: false, reason: `Settle these conflicts first (yours or theirs): ${merged.unresolved.join(', ')}`, written: [] };
             texts.push({ path: f.path, text: merged.text });
         }
         const status = new Map(preview.files.map((f) => [f.path, f.status]));
         const written: string[] = [];
-        const out = [...preview.plan.backups, ...texts.filter((t) => status.get(t.path) !== 'unchanged' || t.text !== preview.plan.files.find((f) => f.path === t.path)?.text)];
+        const out = [...plan.backups, ...texts.filter((t) => status.get(t.path) !== 'unchanged' || t.text !== plan.files.find((f) => f.path === t.path)?.text)];
         for (const file of out) {
             try {
                 await this.#options.fs.writeTextAtomic(inFolder(workspacePath, file.path), file.text);
