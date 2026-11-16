@@ -2,7 +2,7 @@ import { Avatar, Badge, Button, Callout, Icon, Popover, Progress } from '@partic
 import { useState } from 'react';
 import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, type ProviderAccountsView } from '../../core/accounts-view.js';
 import { shortDateTime } from '../../core/clock-words.js';
-import { limitLevel, resetsIn, windowWords, type LimitLevel } from '../../core/headroom.js';
+import { limitLevel, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
 import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 
@@ -28,8 +28,11 @@ const LEVEL_COLOR: Readonly<Record<LimitLevel, 'green' | 'amber' | 'red'>> = { o
 const initial = (label: string): string => (label.trim()[0] ?? '?').toUpperCase();
 
 /** The tightest live window of an account, or null when none has a figure. */
-function tightest(account: AccountView): (AccountWindowRow & { refreshed: false }) | null {
-    const live = account.windows.filter((w): w is AccountWindowRow & { refreshed: false } => !('unknown' in w) && w.refreshed === false);
+/** A window read live: a figure and a reset (not unknown, not Refreshed). */
+type LiveWindow = Extract<WindowReading, { refreshed: false }>;
+
+function tightest(account: AccountView): LiveWindow | null {
+    const live = account.windows.filter((w): w is LiveWindow => !('unknown' in w) && w.refreshed === false);
     if (live.length === 0) return null;
     return live.reduce((a, b) => ((b.over ? -1 : b.leftPct) < (a.over ? -1 : a.leftPct) ? b : a));
 }
