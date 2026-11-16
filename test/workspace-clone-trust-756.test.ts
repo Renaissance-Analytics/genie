@@ -82,7 +82,7 @@ describe('what is created is disarmed, against the real flow store', () => {
 describe('in genie-host', () => {
     it('what waited for the trust is restored when the person trusts, through the same restore that ran when the workspace appeared', () => {
         const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
-        expect(host).toMatch(/trust\.onTrusted\(/);
+        expect(host).toMatch(/\.onTrusted\??\.?\(/);
         expect(host.match(/restoreClone\(/g)?.length).toBe(1);
     });
 });

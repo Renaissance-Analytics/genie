@@ -405,6 +405,9 @@ export interface TrustStepView {
         readonly servers: readonly { readonly file: string; readonly name: string; readonly command: string }[];
         readonly gitKeys: readonly { readonly key: string; readonly value: string }[];
         readonly approvals: readonly string[];
+        /** The flows and processes a clone's files would create, with what they would run (Tynn #756, PR9b). Absent = none. */
+        readonly flows?: readonly { readonly file: string; readonly commands: readonly string[] }[];
+        readonly processes?: readonly { readonly file: string; readonly commands: readonly string[] }[];
     };
 }
 

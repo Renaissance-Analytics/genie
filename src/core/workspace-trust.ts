@@ -12,6 +12,9 @@ export interface TrustSite { readonly key: string; readonly fingerprint: string;
 export interface TrustHook { readonly file: string; readonly event: string; readonly command: string }
 export interface TrustServer { readonly file: string; readonly name: string; readonly command: string }
 export interface GitConfigEntry { readonly key: string; readonly value: string }
+/** A `.flows/` or `.processes/` file a clone brings (Tynn #756, PR9b), with every command it would run or ask. */
+export interface TrustFlow { readonly file: string; readonly commands: readonly string[] }
+export interface TrustProcess { readonly file: string; readonly commands: readonly string[] }
 
 export interface TrustList {
     readonly sites: readonly TrustSite[];
@@ -20,6 +23,10 @@ export interface TrustList {
     readonly gitKeys: readonly GitConfigEntry[];
     /** Commands a person approved one at a time in an untracked settings.local.json: shown on the list, and not hashed, or each approval would ask again. */
     readonly approvals: readonly string[];
+    /** The flows the workspace's `.flows/` files would create, and what they would run (absent = none). */
+    readonly flows?: readonly TrustFlow[];
+    /** The processes its `.processes/` files would keep, and what they would run (absent = none). */
+    readonly processes?: readonly TrustProcess[];
 }
 
 export interface TrustRecord { readonly carried: readonly string[]; readonly workspaces: Readonly<Record<string, string>> }
@@ -64,6 +71,8 @@ export function trustHash(list: TrustList): string {
         hooks: sorted(list.hooks.map((hook) => [hook.file, hook.event, hook.command])),
         servers: sorted(list.servers.map((server) => [server.file, server.name, server.command])),
         gitKeys: sorted(list.gitKeys.map((entry) => [entry.key, entry.value])),
+        flows: sorted((list.flows ?? []).map((flow) => [flow.file, ...flow.commands])),
+        processes: sorted((list.processes ?? []).map((process) => [process.file, ...process.commands])),
     };
     return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
