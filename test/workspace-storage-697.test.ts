@@ -1,13 +1,12 @@
-import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { open, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { approvalFor, parseWorktreeList, suggestedCleanup, type StorageReport } from '../src/core/workspace-storage.js';
 import { sizeOf } from '../src/main/dir-size.js';
+import { runCommand } from './helpers/command-report.js';
 import { WorkspaceStorage, retryTransient, type ChatFile } from '../src/main/workspace-storage-host.js';
 
 /**
@@ -24,7 +23,8 @@ import { WorkspaceStorage, retryTransient, type ChatFile } from '../src/main/wor
  *  - Move to .trash records each item's origin, so it can be restored; a worktree is moved and locked by git itself;
  *  - Empty trash deletes ONLY what is in .trash, only with an approval naming exactly what is there and how much.
  */
-const run = promisify(execFile);
+// A failing command says its exit code, signal, timeout, stdout and stderr (genie#1992: this fixture's git failed on Windows with only "Command failed").
+const run = (file: string, args: readonly string[]) => runCommand(file, args, { timeoutMs: 90_000 });
 const git = (cwd: string, ...args: string[]) => run('git', ['-C', cwd, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'init.defaultBranch=main', ...args]);
 const NOW = 1_763_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
