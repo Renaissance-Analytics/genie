@@ -1438,7 +1438,7 @@ async function boot(): Promise<void> {
     workspaceColors = colors;
     workspaceSaver = workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => theRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true,
         // What a save declares: this workspace's engines, its own settings and its agents' IssueWatch, read when the dialog asks.
-        elements: (id) => elementSourcesFor({ services: { list: () => services?.engines.list() ?? [] }, settings: { workspaceValues: (w) => services?.settings.workspaceValues(w) ?? {} }, registry: theRegistry }, id) });
+        elements: (id) => elementSourcesFor({ services: { list: () => services?.engines.list() ?? [] }, settings: { workspaceValues: (w) => services?.settings.workspaceValues(w) ?? {} }, registry: theRegistry, flows: { list: (w) => services?.flows.list(w) ?? [] }, processes: { kept: () => agentEngineLink?.client.processBook().kept() ?? [] } }, id) });
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
     let colorPassAt = 0;
     let colorPassQueued = false;
