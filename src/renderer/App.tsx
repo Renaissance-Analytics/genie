@@ -60,6 +60,7 @@ import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { limitAlertSound } from '../core/limit-alerts.js';
+import { accountSwitchOutcomeOf, accountSwitchToast } from '../core/account-switch.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { redialer } from './remote-redial.js';
 import { droneReconnect, type DroneHold } from './drone-reconnect.js';
@@ -1132,6 +1133,12 @@ function DesktopApp({ bridge }: AppProps) {
         if (action.kind === 'limit-alert' && action.title && action.body) {
             playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}));
             showAlert({ title: action.title, body: action.body });
+            return;
+        }
+        // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
+        if (action.kind === 'account-switch') {
+            const outcome = accountSwitchOutcomeOf(action.outcome);
+            if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider); }));
             return;
         }
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));

@@ -59,6 +59,8 @@ export interface LoginHostOptions {
     /** The host book's account, to refuse a provider it does not know; it sets no environment (Tynn #753). */
     accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string }) | null;
     onSignedIn: (provider: string, accountId?: string) => void;
+    /** An account switch's login is over (Tynn #482): `signedIn` is the provider's status answer. Called once per switch. */
+    onSwitchEnded?: ((provider: string, signedIn: boolean) => void) | undefined;
     /** The Claude Design login window ended (there is no status to ask): the agents that waited are told to retry. */
     onDesignLoginEnded?: (() => void) | undefined;
     /** The provider CLI's resolved path, when it is not simply on PATH (`providerBinary`). */
@@ -205,12 +207,16 @@ export class LoginHost {
         const live = this.#live.get(key) ?? [...this.#live.values()].find((l) => l.terminalId === key);
         if (!live) return;
         this.#live.delete(live.key);
+        // A SWITCH's window is closed when it is done (its steps say so, Tynn #482): that is its end, so the provider's status
+        // is asked and the switch told, as when its terminal exits. The terminal and folder go either way.
+        if (live.switching === true) { void this.#finish(live); return; }
         this.#release(live);
     }
 
     /** Genie's host is going: every sign-in still open is cancelled. */
     dispose(): void {
-        for (const key of [...this.#live.keys()]) this.cancel(key);
+        // Released, never settled: a host that is going asks no provider anything (a switch's close would).
+        for (const live of [...this.#live.values()]) { this.#live.delete(live.key); this.#release(live); }
     }
 
     /** The one place a sign-in's terminal and folder are removed, whichever way the step ended. */
@@ -235,6 +241,7 @@ export class LoginHost {
                 const status = binary === null ? known.status : `"${binary}"${known.status.slice(known.status.indexOf(' '))}`;
                 const code = await this.#options.runStatus(status, live.scratch).catch(() => 1);
                 if (code === 0) this.#options.onSignedIn(live.provider, live.accountId);
+                if (live.switching === true) this.#options.onSwitchEnded?.(live.provider, code === 0);
             }
         } catch {
             // A failed hand-off is not a reason to leave a terminal behind; the step is over either way.

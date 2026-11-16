@@ -150,7 +150,7 @@ import { PlaywrightHost, osConnections } from './playwright-host.js';
 import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
-import { startAccountSwitch, type AccountSwitchStart } from './account-switch-host.js';
+import { AccountSwitchFlow, type AccountSwitchStart } from './account-switch-host.js';
 import { afterSignedIn, LoginHost, statusCommandFor } from './login-host.js';
 import { accountIdentityFrom, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { tellDesignLoginRan } from '../core/design-login.js';
@@ -1053,6 +1053,7 @@ async function main(): Promise<void> {
     let logins: LoginHost | null = null;
     // Switching accounts = the provider's own login in its one home; no agent is touched (Tynn #753). Composed once the sessions exist.
     let switchAccount: ((provider: string) => AccountSwitchStart) | null = null;
+    let switchFlow: AccountSwitchFlow | null = null;
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
@@ -1330,11 +1331,9 @@ async function main(): Promise<void> {
     };
     // SWITCH ACCOUNT (Tynn #753): the provider's own login, in its one home, in a terminal with the steps on screen. No agent is
     // stopped or started again; when the login ends the identity read (onSignedIn below) records which account is signed in.
-    switchAccount = (provider) => {
-        const login = logins;
-        if (login === null) return { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' };
-        return startAccountSwitch({ login }, provider);
-    };
+    // S9 (Tynn #482): the switch runs through the flow, which reads who is signed in once its login is over and tells every
+    // window which account is active, or that nothing changed (with Retry).
+    switchAccount = (provider) => switchFlow?.start(provider) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' };
     hostVerdicts = new TrustVerdicts({
         agentsOf: (workspaceId) => hostRegistry.listAgents().filter((a) => a.workspaceId === workspaceId).map((a) => a.id),
         untrustedNow: (id) => { const record = hostRegistry.find(id); return record ? hostUntrustedNow(record) : false; },
@@ -1387,6 +1386,15 @@ async function main(): Promise<void> {
         },
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
         onDesignLoginEnded: () => { tellDesignLoginRan(host); },
+        // A switch's login is over (Tynn #482): the flow reads who is signed in and says so.
+        onSwitchEnded: (provider, signedIn) => { void switchFlow?.settle(provider, signedIn); },
+    });
+    const switchLogin = logins;
+    switchFlow = new AccountSwitchFlow({
+        login: switchLogin,
+        active: (provider) => { const a = isAcpProvider(provider) ? accounts.activeFor(provider) : null; return a ? { id: a.id, label: a.label } : { id: '', label: provider }; },
+        readIdentity: (provider) => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
+        emit: (outcome) => { engine.callback({ name: 'toolSignal', signal: { kind: 'account-switch', ...outcome } }); },
     });
     const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
