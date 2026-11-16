@@ -72,6 +72,8 @@ import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nodeSaveGit, workspaceSaveOps } from './workspace-save-host.js';
 import { elementSourcesFor } from './workspace-save-sources.js';
+import { cloneRestorePorts, nodeCloneFiles } from './workspace-clone-ports.js';
+import { restoreClone, watchNewWorkspaces } from './workspace-clone-restore-host.js';
 import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
@@ -1623,7 +1625,7 @@ async function main(): Promise<void> {
         colors: workspaceColors,
         workspaceSave: workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => hostRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true,
             // What a save declares: this workspace's engines, its own settings and its agents' IssueWatch, read when the dialog asks.
-            elements: (id) => elementSourcesFor({ services: { list: () => hostingStack?.engines.list() ?? [] }, settings: { workspaceValues: (w) => settings.workspaceValues(w) }, registry: hostRegistry }, id) }),
+            elements: (id) => elementSourcesFor({ services: { list: () => hostingStack?.engines.list() ?? [] }, settings: { workspaceValues: (w) => settings.workspaceValues(w) }, registry: hostRegistry, flows: { list: (w) => flowStoreNow?.list(w) ?? [] }, processes: { kept: () => processBookNow?.kept() ?? [] } }, id) }),
         tynnTab: { board: hostTynnBoard, readPage: readHostTynnPage },
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),
@@ -1665,6 +1667,8 @@ async function main(): Promise<void> {
     }, () => {});
     /** Flows (P3.3d), once — at the first window's v1 import, after the book (the old scheduled tasks move into it). */
     let flowsOpening: Promise<void> | null = null;
+    /** The flow store once open (Tynn #756): Save to repo reads it, and a fresh clone's flows are created in it. */
+    let flowStoreNow: FlowStore | null = null;
     let processBookNow: ProcessBook | null = null;
     /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
     const clocks: Array<{ stop(): void }> = [marketplacePlugins];
@@ -1688,6 +1692,7 @@ async function main(): Promise<void> {
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
+            flowStoreNow = store;
             store.setHiddenWorkspaces(hiddenWorkspaces);
             // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
             await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -1803,6 +1808,35 @@ async function main(): Promise<void> {
         })();
         return bookOpening;
     };
+    // OPENING A FRESH CLONE (Tynn #756, PR9a): a workspace that appears here is restored in order (its settings, its tabs, the trust
+    // verdict, its flows DISARMED, its processes STOPPED), in the host that owns the stores. What it did, and what it left waiting
+    // for the person's trust, is logged.
+    watchNewWorkspaces({ workspaceStates: () => hostRegistry.workspaceStates(), subscribe: (listener) => phoneRegistry.subscribe(() => listener()) }, (workspaceId) => {
+        const workspace = hostRegistry.workspace(workspaceId);
+        if (!workspace) return;
+        const ports = cloneRestorePorts({
+            files: nodeCloneFiles(),
+            registry: {
+                agentsOf: (id) => hostRegistry.listAgents().filter((a) => a.workspaceId === id),
+                defaultAgentOf: (id) => hostRegistry.defaultAgentOf(id),
+                setDefaultAgent: (id, agentId) => phoneRegistry.setDefaultAgent(id, agentId),
+                listWorkspaces: () => hostRegistry.listWorkspaces(),
+                setWorkspaceEnvFile: (id, file) => phoneRegistry.setWorkspaceEnvFile(id, file),
+                workspaceMcpOff: (id) => hostRegistry.workspaceMcpOff(id),
+                setWorkspaceMcpServer: (id, name, on) => phoneRegistry.setWorkspaceMcpServer(id, name, on),
+                listAgents: () => hostRegistry.listAgents(),
+                workspaceSlugs: () => hostRegistry.workspaceSlugs(),
+            },
+            settings: { workspaceValues: (id) => settings.workspaceValues(id), setFor: (id, key, value) => settings.setFor(id, key, value), get: (key) => settings.snapshot()[key] },
+            flows: async () => { await flowsOpening; return flowStoreNow; },
+            processes: async () => { await bookOpening; return processBookNow; },
+            trusted: (id) => hostingStack?.trust.view(id)?.trusted === true,
+            siteHosts: (id) => (hostingStack?.sites.list() ?? []).filter((s) => s.workspaceId === id).map((s) => `${s.name}.gen`),
+        });
+        void restoreClone({ id: workspace.id, path: workspace.path }, ports)
+            .then((report) => lifecycleLog(`clone ${workspace.id} restored: ${report.order.join(' > ')}${report.skipped.length > 0 ? `; skipped ${report.skipped.map((s) => `${s.step} (${s.reason})`).join(', ')}` : ''}${(report.flows?.waiting.length ?? 0) + (report.processes?.waiting.length ?? 0) > 0 ? '; waiting for the workspace to be trusted' : ''}`))
+            .catch((error: unknown) => say(`clone ${workspace.id} could not be restored: ${error instanceof Error ? error.message : String(error)}`));
+    });
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
     planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); } });
