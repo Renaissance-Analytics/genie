@@ -159,12 +159,30 @@ const mouse = (x, y) => cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved
 let hold = null;
 const holdAt = (x, y) => { clearInterval(hold); hold = setInterval(() => { void mouse(x, y); }, 80); };
 const release = () => { clearInterval(hold); hold = null; };
+// Stills come from the screencast's latest frame (what the compositor shows, dots in flight), and also from Page.captureScreenshot
+// as `<name>-capture.png`: on the first run the capture came back without the overlay though the DOM, the dimming and the
+// screencast all had it, so the two are kept side by side and the difference stays visible.
+const frames = [];
+let castOn = false;
+function onFrame(f) {
+    if (f.method !== 'Page.screencastFrame') return;
+    frames.push({ data: f.params.data, at: f.params.metadata?.timestamp ?? Date.now() / 1000 });
+    if (frames.length > 400) frames.shift();
+    void cdp.send('Page.screencastFrameAck', { sessionId: f.params.sessionId });
+}
+async function startCast(maxWidth, maxHeight) {
+    if (!castOn) { cdp.on(onFrame); castOn = true; }
+    frames.length = 0;
+    await cdp.send('Page.startScreencast', { format: 'png', maxWidth, maxHeight, everyNthFrame: 1 });
+}
 async function shot(name) {
     await sleep(900); // a frame, and the dots in flight
+    const latest = frames.at(-1);
+    if (latest) writeFileSync(join(OUT, `${name}.png`), Buffer.from(latest.data, 'base64'));
     const r = await cdp.send('Page.captureScreenshot', { format: 'png' });
-    if (!r.result?.data) throw new Error(`${name}: no image came back`);
-    writeFileSync(join(OUT, `${name}.png`), Buffer.from(r.result.data, 'base64'));
-    say(`shot ${name}`);
+    if (r.result?.data) writeFileSync(join(OUT, `${name}-capture.png`), Buffer.from(r.result.data, 'base64'));
+    if (!latest && !r.result?.data) throw new Error(`${name}: no image came back`);
+    say(`shot ${name} (${latest ? 'screencast frame' : 'no screencast frame'}, ${r.result?.data ? 'capture' : 'no capture'})`);
 }
 
 async function sizeWindow() {
@@ -235,6 +253,7 @@ try {
     const cellSel = `[data-surface="dashboard"] [data-agent="${meridian.id}"] [data-comms-cell]`;
     await waitFor('meridian\'s Comms cell to count its collaborators', `(document.querySelector(${JSON.stringify(cellSel)})?.textContent ?? '').match(/[1-9]/) !== null`, 60_000);
 
+    await startCast(WIDTH, HEIGHT);
     // 1. AT REST: pointer away, nothing drawn.
     await mouse(WIDTH - 40, HEIGHT - 40);
     await sleep(500);
@@ -279,13 +298,7 @@ try {
     release();
 
     // 4. THE CLIP: about three seconds of the hover, as Page.startScreencast frames, assembled into hover.gif.
-    const frames = [];
-    cdp.on((f) => {
-        if (f.method !== 'Page.screencastFrame') return;
-        frames.push({ data: f.params.data, at: f.params.metadata?.timestamp ?? Date.now() / 1000 });
-        cdp.send('Page.screencastFrameAck', { sessionId: f.params.sessionId });
-    });
-    await cdp.send('Page.startScreencast', { format: 'png', maxWidth: 960, maxHeight: 600, everyNthFrame: 1 });
+    await startCast(960, 600);
     const t0 = Date.now();
     for (let n = 0; Date.now() - t0 < 3200; n += 1) {
         await mouse(cell.x + Math.sin(n / 5) * 6, cell.y + Math.cos(n / 7) * 3);
