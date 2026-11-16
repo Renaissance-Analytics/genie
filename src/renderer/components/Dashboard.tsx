@@ -1,7 +1,9 @@
 import { trayOf } from '../../core/row-tray.js';
-import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
+import { ageLabel, revealOf, type Reveal } from '../../core/reveal.js';
+import { ARC_WINDOW_SECONDS, arcsFor, type Point, type Rect } from '../../core/flight-arcs.js';
+import { FlightPaths } from './FlightPaths.js';
 import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academy/react-fancy';
-import { Fragment, useEffect, useRef, useState, type RefObject } from 'react';
+import { Fragment, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { useNow } from '../use-now.js';
 import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
@@ -159,28 +161,6 @@ function DeliveryCell({ delivery }: { delivery: Delivery | null }) {
 }
 
 /** The 32px agent row. */
-/**
- * The collaborator reveal's lanes in a line's left gutter (§4.1): one per peer, solid violet for a live link, dashed
- * `--fg-4` when quiet; a tick into the row at each end. Purely drawn — nothing here is a control.
- */
-function Lanes({ segments }: { segments: readonly LaneSegment[] | undefined }) {
-    if (!segments || segments.length === 0) return null;
-    return (
-        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-7">
-            {segments.map((s) => {
-                const x = 5 + s.lane * 5;
-                const stroke = s.live ? '2px solid var(--violet-400)' : '2px dashed var(--fg-4)';
-                return (
-                    <span key={s.lane} data-lane={s.lane} data-part={s.part} data-live={String(s.live)}>
-                        <span className="absolute" style={{ left: x, top: s.part === 'start' ? '50%' : 0, bottom: s.part === 'end' ? '50%' : 0, borderLeft: stroke }} />
-                        {s.part === 'mid' ? null : <span className="absolute" style={{ left: x, right: 2, top: '50%', borderTop: stroke }} />}
-                    </span>
-                );
-            })}
-        </span>
-    );
-}
-
 /** The badges' colours: an approval blocks an agent (amber), a question is the person's to answer (violet), the rest are quiet. */
 const BADGE_TONE: Record<WaitingKind, string> = {
     approval: 'border-[var(--warning)]/50 bg-[var(--warning)]/10 text-[var(--warning)]',
@@ -265,7 +245,7 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
     );
 }
 
-function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji, windows, waiting }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting }: {
     row: AgentRow;
     workspaceName: string;
     workspaceColor?: string | undefined;
@@ -279,9 +259,10 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     focused?: boolean | undefined;
     /** The board's collaborator reveal, when one is shown. */
     reveal?: Reveal | null | undefined;
-    lanes?: readonly LaneSegment[] | undefined;
     /** Hovering the comms cell reveals this row's collaborators; leaving it ends the reveal. */
     onReveal?: ((id: string | null) => void) | undefined;
+    /** The same hover draws the flight paths (Tynn #750): enter and move carry the pointer. */
+    onArc?: { enter: (id: string, event: ReactMouseEvent) => void; move: (event: ReactMouseEvent) => void; leave: () => void } | undefined;
     /** What waits on this agent: its badges, and whether its items are open under the row. Absent = nothing waits (or no Deck). */
     waiting?: { badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void } | undefined;
     /** The windows column (Tynn #706): absent = this row has none (Genie's own, or a workspace this window may not open). */
@@ -308,10 +289,9 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
             // The reveal: the rest dims to .32; the row and its peers carry a 2px violet left border (the board).
             style={{ ...stateStyle(shownState(row)), ...(shownState(row) === 'sleeping' ? { opacity: 0.5 } : {}), ...(role === 'dim' ? { opacity: 0.32 } : role ? { boxShadow: 'inset 2px 0 0 var(--violet-400)' } : {}) }}
         >
-            <Lanes segments={lanes} />
             <div className="flex min-w-0 items-center gap-2">
                 <FidelityDot fidelity={row.fidelity} state={shownState(row)} />
-                <span className="truncate font-medium">{row.name}</span>
+                <span data-agent-name="" className="truncate font-medium">{row.name}</span>
                 {emoji ? <span data-row-emoji={emoji} className="shrink-0 animate-pulse" aria-label="what it just did">{emoji}</span> : null}
                 <ProviderLogo provider={row.provider} />
             </div>
@@ -384,8 +364,9 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
              * specifies violet for comms, and `tailwind-merge` resolves the later class.
              */}
             <div
+                data-comms-cell=""
                 className="flex items-center gap-1.5 text-xs text-[var(--fg-2)]"
-                {...(comms && comms.count > 0 && onReveal ? { onMouseEnter: () => onReveal(row.id), onMouseLeave: () => onReveal(null) } : {})}
+                {...(comms && comms.count > 0 && onReveal ? { onMouseEnter: (event: ReactMouseEvent) => { onReveal(row.id); onArc?.enter(row.id, event); }, onMouseMove: (event: ReactMouseEvent) => onArc?.move(event), onMouseLeave: () => { onReveal(null); onArc?.leave(); } } : {})}
             >
                 {peerLink ? (
                     // A peer in the reveal: its link to the focused row — messages · age of the newest.
@@ -543,6 +524,94 @@ export interface DashboardWaiting {
     now?: number | undefined;
 }
 
+/**
+ * THE COMMS FLIGHT PATHS' HOVER (Tynn #750). Nothing is computed at rest. On entering a Comms cell the rows' name positions
+ * are measured ONCE (reads only, no writes in between); the pointer then follows through one requestAnimationFrame at a
+ * time, and the arches are derived (core/flight-arcs.ts) from the newest twelve partners of the last 24 h. Leaving drops
+ * all of it, so the overlay is not in the tree.
+ */
+interface ArcState {
+    readonly focus: string;
+    readonly pointer: Point;
+    readonly targets: Readonly<Record<string, Point>>;
+    /** Every row's text, measured once on entering: the labels keep off it. */
+    readonly obstacles: readonly Rect[];
+    readonly size: { width: number; height: number };
+    readonly reducedMotion: boolean;
+}
+
+function useFlightPaths(shown: readonly AgentRow[]) {
+    const surface = useRef<HTMLDivElement | null>(null);
+    const [state, setState] = useState<ArcState | null>(null);
+    const pending = useRef<{ x: number; y: number } | null>(null);
+    const scheduled = useRef(false);
+    const frame = useRef(0);
+    const live = useRef(false);
+    useEffect(() => () => { if (frame.current) cancelAnimationFrame(frame.current); }, []);
+    const enter = (id: string, event: ReactMouseEvent) => {
+        const host = surface.current;
+        const row = shown.find((r) => r.id === id);
+        if (!host || !row) return;
+        const box = host.getBoundingClientRect();
+        const targets: Record<string, Point> = {};
+        for (const link of row.links ?? []) {
+            if (link.ageSeconds > ARC_WINDOW_SECONDS || link.peer === id) continue;
+            const name = host.querySelector<HTMLElement>(`[data-agent="${CSS.escape(link.peer)}"] [data-agent-name]`);
+            if (!name) continue;
+            const r = name.getBoundingClientRect();
+            targets[link.peer] = { x: r.right - box.left + 8, y: r.top + r.height / 2 - box.top };
+        }
+        // Every text leaf on the board (rows, column headers, buttons), read in one go with the targets (no writes in between): what a label must not cover.
+        const obstacles: Rect[] = [];
+        host.querySelectorAll<HTMLElement>('*').forEach((el) => {
+            if (el.closest('[data-flight-paths]') || el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) obstacles.push({ x: r.left - box.left - 2, y: r.top - box.top - 1, w: r.width + 4, h: r.height + 2 });
+        });
+        live.current = true;
+        setState({
+            focus: id,
+            pointer: { x: event.clientX - box.left, y: event.clientY - box.top },
+            targets,
+            obstacles,
+            size: { width: box.width, height: host.scrollHeight || box.height },
+            reducedMotion: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
+        });
+    };
+    const move = (event: ReactMouseEvent) => {
+        if (!live.current) return;
+        pending.current = { x: event.clientX, y: event.clientY };
+        if (scheduled.current) return;
+        scheduled.current = true;
+        frame.current = requestAnimationFrame(() => {
+            scheduled.current = false;
+            const at = pending.current;
+            const host = surface.current;
+            if (!at || !host || !live.current) return;
+            const box = host.getBoundingClientRect();
+            setState((prev) => (prev ? { ...prev, pointer: { x: at.x - box.left, y: at.y - box.top } } : prev));
+        });
+    };
+    const leave = () => {
+        live.current = false;
+        pending.current = null;
+        scheduled.current = false;
+        if (frame.current) cancelAnimationFrame(frame.current);
+        setState(null);
+    };
+    const row = state ? shown.find((r) => r.id === state.focus) : undefined;
+    const paths = state && row
+        ? {
+            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, obstacles: state.obstacles, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), pointer: state.pointer }),
+            size: state.size,
+            pointer: state.pointer,
+            reducedMotion: state.reducedMotion,
+        }
+        : null;
+    return { surface, paths, handlers: { enter, move, leave } };
+}
+
+
 /** The Genie row's key: items that belong to no agent, or whose agent has no row on screen. */
 export const GENIE_ROW = 'genie:';
 
@@ -582,6 +651,8 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     const focused = focusedId ?? ownFocus;
     const [ownReveal, setOwnReveal] = useState<string | null>(null);
     const reveal = revealOf(shown, revealId ?? ownReveal);
+    const arcs = useFlightPaths(shown);
+    const arcHandlers = arcs.handlers;
     const [ownTray, setOwnTray] = useState<string | null>(null);
     const openTray = trayId ?? ownTray;
     const go = (route: string) => { if (onNavigate) onNavigate(route); else if (route.startsWith('genie://agent/')) onOpenAgent(route.slice('genie://agent/'.length)); };
@@ -601,7 +672,6 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [visibleIds, focused, onOpenAgent]);
-    const lanes = reveal ? lanesFor(visibleIds, reveal) : null;
     const band = deckBand(items);
     const staleItems = dismissableStale(band);
     const olderItems = dismissableOlderThan(band, waiting?.now ?? Date.now(), DAY_MS);
@@ -665,7 +735,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     }
 
     return (
-        <div data-surface="dashboard" className="relative flex min-h-0 flex-col">
+        <div ref={arcs.surface} data-surface="dashboard" className="relative flex min-h-0 flex-col">
             <div data-view-header="" className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-[var(--border-1)] px-5 py-2">
                 <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
                 <div className="flex items-center gap-3 text-xs text-[var(--fg-2)]">
@@ -732,7 +802,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} windows={row.id === genie?.id || windowEntriesFor(row.workspaceId, scopeWorkspaceId).length === 0 ? undefined : { onTerminal: onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined, onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined }} />
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={row.id === genie?.id || windowEntriesFor(row.workspaceId, scopeWorkspaceId).length === 0 ? undefined : { onTerminal: onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined, onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined }} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
                     {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}
@@ -758,6 +828,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 {faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
             </div>)}
             <MailSignalLayer signals={mailSignals ?? []} />
+            {arcs.paths ? <FlightPaths arcs={arcs.paths.arcs} size={arcs.paths.size} pointer={arcs.paths.pointer} reducedMotion={arcs.paths.reducedMotion} /> : null}
         </div>
     );
 }

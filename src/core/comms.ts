@@ -9,7 +9,16 @@ export interface CommsLink {
     readonly peer: string;
     readonly count: number;
     readonly ageSeconds: number;
+    /** Who sent the newest message: this agent (`self`) or the peer. Absent = not measured (read as `self`). */
+    readonly lastFrom?: 'self' | 'peer' | undefined;
+    /** The newest message is not yet read by its recipient. */
+    readonly unread?: boolean | undefined;
+    /** The newest message was read but has gone `WAITING_AFTER_SECONDS` without an answer. */
+    readonly waiting?: boolean | undefined;
 }
+
+/** A read, unanswered message is "waiting on a reply" once it is this old. */
+export const WAITING_AFTER_SECONDS = 60;
 
 export interface Comms {
     readonly collaborators: number;
@@ -18,28 +27,37 @@ export interface Comms {
     readonly links: readonly CommsLink[];
 }
 
-export type CommsMail = readonly { readonly from: string; readonly to: string; readonly sentAt: string }[];
+export type CommsMail = readonly { readonly from: string; readonly to: string; readonly sentAt: string; readonly readAt?: string | null | undefined }[];
 
 /** Each peer's count and newest message time: everything comms needs from the mail, and nothing that depends on `now`. */
-export type CommsTally = ReadonlyMap<string, { readonly count: number; readonly last: number }>;
+export type CommsTally = ReadonlyMap<string, { readonly count: number; readonly last: number; readonly lastFrom: 'self' | 'peer'; readonly lastRead: boolean }>;
 
 /** The scan: one pass over the agent's mail since its session started. The expensive half of `commsOf`. */
 export function commsTally(mail: CommsMail, agentId: string, since: number): CommsTally {
-    const byPeer = new Map<string, { count: number; last: number }>();
+    const byPeer = new Map<string, { count: number; last: number; lastFrom: 'self' | 'peer'; lastRead: boolean }>();
     for (const m of mail) {
         const peer = m.from === agentId ? m.to : m.to === agentId ? m.from : null;
         if (peer === null || peer === 'human' || peer === agentId) continue;
         const t = Date.parse(m.sentAt);
         if (!(t >= since)) continue;
-        const link = byPeer.get(peer) ?? { count: 0, last: t };
-        byPeer.set(peer, { count: link.count + 1, last: Math.max(link.last, t) });
+        const link = byPeer.get(peer);
+        const newest = !link || t >= link.last;
+        byPeer.set(peer, {
+            count: (link?.count ?? 0) + 1,
+            last: newest ? t : link.last,
+            lastFrom: newest ? (m.from === agentId ? 'self' : 'peer') : link.lastFrom,
+            lastRead: newest ? m.readAt !== null && m.readAt !== undefined : link.lastRead,
+        });
     }
     return byPeer;
 }
 
 /** The cheap half: ages against `now`, one step per peer. */
 export function commsAt(tally: CommsTally, now: number): Comms {
-    const links = [...tally].map(([peer, l]) => ({ peer, count: l.count, ageSeconds: Math.max(0, Math.floor((now - l.last) / 1000)) })).sort((a, b) => a.ageSeconds - b.ageSeconds);
+    const links = [...tally].map(([peer, l]) => {
+        const ageSeconds = Math.max(0, Math.floor((now - l.last) / 1000));
+        return { peer, count: l.count, ageSeconds, lastFrom: l.lastFrom, unread: !l.lastRead, waiting: l.lastRead && ageSeconds >= WAITING_AFTER_SECONDS };
+    }).sort((a, b) => a.ageSeconds - b.ageSeconds);
     return { collaborators: links.length, commsAgeSeconds: links[0]?.ageSeconds ?? null, links };
 }
 
