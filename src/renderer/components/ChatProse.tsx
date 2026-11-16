@@ -165,7 +165,8 @@ export interface ChatProseProps {
 
 /** Memoised on its text and refs: a busy agent's push re-renders only the reply that grew (ChatFlyout's ChatReply). */
 export const ChatProse = memo(function ChatProse({ text, refs = NO_REFS, streaming = false, className = '' }: ChatProseProps) {
-    // No internal id is drawn (Tynn #696): AFTER Genie's links are made, so a pill's id still reaches its target.
+    // No internal id is drawn in prose (Tynn #696): AFTER Genie's links are made, so a pill's id still reaches its target.
+    // Code — fenced and inline — is kept verbatim (core/person-text.ts KEEP): it is what the person copies.
     const value = useMemo(() => liftChatBlocks(personText(prepareChatMarkdown(text, refs, streaming)), streaming), [text, refs, streaming]);
     const [hover, setHover] = useState<InlineHover | null>(null);
     const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

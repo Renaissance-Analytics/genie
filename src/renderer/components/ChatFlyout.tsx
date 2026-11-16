@@ -1070,7 +1070,7 @@ export function ChatCarriedRow({ m }: { m: ChatThreadMessage }) {
                 <Icon name="arrow-right-left" size="xs" />
                 <span className="group-hover:underline">{personText(m.text)}</span>
             </summary>
-            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{personText(m.carried)}</pre>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{m.carried}</pre>
         </details>
     );
 }

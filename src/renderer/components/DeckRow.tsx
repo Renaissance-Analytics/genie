@@ -238,7 +238,7 @@ function DeckItemBody({ item }: { item: DeckItem }) {
                 </ol>
             ) : null}
             {/* The technical detail (an error, its paths): once, here, as it was written. */}
-            {item.detail ? <pre data-deck-detail={item.id} className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 font-mono text-[12px] text-[var(--fg-3)]">{personText(item.detail)}</pre> : null}
+            {item.detail ? <pre data-deck-detail={item.id} className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 font-mono text-[12px] text-[var(--fg-3)]">{item.detail}</pre> : null}
         </div>
     );
 }

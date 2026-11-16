@@ -13,9 +13,10 @@
  *  - a bare UUID;
  *  - a ULID (26 Crockford base32 characters; a workspace's id is one).
  *
- * What is NOT touched: a Markdown link's TARGET (`](…)`) and a bare URL — not drawn as text, and the way an in-app link
- * reaches its agent. Anything else is the person's reading, ids removed: `Answer to your question q_…:` reads `Answer to
- * your question:`, `(Your question q_….)` reads `(Your question.)`.
+ * What is NOT touched: code (fenced and inline — shown and copied verbatim, see `KEEP`), a Markdown link's TARGET (`](…)`)
+ * and a bare URL — not drawn as text, and the way an in-app link reaches its agent. Anything else is the person's reading,
+ * ids removed: `Answer to your question q_…:` reads `Answer to your question:`, `(Your question q_….)` reads
+ * `(Your question.)`.
  */
 
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
@@ -26,8 +27,14 @@ export function idsIn(text: string): string[] {
     return [...(text ?? '').matchAll(new RegExp(ID_SOURCE, 'g'))].map((m) => m[0]);
 }
 
-/** What a person never reads, so ids are left alone there: link targets and bare URLs. */
-const KEEP = /\]\([^)\n]*\)|https?:\/\/[^\s<>)\]]+/g;
+/**
+ * Left exactly as written:
+ *  - CODE — a fenced block (``` or ~~~) and inline code: what a person copies to run or paste, so it is shown and copied
+ *    verbatim, ids included, like an approval's command (the review of PR #1931: a filtered command that is copied is a
+ *    broken command);
+ *  - what a person never reads: a link's target and a bare URL.
+ */
+const KEEP = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|``[^\n]+?``|`[^`\n]+`|\]\([^)\n]*\)|https?:\/\/[^\s<>)\]]+/g;
 
 /** Where an id was: the tidying below only ever touches what an id left behind, never the rest of the text. */
 const GONE = '\u0000';
@@ -35,8 +42,8 @@ const GONE = '\u0000';
 function stripIds(text: string): string {
     return text
         .replace(new RegExp(`[ \\t]*${ID_SOURCE}`, 'g'), GONE)
-        // An id in backticks or brackets leaves no empty code span or brackets.
-        .replace(new RegExp(`\`${GONE}\`|\\(${GONE}\\)`, 'g'), GONE)
+        // An id in brackets leaves no empty brackets (code never gets here: it is kept whole).
+        .replace(new RegExp(`\\(${GONE}\\)`, 'g'), GONE)
         // An address whose workspace was an id: `bolt@` reads `bolt`.
         .replace(new RegExp(`(\\w)@${GONE}`, 'g'), `$1${GONE}`)
         // At a line's start, or between two spaces, the id takes one space with it.
