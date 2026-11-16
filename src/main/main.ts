@@ -127,7 +127,6 @@ import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK } from '../core/provider-login.js';
 import { DESIGN_LOGIN } from '../core/design-login.js';
-import { PlanKeepalive } from '../core/plan-keepalive.js';
 import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
@@ -778,8 +777,6 @@ function reportProxies(client: SessionEngineClient, log: (line: string) => void)
         log,
     });
 }
-/** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
-let keepaliveNow: PlanKeepalive | null = null;
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
 let activityFeeds: ActivityFeeds | null = null;
 
@@ -1455,22 +1452,7 @@ async function boot(): Promise<void> {
                 .then(() => moveAgentConfigs(current.filter((w) => theRegistry.workspaceStates().find((s) => s.path === w.path)?.asleep !== true)));
         }, 0);
     });
-    // AN AUTOMATED AGENT WITH AN OPEN PLAN DOES NOT JUST STOP (the owner, 2026-10-21; core/plan-keepalive.ts): a turn that
-    // ends with steps left is nudged once after a short grace — never while the person is the next move.
-    const keepalive = new PlanKeepalive({
-        graceMs: 5_000,
-        schedule: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        read: (id) => {
-            const record = registry?.find(id as AgentId);
-            const live = host?.probe(id as AgentId) ?? null;
-            if (!record || !live) return null;
-            const asked = services?.attention.pending().some((q) => q.agentId === id) ?? false;
-            return { mode: record.mode, lastTurnEnd: host?.lastTurnEnd(id as AgentId) ?? null, plan: live.plan ?? null, promptable: host?.promptable(id as AgentId) != null, waitingOnPerson: asked || live.pendingApproval !== null, background: live.background ?? null };
-        },
-        prompt: (id, text) => { host?.prompt(id as AgentId, text, 'genie'); },
-        stalled: (id, text) => { host?.notice(id as AgentId, text); },
-    });
-    keepaliveNow = keepalive;
+    // THE PLAN KEEPALIVE runs in genie-host now (main/host-plan-keepalive.ts, Tynn #754): it reads the sessions there.
     /*
      * THE SPAWN LEDGER AND THE LIFECYCLE LOG (hosting plan 1.5 / 1.6). Every agent run's processes are written down as
      * they start and forgotten when a stop VERIFIES they ended; whatever a previous Genie left running — a crash, a
@@ -1501,7 +1483,7 @@ async function boot(): Promise<void> {
         // Each plan is kept on the agent's record as it arrives, so its next run (after a relaunch too) shows it at once.
         onPlan: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
-        onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
+        onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
         onHeadroom: (provider: string, room: Headroom, stamp?: ReadingStamp) => headroomFeed.offer(provider, room, stamp),
@@ -3372,8 +3354,6 @@ const quitPorts: QuitPorts = {
         // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
         // (genie-test-windows, job Q0), and a quit needs main for its own steps.
         stallProfiler?.stop();
-        // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
-        keepaliveNow?.stop();
         // Every supervised process, the front door, an in-flight flow run, the knowledge database.
         void services?.shutdown();
         // The spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then
