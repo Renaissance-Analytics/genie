@@ -55,3 +55,8 @@ export const SIGNED_IN_AGAIN =
 /** What each agent is told when the person says its paused ACCOUNT is put right (`Try again`, core/account-pause.ts). */
 export const ACCOUNT_BACK =
     'Your provider had paused this account, and the person says it is put right. Carry on with what you were doing: the last message to you may not have reached you, so read the conversation above before you act.';
+
+/** What a person does in the login window to switch accounts in the provider's one home (Tynn #753). Stub: not implemented yet. */
+export function accountSwitchSteps(_provider: string): readonly string[] {
+    return [];
+}

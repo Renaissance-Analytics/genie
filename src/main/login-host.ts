@@ -47,7 +47,7 @@ export function loginTerminalOf(route: string): string | null {
 }
 
 /** The Take Over window's route for a sign-in terminal: the window only shows it (Tynn #479). */
-export function loginRoute(terminalId: string, provider: string): string {
+export function loginRoute(terminalId: string, provider: string, _switching = false): string {
     return `genie://takeover/${terminalId}?login=${encodeURIComponent(provider)}`;
 }
 
@@ -159,6 +159,11 @@ export class LoginHost {
         this.#live.set(key, live);
         this.#options.openWindow(this.#route(live));
         return { ok: true, terminalId: opened.id };
+    }
+
+    /** Open the provider's own login in its one home so the person can switch accounts (Tynn #753). Stub: not implemented yet. */
+    startSwitch(_provider: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
+        return { ok: false, reason: 'not implemented' };
     }
 
     /**

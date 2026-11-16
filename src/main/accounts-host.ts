@@ -149,6 +149,14 @@ export class AccountsHost {
         });
     }
 
+    /**
+     * THE ACCOUNT SIGNED IN TO THE PROVIDER'S ONE HOME NOW (Tynn #753): matched by email to a known account, which becomes the
+     * active one; a new email becomes a new known account. Stub: not implemented yet.
+     */
+    recordSignedIn(_provider: AcpProvider, _identity: AccountIdentity): Promise<AccountRecord | null> {
+        return Promise.resolve(null);
+    }
+
     rename(id: string, label: string): Promise<void> {
         return this.#update(id, a => ({ ...a, label: accountLabelOf(label), labelEdited: true }));
     }

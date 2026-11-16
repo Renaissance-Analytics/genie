@@ -71,3 +71,17 @@ export async function switchActiveAccount(ports: AccountSwitchPorts, provider: A
     }));
     return { ok: true, moved, failed };
 }
+
+/** What opening the provider's own login to switch accounts needs (Tynn #753). */
+export interface AccountSwitchLoginPorts {
+    readonly login: { startSwitch(provider: string): { ok: true; terminalId: string } | { ok: false; reason: string } };
+}
+
+export type AccountSwitchStart =
+    | { ok: true; terminalId: string; instructions: readonly string[] }
+    | { ok: false; reason: string };
+
+/** Stub: not implemented yet. */
+export function startAccountSwitch(_ports: AccountSwitchLoginPorts, _provider: string): AccountSwitchStart {
+    return { ok: false, reason: 'not implemented' };
+}
