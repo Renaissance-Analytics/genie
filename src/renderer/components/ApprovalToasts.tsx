@@ -1,6 +1,6 @@
 import { Button } from '@particle-academy/react-fancy';
 import { useEffect, useReducer } from 'react';
-import { personText } from '../../core/person-text.js';
+import { personLine } from '../../core/person-text.js';
 import type { DeckItem } from '../../core/deck.js';
 import { EMPTY_TOASTS, toastReducer, toastView, type ToastStackView } from '../../core/approval-toasts.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
@@ -73,7 +73,7 @@ function ToastCard({ item, busy, onAnswer, onOpenAgent, onTrustWorkspace, worksp
             </div>
             <ApprovalCard
                 flat
-                approval={{ question: personText(item.title), options, why: item.why ?? null }}
+                approval={{ question: personLine(item.title), options, why: item.why ?? null }}
                 agentName={item.agentName ?? undefined}
                 // '' = an answer in flight: every option refuses a second press until the request leaves.
                 answering={busy ? '' : null}

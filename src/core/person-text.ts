@@ -41,6 +41,9 @@ const GONE = '\u0000';
 
 function stripIds(text: string): string {
     return text
+        // The comma that only introduced an id goes with it when the id ended the clause: `Run this, agent_…:` reads `Run this:`,
+        // not `Run this,:`. A comma that is the prose's own (the id is followed by more words) stays.
+        .replace(new RegExp(`,[ \\t]*${ID_SOURCE}(?=[:;.!?])`, 'g'), GONE)
         .replace(new RegExp(`[ \\t]*${ID_SOURCE}`, 'g'), GONE)
         // An id in brackets leaves no empty brackets (code never gets here: it is kept whole).
         .replace(new RegExp(`\\(${GONE}\\)`, 'g'), GONE)
@@ -67,9 +70,13 @@ export function personText(text: string | null | undefined): string | null | und
     return out + stripIds(text.slice(at));
 }
 
-/** Text drawn as FLAT text (a preview, a snippet, a toast), never as code: no id is kept anywhere in it. Not built yet. */
+/**
+ * Text drawn as FLAT text (a preview, a search snippet, a toast), never as code: there is nothing to copy there, so no id is kept
+ * anywhere in it, a fenced block's included. `personText` is for what is drawn as Markdown, where code is a block with a copy button.
+ */
 export function personLine(text: string): string;
 export function personLine(text: string | null | undefined): string | null | undefined;
 export function personLine(text: string | null | undefined): string | null | undefined {
-    return text;
+    if (!text || idsIn(text).length === 0) return text;
+    return stripIds(text);
 }
