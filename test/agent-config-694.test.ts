@@ -72,17 +72,17 @@ describe('agents in project.json (pure)', () => {
     const doc = { $schema: SCHEMA('0.3.0'), name: 'Liftpoint', repos: [{ name: 'app', path: 'repos/app', futureKey: 1 }], appearance: { color: '#3b82f6' }, futureOwner: { keep: true }, agents: { reviewer: { purpose: 'Reviews.', provider: 'codex' } } };
     const text = `${JSON.stringify(doc, null, 4)}\n`;
 
-    it('this Genie writes shared-schemas v0.4.0 (the revision that declares agents)', () => {
-        expect(SCHEMA_REVISION).toBe('0.4.0');
+    it('this Genie writes shared-schemas v0.5.0 (the revision that declares agents)', () => {
+        expect(SCHEMA_REVISION).toBe('0.5.0');
     });
 
-    it('sets one agent, keeps every other key and every other agent, stamps v0.4.0, in the file’s own indentation', () => {
+    it('sets one agent, keeps every other key and every other agent, stamps v0.5.0, in the file’s own indentation', () => {
         const r = agentConfigWrite(text, { lift: { purpose: LIFT_PURPOSE, tuis: ['claude'] } });
         expect(r.ok).toBe(true);
         if (!r.ok) return;
         expect(r.changed).toBe(true);
         expect(r.backup).toBeNull();
-        expect(JSON.parse(r.text)).toEqual({ ...doc, $schema: SCHEMA('0.4.0'), agents: { reviewer: { purpose: 'Reviews.', provider: 'codex' }, lift: { purpose: LIFT_PURPOSE, tuis: ['claude'] } } });
+        expect(JSON.parse(r.text)).toEqual({ ...doc, $schema: SCHEMA('0.5.0'), agents: { reviewer: { purpose: 'Reviews.', provider: 'codex' }, lift: { purpose: LIFT_PURPOSE, tuis: ['claude'] } } });
         expect(r.text).toMatch(/^\{\n {4}"\$schema"/);
         expect(r.text.endsWith('}\n')).toBe(true);
     });
@@ -107,7 +107,7 @@ describe('agents in project.json (pure)', () => {
     it('refuses — and so writes nothing — for no project.json, invalid JSON, a newer schema, a bad name or no purpose', () => {
         expect(agentConfigWrite(null, { lift: { purpose: 'L' } })).toMatchObject({ ok: false });
         expect(agentConfigWrite('{ nope', { lift: { purpose: 'L' } })).toMatchObject({ ok: false });
-        expect(agentConfigWrite(JSON.stringify({ $schema: SCHEMA('0.5.0') }), { lift: { purpose: 'L' } })).toMatchObject({ ok: false, reason: expect.stringMatching(/newer/) });
+        expect(agentConfigWrite(JSON.stringify({ $schema: SCHEMA('9.0.0') }), { lift: { purpose: 'L' } })).toMatchObject({ ok: false, reason: expect.stringMatching(/newer/) });
         expect(agentConfigWrite(text, { Lift: { purpose: 'L' } })).toMatchObject({ ok: false });
         expect(agentConfigWrite(text, { lift: { purpose: '  ' } })).toMatchObject({ ok: false });
     });
@@ -115,7 +115,7 @@ describe('agents in project.json (pure)', () => {
     it('an unstamped legacy file gets MIGRATIONS.md’s backup', () => {
         const legacy = '{\n  "name": "Old"\n}\n';
         const r = agentConfigWrite(legacy, { lift: { purpose: 'L' } });
-        expect(r.ok && r.backup).toEqual({ name: 'project.json.pre-schema-0.4.0.bak', text: legacy });
+        expect(r.ok && r.backup).toEqual({ name: 'project.json.pre-schema-0.5.0.bak', text: legacy });
     });
 
     it('reads only the four config keys of each well-formed entry; a malformed entry or name is ignored, not guessed at', () => {
@@ -155,7 +155,7 @@ describe('the one-time move, on the host', () => {
         expect(r).toEqual({ ok: true, moved: ['lift'] });
         // project.json FIRST, then the persona: a failure between them leaves the config twice, never nowhere.
         expect(fs.writes).toEqual([`${ROOT}/project.json`, `${ROOT}/.agents/lift/AGENT.md`]);
-        expect(JSON.parse(fs.files[`${ROOT}/project.json`]!)).toEqual({ $schema: SCHEMA('0.4.0'), name: 'Liftpoint', futureOwner: { keep: true }, tynn: { projectId: '42' }, agents: { lift: { purpose: LIFT_PURPOSE, tuis: ['claude'] } } });
+        expect(JSON.parse(fs.files[`${ROOT}/project.json`]!)).toEqual({ $schema: SCHEMA('0.5.0'), name: 'Liftpoint', futureOwner: { keep: true }, tynn: { projectId: '42' }, agents: { lift: { purpose: LIFT_PURPOSE, tuis: ['claude'] } } });
         expect(fs.files[`${ROOT}/.agents/lift/AGENT.md`]).toBe(`${LIFT_PURPOSE}\n`);
         expect(fs.files[`${ROOT}/.agents/maipa/AGENT.md`]).toBe(MAIPA);
     });
@@ -181,7 +181,7 @@ describe('the one-time move, on the host', () => {
         const none = disk({ [`${ROOT}/.agents/lift/AGENT.md`]: LIFT });
         expect(await moveAgentFrontmatter(none, ROOT)).toMatchObject({ ok: false });
         expect(none.writes).toEqual([]);
-        const newer = disk({ [`${ROOT}/project.json`]: JSON.stringify({ $schema: SCHEMA('0.5.0') }), [`${ROOT}/.agents/lift/AGENT.md`]: LIFT });
+        const newer = disk({ [`${ROOT}/project.json`]: JSON.stringify({ $schema: SCHEMA('9.0.0') }), [`${ROOT}/.agents/lift/AGENT.md`]: LIFT });
         expect(await moveAgentFrontmatter(newer, ROOT)).toMatchObject({ ok: false, reason: expect.stringMatching(/newer/) });
         expect(newer.writes).toEqual([]);
         expect(newer.files[`${ROOT}/.agents/lift/AGENT.md`]).toBe(LIFT);
@@ -221,7 +221,7 @@ describe('creating an agent writes its config to project.json and only its perso
     it('scout: project.json gains agents.scout {purpose, provider}; AGENT.md is the purpose once; then it registers', async () => {
         const { p, fs, registered } = ports({ [`${ROOT}/project.json`]: PROJECT });
         expect(await createAgent(p, 'lp', { name: 'Scout', purpose: 'Reads issues and triages them.', provider: 'codex' })).toEqual({ ok: true, id: 'agent_new', name: 'scout' });
-        expect(JSON.parse(fs.files[`${ROOT}/project.json`]!)).toEqual({ $schema: SCHEMA('0.4.0'), name: 'Liftpoint', futureOwner: { keep: true }, tynn: { projectId: '42' }, agents: { scout: { purpose: 'Reads issues and triages them.', provider: 'codex' } } });
+        expect(JSON.parse(fs.files[`${ROOT}/project.json`]!)).toEqual({ $schema: SCHEMA('0.5.0'), name: 'Liftpoint', futureOwner: { keep: true }, tynn: { projectId: '42' }, agents: { scout: { purpose: 'Reads issues and triages them.', provider: 'codex' } } });
         expect(fs.files[`${ROOT}/.agents/scout/AGENT.md`]).toBe('Reads issues and triages them.\n');
         expect(registered).toEqual([{ workspaceId: 'lp', provider: 'codex', name: 'scout', instructions: '.agents/scout/AGENT.md' }]);
     });
@@ -231,7 +231,7 @@ describe('creating an agent writes its config to project.json and only its perso
         expect(await createAgent(none.p, 'lp', { name: 'scout', purpose: 'P', provider: 'claude' })).toMatchObject({ ok: false, reason: expect.stringMatching(/project\.json/) });
         expect(none.fs.writes).toEqual([]);
         expect(none.registered).toEqual([]);
-        const newer = ports({ [`${ROOT}/project.json`]: JSON.stringify({ $schema: SCHEMA('0.5.0') }) });
+        const newer = ports({ [`${ROOT}/project.json`]: JSON.stringify({ $schema: SCHEMA('9.0.0') }) });
         expect(await createAgent(newer.p, 'lp', { name: 'scout', purpose: 'P', provider: 'claude' })).toMatchObject({ ok: false, reason: expect.stringMatching(/newer/) });
         expect(newer.fs.writes).toEqual([]);
         expect(newer.registered).toEqual([]);
