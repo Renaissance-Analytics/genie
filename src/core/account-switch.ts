@@ -51,3 +51,6 @@ export function accountSwitchOutcomeOf(value: unknown): AccountSwitchOutcome | n
     }
     return null;
 }
+
+/** RED stub (Tynn #482 fix). */
+export function accountSwitchSignal(_o: AccountSwitchOutcome): { kind: string; outcome: unknown } { return { kind: '', outcome: null }; }
