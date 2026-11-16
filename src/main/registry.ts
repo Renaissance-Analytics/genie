@@ -16,6 +16,7 @@ export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readR
 import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
+import { envFileName } from '../core/dotenv.js';
 import { slugsFor } from '../core/address.js';
 import { WorkspaceMailVisibility, hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
 
@@ -536,6 +537,23 @@ export class Registry {
             if (w.id !== workspaceId) return w;
             const { defaultAgentId: _previous, ...rest } = w;
             return agentId === null ? rest : { ...rest, defaultAgentId: agentId };
+        });
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return { ok: true };
+    }
+
+    /**
+     * The env file its sites' service connection is written to (`WorkspaceRecord.envFile`): a plain file name, or `null` for the
+     * default every workspace without one has (Tynn #756, PR8: a clone's project.json may name another). Never a path.
+     */
+    async setWorkspaceEnvFile(workspaceId: string, file: string | null): Promise<{ ok: true } | { ok: false; reason: string }> {
+        if (!this.#workspaces.some((w) => w.id === workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
+        if (file !== null && (file.trim() === '' || envFileName(file) === null)) return { ok: false, reason: `"${file}" is not a file name: an env file is a plain name inside each site's folder, like .env.local` };
+        this.#workspaces = this.#workspaces.map((w) => {
+            if (w.id !== workspaceId) return w;
+            const { envFile: _previous, ...rest } = w;
+            return file === null ? rest : { ...rest, envFile: file.trim() };
         });
         await this.#store.writeWorkspaces(this.#workspaces);
         this.#emit();

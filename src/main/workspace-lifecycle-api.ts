@@ -21,6 +21,7 @@ import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { addWorkspace, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, createWorkspace, hibernateWorkspace, listTynnOwners, listTynnProjects, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { repoOpsPorts } from './workspace-reads-api.js';
+import type { AgentId } from '../core/identity.js';
 import type { WorkspaceSaveOps } from './workspace-save-host.js';
 
 /**
@@ -124,6 +125,10 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
         // The one write: the move of old AGENT.md front matter into project.json (Tynn #694), temp + rename.
         writeTextAtomic: nodeAgentConfigFs().writeTextAtomic,
         register: async (input) => { const record = await registry().register(input); return { id: record.id, name: record.name }; },
+        // What project.json says of an adopted agent (Tynn #756, PR8): its IssueWatch, and whether it is the workspace's default.
+        setIssueWatch: async (id, setting) => { await registry().setIssueWatch(id as AgentId, setting); },
+        defaultAgentOf: (workspaceId) => w.registry()?.defaultAgentOf(workspaceId) ?? null,
+        setDefaultAgent: async (workspaceId, agentId) => { await registry().setDefaultAgent(workspaceId, agentId); },
         sacredName: async (workspaceId) => {
             const folder = w.registry()?.workspace(workspaceId)?.path;
             const manifest = folder ? await readFile(join(folder, 'project.json'), 'utf8').catch(() => null) : null;
