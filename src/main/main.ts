@@ -1541,7 +1541,7 @@ async function boot(): Promise<void> {
                 if (target && !target.isDestroyed()) target.webContents.send('genie:action', { agentId: null, kind: TERMINAL_NEEDS_YOU, workspaceId: signal.workspaceId, terminalId: signal.terminalId, agentName: signal.agentName ?? 'An agent' });
             } else if (signal.kind === 'limit-alert' && typeof signal.title === 'string' && typeof signal.body === 'string') broadcast('genie:action', { agentId: null, kind: 'limit-alert', sound: typeof signal.sound === 'string' ? signal.sound : 'synth', title: signal.title, body: signal.body });
             // How an account switch came out (Tynn #482): every window shows it, with Retry when nothing changed.
-            else if (signal.kind === 'account-switch') broadcast('genie:action', { agentId: null, kind: 'account-switch', outcome: raw });
+            else if (signal.kind === 'account-switch') broadcast('genie:action', { agentId: null, kind: 'account-switch', outcome: (raw as { outcome?: unknown }).outcome });
             else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
