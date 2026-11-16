@@ -19,7 +19,8 @@ export interface SaveFs {
 }
 
 export interface SaveGit {
-    fetch(cwd: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `git fetch`, so what is shown as incoming is what the team has now. Named so it is not mistaken for a network fetch. */
+    fetchUpstream(cwd: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** The branch this one tracks (`origin/main`), or null. */
     upstream(cwd: string): Promise<string | null>;
     mergeBase(cwd: string, ref: string): Promise<string | null>;
@@ -64,7 +65,7 @@ export class WorkspaceSave {
     async preview(workspacePath: string): Promise<SavePreview> {
         const { fs, git } = this.#options;
         if (this.#options.mayReadFolder?.(workspacePath) === false) return refusedPreview('this workspace is hibernated; wake it to save');
-        const fetched = await git.fetch(workspacePath);
+        const fetched = await git.fetchUpstream(workspacePath);
         const ref = await git.upstream(workspacePath);
         const upstream: SavePreview['upstream'] = fetched.ok ? { fetched: true, ref } : { fetched: false, ref, reason: fetched.reason };
         const model = await this.#options.liveModel(workspacePath);
@@ -136,7 +137,7 @@ async function git(cwd: string, args: readonly string[], timeout: number): Promi
 /** The real git behind {@link SaveGit}. Nothing here commits, merges, resets or checks out. */
 export function nodeSaveGit(): SaveGit {
     return {
-        async fetch(cwd) {
+        async fetchUpstream(cwd) {
             const r = await git(cwd, ['fetch', '--quiet'], 60_000);
             return r.ok ? { ok: true } : { ok: false, reason: r.reason };
         },

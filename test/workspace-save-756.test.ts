@@ -328,7 +328,7 @@ describe('Save to repo, in main', () => {
         };
         const upstream = options.upstream === undefined ? 'origin/main' : options.upstream;
         const git: SaveGit = {
-            async fetch() { calls.push('fetch'); return options.fetch ?? { ok: true }; },
+            async fetchUpstream() { calls.push('fetch'); return options.fetch ?? { ok: true }; },
             async upstream() { calls.push('upstream'); return upstream; },
             async mergeBase() { calls.push('mergeBase'); return 'base1'; },
             async show(_cwd, ref, path) { calls.push(`show ${ref} ${path}`); return ref === 'base1' ? (path === 'project.json' ? json(BASE) : null) : ref === 'origin/main' && path === 'project.json' ? json(THEIRS) : null; },
