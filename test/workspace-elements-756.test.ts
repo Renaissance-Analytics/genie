@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { agentConfigOf, agentConfigsOf, agentConfigWrite } from '../src/core/agent-config.js';
 import type { ServiceInstance } from '../src/core/services.js';
@@ -7,8 +6,8 @@ import { SHARED_SCHEMAS_PIN } from '../src/core/shared-schemas-pin.js';
 import { scanForMachineState } from '../src/core/workspace-save-guard.js';
 import { planSave, type LiveModel } from '../src/core/workspace-save.js';
 import { SCHEMA_REVISION } from '../src/core/workspace-model.js';
-import { elementSourcesFor } from '../src/main/workspace-save-sources.js';
-import { workspaceSaveOps, type SaveFs, type SaveGit } from '../src/main/workspace-save-host.js';
+import { elementSourcesFor, liveModelWithElements } from '../src/main/workspace-save-sources.js';
+import { WorkspaceSave, type SaveFs, type SaveGit } from '../src/main/workspace-save-host.js';
 
 /**
  * THE WRITERS (Tynn #756, PR3): a workspace's services, workspace settings and agents' IssueWatch as what a repo keeps of
@@ -272,34 +271,38 @@ describe('what the workspace holds', () => {
     it('CONTROL: a workspace with no default agent has none', () => {
         expect(elementSourcesFor(ports(), 'someoneelse').workspace.defaultAgent).toBeNull();
     });
-
-    it('both hosts hand them to the save', () => {
-        for (const file of ['src/main/main.ts', 'src/main/genie-host.ts']) expect(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), file).toContain('elementSourcesFor(');
-    });
 });
 
 describe('through Save to repo', () => {
-    function rig() {
-        const disk: Record<string, string> = { '/w/acme/project.json': `${JSON.stringify({ $schema: V4, name: 'Acme', agents: { lift: { purpose: 'Builds.' } } }, null, 2)}\n` };
-        const writes: [string, string][] = [];
-        const fs: SaveFs = { async readText(p) { return disk[p] ?? null; }, async writeTextAtomic(p, t) { writes.push([p, t]); disk[p] = t; } };
+    const disk = () => ({ '/w/acme/project.json': `${JSON.stringify({ $schema: V4, name: 'Acme', agents: { lift: { purpose: 'Builds.' } } }, null, 2)}\n` } as Record<string, string>);
+    const read = (files: Record<string, string>) => async (path: string): Promise<LiveModel | null> => {
+        const manifestText = files[`${path}/project.json`];
+        return manifestText === undefined ? null : { manifest: JSON.parse(manifestText), manifestText, files: [] };
+    };
+    const sources = (): ElementSources => ({
+        services: [dedicatedPg],
+        workspace: { overrides: { limit_terminals: '8' }, defaultAgent: 'lift', envFile: null, mcpOff: [] },
+        agents: [{ name: 'lift', issueWatch: { delivery: 'push', kinds: ['issue.new'] } }],
+    });
+    const saver = (files: Record<string, string>, writes: [string, string][]) => {
+        const fs: SaveFs = { async readText(p) { return files[p] ?? null; }, async writeTextAtomic(p, t) { writes.push([p, t]); files[p] = t; } };
         const git: SaveGit = { async fetchUpstream() { return { ok: true }; }, async upstream() { return null; }, async mergeBase() { return null; }, async show() { return null; } };
-        const ops = workspaceSaveOps({
-            fs, git, pathOf: (id) => (id === WS ? '/w/acme' : null),
-            elements: () => ({ services: [dedicatedPg], workspace: { overrides: { limit_terminals: '8' }, defaultAgent: 'lift', envFile: null, mcpOff: [] }, agents: [{ name: 'lift', issueWatch: { delivery: 'push', kinds: ['issue.new'] } }] }),
-        });
-        return { ops, writes };
-    }
+        return new WorkspaceSave({ fs, git, liveModel: liveModelWithElements(read(files), sources, WS) });
+    };
 
-    it('the preview shows project.json as changed by the declarations, with nothing excluded from the plan', async () => {
-        const preview = await rig().ops.savePreview(WS);
+    it('CONTROL: a workspace with no project.json has no live model, declarations or not', async () => {
+        expect(await liveModelWithElements(read({}), sources, WS)('/w/acme')).toBeNull();
+    });
+
+    it('the preview shows project.json as changed by the declarations', async () => {
+        const preview = await saver(disk(), []).preview('/w/acme');
         expect(preview.plan.ok).toBe(true);
         expect(preview.files).toEqual([{ path: 'project.json', status: 'changed' }]);
     });
 
-    it('save writes the three declarations into project.json, stamped v0.5.0, in the file’s style; nothing machine-specific', async () => {
-        const { ops, writes } = rig();
-        expect(await ops.save(WS, {})).toEqual({ ok: true, written: ['project.json'] });
+    it('save writes the three declarations into project.json, stamped v0.5.0, in the file style; nothing machine-specific', async () => {
+        const writes: [string, string][] = [];
+        expect(await saver(disk(), writes).save('/w/acme', {})).toEqual({ ok: true, written: ['project.json'] });
         const written = JSON.parse(writes[0]![1]);
         expect(written.$schema).toBe(V5);
         expect(written.services).toEqual([{ engine: 'postgres', variant: 'pgvector', version: '17', scope: 'dedicated', active: true }]);

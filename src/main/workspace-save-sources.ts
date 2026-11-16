@@ -1,4 +1,5 @@
 import type { ElementSources } from '../core/workspace-elements.js';
+import type { LiveModel } from '../core/workspace-save.js';
 import type { ServiceInstance } from '../core/services.js';
 import type { IssueWatchSetting } from '../core/issue-watch.js';
 
@@ -17,4 +18,13 @@ export interface SourcePorts {
 
 export function elementSourcesFor(_ports: SourcePorts, _workspaceId: string): ElementSources {
     return { services: [], workspace: { overrides: {}, defaultAgent: null, envFile: null, mcpOff: [] }, agents: [] };
+}
+
+/** Inert stub (RED): a live-model loader with a workspace's declarations in it. */
+export function liveModelWithElements(
+    base: (workspacePath: string) => Promise<LiveModel | null>,
+    _sources: (workspaceId: string) => ElementSources | Promise<ElementSources>,
+    _workspaceId: string,
+): (workspacePath: string) => Promise<LiveModel | null> {
+    return base;
 }
