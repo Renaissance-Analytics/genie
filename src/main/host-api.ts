@@ -228,6 +228,9 @@ export interface HostApiDeps {
         /** Save to repo (Tynn #756): the preview, then the save with the person's choices. Optional: a host without them refuses. */
         savePreview?(workspaceId: unknown): Promise<unknown>;
         save?(workspaceId: unknown, choices: unknown): Promise<unknown>;
+        /** The offers a clone's repo brings (Tynn #756): listed, and one applied. Optional: a host without them refuses. */
+        cloneOffers?(workspaceId: unknown): Promise<unknown>;
+        applyOffer?(workspaceId: unknown, offerId: unknown): Promise<unknown>;
     };
     agentOps: {
         /** THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. */
@@ -635,6 +638,10 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.savePreview ? deps.workspaceOps.savePreview(args[0]) : { plan: { ok: false, reason: 'this host cannot save a workspace to its repo', violations: [] }, files: [], upstream: { fetched: false, ref: null }, decisions: [], conflicts: [] };
             case 'workspaces.save':
                 return deps.workspaceOps.save ? deps.workspaceOps.save(args[0], args[1]) : { ok: false, reason: 'this host cannot save a workspace to its repo', written: [] };
+            case 'workspaces.cloneOffers':
+                return deps.workspaceOps.cloneOffers ? deps.workspaceOps.cloneOffers(args[0]) : { ok: false, reason: 'this host does not watch a workspace’s repo' };
+            case 'workspaces.applyOffer':
+                return deps.workspaceOps.applyOffer ? deps.workspaceOps.applyOffer(args[0], args[1]) : { ok: false, reason: 'this host does not watch a workspace’s repo' };
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
             case 'addWorkspace':

@@ -70,6 +70,7 @@ import { terminalWorkspaceOf, workspaceFolders } from './host-share-scope.js';
 import { TakeOverHost } from './take-over-host.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
+import { CloneOffersService } from './clone-offers-service.js';
 import { nodeSaveGit, workspaceSaveOps } from './workspace-save-host.js';
 import { elementSourcesFor } from './workspace-save-sources.js';
 import { cloneRestorePorts, nodeCloneFiles } from './workspace-clone-ports.js';
@@ -566,6 +567,7 @@ async function main(): Promise<void> {
      * database, whose background processes the book takes once) — the host is only ever started by a window until P6.
      */
     const processesService = new ProcessesService();
+    const cloneOffersService = new CloneOffersService();
     /*
      * FLOWS (P3.3d): the flows file, the scheduler, the runner and the file trigger — an armed flow fires on this host's
      * clock with no window, its prompts reaching this host's sessions, its commands this host's supervisor, its tool steps
@@ -1105,6 +1107,7 @@ async function main(): Promise<void> {
         ...(hostingService ? { hosting: hostingService } : {}),
         appInbox: appInboxDoor,
         processes: processesService,
+        cloneOffers: cloneOffersService,
         plugins: pluginsService,
         marketplace: marketplaceHost,
         ...(gappBook ? { gapps: gappsApi(gappBook, gappAsk, gappPreviews ?? undefined), gappsChanged: (listener) => gappBook!.onChange(listener) } : {}),
@@ -1625,6 +1628,7 @@ async function main(): Promise<void> {
             stagingDirectory: () => hostScratch.directory(),
         },
         colors: workspaceColors,
+        cloneOffers: { cloneOffers: (id) => cloneOffersService.call('list', [id]), applyOffer: (id, offerId) => cloneOffersService.call('apply', [id, offerId]) },
         workspaceSave: workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => hostRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true,
             // What a save declares: this workspace's engines, its own settings and its agents' IssueWatch, read when the dialog asks.
             elements: (id) => elementSourcesFor({ services: { list: () => hostingStack?.engines.list() ?? [] }, settings: { workspaceValues: (w) => settings.workspaceValues(w) }, registry: hostRegistry, flows: { list: (w) => flowStoreNow?.list(w) ?? [] }, processes: { kept: () => processBookNow?.kept() ?? [] } }, id) }),
@@ -1857,6 +1861,7 @@ async function main(): Promise<void> {
             workspace.path,
         ).model.files.map((f) => ({ path: f.path, value: f.value })),
     });
+    cloneOffersService.attach({ watch: cloneWatch, trusted: (id) => hostingStack?.trust.view(id)?.trusted === true });
     cloneWatch.onChange((workspaceId, offers) => { if (offers.length > 0) lifecycleLog(`${workspaceId}: the repo has ${offers.length} change${offers.length === 1 ? '' : 's'} to offer: ${offers.map((o) => o.summary).join(', ')}`); });
     const cloneWatchTimer = setInterval(() => { cloneWatch.pass().catch((error: unknown) => say(`clone watch: ${error instanceof Error ? error.message : String(error)}`)); }, 30_000);
     cloneWatchTimer.unref();

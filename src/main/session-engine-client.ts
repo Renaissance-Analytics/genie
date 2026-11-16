@@ -57,6 +57,7 @@ import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-h
 import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { PhpCgiResolution } from './site-manager.js';
+import type { CloneApplyReply, CloneOffersReply } from './clone-offers-service.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import { PluginsReplica } from './plugins-replica.js';
@@ -195,6 +196,7 @@ export class SessionEngineClient {
     #hosting: HostingReplica | null = null;
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
+    #cloneOffers: { list(workspaceId: string): Promise<CloneOffersReply>; apply(workspaceId: string, offerId: string): Promise<CloneApplyReply> } | null = null;
     #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
     #gapps: GAppBookApi | null = null;
@@ -931,6 +933,16 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#processBook;
+    }
+
+    /** genie-host's watcher of a clone's repo, as this window lists and applies its offers (Tynn #756). A failed link is a refusal in words. */
+    cloneOffers(): { list(workspaceId: string): Promise<CloneOffersReply>; apply(workspaceId: string, offerId: string): Promise<CloneApplyReply> } {
+        const ask = async <T>(method: string, args: unknown[]): Promise<T> => {
+            const reply = await this.call('engine.cloneOffers', [method, args]);
+            return (reply.ok ? reply.value : { ok: false, reason: reply.reason }) as T;
+        };
+        this.#cloneOffers ??= { list: (id) => ask<CloneOffersReply>('list', [id]), apply: (id, offerId) => ask<CloneApplyReply>('apply', [id, offerId]) };
+        return this.#cloneOffers;
     }
 
     #issueWatch: IssueWatchReplica | null = null;

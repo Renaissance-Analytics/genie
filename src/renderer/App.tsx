@@ -83,6 +83,7 @@ import { GITHUB_ROUTE, type RepoListing } from '../core/github.js';
 import type { TynnLinkApi } from './components/TynnProjectLink.js';
 import { ImportedAgentsModal } from './components/ImportedAgents.js';
 import { NewAgentModal } from './components/NewAgentModal.js';
+import { OffersDialog } from './components/OffersDialog.js';
 import { SaveToRepoDialog } from './components/SaveToRepoDialog.js';
 import { importedAgentsOffer, type ImportedAgent } from '../core/agent-adoption.js';
 import { pickerStart } from '../core/add-workspace.js';
@@ -1233,6 +1234,20 @@ function DesktopApp({ bridge }: AppProps) {
     /** Save to repo (Tynn #756): the workspace whose dialog is open. */
     const [saveFor, setSaveFor] = useState<string | null>(null);
     const loadSavePreview = useCallback(() => (saveFor !== null && resolvedBridge?.workspaces.savePreview ? resolvedBridge.workspaces.savePreview(saveFor) : Promise.resolve({ ok: false as const, reason: 'this host cannot save to the repo' })), [saveFor, resolvedBridge]);
+    /** What the routed workspace's repo brings (Tynn #756): its count for the dashboard's badge, and the dialog's workspace. */
+    const [cloneOfferCount, setCloneOfferCount] = useState<{ workspaceId: string; count: number } | null>(null);
+    const [offersFor, setOffersFor] = useState<string | null>(null);
+    const routedWorkspaceId = parsed.surface === 'workspace' ? parsed.workspaceId : null;
+    const cloneOffersOf = resolvedBridge?.workspaces.cloneOffers;
+    useEffect(() => {
+        if (routedWorkspaceId === null || !cloneOffersOf) { setCloneOfferCount(null); return undefined; }
+        let live = true;
+        const look = (): void => { void cloneOffersOf(routedWorkspaceId).then((r) => { if (live && r.ok) setCloneOfferCount({ workspaceId: routedWorkspaceId, count: r.offers.length }); }, () => {}); };
+        look();
+        const timer = setInterval(look, 30_000);
+        return () => { live = false; clearInterval(timer); };
+    }, [routedWorkspaceId, cloneOffersOf]);
+    const loadCloneOffers = useCallback(() => (offersFor !== null && resolvedBridge?.workspaces.cloneOffers ? resolvedBridge.workspaces.cloneOffers(offersFor) : Promise.resolve({ ok: false as const, reason: 'this host does not watch the repo' })), [offersFor, resolvedBridge]);
     const offerAgentsRef = useRef<(id: string) => void>(() => {});
     offerAgentsRef.current = (id) => {
         const read = resolvedBridge?.workspaces.importedAgents;
@@ -2159,6 +2174,7 @@ function DesktopApp({ bridge }: AppProps) {
             // Every "+ Add agent" opens the New agent form (Genie 1's); nothing is created until it is filled in.
             onAddAgent={(workspaceId) => setNewAgentFor(workspaceId)}
             {...(resolvedBridge?.workspaces.savePreview && resolvedBridge.workspaces.save ? { onSaveToRepo: (workspaceId: string) => setSaveFor(workspaceId) } : {})}
+            {...(cloneOfferCount && cloneOfferCount.count > 0 ? { cloneOffers: { workspaceId: cloneOfferCount.workspaceId, count: cloneOfferCount.count, onOpen: () => setOffersFor(cloneOfferCount.workspaceId) } } : {})}
             onAddWorkspace={previewAdd}
             // The Genie browser window: this machine's sites, or — in a window driving a Tynn workstation — that workstation's.
             onOpenBrowser={resolvedBridge?.browserWindow ? () => { void resolvedBridge.browserWindow?.open(); } : undefined}
@@ -2318,6 +2334,16 @@ function DesktopApp({ bridge }: AppProps) {
                 load={loadSavePreview}
                 save={(choices) => resolvedBridge.workspaces.save!(saveFor, choices)}
                 onClose={() => setSaveFor(null)}
+            />
+        ) : null}
+        {offersFor !== null && resolvedBridge?.workspaces.applyOffer ? (
+            <OffersDialog
+                workspaceName={workspaceLabel(snapshot.workspaces, offersFor)}
+                load={loadCloneOffers}
+                apply={(offerId) => resolvedBridge.workspaces.applyOffer!(offersFor, offerId)}
+                trust={() => resolvedBridge.features.act({ kind: 'workspace.trust', workspaceId: offersFor, workspacePath: snapshot.workspaces?.find((w) => w.id === offersFor)?.path ?? '' })}
+                onChanged={(count) => setCloneOfferCount({ workspaceId: offersFor, count })}
+                onClose={() => setOffersFor(null)}
             />
         ) : null}
         {newAgentFor !== null && resolvedBridge ? (

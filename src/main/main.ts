@@ -618,6 +618,7 @@ let registry: Registry | null = null;
 let workspaceColors: WorkspaceColors | null = null;
 /** Save to repo (Tynn #756): this workspace's project.json and repo files, saved against upstream. */
 let workspaceSaver: WorkspaceSaveOps | null = null;
+const NO_OFFERS = { ok: false as const, reason: 'Genie’s host is not running, so nothing is watching the repo' };
 /**
  * ISSUEWATCH (Tynn #806; the host split, P5c): genie-host hears Tynn and holds the state — the latest entry per project,
  * when it arrived, what happened lately, the repo switches, the client's state. This window reads it through the replica
@@ -2500,6 +2501,10 @@ async function boot(): Promise<void> {
                 ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry?.touch(), (id, color) => setWorkspaceColor(id, color), {
                     savePreview: (id) => (workspaceSaver ?? WORKSPACE_SAVE_UNAVAILABLE).savePreview(id),
                     save: (id, choices) => (workspaceSaver ?? WORKSPACE_SAVE_UNAVAILABLE).save(id, choices),
+                }, {
+                    // The watcher lives in genie-host: the window asks it over the engine link (Tynn #756).
+                    cloneOffers: (id) => (agentEngineLink?.live === true ? agentEngineLink.client.cloneOffers().list(String(id)) : Promise.resolve(NO_OFFERS)),
+                    applyOffer: (id, offerId) => (agentEngineLink?.live === true ? agentEngineLink.client.cloneOffers().apply(String(id), String(offerId)) : Promise.resolve(NO_OFFERS)),
                 }),
                 // The live tab's reads (P4 family 12): what changed since a cursor, never the whole board or queue.
                 tynnBoardChanges: (id, scope, cursor, ids) => readTynnBoardChanges(tynnBoardPorts(), id, (scope ?? {}) as BoardScope, cursor, ids),

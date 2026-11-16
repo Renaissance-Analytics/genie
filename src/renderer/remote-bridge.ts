@@ -6,7 +6,7 @@ import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js'
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
-import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import { NO_FILES, type AgentDetail, type CloneOffersReply, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
 import { isFeaturesRevision } from '../core/remote-frame.js';
 import { bytesToBase64 } from '../core/mobile.js';
@@ -473,6 +473,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             // The preview and the save are not ok/reason shapes themselves; a host's refusal still takes that shape.
             savePreview: async (workspaceId) => { const r = await call('workspaces.savePreview', workspaceId); return r.ok ? (r.value as SavePreview) : { ok: false as const, reason: r.reason }; },
             save: async (workspaceId, choices) => { const r = await call('workspaces.save', workspaceId, choices); return r.ok ? (r.value as SaveResult) : { ok: false as const, reason: r.reason }; },
+            cloneOffers: async (workspaceId) => { const r = await call('workspaces.cloneOffers', workspaceId); return r.ok ? (r.value as CloneOffersReply) : { ok: false as const, reason: r.reason }; },
+            applyOffer: async (workspaceId, offerId) => { const r = await call('workspaces.applyOffer', workspaceId, offerId); return r.ok ? (r.value as { ok: true } | { ok: false; reason: string }) : { ok: false as const, reason: r.reason }; },
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),

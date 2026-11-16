@@ -6,7 +6,7 @@ import { connectRemote, type RemoteClient } from './remote-bridge.js';
 import type { LocalFilesBridge } from './local-files-client.js';
 
 export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'commitsSince'
-    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'savePreview' | 'save' | 'setMcpServer' | 'onSettingsChanged'
+    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'savePreview' | 'save' | 'cloneOffers' | 'applyOffer' | 'setMcpServer' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
     | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn'
@@ -341,6 +341,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setColor: (id, color) => request((ws) => ws.setColor!(id, color)),
             savePreview: (id) => request((ws) => ws.savePreview!(id)),
             save: (id, choices) => request((ws) => ws.save!(id, choices)),
+            cloneOffers: (id) => request((ws) => ws.cloneOffers!(id)),
+            applyOffer: (id, offerId) => request((ws) => ws.applyOffer!(id, offerId)),
             onSettingsChanged: (listener) => { settingsListeners.add(listener); return () => { settingsListeners.delete(listener); }; },
             // The Tynn tab (P4 family 12): reads and actions reject on a failed connection, as the IPC calls did.
             tynnBoard: (id, scope) => read((b) => b.workspaces.tynnBoard!(id, scope)),

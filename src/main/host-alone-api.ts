@@ -8,7 +8,7 @@ import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
 import type { Finished } from './attention-store.js';
 import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
-import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
+import { workspaceLifecycleApi, workspaceLifecyclePorts, type CloneOfferOps, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { workspaceSettingsOps } from './workspace-reads-api.js';
 import { workspaceTynnApi } from './workspace-tynn-api.js';
 import { buildHostApi, type HostApiDeps } from './host-api.js';
@@ -63,7 +63,7 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
     'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn',
     'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.locateRepo',
     'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.setMcpServer',
-    'workspaces.savePreview', 'workspaces.save',
+    'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer',
 ]);
 
 /** The Tynn tab, read and changed (Tynn #553, P5d.5f). A live view's change reads stay the local window's. */
@@ -113,6 +113,8 @@ export interface HostAlonePorts {
     readonly colors: { set(path: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** Save to repo (Tynn #756), over this host's registry, disk and git. Absent: refused in words. */
     readonly workspaceSave?: WorkspaceSaveOps;
+    /** The offers a clone's repo brings (Tynn #756): genie-host's watcher. Absent: refused in words. */
+    readonly cloneOffers?: CloneOfferOps;
     /** genie-host's Tynn account, as the Tynn tab reaches it, and its page reader. */
     readonly tynnTab: { board: Parameters<typeof workspaceTynnApi>[0]; readPage: Parameters<typeof workspaceTynnApi>[1] };
     readonly updates?: HostApiDeps['updates'];
@@ -207,7 +209,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
             onSettingsChanged: (listener) => ports.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
             ...workspaceSettingsOps(() => ports.settings),
-            ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor, ports.workspaceSave ?? WORKSPACE_SAVE_UNAVAILABLE),
+            ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor, ports.workspaceSave ?? WORKSPACE_SAVE_UNAVAILABLE, ports.cloneOffers),
             ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
