@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { importedAgents, type AgentFile, type ImportedAgent } from '../core/agent-adoption.js';
 import { agentConfigsOf } from '../core/agent-config.js';
 import type { AcpProvider } from '../core/engine.js';
+import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { moveAgentFrontmatter, type AgentConfigFs } from './agent-config-host.js';
 
 /**
@@ -18,6 +19,11 @@ export interface AgentAdoptionPorts extends AgentConfigFs {
     register(input: { workspaceId: string; provider: AcpProvider; name: string; instructions: string }): Promise<{ id: string; name: string }>;
     /** The workspace's sacred grant from its linked Tynn project (`sacred_agent_name`); a failure grants nothing. */
     sacredName?(workspaceId: string): Promise<string | null>;
+    /** Set an adopted agent's IssueWatch from its config (Tynn #756, PR8). Absent: not applied. */
+    setIssueWatch?(agentId: string, setting: IssueWatchSetting): Promise<unknown>;
+    /** The workspace's default agent (by id), or null; and make one the default (Tynn #756, PR8). Absent: not applied. */
+    defaultAgentOf?(workspaceId: string): string | null;
+    setDefaultAgent?(workspaceId: string, agentId: string): Promise<unknown>;
 }
 
 type Refusal = { ok: false; reason: string };
@@ -59,6 +65,19 @@ export async function readImportedAgents(ports: AgentAdoptionPorts, workspaceId:
     return { ok: true, agents: importedAgents({ files, registered: ports.agentsOf(workspaceId), configs: agentConfigsOf(manifest), sacredName: await sacredOf(ports, workspaceId) }) };
 }
 
+/** The default agent project.json's `workspace` names, or null. */
+async function declaredDefaultAgent(ports: AgentAdoptionPorts, workspaceId: string): Promise<string | null> {
+    const folder = ports.workspace(workspaceId)?.path;
+    if (!folder) return null;
+    try {
+        const manifest = JSON.parse((await ports.readText(join(folder, 'project.json'))) ?? 'null') as { workspace?: { defaultAgent?: unknown } } | null;
+        const name = manifest?.workspace?.defaultAgent;
+        return typeof name === 'string' ? name : null;
+    } catch {
+        return null;
+    }
+}
+
 /** Adoptions in flight, by workspace and name: two clicks (or two windows) at once register the agent once. */
 const inFlight = new Set<string>();
 
@@ -78,6 +97,12 @@ export async function adoptAgent(ports: AgentAdoptionPorts, workspaceId: string,
         if (!agent) return { ok: false, reason: `${workspaceId} has no unregistered agent ${name} in .agents/` };
         if (agent.refusal !== null || agent.provider === null) return { ok: false, reason: agent.refusal ?? `${name} cannot be adopted` };
         const record = await ports.register({ workspaceId, provider: agent.provider, name: agent.name, instructions: agent.instructions });
+        // What project.json says of this agent comes with it: how it hears IssueWatch, and whether it is the workspace's default
+        // agent (only where the workspace has none: a person's choice here is never replaced). Never a capability grant.
+        if (agent.issueWatch && ports.setIssueWatch) await ports.setIssueWatch(record.id, agent.issueWatch);
+        if (ports.setDefaultAgent && ports.defaultAgentOf?.(workspaceId) === null && (await declaredDefaultAgent(ports, workspaceId))?.toLowerCase() === agent.name.toLowerCase()) {
+            await ports.setDefaultAgent(workspaceId, record.id);
+        }
         return { ok: true, id: record.id, name: record.name };
     } finally {
         inFlight.delete(key);
