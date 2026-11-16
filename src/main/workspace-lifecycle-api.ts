@@ -154,6 +154,11 @@ export interface CloneOfferOps {
     applyOffer(workspaceId: unknown, offerId: unknown): Promise<unknown>;
 }
 
+const NO_OFFER_OPS: CloneOfferOps = {
+    cloneOffers: () => Promise.resolve({ ok: false as const, reason: 'this host does not watch a workspace’s repo' }),
+    applyOffer: () => Promise.resolve({ ok: false as const, reason: 'this host does not watch a workspace’s repo' }),
+};
+
 export function workspaceLifecycleApi(
     parts: WorkspaceLifecycle,
     wiring: Pick<WorkspaceLifecycleWiring, 'registry' | 'github'>,
@@ -206,7 +211,8 @@ export function workspaceLifecycleApi(
         setDefaultAgent: (id, agentId) => wiring.registry()!.setDefaultAgent(id, agentId),
         setMcpServer: (id, name, on) => wiring.registry()!.setWorkspaceMcpServer(id, name, on).finally(touch),
         setColor,
-        ...(offerOps ? { cloneOffers: (id: unknown) => offerOps.cloneOffers(id), applyOffer: (id: unknown, offerId: unknown) => offerOps.applyOffer(id, offerId) } : {}),
+        cloneOffers: (id: unknown) => (offerOps ?? NO_OFFER_OPS).cloneOffers(id),
+        applyOffer: (id: unknown, offerId: unknown) => (offerOps ?? NO_OFFER_OPS).applyOffer(id, offerId),
         ...(saveOps ? { savePreview: (id: unknown) => saveOps.savePreview(id), save: (id: unknown, choices: unknown) => saveOps.save(id, choices) } : {}),
     };
 }
