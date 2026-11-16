@@ -19,6 +19,8 @@ export interface SourcePorts {
     };
     /** The flow store (Tynn #756, PR5). Absent: flows are not saved. */
     readonly flows?: { list(workspaceId?: string): readonly { name: string; workspaceId: string; document: Record<string, unknown> }[] };
+    /** The process book (Tynn #756, PR6). Absent: processes are not saved. */
+    readonly processes?: { kept(): readonly { name: string; workspaceId: string; command: string; cwd: string; restart: 'never' | 'on-failure' | 'always'; schedule?: { cron: string; kind: 'command' | 'agent-nudge'; prompt?: string; agent?: string } }[] };
 }
 
 export function elementSourcesFor(ports: SourcePorts, workspaceId: string): ElementSources {
@@ -35,6 +37,8 @@ export function elementSourcesFor(ports: SourcePorts, workspaceId: string): Elem
         agents: agents.map((a) => ({ name: a.name, issueWatch: a.issueWatch ?? null })),
         // Name, workspace and document only: the store's id, arming, runs and history stay on this machine.
         ...(ports.flows ? { flows: ports.flows.list(workspaceId).filter((f) => f.workspaceId === workspaceId).map((f) => ({ name: f.name, workspaceId: f.workspaceId, document: f.document })) } : {}),
+        // Name, command, folder, restart and schedule only: the book's id, the person's intent and the run history stay on this machine.
+        ...(ports.processes ? { processes: ports.processes.kept().filter((p) => p.workspaceId === workspaceId).map((p) => ({ name: p.name, workspaceId: p.workspaceId, command: p.command, cwd: p.cwd, restart: p.restart, ...(p.schedule ? { schedule: { cron: p.schedule.cron, kind: p.schedule.kind, ...(p.schedule.prompt !== undefined ? { prompt: p.schedule.prompt } : {}), ...(p.schedule.agent !== undefined ? { agent: p.schedule.agent } : {}) } } : {}) })) } : {}),
     };
 }
 
