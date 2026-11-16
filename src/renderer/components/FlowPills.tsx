@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Icon, Popover } from '@particle-academy/react-fancy';
-import { flowPills, pausedWords, type EndedFlow, type FlowPill, type LiveFlow } from '../../core/flow-pills.js';
+import { flowPills, NARROW_BAR_PX, NARROW_PILLS_SHOWN, PILLS_SHOWN, pausedWords, type EndedFlow, type FlowPill, type LiveFlow } from '../../core/flow-pills.js';
 import { useWorkspaceColor, wsStyle } from '../workspace-colors.js';
 
 export interface FlowPillsProps {
@@ -40,12 +40,23 @@ function Pill({ pill, onOpen, row }: { pill: FlowPill; onOpen: (flowId: string) 
             title={`${pill.name} · ${wordsOf(pill)}`}
             aria-label={`${pill.name}, ${wordsOf(pill)}. Open the run`}
             onClick={() => onOpen(pill.flowId)}
-            className={`[-webkit-app-region:no-drag] flex min-w-0 items-center gap-1 whitespace-nowrap rounded-full border border-l-[3px] border-[var(--border-1)] border-l-[var(--ws,var(--border-2))] bg-[var(--bg-1)] px-2 py-0 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] ${row ? 'w-full justify-start' : 'max-w-40'}`}
+            className={`[-webkit-app-region:no-drag] flex min-w-0 items-center gap-1 whitespace-nowrap rounded-full border border-l-[3px] border-[var(--border-1)] border-l-[var(--ws,var(--border-2))] bg-[var(--bg-1)] px-2 py-0 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] ${row ? 'w-full justify-start' : 'max-w-40 shrink-0'}`}
         >
             <StateIcon state={pill.state} />
             <span className="truncate">{pill.name}</span>
         </Button>
     );
+}
+
+/** A window too narrow for two pills beside the palette box: the rest go behind "+N". Static render = wide. */
+function useNarrow(): boolean {
+    const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < NARROW_BAR_PX);
+    useEffect(() => {
+        const on = (): void => setNarrow(window.innerWidth < NARROW_BAR_PX);
+        window.addEventListener('resize', on);
+        return () => window.removeEventListener('resize', on);
+    }, []);
+    return narrow;
 }
 
 /**
@@ -54,10 +65,11 @@ function Pill({ pill, onOpen, row }: { pill: FlowPill; onOpen: (flowId: string) 
  */
 export function FlowPills({ live, ended, now, workspaceId, onOpen }: FlowPillsProps) {
     const [open, setOpen] = useState(false);
-    const { shown, more } = flowPills({ live, ended, now, workspaceId });
+    const narrow = useNarrow();
+    const { shown, more } = flowPills({ live, ended, now, workspaceId, max: narrow ? NARROW_PILLS_SHOWN : PILLS_SHOWN });
     if (shown.length === 0) return null;
     return (
-        <div data-flow-pills="" role="group" aria-label="Running flows" className="[-webkit-app-region:no-drag] flex min-w-0 items-center gap-1">
+        <div data-flow-pills="" role="group" aria-label="Running flows" className="[-webkit-app-region:no-drag] flex shrink-0 items-center gap-1">
             {shown.map((p) => <Pill key={p.flowId} pill={p} onOpen={onOpen} />)}
             {more.length > 0 ? (
                 <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>

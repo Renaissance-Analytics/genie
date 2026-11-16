@@ -23,6 +23,7 @@ import type { DotnetInstallOutcome, DotnetRemoveOutcome, DotnetVersionsView } fr
 import type { RustInstallOutcome, RustRemoveOutcome, RustVersionsView } from './rust-versions.js';
 import type { RubyInstallOutcome, RubyRemoveOutcome, RubyVersionsView } from './ruby-versions.js';
 import type { JavaInstallOutcome, JavaRemoveOutcome, JavaVersionsView } from './java-versions.js';
+import type { PlaywrightBrowsersView, PlaywrightInstallOutcome } from './playwright-browsers.js';
 import type { DefaultOutcome } from './toolchain-defaults.js';
 import type { MachinePathOutcome } from './machine-path.js';
 import type { DefaultLang } from '../core/toolchain-defaults.js';
@@ -196,6 +197,11 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<JavaInstallOutcome>;
             remove(version: string): JavaRemoveOutcome;
         };
+        /** Genie's one Playwright browser install (main/playwright-browsers.ts): every workspace and worktree uses it (Tynn #604). */
+        playwright?: {
+            list(): Promise<PlaywrightBrowsersView>;
+            install(version: string | null, browsers: readonly string[], consent: boolean): Promise<PlaywrightInstallOutcome>;
+        };
         /** Each language's default (main/toolchain-defaults.ts): read from the `current/<lang>` links; set repoints one. */
         defaults?: {
             list(): Record<DefaultLang, string | null>;
@@ -254,6 +260,7 @@ export interface FeatureState {
     toolchainRust?: RustVersionsView | null;
     toolchainRuby?: RubyVersionsView | null;
     toolchainJava?: JavaVersionsView | null;
+    toolchainPlaywright?: PlaywrightBrowsersView | null;
     toolchainDefaults?: Record<DefaultLang, string | null> | null;
     toolchainMachinePath?: MachinePathStatus | null;
     siteAdding?: SiteAdding | null;

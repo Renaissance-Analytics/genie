@@ -21,6 +21,7 @@ import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.j
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
+import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
@@ -1234,6 +1235,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
             {tc?.dotnet ? <DotnetVersions dotnet={tc.dotnet} current={tc.defaults?.dotnet ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'dotnet' && r.version !== undefined)} /> : null}
             {tc?.rust ? <RustVersions rust={tc.rust} current={tc.defaults?.rust ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'rust' && r.version !== undefined)} /> : null}
             {tc?.ruby ? <RubyVersions ruby={tc.ruby} current={tc.defaults?.ruby ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'ruby' && r.version !== undefined)} /> : null}
+            {tc?.playwright ? <PlaywrightBrowsers playwright={tc.playwright} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'playwright')} /> : null}
             {tc?.java ? <JavaVersions java={tc.java} check={checkRows.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
@@ -1452,6 +1454,48 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
  * GENIE'S OWN JAVA (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6d): the Temurin JDKs Genie manages, the java on
  * PATH, and an Install per LTS line (its release for this OS) — or, on macOS, why not.
  */
+function formatBytes(bytes: number): string {
+    if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`;
+    return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+/** Genie's one Playwright browser install: version, size, Update (Tynn #604). Every workspace and worktree uses it. */
+function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { playwright: NonNullable<NonNullable<FeatureData['toolchain']>['playwright']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const newest = playwright.sets[0]?.version ?? null;
+    const outdated = playwright.latest !== null && newest !== playwright.latest;
+    return (
+        <section data-playwright-browsers={playwright.sets.length} className="border-b border-[var(--border-1)]">
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Playwright browsers</h3>
+                <span data-playwright-size="" className="text-xs text-[var(--fg-3)]">{formatBytes(playwright.totalBytes)}</span>
+            </div>
+            <p className="px-5 py-1 text-xs text-[var(--fg-3)]">One install for every workspace and worktree: <span className="font-mono">{playwright.browsersPath}</span></p>
+            {refusals.map((r) => (
+                <p key={r.version ?? 'latest'} data-playwright-refusal={r.version ?? 'latest'} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <ul className="divide-y divide-[var(--border-1)]">
+                {playwright.sets.map((s) => (
+                    <li key={s.version} data-playwright-version={s.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">Playwright {s.version}</span>
+                        <span className="text-xs text-[var(--fg-3)]">{s.browsers.join(', ')}</span>
+                        {s.version === newest && outdated ? (
+                            <Button size="xs" type="button" data-playwright-update={playwright.latest} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: s.browsers, consent: true })}>Update to {playwright.latest}</Button>
+                        ) : null}
+                    </li>
+                ))}
+            </ul>
+            <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                {playwright.sets.length === 0 ? (
+                    <Button size="xs" type="button" data-playwright-install="latest" disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: ['chromium'], consent: true })}>Install Chromium</Button>
+                ) : null}
+                {newest !== null ? playwright.optional.filter((b) => !(playwright.sets[0]?.browsers ?? []).includes(b)).map((b) => (
+                    <Button size="xs" key={b} type="button" data-playwright-add={b} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: newest, browsers: [b], consent: true })}>Add {b}</Button>
+                )) : null}
+            </div>
+        </section>
+    );
+}
+
 function JavaVersions({ java, current = null, busy, onAction, refusals = [], check }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = java.available.filter((a) => !a.installed);
     return (
@@ -1904,6 +1948,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                                 <>
                                     <SetSection title="Notifications" desc="The master switch for every sound.">{rows('notifications')}</SetSection>
                                     <AlertSounds values={values} onAction={onAction} />
+                                    <RateLimitAlerts raw={values === null ? undefined : values[LIMIT_ALERTS_SETTING]} onAction={onAction} />
                                 </>
                             ) : null}
                             {active === 'keyboard' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
@@ -1995,6 +2040,73 @@ function AlertSounds({ values, onAction }: { values: Readonly<Record<string, boo
                     </ul>
                 </div>
             ))}
+        </section>
+    );
+}
+
+
+/**
+ * RATE-LIMIT ALERTS (Tynn #748; the owner, 2026-11-15): the person adds alerts at the thresholds they choose — percent of a
+ * window used, which window (5-hour, weekly, any) and a sound of its own, picked with the sound popover (each with its own
+ * play button). Ordered by threshold. None by default: nothing new is heard until one is added. genie-host fires them.
+ */
+function RateLimitAlerts({ raw, onAction }: { raw: boolean | string | undefined; onAction: SurfaceProps['onAction'] }) {
+    const alerts = parseLimitAlerts(raw);
+    const save = (next: readonly RateLimitAlert[]): void => onAction({ kind: 'settings.set', key: LIMIT_ALERTS_SETTING, value: serializeLimitAlerts(next) });
+    // A new alert starts at 90% on any window with the Default chime; the person edits it in place.
+    const add = (): void => save(upsertLimitAlert(alerts, { id: newLimitAlertId(Date.now(), Math.random()), thresholdPct: 90, window: 'any', sound: 'synth' }));
+    const canPreview = (v: string): boolean => v !== 'off' && v !== 'custom';
+    return (
+        <section data-rate-limit-alerts className="border-b border-[var(--border-1)] px-5 py-3">
+            <div className="text-sm font-medium">Rate-limit alerts</div>
+            <div className="mb-2 text-xs text-[var(--fg-3)]">Hear it when an account passes a share of its rate limit. Each alert has its own sound; it plays once per window and again after the window resets. Do not disturb holds the sound.</div>
+            {alerts.length === 0 ? <p className="py-2 text-sm text-[var(--fg-3)]">No rate-limit alerts yet. Add one to be told at the share you choose.</p> : null}
+            <ul className="divide-y divide-[var(--border-1)]">
+                {alerts.map((alert) => (
+                    <li key={alert.id} data-rate-limit-alert={alert.id} className="flex items-center gap-3 py-2">
+                        <span className="flex items-center gap-1.5 text-sm">
+                            At
+                            <Input
+                                data-limit-threshold={alert.id}
+                                aria-label="Threshold, percent of the window used"
+                                type="number"
+                                min={1}
+                                max={100}
+                                defaultValue={String(alert.thresholdPct)}
+                                className="w-20"
+                                onBlur={(e) => {
+                                    const pct = Number(e.target.value);
+                                    if (Number.isInteger(pct) && pct >= 1 && pct <= 100) { if (pct !== alert.thresholdPct) save(upsertLimitAlert(alerts, { ...alert, thresholdPct: pct })); } else e.target.value = String(alert.thresholdPct);
+                                }}
+                            />
+                            % used
+                        </span>
+                        <span data-limit-window={alert.id}>
+                            <Select
+                                list={LIMIT_WINDOW_CHOICES.map((c) => ({ value: c.value, label: c.label }))}
+                                value={alert.window}
+                                onValueChange={(v) => save(upsertLimitAlert(alerts, { ...alert, window: v as LimitWindowChoice }))}
+                                aria-label="Window this alert watches"
+                            />
+                        </span>
+                        <span className="flex-1" />
+                        <SoundPicker
+                            value={alert.sound}
+                            label={`Sound for the ${alert.thresholdPct}% rate-limit alert`}
+                            onSelect={(v) => { if (v !== 'custom') save(upsertLimitAlert(alerts, { ...alert, sound: v })); }}
+                            onPreview={(v) => playPreviewSound(limitAlertSound(v, {}))}
+                            canPreview={canPreview}
+                        />
+                        <Button data-action="limit-alert-remove" type="button" size="sm" variant="ghost" className="justify-start" aria-label={`Remove the ${alert.thresholdPct}% rate-limit alert`} onClick={() => save(removeLimitAlert(alerts, alert.id))}>
+                            <Icon name="trash-2" size="sm" />
+                        </Button>
+                    </li>
+                ))}
+            </ul>
+            <Button data-action="limit-alert-add" type="button" size="sm" className="mt-2 justify-start" onClick={add}>
+                <Icon name="plus" size="sm" />
+                Add an alert
+            </Button>
         </section>
     );
 }

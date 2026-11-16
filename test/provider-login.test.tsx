@@ -190,6 +190,8 @@ describe('the window’s notice', () => {
         expect(html).toContain('claude auth login');
         expect(html).toMatch(/browser/i);
         expect(html).toMatch(/close this window/i);
+        // Anthropic: a sign-in completes through the provider's own flow. Genie says so, and never handles a code or token.
+        expect(html).toMatch(/Claude Code(&#x27;|&#39;|')s own sign-in, run unchanged: Genie never sees or keeps your sign-in code or token/);
     });
 
     it('for a provider Genie has no login for: the steps to do it by hand in its own CLI', () => {

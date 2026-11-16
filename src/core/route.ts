@@ -99,7 +99,7 @@ export type Route =
           artboardItem?: string | undefined;
       } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
-    | ({ surface: 'takeover'; terminalId: string; login?: string } & Common)
+    | ({ surface: 'takeover'; terminalId: string; login?: string; switching?: boolean } & Common)
     /** The file panel in its own window (§4.3): one workspace's panel, no chrome. `genie://files/<workspaceId>`. */
     | ({ surface: 'files'; workspaceId: string } & Common)
     /**
@@ -192,7 +192,7 @@ export function parseRoute(input: string): Route {
             if (!tail) return dashboard(common);
             // No chat and no pin: a TUI window has no chat to open. `login` names a provider's login window (its notice).
             const login = params.get('login');
-            return { surface: 'takeover', terminalId: tail, chat: null, pin: null, ...(login ? { login } : {}) };
+            return { surface: 'takeover', terminalId: tail, chat: null, pin: null, ...(login ? { login } : {}), ...(login && params.get('switch') === '1' ? { switching: true } : {}) };
         }
         case 'flow': {
             // No id is not a window; `new` is a new flow, in the workspace the link names.
@@ -300,6 +300,7 @@ export function formatRoute(route: Route): string {
             break;
         case 'takeover':
             if (route.login) params.set('login', route.login);
+            if (route.login && route.switching) params.set('switch', '1');
             break;
         case 'files':
             break;

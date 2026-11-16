@@ -1,6 +1,5 @@
 import { isOsAgent } from '../core/os-agent.js';
-import { legacyAccountId, providerAccountEnv, type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
-import { isAcpProvider } from '../core/engine.js';
+import { type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
@@ -137,7 +136,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
-import { legacyProviderHomes, sessionsDir } from './paths.js';
+import { sessionsDir } from './paths.js';
 
 /**
  * THE RUNNING AGENTS — one place that owns sessions, and counts them.
@@ -189,6 +188,10 @@ const SCRIPT = /\.(mjs|cjs|js)$/i;
  * interpreter is Electron itself, run as Node: `ELECTRON_RUN_AS_NODE=1`, allowed through to that provider alone. A real
  * binary is passed as it always was; nothing configured is the provider's default. The workspace's service variables
  * ride along in every case (`serviceEnvDriverOptions`).
+ *
+ * ONE HOME PER PROVIDER (Tynn #753): `account` changes nothing about the environment. A launch uses the provider's normal
+ * home exactly as it did before accounts existed, so every agent's session files stay in it and a thread carries on across a
+ * re-login. It is accepted only so a caller can name the account it launches for.
  */
 export function providerLaunchOptions(
     configured: string | undefined,
@@ -201,7 +204,7 @@ export function providerLaunchOptions(
     if (process.env[PROGRAM_LOOKUP_VARIABLE]) service = { ...service, parentEnv: { ...(service.parentEnv ?? process.env), [PROGRAM_LOOKUP_VARIABLE]: process.env[PROGRAM_LOOKUP_VARIABLE] }, allowEnv: [...(service.allowEnv ?? []), PROGRAM_LOOKUP_VARIABLE] };
     // Check and repair sets these beside PATH (already in the SDK's base allow-list). Keep only these explicit
     // toolchain overrides, including for model-list probes; an ambient env passthrough would expose credentials.
-    const toolchain = ['NPM_CONFIG_PREFIX', 'PHP_INI_SCAN_DIR'].flatMap((name) => {
+    const toolchain = ['NPM_CONFIG_PREFIX', 'PHP_INI_SCAN_DIR', 'PLAYWRIGHT_BROWSERS_PATH'].flatMap((name) => {
         const value = process.env[name];
         return value?.trim() ? [[name, value] as const] : [];
     });
@@ -215,11 +218,6 @@ export function providerLaunchOptions(
             parentEnv[key] = value;
         }
         service = { parentEnv, allowEnv: [...(service.allowEnv ?? []).filter((name) => !overridden.has(name.toUpperCase())), ...overridden] };
-    }
-    if (account) {
-        service = { parentEnv: providerAccountEnv(account, service.parentEnv ?? process.env),
-            allowEnv: [...(service.allowEnv ?? []).filter(key => !/^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(key)),
-                account.provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] };
     }
     if (!configured) return service;
     if (!SCRIPT.test(configured)) return { binary: configured, ...service };
@@ -426,8 +424,7 @@ export function listModelsOptionsFor(
 export const realListModels = (provider: Parameters<ListProviderModels>[0], account?: ProviderAccountHome): ReturnType<ListProviderModels> => {
     const problem = providerStartProblem(provider);
     if (problem !== null) return Promise.reject(new Error(problem));
-    const bound = account ?? { provider, home: legacyProviderHomes()[provider], legacy: true };
-    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, undefined, bound));
+    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, undefined, account));
 };
 
 /** How often a held login is read again while it waits (genie#1195). */
@@ -494,12 +491,8 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
     // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
-    // Production SessionHost supplies the book's record. Standalone legacy harnesses keep their existing home;
-    // a managed binding without its book must never silently use a different login.
-    if (isAcpProvider(record.provider) && record.accountId && record.accountId !== legacyAccountId(record.provider) && !extras?.account)
-        return () => { throw new Error('The agent account is unavailable; reconnect its account book before starting.'); };
-    const account = extras?.account ?? (isAcpProvider(record.provider) ? { provider: record.provider, home: legacyProviderHomes()[record.provider], legacy: true } : undefined);
-    const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, account);
+    // The provider's normal home, whichever account is signed in to it (Tynn #753).
+    const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
 
     switch (record.provider) {
         case 'claude':
@@ -513,10 +506,9 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     }
 };
 
-/** A rate-limit login: a provider's account (Tynn #478). */
+/** A rate-limit login: a provider's account (Tynn #478). Every agent of a provider is on its ACTIVE account (Tynn #751). */
 interface Login { readonly provider: string; readonly account: string }
 const loginKey = (login: Login): string => `${login.provider}:${login.account}`;
-const onLogin = (e: { readonly provider: string; readonly accountId: string }, login: Login): boolean => e.provider === login.provider && e.accountId === login.account;
 
 interface Running {
     session: AgentSession;
@@ -524,8 +516,6 @@ interface Running {
     launchedUntrusted?: boolean;
     /** The provider it runs on: whose rate-limit login holds it (Tynn #793). */
     provider: string;
-    /** The account it was LAUNCHED on (Tynn #478): its login is the provider's and this account's, not the provider's alone. */
-    accountId: string;
     /** The ledger, with arrival times. Timestamps are recorded HERE because this is where the
      *  event arrives — the wire carries none, and a time invented later would be a guess. */
     rows: TimedEvent[];
@@ -566,7 +556,7 @@ export class SessionHost {
     readonly #userData: string;
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
-    readonly #accountById: ((id: string) => AccountRecord | null) | undefined;
+    readonly #activeAccount: ((provider: string) => AccountRecord | null) | undefined;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
@@ -577,6 +567,8 @@ export class SessionHost {
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
+    readonly #onTurnEnd: ((agentId: AgentId, cause: 'interrupted' | 'restarted') => void) | undefined;
+    readonly #onPersonTurn: ((agentId: AgentId) => void) | undefined;
     readonly #onHeadroom: ((provider: string, headroom: Headroom, stamp?: ReadingStamp) => void) | undefined;
     readonly #onMcpServers: ((agentId: AgentId, reports: readonly McpServerReport[]) => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
@@ -645,8 +637,8 @@ export class SessionHost {
     constructor(options: {
         userData: string;
         driverFor?: DriverFor;
-        /** The one host account book; absent only for standalone legacy hosts/tests. */
-        accountById?: (id: string) => AccountRecord | null;
+        /** The host book's ONE active account per provider (Tynn #751), which every agent launches on; absent only for standalone legacy hosts/tests. */
+        activeAccount?: (provider: string) => AccountRecord | null;
         clock?: () => number;
         processTree?: ProcessTree;
         /**
@@ -700,6 +692,14 @@ export class SessionHost {
          * pushes it to the window, which plays the sound the person chose for it.
          */
         onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
+        /**
+         * A TURN THAT ENDED BUT WAS NOT A REPLY, by a stop that was not the person's (Tynn #754): `interrupted` = it ended and
+         * the same session can take another; `restarted` = Genie ended the run and started a new one on the same conversation
+         * (an interrupt the provider did not confirm). The plan keepalive nudges both; a reply is `onAction`'s `replied`.
+         */
+        onTurnEnd?: (agentId: AgentId, cause: 'interrupted' | 'restarted') => void;
+        /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
+        onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
         onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
         /** Each MCP server's state as an agent's provider reports it (genie#1202): main decides whether one is missing. */
@@ -746,7 +746,7 @@ export class SessionHost {
         let shared: SessionStore | null = null;
         this.#store = options.store ?? (() => (shared ??= openDurableStore(sessionsDir(this.#userData))));
         this.#driverFor = options.driverFor ?? realDriverFor;
-        this.#accountById = options.accountById;
+        this.#activeAccount = options.activeAccount;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -757,6 +757,8 @@ export class SessionHost {
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
+        this.#onTurnEnd = options.onTurnEnd;
+        this.#onPersonTurn = options.onPersonTurn;
         this.#onHeadroom = options.onHeadroom;
         this.#onMcpServers = options.onMcpServers;
         this.#serviceEnvFor = options.serviceEnvFor;
@@ -811,15 +813,29 @@ export class SessionHost {
     readonly #schedule: (ms: number, fn: () => void) => () => void;
     #wakeCancel: (() => void) | null = null;
 
-    /** A login is a provider's ACCOUNT (Tynn #478): a limit on one account never holds an agent on another. */
+    /** A login is a provider's ACCOUNT (Tynn #478): a limit on one account holds the agents on it. */
     #loginOf(provider: string, account: string): Login {
         return { provider, account };
+    }
+
+    /** The provider's active account: the one every agent of it runs on (Tynn #751). */
+    #activeId(provider: string): string {
+        return this.#activeAccount?.(provider)?.id ?? `account_legacy_${provider}`;
+    }
+
+    /** The login every agent of the provider is under now: its active account's. */
+    #loginFor(provider: string): Login {
+        return this.#loginOf(provider, this.#activeId(provider));
+    }
+
+    #onLogin(e: { readonly provider: string }, login: Login): boolean {
+        return e.provider === login.provider && login.account === this.#activeId(e.provider);
     }
 
     /** The distinct logins the running agents are on. */
     #runningLogins(): Login[] {
         const seen = new Map<string, Login>();
-        for (const e of this.#running.values()) seen.set(loginKey({ provider: e.provider, account: e.accountId }), this.#loginOf(e.provider, e.accountId));
+        for (const e of this.#running.values()) { const login = this.#loginFor(e.provider); seen.set(loginKey(login), login); }
         return [...seen.values()];
     }
 
@@ -868,7 +884,7 @@ export class SessionHost {
     #holdLogin(login: Login): void {
         let first: AgentId | null = null;
         for (const [id, entry] of this.#running) {
-            if (onLogin(entry, login) && !entry.session.held) { entry.session.hold(); this.#emit(id); first ??= id; }
+            if (this.#onLogin(entry, login) && !entry.session.held) { entry.session.hold(); this.#emit(id); first ??= id; }
         }
         // ONCE for the login, not once per agent it holds: one limit, one sound.
         if (first !== null) this.#onAction?.(first, 'limited');
@@ -905,8 +921,8 @@ export class SessionHost {
             const state = this.#gate.view(login, now).state;
             if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(key); this.#heldAccount.delete(key); this.#lastAccountRead.delete(key); continue; }
             // The account it is held on, read when the hold begins and every LIMIT_REREAD_MS after (Tynn #699).
-            // Only the legacy account's: the read is of the provider's default home.
-            if (this.#accountOf && login.account === `account_legacy_${provider}`) {
+            // Of the ACTIVE account (Tynn #751): the read runs in its home.
+            if (this.#accountOf) {
                 if (!this.#heldAccount.has(key)) this.#heldAccount.set(key, null);
                 const lastAccount = this.#lastAccountRead.get(key);
                 if (lastAccount === undefined || now >= lastAccount + LIMIT_REREAD_MS) {
@@ -916,7 +932,7 @@ export class SessionHost {
                 } else next = Math.min(next, lastAccount + LIMIT_REREAD_MS);
             }
             // The session that will be asked: the first on this login whose driver can read. None — nothing to wait for.
-            const reader = [...this.#running.values()].find((e) => onLogin(e, login) && e.session.canReadRateLimits);
+            const reader = [...this.#running.values()].find((e) => this.#onLogin(e, login) && e.session.canReadRateLimits);
             if (!reader) { this.#lastLimitRead.delete(key); continue; }
             const last = this.#lastLimitRead.get(key);
             if (last === undefined) { this.#lastLimitRead.set(key, now); next = Math.min(next, now + LIMIT_REREAD_MS); continue; }
@@ -933,7 +949,7 @@ export class SessionHost {
     #resumeHeld(login: Login): void {
         let first: AgentId | null = null;
         for (const [id, entry] of this.#running) {
-            if (onLogin(entry, login) && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); first ??= id; }
+            if (this.#onLogin(entry, login) && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); first ??= id; }
         }
         if (first !== null) this.#onAction?.(first, 'resumed');
     }
@@ -945,7 +961,7 @@ export class SessionHost {
         for (const login of this.#runningLogins()) {
             const view = this.#gate.view(login, now);
             // A breach's retry is the login's only while it holds one of its agents (Tynn #556).
-            const holds = view.state !== 'retrying' || this.#gate.limitedByReading(login, now) || [...this.#running.values()].some((e) => onLogin(e, login) && e.session.held);
+            const holds = view.state !== 'retrying' || this.#gate.limitedByReading(login, now) || [...this.#running.values()].some((e) => this.#onLogin(e, login) && e.session.held);
             if (view.state !== 'open' && holds) out.push({ provider: login.provider, account: login.account, view });
         }
         return out;
@@ -967,7 +983,9 @@ export class SessionHost {
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.accountPaused !== null).map(([id]) => id);
     }
 
-    signedOutAgents(provider: string): AgentId[] {
+    signedOutAgents(provider: string, accountId?: string): AgentId[] {
+        // Every agent of the provider runs on its ACTIVE account (Tynn #751): signing in another account signs nobody back in.
+        if (accountId !== undefined && accountId !== this.#activeId(provider)) return [];
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.signedOut).map(([id]) => id);
     }
 
@@ -983,9 +1001,9 @@ export class SessionHost {
 
     /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */
     resumeLimit(provider: string, accountId?: string): void {
-        // One account's login, or — with no account named — every account of the provider that a running agent is on.
-        const logins = accountId !== undefined ? [this.#loginOf(provider, accountId)] : this.#runningLogins().filter((l) => l.provider === provider);
-        for (const login of logins) { this.#gate.resumeNow(login); this.#resumeHeld(login); }
+        // The provider's ACTIVE account's hold (Tynn #751) unless a caller names another account's, which only opens that hold.
+        const login = accountId !== undefined ? this.#loginOf(provider, accountId) : this.#loginFor(provider);
+        this.#gate.resumeNow(login); this.#resumeHeld(login);
         this.#wake();
     }
 
@@ -1063,13 +1081,10 @@ export class SessionHost {
         if (held !== null) return { ok: false, reason: held };
 
         let account: AccountRecord | undefined;
-        if (this.#accountById) {
-            const found = this.#accountById(record.accountId ?? `account_legacy_${record.provider}`);
-            let reason: string | null = !found || found.provider !== record.provider ? 'This agent’s provider account is missing or belongs to another provider; select its account before starting.' : null;
-            if (found && reason === null) {
-                try { providerAccountEnv(found, {}); account = found; }
-                catch { reason = 'This agent’s provider account has an invalid home; repair its account before starting.'; }
-            }
+        if (this.#activeAccount) {
+            const found = this.#activeAccount(record.provider);
+            const reason: string | null = !found || found.provider !== record.provider ? 'This provider has no active account; choose its account before starting.' : null;
+            if (found && reason === null) account = found;
             if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
         }
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
@@ -1166,9 +1181,7 @@ export class SessionHost {
         const rows: TimedEvent[] = [];
         const startedAt = this.#clock();
         const runId = randomUUID();
-        // Fixed at launch: a reading or a breach that arrives after the agent was moved still belongs to THIS account.
-        const launchAccountId = account?.id ?? record.accountId ?? `account_legacy_${record.provider}`;
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, accountId: launchAccountId, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
 
         // The plan kept from before this run: shown at once, until the run reports its own (identity.ts `plan`).
         if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
@@ -1198,8 +1211,8 @@ export class SessionHost {
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
-            onRateLimit: (readings, message) => this.#limitReport(this.#loginOf(record.provider, launchAccountId), readings, message),
-            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: launchAccountId, runId }) } : {}),
+            onRateLimit: (readings, message) => this.#limitReport(this.#loginFor(record.provider), readings, message),
+            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: this.#activeId(record.provider), runId }) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
@@ -1214,7 +1227,7 @@ export class SessionHost {
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
             mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
-            onLimitBreach: (reason) => this.#limitBreach(record.id, this.#loginOf(record.provider, launchAccountId), reason),
+            onLimitBreach: (reason) => this.#limitBreach(record.id, this.#loginFor(record.provider), reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *
@@ -1232,8 +1245,12 @@ export class SessionHost {
                         // A turn that REPLIED went through: a no-reset backoff on its login is over, and the next breach
                         // starts at its first step (genie#1195: `ok` was never called). Only when the login is open — a
                         // reply from a turn that was already running never lets another agent's hold go.
-                        const login = this.#loginOf(record.provider, launchAccountId);
+                        const login = this.#loginFor(record.provider);
                         if (this.#gate.view(login, this.#clock()).state === 'open') this.#gate.ok(login);
+                    } else if (session.lastTurnEnd === 'stopped' && !session.stoppedByYou && !session.needsNewDriver) {
+                        // Stopped, but not by the person, and this session can go on: the keepalive's to weigh (Tynn #754).
+                        // One that needs a new driver is restarted (`#restartForQueue`), which says so itself.
+                        this.#onTurnEnd?.(record.id, 'interrupted');
                     }
                     entry.sounded.clear();
                 }
@@ -1349,9 +1366,9 @@ export class SessionHost {
             }
             // Its login is at its limit (the provider's reading says so): held from the start, so nothing is sent to a
             // provider that would refuse it — and the chat says why and until when (Tynn #556).
-            if (this.#gate.limitedByReading(this.#loginOf(record.provider, launchAccountId), this.#clock())) {
+            if (this.#gate.limitedByReading(this.#loginFor(record.provider), this.#clock())) {
                 session.hold();
-                session.notice(this.#heldWords(this.#loginOf(record.provider, launchAccountId)));
+                session.notice(this.#heldWords(this.#loginFor(record.provider)));
             }
         } catch (error) {
             this.#running.delete(record.id);
@@ -1422,6 +1439,7 @@ export class SessionHost {
     deliver(agentId: AgentId, text: string, by: string | null = 'you'): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
+        if (by === 'you') this.#onPersonTurn?.(agentId);
         entry.session.deliver(text, by);
         this.#emit(agentId);
         return true;
@@ -1439,6 +1457,7 @@ export class SessionHost {
         if (command !== null) return command;
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
+        if (by === 'you') this.#onPersonTurn?.(agentId);
         try {
             entry.session.deliver(text, by, attachments.length === 0 ? null : { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
         } catch (error) {
@@ -1691,6 +1710,11 @@ export class SessionHost {
         return true;
     }
 
+    /** Whether the agent's last turn ended on the PERSON's Stop (`AgentSession.stoppedByYou`); `false` with no session. */
+    stoppedByYou(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.stoppedByYou ?? false;
+    }
+
     /** How the agent's last turn ended (`AgentSession.lastTurnEnd`); `null` when it has no session or no turn ended. */
     lastTurnEnd(agentId: AgentId): AgentSession['lastTurnEnd'] {
         return this.#running.get(agentId)?.session.lastTurnEnd ?? null;
@@ -1727,6 +1751,7 @@ export class SessionHost {
         // The phone's text-only message comes this way: the same check as the composer's (Tynn #440).
         const command = this.#yourCommand(agentId, entry, text, by, false);
         if (command !== null) return command.ok ? { queued: null } : null;
+        if (by === 'you') this.#onPersonTurn?.(agentId);
         const queued = entry.session.deliver(text, by, null, context);
         this.#emit(agentId);
         return { queued };
@@ -1766,6 +1791,8 @@ export class SessionHost {
                 if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
                 const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
                 if (!started.ok) return;
+                // The new session has had no turn of its own: the plan keepalive weighs it (Tynn #754).
+                this.#onTurnEnd?.(id, 'restarted');
                 await this.deliverOwed(id);
             })().catch(() => { /* what waited stays owed: the chat offers Send all now */ });
         }, 0);
@@ -2103,7 +2130,7 @@ export class SessionHost {
                 : null;
 
         return {
-            limit: this.#limitOf(this.#loginOf(entry.provider, entry.accountId), entry.session.held),
+            limit: this.#limitOf(this.#loginFor(entry.provider), entry.session.held),
             signedOut: entry.session.signedOut,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),

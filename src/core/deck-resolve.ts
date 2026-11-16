@@ -2,6 +2,7 @@ import type { DeckItem } from './deck.js';
 import { TRUST_DECK_ID } from './gen-ca.js';
 import { ELEVATION_WAITING_DECK_ID } from './elevation-waiting.js';
 import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
+import { LIMIT_NOTICE_DECK_PREFIX } from './limit-alerts.js';
 
 /**
  * RESOLVING A DECK ITEM IN PLACE (§4.5) — what pressing an option on each kind MEANS, as a plain
@@ -28,6 +29,8 @@ export type DeckCommand =
     | { kind: 'sync-hosts' }
     /** Genie's own record of an error the main process caught and survived (core/main-errors.ts): the person has read it. */
     | { kind: 'dismiss-main-error'; id: string }
+    /** A rate-limit alert's kept notice (core/limit-alerts.ts): the person has read it. */
+    | { kind: 'dismiss-limit-alert'; id: string }
     /** Open an editable issue draft for an internal error; the diagnostic log stays local (#636). */
     | { kind: 'report-main-error'; id: string }
     /** Try again on the item for a host copy that could not be made (Tynn #693): the copy is made now. */
@@ -157,6 +160,7 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
             // Genie's own asks, by id; one it does not know is refused, never guessed.
             if (item.id === TRUST_DECK_ID) return optionId === 'trust' ? { kind: 'trust-certificate' } : { kind: 'defer-trust-certificate' };
             if (item.id === ELEVATION_WAITING_DECK_ID) return { kind: 'sync-hosts' };
+            if (item.id.startsWith(LIMIT_NOTICE_DECK_PREFIX)) return { kind: 'dismiss-limit-alert', id: item.id };
             if (item.id.startsWith(MAIN_ERROR_DECK_PREFIX)) {
                 // An action that does something (Tynn #693), beside Dismiss.
                 if (optionId === 'retry') return { kind: 'retry-host-copy', id: item.id };

@@ -1,11 +1,10 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountLabel, legacyAccountId } from '../src/core/accounts.js';
 import { AccountsHost, type AccountsOptions } from '../src/main/accounts-host.js';
 import { GENIE_SKILLS, skillFile } from '../src/main/agent-skills.js';
-import { sharedProtocol, providerProtocol } from '../src/core/genie-protocol.js';
 import { writeJsonAtomic } from '../src/main/store.js';
 
 // The VM owns every file. No real provider home or credential is opened by these tests.
@@ -29,7 +28,7 @@ describe('Accounts S1: a stable host book, no provider login material', () => {
         const book = await reopen();
         expect(book.list()).toHaveLength(2);
         for (const provider of ['claude', 'codex'] as const) {
-            expect(book.defaultFor(provider)).toEqual({ id: `account_legacy_${provider}`, provider, label: 'Account 1', labelEdited: false,
+            expect(book.activeFor(provider)).toEqual({ id: `account_legacy_${provider}`, provider, label: 'Account 1', labelEdited: false,
                 home: options.legacyHomes[provider], legacy: true, identity: UNKNOWN, createdAt: NOW });
             expect(legacyAccountId(provider)).toBe(`account_legacy_${provider}`);
         }
@@ -53,33 +52,29 @@ describe('Accounts S1: a stable host book, no provider login material', () => {
         expect(await readFile(file(), 'utf8')).toBe(bytes);
     });
 
-    it('adds an isolated home under the one Genie root and provisions only the new account', async () => {
-        const provision = vi.fn(async () => {});
-        const book = await AccountsHost.open({ ...options, provision });
+    it('adds a known account that shares the one normal home of its provider and makes no folder (Tynn #753)', async () => {
+        const book = await reopen();
         const account = await book.add({ provider: 'claude' });
-        expect(account.home).toBe(join(options.root, 'accounts', 'claude', account.id));
+        expect(account.home).toBe(options.legacyHomes.claude);
         expect(account).toMatchObject({ label: 'Account 2', legacy: false, identity: UNKNOWN, createdAt: NOW });
-        expect(provision).toHaveBeenCalledExactlyOnceWith(account);
+        expect(await readdir(options.root)).toEqual(['runtime']);
         expect((await reopen()).get(account.id)).toEqual(account);
-        expect(book.defaultFor('claude')?.legacy).toBe(true);
+        expect(book.activeFor('claude')?.legacy).toBe(true);
     });
 
-    it('generates instructions, a Genie plugin and skills for a fresh Claude home without copying a provider store', async () => {
-        const account = await (await reopen()).add({ provider: 'claude' });
-        expect(account.home).toBe(join(options.root, 'accounts', 'claude', account.id));
-        expect(await readFile(join(account.home, 'CLAUDE.md'), 'utf8')).toBe(`${sharedProtocol([])}\n\n${providerProtocol('claude')}\n`);
-        expect(JSON.parse(await readFile(join(account.home, 'settings.json'), 'utf8'))).toEqual({});
-        expect(JSON.parse(await readFile(join(account.home, 'genie', 'plugin', '.claude-plugin', 'plugin.json'), 'utf8'))).toMatchObject({ name: 'genie-own' });
-        for (const skill of GENIE_SKILLS) expect(await readFile(join(account.home, 'skills', skill.name, 'SKILL.md'), 'utf8')).toBe(skillFile(skill));
-        expect((await readdir(account.home)).sort()).toEqual(['CLAUDE.md', 'genie', 'settings.json', 'skills']);
-    });
-
-    it('generates Codex file-mode settings and instructions without creating auth or copying history', async () => {
-        const account = await (await reopen()).add({ provider: 'codex' });
-        expect(account.home).toBe(join(options.root, 'accounts', 'codex', account.id));
-        expect(await readFile(join(account.home, 'AGENTS.md'), 'utf8')).toBe(`${sharedProtocol([])}\n\n${providerProtocol('codex')}\n`);
-        expect(await readFile(join(account.home, 'config.toml'), 'utf8')).toBe('cli_auth_credentials_store = "file"\n');
-        expect((await readdir(account.home)).sort()).toEqual(['AGENTS.md', 'config.toml', 'genie', 'skills']);
+    it('an account folder an earlier build made is read, left exactly as it is, and never used', async () => {
+        const id = `account_${'0'.repeat(31)}1`;
+        const old = join(options.root, 'accounts', 'claude', id);
+        await mkdir(old, { recursive: true });
+        await writeFile(join(old, 'sentinel'), 'leave alone');
+        await mkdir(dirname(file()), { recursive: true });
+        const legacy = (provider: string) => ({ id: `account_legacy_${provider}`, provider, label: 'Account 1', labelEdited: false, legacy: true, home: join(dir, 'old-' + provider), identity: UNKNOWN, createdAt: NOW });
+        await writeFile(file(), JSON.stringify({ version: 1, accounts: [legacy('claude'), legacy('codex'),
+            { id, provider: 'claude', label: 'Account 2', labelEdited: false, legacy: false, home: old, identity: UNKNOWN, createdAt: NOW }] }));
+        const book = await reopen();
+        expect(book.get(id)).toMatchObject({ home: old });
+        expect(await readFile(join(old, 'sentinel'), 'utf8')).toBe('leave alone');
+        expect(await readdir(old)).toEqual(['sentinel']);
     });
 
     it('keeps simultaneous additions, their distinct ids, and provider-local fallback labels', async () => {
@@ -124,43 +119,23 @@ describe('Accounts S1: a stable host book, no provider login material', () => {
         expect(await readFile(file(), 'utf8')).toBe('{broken');
     });
 
-    it('refuses a syntactically valid book with an unsupported provider or escaped managed home', async () => {
+    it('refuses a syntactically valid book with an unsupported provider or a malformed account id', async () => {
         await mkdir(dirname(file()), { recursive: true });
         const bad = { version: 1, accounts: [{ id: 'account_bad', provider: 'other', label: 'bad', labelEdited: false, legacy: false, home: dir, identity: UNKNOWN, createdAt: NOW }] };
         await writeFile(file(), JSON.stringify(bad));
         await expect(reopen()).rejects.toThrow(/invalid|provider|account/i);
         bad.accounts[0]!.provider = 'claude';
         await writeFile(file(), JSON.stringify(bad));
-        await expect(reopen()).rejects.toThrow(/invalid|home|account/i);
+        await expect(reopen()).rejects.toThrow(/invalid|account/i);
     });
 
-    it('refuses id traversal and an occupied home without modifying its files', async () => {
+    it('refuses id traversal and an occupied id', async () => {
         const bad = await AccountsHost.open({ ...options, mintId: () => '../../outside' });
         await expect(bad.add({ provider: 'claude' })).rejects.toThrow(/id|account/i);
-        const id = `account_${'0'.repeat(31)}1`;
-        const occupied = join(options.root, 'accounts', 'claude', id);
-        await mkdir(occupied, { recursive: true });
-        await writeFile(join(occupied, 'sentinel'), 'leave alone');
-        const book = await reopen();
-        await expect(book.add({ provider: 'claude' })).rejects.toThrow(/exist|occupied/i);
-        expect(await readFile(join(occupied, 'sentinel'), 'utf8')).toBe('leave alone');
-    });
-
-    it('refuses a redirected account directory before generating files outside Genie root', async () => {
-        const book = await reopen();
-        expect(book.list()).toHaveLength(2);
-        const outside = join(dir, 'outside');
-        await mkdir(outside);
-        await symlink(outside, join(options.root, 'accounts'), process.platform === 'win32' ? 'junction' : 'dir');
-        await expect(book.add({ provider: 'claude' })).rejects.toThrow(/link|redirect|directory/i);
-        expect(await readdir(outside)).toEqual([]);
-    });
-
-    it('does not publish an account when provisioning fails, and does not delete provider files', async () => {
-        const provision = vi.fn(async () => { throw new Error('fixture provision refused'); });
-        const book = await AccountsHost.open({ ...options, provision });
-        await expect(book.add({ provider: 'claude' })).rejects.toThrow('fixture provision refused');
-        expect((await reopen()).list()).toHaveLength(2);
+        const same = await AccountsHost.open({ ...options, mintId: () => `account_${'0'.repeat(31)}1` });
+        await same.add({ provider: 'claude' });
+        await expect(same.add({ provider: 'claude' })).rejects.toThrow(/exist|occupied/i);
+        expect(same.list()).toHaveLength(3);
     });
 
     it('refuses blank labels and unknown account mutations without changing the book', async () => {

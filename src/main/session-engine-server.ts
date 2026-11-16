@@ -130,6 +130,11 @@ export interface EngineServerOptions {
     readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
     /** The host book's persisted legacy account; only this machine's window may ask. */
     readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null;
+    /** A sign-in for one account, run here (Tynn #479). */
+    readonly login?: (provider: string, accountId: string | undefined) => { ok: true; terminalId: string } | { ok: false; reason: string };
+    readonly cancelLogin?: (accountId: string) => void;
+    /** Open the provider's own login in its one home so the person can switch accounts; no agent is touched (Tynn #753). */
+    readonly switchAccount?: (provider: string) => import('./account-switch-host.js').AccountSwitchStart;
     /** After a login: read the provider's account identity again (Tynn #477). */
     readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
@@ -635,6 +640,21 @@ export class SessionEngineServer {
             if (!this.#options.providerAccount) throw new Error('The provider account book is unavailable.');
             const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
             return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
+        }
+        if (method === 'engine.login') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            if (!this.#options.login) throw new Error('Sign-in is not ready in the host yet.');
+            return this.#options.login(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'string' ? args[1] : undefined);
+        }
+        if (method === 'engine.cancelLogin') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            this.#options.cancelLogin?.(typeof args[0] === 'string' ? args[0] : '');
+            return true;
+        }
+        if (method === 'engine.switchAccount') {
+            if (!conn.local || !conn.window) throw new Error('Switching accounts needs this machine’s own window.');
+            if (!this.#options.switchAccount) throw new Error('Switching accounts is not ready in the host yet.');
+            return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '');
         }
         if (method === 'engine.refreshAccountIdentity') {
             if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');

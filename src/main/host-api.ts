@@ -390,8 +390,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'resumeLimit': {
                 const r = agent(args[0]);
                 if (!r) return { ok: false, reason: 'unknown agent' };
-                // One agent's Resume now opens ITS account's login, never another account's of the same provider (Tynn #478).
-                deps.host.resumeLimit(r.provider, r.accountId);
+                // Every agent of a provider is on its active account (Tynn #751): Resume now opens that account's hold.
+                deps.host.resumeLimit(r.provider);
                 return { ok: true };
             }
             case 'cancelTurn': {

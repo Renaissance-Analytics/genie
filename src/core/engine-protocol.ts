@@ -58,6 +58,11 @@ export const ENGINE_METHODS = [
     'engine.providerAccount',
     // After a login: ask the provider who the account is now (Tynn #477). `[provider]`.
     'engine.refreshAccountIdentity',
+    // A provider sign-in for one account, run in the host (Tynn #479). `[provider, accountId?]`; `[accountId]` cancels.
+    'engine.login',
+    'engine.cancelLogin',
+    // SWITCH ACCOUNT (Tynn #753): open the provider's own login in its one home, with the steps. No agent is touched. `[provider]`.
+    'engine.switchAccount',
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',

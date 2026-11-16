@@ -46,24 +46,26 @@ describe('S3: the persisted home reaches the existing login without opening an a
     it('the production owners resolve launch and legacy probes from the host book, and reload login homes on reconnect', () => {
         const source = (name: string) => readFileSync(new URL(`../src/main/${name}.ts`, import.meta.url), 'utf8');
         const host = source('genie-host'), window = source('main');
-        expect(host).toMatch(/accountById: id => accounts\.get\(id\)/);
-        expect(host).toMatch(/providerAccount: provider => isAcpProvider\(provider\) \? accounts\.defaultFor\(provider\) : null/);
-        expect(host).toMatch(/realListModels\(provider, accounts\.defaultFor\(provider\) \?\? undefined\)/);
-        expect(host).toMatch(/checkProviderHealth\(provider, realProviderHealthPorts\(execFileRunner\), accounts\.defaultFor\(provider\) \?\? undefined\)/);
-        expect(host).toMatch(/env: providerAccountEnv\(account, process\.env\)/);
-        expect(window).toMatch(/accountFor: provider => loginAccounts\.get\(provider\) \?\? null/);
-        expect(window).toMatch(/void refreshLoginAccounts\?\.\(client\)\.catch\(/);
-        expect(window).toMatch(/const account = await client\.providerAccount\(provider\)/);
-        expect(window).toMatch(/runStatus: \(command, cwd, env\) => execFileRunner\(/);
+        // Tynn #751: ONE active account per provider; every launch and probe reads it, never an agent's own.
+        expect(host).toMatch(/activeAccount: provider => isAcpProvider\(provider\) \? accounts\.activeFor\(provider\) : null/);
+        expect(host).toMatch(/providerAccount: provider => isAcpProvider\(provider\) \? accounts\.activeFor\(provider\) : null/);
+        expect(host).toMatch(/realListModels\(provider, accounts\.activeFor\(provider\)\)/);
+        expect(host).toMatch(/checkProviderHealth\(provider, realProviderHealthPorts\(execFileRunner\), accounts\.activeFor\(provider\)\)/);
+        // Tynn #753: ONE HOME PER PROVIDER, so nothing here builds an environment for an account.
+        expect(host).not.toContain('providerAccountEnv');
+        // S6 (Tynn #479): the sign-in runs in the host, per account, from the host book; the window opens no book and runs no status.
+        expect(host).toMatch(/accountFor: \(provider, accountId\) => \{[\s\S]{0,200}accounts\.get\(accountId\)/);
+        expect(host).toMatch(/runStatus: \(command, cwd\) => execFileRunner\(/);
+        expect(window).not.toMatch(/new LoginHost/);
         expect(window).not.toMatch(/AccountsHost\.open/);
     });
 });
 
 
-describe('S3: the observed Take Over TUI keeps the bound account', () => {
+describe('S3 (R1, Tynn #751): the observed Take Over TUI uses the provider active account', () => {
     function fixture(provider: 'claude' | 'codex', selected: 'matching' | 'missing' | 'mismatched' = 'matching', mcp = true, legacy = false) {
         const opened: Array<{ env?: Readonly<Record<string, string>> | undefined }> = [];
-        const record = { ...agentRecord({ id: mintAgentId(), name: 'fixture', provider, workspaceId: 'fixture' }), accountId: `account_${'a'.repeat(32)}` };
+        const record = agentRecord({ id: mintAgentId(), name: 'fixture', provider, workspaceId: 'fixture' });
         const account = { provider: selected === 'mismatched' ? (provider === 'claude' ? 'codex' as const : 'claude' as const) : provider,
             home: `/genie/accounts/${provider}/selected`, legacy };
         const host = new TakeOverHost({ accountFor: () => selected === 'missing' ? null : account,
@@ -72,11 +74,12 @@ describe('S3: the observed Take Over TUI keeps the bound account', () => {
             openWindow: () => {}, mcp: () => mcp ? { mcpUrl: 'http://127.0.0.1:9/mcp', token: 'fixture-bearer' } : null });
         return { host, record, account, opened };
     }
-    it.each(['claude', 'codex'] as const)('%s Take Over launches in the selected home beside its own MCP attribution', provider => {
+    it.each(['claude', 'codex'] as const)('%s Take Over sets no home variable beside its own MCP attribution (Tynn #753)', provider => {
         const f = fixture(provider);
         expect(f.host.start(f.record, '/fixture', provider)).toMatchObject({ ok: true });
         const env = f.opened[0]!.env!;
-        expect(env[provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']).toBe(f.account.home);
+        expect(env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+        expect(env).not.toHaveProperty('CODEX_HOME');
         expect(env.GENIE_MCP_TOKEN).toBe('fixture-bearer');
         expect(env.GENIE_TERMINAL_ID).toMatch(/^takeover_/);
         expect(f.host.callerFor(env.GENIE_TERMINAL_ID!)).toMatchObject({ agentId: f.record.id });
@@ -89,7 +92,7 @@ describe('S3: the observed Take Over TUI keeps the bound account', () => {
     it('a home without an MCP server invents no MCP caller or token', () => {
         const f = fixture('claude', 'matching', false);
         expect(f.host.start(f.record, '/fixture', 'claude')).toMatchObject({ ok: true });
-        expect(f.opened[0]!.env).toEqual({ CLAUDE_CONFIG_DIR: f.account.home });
+        expect(f.opened[0]!.env).toBeUndefined();
         expect(f.host.callers()).toEqual({});
     });
     it.each(['claude', 'codex'] as const)('%s legacy Take Over keeps an unset home unset beside its MCP attribution', provider => {
