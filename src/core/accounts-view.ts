@@ -8,7 +8,9 @@ import type { SwitchOffer } from './switch-offer.js';
  * limits. Per provider: every known account, the active one first; its plan (the identity's, else the reading's, else
  * unknown: never a guess); and its windows, 5 h and weekly always (a window not reported is unknown; one past its reset reads
  * Refreshed), then any other window it reported. A provider nobody has used here (no account with an email or a reading) is
- * left out, so a provider the person never signed in to draws no chip.
+ * left out, so a provider the person never signed in to draws no chip. An account with no email, no reading and not signed
+ * in (the book's placeholder after it was forgotten, Tynn #484) is not listed either: it is no account yet, only the place
+ * the next sign-in takes, and would read as a blank row.
  */
 export type AccountWindowRow = WindowReading | { readonly unknown: true; readonly window: string };
 
@@ -42,7 +44,7 @@ export function accountsView(known: readonly KnownAccountRecord[], readings: rea
         const mine = known.filter((a) => a.provider === provider);
         const readingOf = (id: string) => readings.find((r) => r.provider === provider && r.accountId === id);
         if (!mine.some((a) => a.identity.email !== null || readingOf(a.id) !== undefined)) continue;
-        const accounts = mine.map((a): AccountView => {
+        const accounts = mine.filter((a) => a.identity.email !== null || readingOf(a.id) !== undefined || active[provider] === a.id).map((a): AccountView => {
             const r = readingOf(a.id);
             const reported = r?.windows ?? [];
             const windows: AccountWindowRow[] = [

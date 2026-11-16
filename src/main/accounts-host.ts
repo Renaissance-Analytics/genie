@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { accountIdentityOf, accountLabel, accountLabelOf, legacyAccountId, unknownAccountIdentity, type AccountIdentity, type AccountRecord } from '../core/accounts.js';
+import { forgetRefusal } from '../core/account-settings.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -157,6 +158,26 @@ export class AccountsHost {
         return { id, provider, label: label === undefined ? accountLabel(identity?.email ?? null, ordinal) : accountLabelOf(label),
             labelEdited: label !== undefined, home: this.#options.legacyHomes[provider], legacy: false,
             identity: identity ?? unknownAccountIdentity(), createdAt: (this.#options.now ?? (() => new Date().toISOString()))() };
+    }
+
+    /**
+     * FORGET A KNOWN ACCOUNT (Tynn #484). The account signed in now is refused, and says so: every agent of its provider uses
+     * it. Another is removed from the book. The provider's first account (the book's placeholder, which the book always keeps)
+     * is reset to an unnamed placeholder instead, so the next account signed in that Genie does not know takes its place.
+     * Nothing on disk but the book changes; no credential is touched.
+     */
+    forget(id: string): Promise<void> {
+        return this.#queue(async () => {
+            const account = this.#accounts.find((a) => a.id === id);
+            if (!account) throw new Error('Unknown account');
+            const refused = forgetRefusal({ label: account.label, active: this.activeFor(account.provider).id === id });
+            if (refused) throw new Error(refused);
+            const ordinal = this.#accounts.filter((a) => a.provider === account.provider).findIndex((a) => a.id === id) + 1;
+            const next = account.legacy
+                ? this.#accounts.map((a) => a.id === id ? { ...detached(a), identity: unknownAccountIdentity(), label: accountLabel(null, ordinal), labelEdited: false } : a)
+                : this.#accounts.filter((a) => a.id !== id);
+            await this.#write(next, this.#active); this.#accounts = next;
+        });
     }
 
     rename(id: string, label: string): Promise<void> {

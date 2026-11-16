@@ -4,6 +4,7 @@ import { FEATURE_CHANNELS, type PreloadBridge } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsActResult } from '../core/account-settings.js';
 import { browserStallEnv, watchRendererStalls } from './renderer-stalls.js';
 
 /**
@@ -45,6 +46,7 @@ const bridge: PreloadBridge = {
     providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     switchAccount: (provider, choose) => ipcRenderer.invoke('genie:account-switch', provider, choose) as Promise<{ ok: true } | { ok: false; reason: string }>,
     accounts: () => ipcRenderer.invoke('genie:accounts') as Promise<AccountsSnapshot | null>,
+    accountsAct: (action) => ipcRenderer.invoke('genie:accounts-act', action) as Promise<AccountsActResult>,
     dismissSwitchOffer: (id) => ipcRenderer.invoke('genie:switch-offer-dismiss', id) as Promise<boolean>,
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 

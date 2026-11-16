@@ -48,6 +48,8 @@ import { describeSchedule, formatLastRun, formatNextRun } from '../../core/sched
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
+import { AccountsSettings, type AccountsSettingsProps } from './AccountsSettings.js';
+import { SWITCH_OFFER_WINDOWS_SETTING } from '../../core/switch-offer.js';
 import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 import { UNLOCK_WORDS } from '../../core/keyring-unlock.js';
 
@@ -1855,7 +1857,7 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, onNavigate, section, workspaces = [], remoteConnect, query, update, providers, marketplace }: SurfaceProps & { section: SectionId | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined; providers?: readonly ProviderStatus[] | undefined; marketplace?: MarketplaceApi | undefined }) {
+export function SettingsSurface({ data, onAction, onNavigate, section, workspaces = [], remoteConnect, query, update, providers, marketplace, accountsSettings }: SurfaceProps & { section: SectionId | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined; providers?: readonly ProviderStatus[] | undefined; marketplace?: MarketplaceApi | undefined; accountsSettings?: Pick<AccountsSettingsProps, 'snapshot' | 'onSwitch' | 'onAct'> | undefined }) {
     const values = data.settings.values;
     const active: SectionId = section ?? 'general';
     // SEARCH across every page (§6.9). Transient view state: a query is not a place, so it is not in the route.
@@ -1955,7 +1957,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'appearance' ? <SetSection title="Appearance" desc="How Genie looks on this device.">{rows('appearance')}</SetSection> : null}
                             {active === 'tynn' ? <SetSection title="Tynn" desc="Optional: identity, your projects, and IssueWatch. Genie is fully usable signed out." data-settings-tynn=""><TynnBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
                             {active === 'github' ? <SetSection title="GitHub" desc="Sign in to the Genie AOS app: who you are on GitHub, where the app is installed, and what it may do there." data-settings-github=""><GithubBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
-                            {active === 'providers' ? <SetSection title="Providers" desc="The agent CLIs Genie runs, and whether each is signed in." data-settings-providers=""><ProvidersBlock providers={providers} onNavigate={onNavigate} /></SetSection> : null}
+                            {active === 'providers' ? <SetSection title="Providers" desc="The agent CLIs Genie runs, and whether each is signed in." data-settings-providers=""><ProvidersBlock providers={providers} onNavigate={onNavigate} />{accountsSettings ? <AccountsSettings {...accountsSettings} offerWindows={values === null ? undefined : values[SWITCH_OFFER_WINDOWS_SETTING]} onSetOfferWindows={(value) => onAction({ kind: 'settings.set', key: SWITCH_OFFER_WINDOWS_SETTING, value })} /> : null}</SetSection> : null}
                             {active === 'workspace-defaults' ? <SetSection title="Defaults for workspaces" desc="What every workspace uses unless its own Settings override it.">{rows('workspace-defaults')}</SetSection> : null}
                             {active === 'prompts' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} bindings={bindingsFrom(values)} onAction={onAction} /> : null}
                             {active === 'agent-mcp' ? (

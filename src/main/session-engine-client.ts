@@ -49,6 +49,7 @@ import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '..
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SwitchOffer } from '../core/switch-offer.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
@@ -1324,6 +1325,14 @@ export class SessionEngineClient {
         const reply = await this.call('engine.switchAccount', [provider]);
         if (!reply.ok) return { ok: false, reason: reply.reason };
         return reply.value as { ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string };
+    }
+
+    /** Rename or forget a known account (Tynn #484); a refusal, or a host that cannot answer, is its reason. */
+    async accountsAct(action: AccountsAction): Promise<AccountsActResult> {
+        const reply = await this.call('engine.accountsAct', [action]);
+        if (!reply.ok) return { ok: false, reason: reply.reason };
+        const v = reply.value as AccountsActResult | null;
+        return v && typeof v === 'object' && 'ok' in v ? v : { ok: false, reason: 'The host gave no answer.' };
     }
 
     /** Every known account and the standing offers (Tynn #483); `null` while the host cannot answer. */

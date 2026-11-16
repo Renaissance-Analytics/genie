@@ -62,6 +62,7 @@ import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { limitAlertSound } from '../core/limit-alerts.js';
 import { accountSwitchOutcomeOf, accountSwitchToast } from '../core/account-switch.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { redialer } from './remote-redial.js';
 import { droneReconnect, type DroneHold } from './drone-reconnect.js';
@@ -1138,6 +1139,11 @@ function DesktopApp({ bridge }: AppProps) {
     const switchAccount = useCallback((provider: string, choose?: string) => {
         void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) showAlert({ title: 'The switch could not start', body: r.reason }); }, () => {});
     }, [resolvedBridge, showAlert]);
+    const accountsAct = useCallback(async (action: AccountsAction): Promise<AccountsActResult> => {
+        const r = (await resolvedBridge?.accountsAct?.(action)) ?? { ok: false as const, reason: 'Genie’s host is not connected yet.' };
+        readAccounts();
+        return r;
+    }, [resolvedBridge, readAccounts]);
     const dismissSwitchOffer = useCallback((id: string) => { void resolvedBridge?.dismissSwitchOffer?.(id).then(() => readAccounts(), () => {}); }, [resolvedBridge, readAccounts]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
@@ -2057,6 +2063,7 @@ function DesktopApp({ bridge }: AppProps) {
             accounts={accountsSnapshot}
             onSwitchAccount={switchAccount}
             onDismissSwitchOffer={dismissSwitchOffer}
+            onAccountsAct={accountsAct}
             mailSignals={mailSignalList}
             route={route}
             address={shownAddress}

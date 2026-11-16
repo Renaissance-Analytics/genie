@@ -68,6 +68,8 @@ export const ENGINE_METHODS = [
     'engine.switchOffers',
     // EVERY KNOWN ACCOUNT, with its readings, and the standing offers (Tynn #483): the header's account chips. `[]`.
     'engine.accounts',
+    // Rename or forget a known account (Tynn #484). `[action]`.
+    'engine.accountsAct',
     'engine.dismissSwitchOffer',
     'engine.resumeLimit',
     'engine.clearDesignLogin',

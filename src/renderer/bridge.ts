@@ -7,6 +7,7 @@ import type { TynnPage, TynnPageActionInput, TynnPageQuery, TynnTabHost } from '
 import type { IssueActionInput, IssueFilters, TynnIssuesHost } from '../core/tynn-issues.js';
 import type { Headroom } from '../core/headroom.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { AgentPermissions } from '../core/identity.js';
@@ -281,6 +282,8 @@ export interface GenieBridge {
     switchAccount?(provider: string, choose?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** Every known account with its readings, and the standing switch offers (Tynn #483); `null` while the host cannot answer. */
     accounts?(): Promise<AccountsSnapshot | null>;
+    /** Rename or forget a known account (Tynn #484); a refusal comes back as its reason. */
+    accountsAct?(action: AccountsAction): Promise<AccountsActResult>;
     /** Not now on a switch offer (Tynn #481): it goes, and is not made again in that window. */
     dismissSwitchOffer?(id: string): Promise<boolean>;
     /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
