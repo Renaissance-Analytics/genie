@@ -21,7 +21,10 @@ describe('arcGeometry', () => {
         expect(near.d.startsWith('M700,40 C')).toBe(true);
         expect(near.d.endsWith(' 300,72')).toBe(true);
         expect(far.lift).toBeGreaterThan(near.lift);
-        expect(bezierAt(far, 0.5).y).toBeLessThan(bezierAt(near, 0.5).y - 20);
+        // Height is the rise ABOVE the straight line between the two ends (the far end is also lower on the screen, so absolute y says nothing).
+        const rise = (g: ReturnType<typeof arcGeometry>) => (g.p0.y + g.p3.y) / 2 - bezierAt(g, 0.5).y;
+        expect(rise(near)).toBeGreaterThan(0);
+        expect(rise(far)).toBeGreaterThan(rise(near) + 20);
         expect(bezierAt(near, 0)).toEqual(pointer);
         expect(bezierAt(near, 1)).toEqual({ x: 300, y: 72 });
     });

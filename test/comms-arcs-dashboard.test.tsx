@@ -46,8 +46,11 @@ function layOut(): void {
 }
 /** The column headers are text too (the first run covered them): stubbed at the top of the table, and a label must keep off them. */
 function layOutHeader(): void {
-    const header = [...host.querySelectorAll<HTMLElement>('div')].find((d) => /Agent/.test(d.textContent ?? '') && /Comms/.test(d.textContent ?? '') && d.querySelector('[data-column-header="windows"]'));
-    header?.querySelectorAll<HTMLElement>(':scope > span').forEach((el, k) => {
+    // The header row is the parent of the windows column's header cell (not an ancestor that merely contains it all).
+    const header = host.querySelector<HTMLElement>('[data-column-header="windows"]')?.parentElement;
+    expect(header).toBeTruthy();
+    expect([...header!.children].filter((el) => el.tagName === 'SPAN').length).toBeGreaterThan(3);
+    ([...header!.children] as HTMLElement[]).filter((el) => el.tagName === 'SPAN').forEach((el, k) => {
         el.getBoundingClientRect = () => ({ left: 160 + k * 74, top: 70, width: 70, height: 14, right: 230 + k * 74, bottom: 84, x: 160 + k * 74, y: 70, toJSON: () => ({}) }) as DOMRect;
     });
 }
