@@ -19,7 +19,17 @@ export interface KeepGoingState {
     readonly waitingOnPerson: boolean;
     /** Background shells and tasks of its own still running (core/background-count.ts): their end wakes it, so no nudge. */
     readonly background?: number | null | undefined;
+    /** The turn ended on the PERSON's Stop (`AgentSession.stoppedByYou`). A stop Genie did itself (an interrupt it restarted) is nudgeable. */
+    readonly stoppedByYou?: boolean | undefined;
 }
+
+/** Why a turn's end was NOT nudged, said in the host's log so the person can see why an agent was left. */
+export type SkipReason =
+    | 'manual' | 'no-turn' | 'stopped-by-you' | 'failed' | 'held' | 'signed-out' | 'no-plan' | 'plan-complete'
+    | 'waiting-on-person' | 'background' | 'busy' | 'gone' | 'stalled';
+
+/** What ended the turn: a reply, or a stop Genie did itself and restarted from (`restarted`: a new session, no turn of its own yet). */
+export type TurnEndCause = 'replied' | 'interrupted' | 'restarted';
 
 export interface PlanKeepalivePorts {
     readonly graceMs: number;
@@ -29,6 +39,8 @@ export interface PlanKeepalivePorts {
     readonly prompt: (agentId: string, text: string) => void;
     /** Said in the agent's chat when the nudging stops. */
     readonly stalled: (agentId: string, text: string) => void;
+    /** Every turn end that was not nudged, with why. */
+    readonly skipped?: ((agentId: string, reason: SkipReason) => void) | undefined;
 }
 
 /** Nudges in a row that complete no step before the nudging stops. */
@@ -56,7 +68,7 @@ export class PlanKeepalive {
     }
 
     /** A turn of this agent ended. */
-    turnEnded(agentId: string): void {
+    turnEnded(agentId: string, _cause: TurnEndCause = 'replied'): void {
         if (this.#pending.has(agentId)) return;
         if (!shouldNudge(this.#ports.read(agentId))) return;
         const cancel = this.#ports.schedule(this.#ports.graceMs, () => {
@@ -64,6 +76,11 @@ export class PlanKeepalive {
             this.#fire(agentId);
         });
         this.#pending.set(agentId, cancel);
+    }
+
+    /** The person began a turn of their own (a message they typed): the count of nudges that moved nothing starts again. */
+    personTurnStarted(_agentId: string): void {
+        // not implemented
     }
 
     /** Stop everything waiting (a quit). */
