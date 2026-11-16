@@ -17,6 +17,7 @@ const WS = { id: 'ws_clone', path: '/c/acme' };
 const flowFile = (name: string, command: string) => flowsDeclaration([{ name, workspaceId: 'w', document: flowDocument({ workspaceId: 'w', cron: '0 3 * * *', step: command === '' ? { kind: 'log' } : { kind: 'command', command, folder: '' } }) as unknown as Record<string, unknown> }], 'w').files[0]!.value;
 
 function rig(over: { trusted?: boolean; asleep?: boolean } = {}) {
+    const state = { asleep: over.asleep === true };
     const files: Record<string, string> = {};
     const made: { workspaceId: string; name: string }[] = [];
     /** What Genie would save for each flow it created, as the file said when it was created. */
@@ -24,7 +25,7 @@ function rig(over: { trusted?: boolean; asleep?: boolean } = {}) {
     const writes: string[] = [];
     const scans = { live: 0 };
     const ports = {
-        workspaces: () => [{ ...WS, ...(over.asleep ? { asleep: true } : {}) }],
+        workspaces: () => [{ ...WS, ...(state.asleep ? { asleep: true } : {}) }],
         restore: {
             files: {
                 read: async (p: string) => files[p] ?? null,
@@ -42,7 +43,7 @@ function rig(over: { trusted?: boolean; asleep?: boolean } = {}) {
             return made.map((m) => ({ path: `.flows/${m.name}.json`, value: applied[m.name] }));
         },
     };
-    return { ports, files, made, writes, scans, watch: new CloneWatch(ports as never) };
+    return { ports, files, made, writes, scans, state, watch: new CloneWatch(ports as never) };
 }
 
 describe('a pass', () => {
@@ -70,12 +71,16 @@ describe('a pass', () => {
         expect(heard).toEqual([1, 2]);
     });
 
-    it('a hibernated workspace is a ghost: not looked at', async () => {
+    it('a hibernated workspace is a ghost: not looked at, and looked at again once it is woken', async () => {
         const r = rig({ asleep: true });
         r.files['/c/acme/.flows/a.json'] = JSON.stringify(flowFile('A', ''));
         await r.watch.pass();
         expect(r.scans.live).toBe(0);
         expect(r.watch.list('ws_clone')).toEqual([]);
+        r.state.asleep = false;
+        await r.watch.pass();
+        expect(r.scans.live).toBe(1);
+        expect(r.watch.list('ws_clone').map((o) => o.id)).toEqual(['flow:.flows/a.json']);
     });
 
     it('CONTROL: a workspace with none of the three places has no offers and is not an error', async () => {
