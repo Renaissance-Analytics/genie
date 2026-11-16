@@ -58,6 +58,9 @@ export const ENGINE_METHODS = [
     'engine.providerAccount',
     // After a login: ask the provider who the account is now (Tynn #477). `[provider]`.
     'engine.refreshAccountIdentity',
+    // A provider sign-in for one account, run in the host (Tynn #479). `[provider, accountId?]`; `[accountId]` cancels.
+    'engine.login',
+    'engine.cancelLogin',
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',
@@ -264,7 +267,7 @@ export interface EngineAgentUpdate {
 /** `engine.global`: what is per provider or per host rather than per agent. Sent when it changed. */
 export interface EngineGlobalView {
     readonly startedIds: readonly string[];
-    readonly heldLogins: ReadonlyArray<{ provider: string; view: GateView }>;
+    readonly heldLogins: ReadonlyArray<{ provider: string; account: string; view: GateView }>;
     readonly signedOutProviders: readonly string[];
     readonly pausedProviders: readonly string[];
     readonly pausedAgents: Readonly<Record<string, readonly string[]>>;
@@ -285,7 +288,7 @@ export type EngineCallback =
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
     | { readonly name: 'turnNumbered'; readonly agentId: string; readonly n: number }
     | { readonly name: 'action'; readonly agentId: string; readonly kind: string }
-    | { readonly name: 'headroom'; readonly provider: string; readonly headroom: unknown }
+    | { readonly name: 'headroom'; readonly provider: string; readonly headroom: unknown; readonly stamp?: { readonly accountId: string; readonly runId: string } }
     | { readonly name: 'mcpServers'; readonly agentId: string; readonly reports: readonly unknown[] }
     | { readonly name: 'stopUnverified'; readonly agentId: string; readonly reason: string }
     // openFileForUser while no window was there (P3.1): shown when the next one connects.

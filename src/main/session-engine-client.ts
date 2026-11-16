@@ -38,7 +38,7 @@ import {
     type EngineWelcome,
     type WireAttachment,
 } from '../core/engine-protocol.js';
-import type { Headroom } from '../core/headroom.js';
+import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -106,7 +106,7 @@ export interface EngineClientOptions {
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
     readonly onTurnNumbered?: (agentId: AgentId, n: number) => void;
     readonly onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
-    readonly onHeadroom?: (provider: string, headroom: Headroom) => void;
+    readonly onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
     readonly onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
     readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
@@ -526,7 +526,7 @@ export class SessionEngineClient {
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
             case 'action': o.onAction?.(c.agentId as AgentId, c.kind as AgentActionKind); return;
-            case 'headroom': o.onHeadroom?.(c.provider, c.headroom as Headroom); return;
+            case 'headroom': o.onHeadroom?.(c.provider, c.headroom as Headroom, c.stamp); return;
             case 'mcpServers': o.onMcpServers?.(c.agentId as AgentId, c.reports as readonly McpServerReport[]); return;
             case 'stopUnverified': o.onStopUnverified?.(c.agentId as AgentId, c.reason); return;
             case 'openFileForUser': o.onOpenFileLater?.(c.call as ForwardedToolCall); return;
@@ -1066,7 +1066,7 @@ export class SessionEngineClient {
         return [...this.#global.startedIds] as AgentId[];
     }
 
-    heldLogins(): Array<{ provider: string; view: GateView }> {
+    heldLogins(): Array<{ provider: string; account: string; view: GateView }> {
         return [...this.#global.heldLogins];
     }
 
@@ -1094,8 +1094,8 @@ export class SessionEngineClient {
         void this.call('engine.clearDesignLogin', [agentId]);
     }
 
-    resumeLimit(provider: string): void {
-        void this.call('engine.resumeLimit', [provider]);
+    resumeLimit(provider: string, accountId?: string): void {
+        void this.call('engine.resumeLimit', accountId === undefined ? [provider] : [provider, accountId]);
     }
 
     #view(agentId: string): EngineAgentView {
@@ -1285,6 +1285,21 @@ export class SessionEngineClient {
     /** Ask the host to read who the provider's account is now (after a login, Tynn #477). */
     async refreshAccountIdentity(provider: string): Promise<void> {
         await this.#value('engine.refreshAccountIdentity', [provider], false);
+    }
+
+    /**
+     * Sign one account of a provider in (Tynn #479). The host runs the sign-in and owns its terminal; the window only shows it.
+     * Two calls for one account join one sign-in. With no account named, the provider's default account.
+     */
+    async login(provider: string, accountId?: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.login', accountId === undefined ? [provider] : [provider, accountId]);
+        if (!reply.ok) return { ok: false, reason: reply.reason };
+        return reply.value as { ok: true; terminalId: string } | { ok: false; reason: string };
+    }
+
+    /** The person closed or cancelled the sign-in window: the host kills its terminal and signs nobody in. */
+    async cancelLogin(accountId: string): Promise<void> {
+        await this.#value('engine.cancelLogin', [accountId], false);
     }
 
     /** The persisted legacy account home, or unknown while the host/book cannot answer. */

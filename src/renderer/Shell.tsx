@@ -126,6 +126,8 @@ export interface ShellProps {
     pulsingWorkspaces?: ReadonlySet<string> | undefined;
     /** Each provider's rate limit for the Dashboard header. */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
+    now?: number | undefined;
     /** Mail between agents for the Dashboard (genie#1209). */
     mailSignals?: readonly MailSignal[] | undefined;
     /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
@@ -368,6 +370,7 @@ export function Shell({
     rowEmoji,
     pulsingWorkspaces,
     rateLimits,
+    now,
     mailSignals,
     workspaceFaults,
     onLocateRepo,
@@ -557,6 +560,8 @@ export function Shell({
      * the chat is already that agent's (core/chat-scope.ts chatSubjectFor); from anywhere else the click opens the agent.
      */
     const [chatInsert, setChatInsert] = useState<ChatInsert | null>(null);
+    // The clock the rate limits are read against: a window past its reset reads Refreshed, not its last figure (Tynn #478).
+    const limitsNow = useNow(true, now, 30_000);
     const insertSeq = useRef(Date.now());
     const discussStep = (agentId: string, step: string): void => {
         insertSeq.current += 1;
@@ -748,7 +753,7 @@ export function Shell({
                     onAddWorkspace={onAddWorkspace}
                     onOpenBrowser={onOpenBrowser}
                     // A provider limit running low lights the Dashboard row, from any page (genie#1268).
-                    rateLimitAlert={rateLimitAlert(rateLimits ?? {})}
+                    rateLimitAlert={rateLimitAlert(rateLimits ?? {}, limitsNow)}
                     // A paired device close to expiring: a yellow ! on Settings, naming it and the date (q_8c07b142).
                     settingsAlert={deviceExpiryAlert(features.remote?.devices ?? [], Date.now())}
                     // THE AGENT LIST (Tynn #687): every agent of an awake workspace — a hibernated one's are ghosts — and a
@@ -812,6 +817,7 @@ export function Shell({
                             pulsing={pulsingWorkspaces}
                             rowEmoji={rowEmoji}
                             rateLimits={rateLimits}
+                            now={now}
                             mailSignals={mailSignals}
                             rows={snapshot.agents}
                             // Genie's own row, its group first (the design mockup).

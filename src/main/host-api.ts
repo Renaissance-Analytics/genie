@@ -118,8 +118,8 @@ export interface HostApiDeps {
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;
-        /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
-        resumeLimit(provider: string): void;
+        /** `Resume now`: the login held for its rate limit opens (Tynn #794) — one account's when named (Tynn #478). */
+        resumeLimit(provider: string, accountId?: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
         promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): ({ ok: true } | { ok: false; reason: string | null }) | Promise<{ ok: true } | { ok: false; reason: string | null }>;
         subscribe(listener: (agentId: string) => void): () => void;
@@ -390,7 +390,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'resumeLimit': {
                 const r = agent(args[0]);
                 if (!r) return { ok: false, reason: 'unknown agent' };
-                deps.host.resumeLimit(r.provider);
+                // One agent's Resume now opens ITS account's login, never another account's of the same provider (Tynn #478).
+                deps.host.resumeLimit(r.provider, r.accountId);
                 return { ok: true };
             }
             case 'cancelTurn': {

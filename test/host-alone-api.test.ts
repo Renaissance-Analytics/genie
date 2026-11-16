@@ -51,7 +51,7 @@ function engine(running = false): HostAloneEngine {
         ended: async () => { calls.push('ended'); return { verified: true, survivors: [], reason: '' }; },
         deliverOwed: async () => { calls.push('deliverOwed'); return 0; },
         cancel: () => ({ ok: true }),
-        resumeLimit: (provider: string) => { calls.push(`resumeLimit ${provider}`); },
+        resumeLimit: (provider: string, accountId?: string) => { calls.push(`resumeLimit ${provider} ${accountId}`); },
         prompt: async (_id: string, text: string, by: string | null) => { calls.push(`prompt ${text} by ${by}`); return true; },
         promptWith: async (_id: string, text: string, files: readonly unknown[], by: string | null) => { calls.push(`promptWith ${text} ${files.length} by ${by}`); return { ok: true }; },
         resolvePrompt: async () => ({ ok: true }),
@@ -137,7 +137,7 @@ describe('genie-host answers the phone itself', () => {
         expect(await api.invoke('answerApproval', [atlas.id, 'allow', 'go ahead'])).toEqual({ ok: true });
         expect(await api.invoke('resumeLimit', [atlas.id])).toEqual({ ok: true });
         expect(await api.invoke('agents.restart', [atlas.id, 'graceful'])).toEqual({ ok: true, kind: 'graceful' });
-        expect(calls).toEqual(['answerApproval allow go ahead', 'resumeLimit claude', 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
+        expect(calls).toEqual(['answerApproval allow go ahead', `resumeLimit claude ${atlas.accountId}`, 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
     });
 
     it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {

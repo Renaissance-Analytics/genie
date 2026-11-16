@@ -130,6 +130,9 @@ export interface EngineServerOptions {
     readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
     /** The host book's persisted legacy account; only this machine's window may ask. */
     readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null;
+    /** A sign-in for one account, run here (Tynn #479). */
+    readonly login?: (provider: string, accountId: string | undefined) => { ok: true; terminalId: string } | { ok: false; reason: string };
+    readonly cancelLogin?: (accountId: string) => void;
     /** After a login: read the provider's account identity again (Tynn #477). */
     readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
@@ -377,7 +380,7 @@ export class SessionEngineServer {
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
             onAction: (agentId, kind) => this.callback({ name: 'action', agentId, kind }),
-            onHeadroom: (provider, headroom) => this.callback({ name: 'headroom', provider, headroom }),
+            onHeadroom: (provider, headroom, stamp) => this.callback({ name: 'headroom', provider, headroom, ...(stamp ? { stamp } : {}) }),
             onMcpServers: (agentId, reports) => this.callback({ name: 'mcpServers', agentId, reports }),
         };
     }
@@ -636,6 +639,16 @@ export class SessionEngineServer {
             const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
             return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
         }
+        if (method === 'engine.login') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            if (!this.#options.login) throw new Error('Sign-in is not ready in the host yet.');
+            return this.#options.login(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'string' ? args[1] : undefined);
+        }
+        if (method === 'engine.cancelLogin') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            this.#options.cancelLogin?.(typeof args[0] === 'string' ? args[0] : '');
+            return true;
+        }
         if (method === 'engine.refreshAccountIdentity') {
             if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');
             await this.#options.refreshAccountIdentity?.(typeof args[0] === 'string' ? args[0] : '');
@@ -752,7 +765,7 @@ export class SessionEngineServer {
                 return true;
             }
             case 'engine.resumeLimit':
-                host.resumeLimit(str(0));
+                host.resumeLimit(str(0), typeof args[1] === 'string' ? args[1] : undefined);
                 return true;
             case 'engine.clearDesignLogin':
                 host.clearDesignLogin(str(0));
