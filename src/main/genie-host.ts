@@ -73,7 +73,9 @@ import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nodeSaveGit, workspaceSaveOps } from './workspace-save-host.js';
 import { elementSourcesFor } from './workspace-save-sources.js';
 import { cloneRestorePorts, nodeCloneFiles } from './workspace-clone-ports.js';
-import { restoreClone, watchNewWorkspaces } from './workspace-clone-restore-host.js';
+import { restoreClone, watchNewWorkspaces, type CloneRestorePorts } from './workspace-clone-restore-host.js';
+import { CloneWatch } from './clone-watch-host.js';
+import { withElements } from '../core/workspace-elements.js';
 import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
@@ -117,7 +119,7 @@ import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
 import { relayFetchOver } from './host-relay-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
-import { chmod, mkdir, readFile as readFileText } from 'node:fs/promises';
+import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { transportHub } from '../core/remote-protocol.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -1811,10 +1813,7 @@ async function main(): Promise<void> {
     // OPENING A FRESH CLONE (Tynn #756, PR9a): a workspace that appears here is restored in order (its settings, its tabs, the trust
     // verdict, its flows DISARMED, its processes STOPPED), in the host that owns the stores. What it did, and what it left waiting
     // for the person's trust, is logged.
-    const restoreWorkspaceClone = (workspaceId: string): void => {
-        const workspace = hostRegistry.workspace(workspaceId);
-        if (!workspace) return;
-        const ports = cloneRestorePorts({
+    const cloneRestorePortsNow = (): CloneRestorePorts => cloneRestorePorts({
             files: nodeCloneFiles(),
             registry: {
                 agentsOf: (id) => hostRegistry.listAgents().filter((a) => a.workspaceId === id),
@@ -1832,7 +1831,11 @@ async function main(): Promise<void> {
             processes: async () => { await bookOpening; return processBookNow; },
             trusted: (id) => hostingStack?.trust.view(id)?.trusted === true,
             siteHosts: (id) => (hostingStack?.sites.list() ?? []).filter((s) => s.workspaceId === id).map((s) => `${s.name}.gen`),
-        });
+    });
+    const restoreWorkspaceClone = (workspaceId: string): void => {
+        const workspace = hostRegistry.workspace(workspaceId);
+        if (!workspace) return;
+        const ports = cloneRestorePortsNow();
         void restoreClone({ id: workspace.id, path: workspace.path }, ports)
             .then((report) => lifecycleLog(`clone ${workspace.id} restored: ${report.order.join(' > ')}${report.skipped.length > 0 ? `; skipped ${report.skipped.map((s) => `${s.step} (${s.reason})`).join(', ')}` : ''}${(report.flows?.waiting.length ?? 0) + (report.processes?.waiting.length ?? 0) > 0 ? '; waiting for the workspace to be trusted' : ''}`))
             .catch((error: unknown) => say(`clone ${workspace.id} could not be restored: ${error instanceof Error ? error.message : String(error)}`));
@@ -1840,6 +1843,23 @@ async function main(): Promise<void> {
     watchNewWorkspaces({ workspaceStates: () => hostRegistry.workspaceStates(), subscribe: (listener) => phoneRegistry.subscribe(() => listener()) }, restoreWorkspaceClone);
     // The person's yes (Tynn #756, PR9b): what waited for it is restored now, by the same restore (it leaves what is already here alone).
     hostingStack?.trust.onTrusted?.((id) => restoreWorkspaceClone(id));
+    // THE WATCHER (Tynn #756, PR9c): what a teammate pushes to `.flows/`, `.processes/` or `.genie/tabs.json` is noticed and OFFERED,
+    // with what the repo says beside what this machine has. The host only looks and says what it found: nothing is applied here;
+    // applying one is the person's, asked of the watcher.
+    const cloneWatch = new CloneWatch({
+        workspaces: () => hostRegistry.workspaceStates().map((w) => ({ id: w.id, path: w.path, ...(w.asleep === true ? { asleep: true } : {}) })),
+        restore: cloneRestorePortsNow(),
+        stamp: async (path) => { try { const info = await statFile(path); return `${info.mtimeMs}:${info.size}`; } catch { return null; } },
+        live: async (workspace) => withElements(
+            { manifest: {}, manifestText: '{}\n', files: [] },
+            elementSourcesFor({ services: { list: () => hostingStack?.engines.list() ?? [] }, settings: { workspaceValues: (w) => settings.workspaceValues(w) }, registry: hostRegistry, flows: { list: (w) => flowStoreNow?.list(w) ?? [] }, processes: { kept: () => processBookNow?.kept() ?? [] } }, workspace.id),
+            workspace.id,
+            workspace.path,
+        ).model.files.map((f) => ({ path: f.path, value: f.value })),
+    });
+    cloneWatch.onChange((workspaceId, offers) => { if (offers.length > 0) lifecycleLog(`${workspaceId}: the repo has ${offers.length} change${offers.length === 1 ? '' : 's'} to offer: ${offers.map((o) => o.summary).join(', ')}`); });
+    const cloneWatchTimer = setInterval(() => { cloneWatch.pass().catch((error: unknown) => say(`clone watch: ${error instanceof Error ? error.message : String(error)}`)); }, 30_000);
+    cloneWatchTimer.unref();
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
     planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); } });
