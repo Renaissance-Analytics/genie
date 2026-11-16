@@ -286,7 +286,7 @@ try {
     const overlaps = JSON.parse(await ev(`(() => {
       const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
       const labels = [...document.querySelectorAll('[data-arc-label]')].map((t) => ({ text: t.textContent, r: t.getBoundingClientRect() }));
-      const leaves = [...document.querySelectorAll('[data-surface="dashboard"] [data-agent] *')].filter((e) => e.childElementCount === 0 && (e.textContent ?? '').trim() !== '').map((e) => ({ text: e.textContent.trim().slice(0, 24), r: e.getBoundingClientRect() })).filter((l) => l.r.width > 0);
+      const leaves = [...document.querySelectorAll('[data-surface="dashboard"] *')].filter((e) => !e.closest('[data-flight-paths]') && e.childElementCount === 0 && (e.textContent ?? '').trim() !== '').map((e) => ({ text: e.textContent.trim().slice(0, 24), r: e.getBoundingClientRect() })).filter((l) => l.r.width > 0);
       const onText = [], onLabel = [];
       labels.forEach((l, i) => {
         leaves.forEach((t) => { if (hit(l.r, t.r)) onText.push(l.text + ' over ' + t.text); });
@@ -295,7 +295,7 @@ try {
       return JSON.stringify({ labels: labels.length, onText, onLabel });
     })()`));
     proof.labels = overlaps;
-    check('arcs carry labels, and none covers row text or another label', overlaps.labels > 0 && overlaps.onText.length === 0 && overlaps.onLabel.length === 0, overlaps);
+    check('arcs carry labels, and none covers any text on the board (rows, headers) or another label', overlaps.labels > 0 && overlaps.onText.length === 0 && overlaps.onLabel.length === 0, overlaps);
     await shot('02-hover');
     release();
 

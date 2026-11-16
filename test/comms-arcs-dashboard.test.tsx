@@ -44,6 +44,13 @@ function layOut(): void {
         });
     });
 }
+/** The column headers are text too (the first run covered them): stubbed at the top of the table, and a label must keep off them. */
+function layOutHeader(): void {
+    const header = [...host.querySelectorAll<HTMLElement>('div')].find((d) => /Agent/.test(d.textContent ?? '') && /Comms/.test(d.textContent ?? '') && d.querySelector('[data-column-header="windows"]'));
+    header?.querySelectorAll<HTMLElement>(':scope > span').forEach((el, k) => {
+        el.getBoundingClientRect = () => ({ left: 160 + k * 74, top: 70, width: 70, height: 14, right: 230 + k * 74, bottom: 84, x: 160 + k * 74, y: 70, toJSON: () => ({}) }) as DOMRect;
+    });
+}
 const cell = (id: string) => host.querySelector<HTMLElement>(`[data-agent="${id}"] [data-comms-cell]`)!;
 const over = (el: Element, x: number, y: number) => act(() => { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y })); el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y })); });
 const move = (el: Element, x: number, y: number) => act(() => { el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y })); });
@@ -64,6 +71,7 @@ beforeEach(async () => {
         root.render(<Dashboard rows={rowsData} workspaces={[{ id: 'tynn', path: '/w/tynn' }]} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} />);
     });
     layOut();
+    layOutHeader();
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
@@ -144,12 +152,14 @@ describe('hovering a Comms cell', () => {
         over(cell('kai'), 700, 120);
         // Row text in overlay coordinates (the surface is at 100, 50): the name boxes and the stubbed leaves.
         const text: Array<{ x: number; y: number; w: number; h: number }> = [];
-        host.querySelectorAll<HTMLElement>('[data-agent] *').forEach((el) => {
-            if (el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
+        host.querySelectorAll<HTMLElement>('[data-surface="dashboard"] *').forEach((el) => {
+            if (el.closest('[data-flight-paths]') || el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
             const r = el.getBoundingClientRect();
             if (r.width > 0) text.push({ x: r.left - 100, y: r.top - 50, w: r.width, h: r.height });
         });
         expect(text.length).toBeGreaterThan(8);
+        // The header's text is among what the labels avoid (the first Azure run put one over "WORKSPACE").
+        expect(text.some((t) => t.y < 50)).toBe(true);
         const labels = [...host.querySelectorAll<SVGTextElement>('[data-arc-label]')].map((t) => ({ x: Number(t.dataset.x), y: Number(t.dataset.y) - 10, w: Number(t.dataset.w), h: Number(t.dataset.h) }));
         expect(labels.length).toBeGreaterThan(0);
         const hit = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;

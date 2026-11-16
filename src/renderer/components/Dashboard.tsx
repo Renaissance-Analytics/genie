@@ -561,10 +561,10 @@ function useFlightPaths(shown: readonly AgentRow[]) {
             const r = name.getBoundingClientRect();
             targets[link.peer] = { x: r.right - box.left + 8, y: r.top + r.height / 2 - box.top };
         }
-        // Every text leaf of every row, read in one go with the targets (no writes in between): what a label must not cover.
+        // Every text leaf on the board (rows, column headers, buttons), read in one go with the targets (no writes in between): what a label must not cover.
         const obstacles: Rect[] = [];
-        host.querySelectorAll<HTMLElement>('[data-agent] *').forEach((el) => {
-            if (el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
+        host.querySelectorAll<HTMLElement>('*').forEach((el) => {
+            if (el.closest('[data-flight-paths]') || el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
             const r = el.getBoundingClientRect();
             if (r.width > 0 && r.height > 0) obstacles.push({ x: r.left - box.left - 2, y: r.top - box.top - 1, w: r.width + 4, h: r.height + 2 });
         });

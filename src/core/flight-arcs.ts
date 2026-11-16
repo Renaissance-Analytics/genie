@@ -114,6 +114,15 @@ const LABEL_TRIES = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.45, 0.55, 0.35, 0.65, 
 /** Baseline offsets from the path, nearest first: above it, then below. */
 const LABEL_DY = [-8, -14, -20, 8, 16, -26];
 
+/** A path as small boxes along it (`CURVE_SAMPLES` of them, 5px square): what another arch's label must not sit on. */
+const CURVE_SAMPLES = 24;
+function curveBoxes(g: ArcGeometry): Rect[] {
+    return Array.from({ length: CURVE_SAMPLES + 1 }, (_, i) => {
+        const p = bezierAt(g, i / CURVE_SAMPLES);
+        return { x: p.x - 2.5, y: p.y - 2.5, w: 5, h: 5 };
+    });
+}
+
 /** The first spot along the path where the label touches no text, no other label and keeps inside the overlay; `null` when there is none. */
 function placeLabel(g: ArcGeometry, text: string, first: number, avoid: readonly Rect[]): ArcLabel | null {
     const w = Math.ceil(text.length * LABEL_CHAR_WIDTH);
@@ -156,7 +165,9 @@ export function arcsFor(input: ArcInput): Arc[] {
             const me = input.names[input.focus] ?? input.focus;
             const them = input.names[l.peer] ?? l.peer;
             const g = arcGeometry(input.pointer, input.targets[l.peer]!, dist);
-            const label = placeLabel(g, `${out ? me : them} › ${out ? them : me} ${ageLabel(l.ageSeconds)}`, LABEL_STEPS[n % LABEL_STEPS.length]!, taken);
+            // The other arches are in the way too: a label is never struck through by a neighbour's stroke.
+            const others = ordered.filter((o) => o.l.peer !== l.peer).flatMap((o) => curveBoxes(arcGeometry(input.pointer, input.targets[o.l.peer]!, o.dist)));
+            const label = placeLabel(g, `${out ? me : them} › ${out ? them : me} ${ageLabel(l.ageSeconds)}`, LABEL_STEPS[n % LABEL_STEPS.length]!, [...taken, ...others]);
             if (label) taken.push(labelRect(label));
             labels.set(l.peer, label);
         });
