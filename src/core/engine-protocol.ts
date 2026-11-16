@@ -63,6 +63,10 @@ export const ENGINE_METHODS = [
     'engine.cancelLogin',
     // SWITCH ACCOUNT (Tynn #753): open the provider's own login in its one home, with the steps. No agent is touched. `[provider]`.
     'engine.switchAccount',
+    // SWITCH OFFERS (Tynn #481): the offers genie-host makes when the active account's chosen window is near its limit. `[]`;
+    // Not now on one: `[offerId]`.
+    'engine.switchOffers',
+    'engine.dismissSwitchOffer',
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',
