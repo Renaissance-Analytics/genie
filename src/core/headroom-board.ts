@@ -90,6 +90,10 @@ export class HeadroomFeed {
         this.#board.forget(accountId);
     }
 
+    /** RED stub (Tynn #485). */
+    snapshot(): unknown[] { return []; }
+    restore(_saved: unknown): void {}
+
     /** Every account's reading, each window read now (a window past its reset is Refreshed). */
     accounts(): AccountHeadroom[] {
         return this.#board.accounts(this.#now());

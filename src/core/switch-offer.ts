@@ -157,6 +157,9 @@ export interface SwitchOfferServiceOptions {
     /** The `switch_offer_windows` setting as stored, read at every check and every list. */
     readonly choice: () => unknown;
     readonly now?: () => number;
+    /** RED stub (Tynn #485): ignored. */
+    readonly load?: () => unknown;
+    readonly save?: (state: unknown) => void;
 }
 
 /**
