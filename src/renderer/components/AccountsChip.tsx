@@ -4,6 +4,8 @@ import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, 
 import { shortDateTime } from '../../core/clock-words.js';
 import { limitLevel, resetsIn, windowWords, type LimitLevel } from '../../core/headroom.js';
 import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
+import { DesignAuthRow } from './DesignAuthRow.js';
+import type { DesignAuthView } from '../../core/design-auth.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 
 /**
@@ -19,6 +21,9 @@ export interface AccountsChipProps {
     readonly now: number;
     readonly onSwitch?: ((provider: string, choose?: string) => void) | undefined;
     readonly onDismissOffer?: ((id: string) => void) | undefined;
+    /** Claude Design's authorization for the machine (Tynn #480): shown in Claude's popover. */
+    readonly design?: DesignAuthView | undefined;
+    readonly onDesignSignIn?: (() => void) | undefined;
 }
 
 const LEVEL_TEXT: Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
@@ -40,7 +45,7 @@ function targetWords(t: SwitchTarget): string {
     return `${t.label} (${t.leftPct}% left)`;
 }
 
-export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer }: AccountsChipProps) {
+export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn }: AccountsChipProps) {
     const [open, setOpen] = useState(false);
     const active = activeAccountOf(view);
     if (!active) return null;
@@ -93,6 +98,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer }: Acc
                         </Callout>
                     ) : null}
                     {view.accounts.map((a) => <AccountSection key={a.id} account={a} now={now} onSwitch={() => switchTo(chooseWords(a))} />)}
+                    {design && provider === 'claude' ? <DesignAuthRow design={design} onSignIn={onDesignSignIn} /> : null}
                 </div>
             </Popover.Content>
         </Popover>

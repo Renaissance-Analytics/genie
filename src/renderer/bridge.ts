@@ -290,6 +290,8 @@ export interface GenieBridge {
     accountRetry?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to Claude Design` (#1081): the interactive `claude` in the login window on this machine. Absent on an older host. */
     designLogin?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Design sign-in for the machine (Tynn #480), from the accounts popover or Settings: no agent needed. Absent on an older host. */
+    designSignIn?(): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.

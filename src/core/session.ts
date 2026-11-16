@@ -16,6 +16,7 @@ import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
 import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
+import { DesignOperationTracker, type DesignAuthEvent } from './design-auth.js';
 import { randomUUID } from 'node:crypto';
 import { SLEEPING_AFTER_IDLE_MS } from './agent-status.js';
 import { redockReorientation } from './redock.js';
@@ -425,6 +426,8 @@ export interface AgentSessionOptions {
     onRateLimit?: (readings: readonly LimitReading[], message: string | null) => void;
     /** The provider's headroom, as a frame reports it — for the Dashboard header (main buffers it per provider). */
     onHeadroom?: (headroom: Headroom) => void;
+    /** Claude Design's authorization (Tynn #480): a refusal for want of /design-login, and every call that completes. */
+    onDesignAuth?: (event: DesignAuthEvent) => void;
     /** Each MCP server's state as the provider reports it (prism-acp 0.27.0, genie#1202): what a missing server is told by. */
     onMcpServers?: (reports: readonly McpServerReport[]) => void;
     /**
@@ -501,6 +504,7 @@ export class AgentSession {
     #accountPaused: AccountPause | null = null;
     /** A tool was refused for want of Claude Design's `/design-login` (core/design-login.ts): the login window fixes it. */
     #designLogin = false;
+    readonly #designOps = new DesignOperationTracker();
     /**
      * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there. Claude Code takes it and usually
      * FOLDS it into the running turn (measured, the 2026-10-20 note in `onTurnEnd`), so no turn of its own may ever come;
@@ -2756,6 +2760,9 @@ export class AgentSession {
     /** A row off the wire that is not a message chunk, arriving now or held until now: emitted, and what it says acted on. */
     #wireRow(event: StreamEvent): Promise<void> {
         const written = this.#emitRow(event);
+        // The machine's Design authorization (Tynn #480): only the host decides what this proves.
+        const auth = this.#options.onDesignAuth ? this.#designOps.track(event) : null;
+        if (auth) this.#options.onDesignAuth?.(auth);
         // REFUSED FOR WANT OF /design-login (#1081): said ONCE per login, after the refused call, however many calls fail.
         if (!this.#designLogin && designLoginRefused(event)) {
             this.#designLogin = true;

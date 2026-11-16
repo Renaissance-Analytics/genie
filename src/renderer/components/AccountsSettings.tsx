@@ -5,6 +5,7 @@ import { forgetRefusal, SWITCH_OFFER_WINDOW_CHOICES, type AccountsAction, type A
 import { shortDateTime } from '../../core/clock-words.js';
 import { parseSwitchOfferWindows } from '../../core/switch-offer.js';
 import { ProviderLogo } from './ProviderLogo.js';
+import { DesignAuthRow } from './DesignAuthRow.js';
 
 /**
  * SETTINGS → PROVIDERS → ACCOUNTS (Tynn #484, Accounts S11). Every known account of each provider with its usage, the one
@@ -20,9 +21,11 @@ export interface AccountsSettingsProps {
     readonly onSwitch?: ((provider: string, choose?: string) => void) | undefined;
     readonly onAct?: ((action: AccountsAction) => Promise<AccountsActResult>) | undefined;
     readonly now?: number | undefined;
+    /** Design sign-in for the machine (Tynn #480). */
+    readonly onDesignSignIn?: (() => void) | undefined;
 }
 
-export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, onSwitch, onAct, now }: AccountsSettingsProps) {
+export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, onSwitch, onAct, now, onDesignSignIn }: AccountsSettingsProps) {
     const at = now ?? Date.now();
     return (
         <section data-settings-accounts="" className="mt-4 flex flex-col gap-3">
@@ -41,6 +44,7 @@ export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, on
                     <ul className="divide-y divide-[var(--border-1)]">
                         {p.accounts.map((a) => <AccountRow key={a.id} account={a} now={at} onSwitch={onSwitch} onAct={onAct} />)}
                     </ul>
+                    {p.provider === 'claude' && snapshot.design ? <DesignAuthRow design={snapshot.design} onSignIn={onDesignSignIn} /> : null}
                 </div>
             ))}
         </section>

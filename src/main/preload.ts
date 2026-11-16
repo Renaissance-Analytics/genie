@@ -48,6 +48,7 @@ const bridge: PreloadBridge = {
     accounts: () => ipcRenderer.invoke('genie:accounts') as Promise<AccountsSnapshot | null>,
     accountsAct: (action) => ipcRenderer.invoke('genie:accounts-act', action) as Promise<AccountsActResult>,
     dismissSwitchOffer: (id) => ipcRenderer.invoke('genie:switch-offer-dismiss', id) as Promise<boolean>,
+    designSignIn: () => ipcRenderer.invoke('genie:design-sign-in') as Promise<{ ok: true } | { ok: false; reason: string }>,
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
 

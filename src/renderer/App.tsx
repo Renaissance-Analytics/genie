@@ -1135,7 +1135,11 @@ function DesktopApp({ bridge }: AppProps) {
     const [accountsSnapshot, setAccountsSnapshot] = useState<AccountsSnapshot | undefined>(undefined);
     const readAccounts = useCallback(() => { void resolvedBridge?.accounts?.().then((s) => { if (s) setAccountsSnapshot(s); }, () => {}); }, [resolvedBridge]);
     useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
-    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch') readAccounts(); }), [resolvedBridge, readAccounts]);
+    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed') readAccounts(); }), [resolvedBridge, readAccounts]);
+    // DESIGN SIGN-IN for the machine (Tynn #480): one click from the Claude popover or Settings.
+    const designSignIn = useCallback(() => {
+        void resolvedBridge?.designSignIn?.().then((r) => { if (!r.ok) showAlert({ title: 'Design sign-in could not start', body: r.reason }); }, () => {});
+    }, [resolvedBridge, showAlert]);
     const switchAccount = useCallback((provider: string, choose?: string) => {
         void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) showAlert({ title: 'The switch could not start', body: r.reason }); }, () => {});
     }, [resolvedBridge, showAlert]);
@@ -2064,6 +2068,7 @@ function DesktopApp({ bridge }: AppProps) {
             onSwitchAccount={switchAccount}
             onDismissSwitchOffer={dismissSwitchOffer}
             onAccountsAct={accountsAct}
+            onDesignSignIn={designSignIn}
             mailSignals={mailSignalList}
             route={route}
             address={shownAddress}
