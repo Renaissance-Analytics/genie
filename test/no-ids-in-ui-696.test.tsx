@@ -4,7 +4,7 @@ import { Drawer } from '@particle-academy/react-fancy';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
 import { inboxThreads, pairKey, type ThreadMail } from '../src/core/inbox-threads.js';
 import { contentCopyPayload, inlineCopyText } from '../src/core/chat-copy.js';
-import { idsIn, personText } from '../src/core/person-text.js';
+import { idsIn, personLine, personText } from '../src/core/person-text.js';
 import { AlertToasts } from '../src/renderer/components/AlertToasts.js';
 import { ChatMailRow } from '../src/renderer/components/ChatFlyout.js';
 import { ChatProse } from '../src/renderer/components/ChatProse.js';
@@ -81,6 +81,15 @@ describe('personText: the person’s reading of a text, ids removed, at render',
         const fenced = `Run this, ${AGENT}:\n\n${fence}\ngenie agent restart ${AGENT} --flow ${FLOW}\n${fence}\n`;
         expect(personText(fenced)).toBe(`Run this:\n\n${fence}\ngenie agent restart ${AGENT} --flow ${FLOW}\n${fence}\n`);
         expect(personText(`~~~\ncurl /q/${QID}\n~~~ then ${MSG}`)).toBe(`~~~\ncurl /q/${QID}\n~~~ then`);
+    });
+
+    it('a FLAT line (a preview, a search snippet, a toast: text drawn as text, never as code) has no id even where the message had code', () => {
+        const fence = '```';
+        const mail = `Run this:\n${fence}\ngenie agent restart ${AGENT}\n${fence}\nor \`${MSG}\``;
+        expect(idsIn(personLine(mail))).toEqual([]);
+        expect(personLine(`Answer to your question ${QID}: yes`)).toBe('Answer to your question: yes');
+        // CONTROL: the same mail through personText is code-verbatim, so a flat surface that used it would draw the ids.
+        expect(idsIn(personText(mail)).length).toBeGreaterThan(0);
     });
 
     it('link targets and URLs keep theirs (they are how an in-app link reaches its agent); their words do not', () => {
@@ -187,7 +196,7 @@ describe('the surfaces, from fixtures full of ids (control: each fixture really 
 
     it('a Deck item’s technical detail, opened, is verbatim in its <pre> (an error to copy); its title is filtered', () => {
         const opened = deckItem({ id: 'todo1', answer: { kind: 'form', fields: 1 } } as Partial<DeckItem>);
-        const html = renderToStaticMarkup(<Deck items={[opened]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} initiallyExpanded={['todo1']} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[opened]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} initiallyExpanded={['todo1']} />);
         expect(html).toMatch(new RegExp(`<pre[^>]*data-deck-detail="todo1"[^>]*>run ${UUID} failed in ${MSG}</pre>`));
         expect(idsShown(html)).toEqual([]);
     });

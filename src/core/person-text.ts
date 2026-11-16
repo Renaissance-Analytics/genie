@@ -66,3 +66,10 @@ export function personText(text: string | null | undefined): string | null | und
     }
     return out + stripIds(text.slice(at));
 }
+
+/** Text drawn as FLAT text (a preview, a snippet, a toast), never as code: no id is kept anywhere in it. Not built yet. */
+export function personLine(text: string): string;
+export function personLine(text: string | null | undefined): string | null | undefined;
+export function personLine(text: string | null | undefined): string | null | undefined {
+    return text;
+}
