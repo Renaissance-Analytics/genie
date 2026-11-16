@@ -4,6 +4,7 @@ import type { ServiceInstance } from './services.js';
 import { SETTINGS } from './settings.js';
 import type { LiveModel } from './workspace-save.js';
 import { flowsDeclaration, type FlowSource } from './workspace-flows.js';
+import { processesDeclaration, type ProcessSource } from './workspace-processes.js';
 
 /**
  * SERVICES, WORKSPACE SETTINGS AND ISSUEWATCH AS WHAT A REPO KEEPS OF THEM (Tynn #756, PR3), against shared-schemas v0.5.0.
@@ -212,6 +213,8 @@ export interface ElementSources {
     readonly agents: readonly { readonly name: string; readonly issueWatch: IssueWatchSetting | null }[];
     /** This workspace's flows (Tynn #756, PR5), saved as `.flows/<name>.json`. Absent: the model's files are left as they are. */
     readonly flows?: readonly FlowSource[];
+    /** This workspace's background processes and scheduled tasks (Tynn #756, PR6), saved as `.processes/<name>.json`. Absent: the model's files are left as they are. */
+    readonly processes?: readonly ProcessSource[];
 }
 
 /**
@@ -219,7 +222,7 @@ export interface ElementSources {
  * to declare, so clearing a setting is a saved change), and each agent's `issueWatch` set on its own config entry (an agent
  * with no config entry has no purpose to declare and is skipped). Every other key keeps its place.
  */
-export function withElements(model: LiveModel, sources: ElementSources, workspaceId: string): { model: LiveModel; excluded: Exclusion[] } {
+export function withElements(model: LiveModel, sources: ElementSources, workspaceId: string, workspacePath = ''): { model: LiveModel; excluded: Exclusion[] } {
     const manifest: Record<string, unknown> = { ...model.manifest };
     const services = servicesDeclaration(sources.services, workspaceId);
     const settings = workspaceSettingsDeclaration(sources.workspace);
@@ -240,6 +243,11 @@ export function withElements(model: LiveModel, sources: ElementSources, workspac
         manifest.agents = agents;
     }
     const flows = sources.flows === undefined ? null : flowsDeclaration(sources.flows, workspaceId);
-    const files = flows === null ? model.files : [...model.files.filter((f) => !f.path.startsWith('.flows/')), ...flows.files];
-    return { model: { ...model, manifest, files }, excluded: [...services.excluded, ...settings.excluded, ...(flows?.excluded ?? [])] };
+    const processes = sources.processes === undefined ? null : processesDeclaration(sources.processes, workspaceId, workspacePath);
+    const files = [
+        ...model.files.filter((f) => !(flows !== null && f.path.startsWith('.flows/')) && !(processes !== null && f.path.startsWith('.processes/'))),
+        ...(flows?.files ?? []),
+        ...(processes?.files ?? []),
+    ];
+    return { model: { ...model, manifest, files }, excluded: [...services.excluded, ...settings.excluded, ...(flows?.excluded ?? []), ...(processes?.excluded ?? [])] };
 }

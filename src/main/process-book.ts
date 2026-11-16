@@ -450,6 +450,20 @@ export class ProcessBook {
     }
 
     /** Validate, write it down as wanted, then start it. A refusal throws with the reason and keeps nothing. */
+    /**
+     * KEEP WITHOUT STARTING (Tynn #756, PR6): the same record `create` makes, validated the same way, never run. A process comes
+     * in STOPPED (`wanted: false`) and a scheduled task PAUSED; starting is the person's. A fresh clone's `.processes/` files
+     * are kept this way, after the workspace's one-time trust.
+     */
+    async keep(input: CreateProcessInput): Promise<ProcessStatus> {
+        if (input.schedule) return this.create({ ...input, enabled: false });
+        const { name, command, cwd, restart } = this.prepare(input);
+        const kept: KeptProcess = { id: `proc_${randomUUID()}`, workspaceId: input.workspaceId, name, command, cwd, restart, wanted: false, changedAt: this.#now() };
+        this.#data = { ...this.#data, processes: [...this.#data.processes, kept] };
+        await this.#flush();
+        return { id: kept.id, workspaceId: kept.workspaceId, name, state: 'stopped', pid: null, exitCode: null, restarts: 0, since: kept.changedAt };
+    }
+
     async create(input: CreateProcessInput): Promise<ProcessStatus> {
         const { name, command, cwd } = this.prepare(input);
         if (input.schedule) {

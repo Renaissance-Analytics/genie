@@ -198,7 +198,7 @@ export function workspaceSaveOps(options: {
             if (loaded === null) return null;
             const model = withPortableSites(loaded, path);
             if (!options.elements) return model;
-            return withElements(model, await options.elements(workspaceId), workspaceId).model;
+            return withElements(model, await options.elements(workspaceId), workspaceId, path).model;
         },
         ...(options.mayReadFolder ? { mayReadFolder: options.mayReadFolder } : {}),
         ...(options.revision ? { revision: options.revision } : {}),
