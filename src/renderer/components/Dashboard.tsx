@@ -271,7 +271,7 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     /** The windows column (Tynn #706): absent = this row has none (Genie's own, or a workspace this window may not open). */
     windows?: { onTerminal?: (() => void) | undefined; onFiles?: (() => void) | undefined } | undefined;
     /** Its provider's standing switch offer (Tynn #483): one click starts the switch. Absent = none. */
-    switchOffer?: { offer: SwitchOffer; onSwitch: (provider: string) => void } | undefined;
+    switchOffer?: { offer: SwitchOffer; onSwitch: (provider: string, choose?: string) => void } | undefined;
 }) {
     const role = reveal ? (reveal.focus === row.id ? 'focus' : reveal.peers[row.id] ? 'peer' : 'dim') : null;
     const peerLink = role === 'peer' ? reveal!.peers[row.id]! : null;
@@ -304,7 +304,7 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                         aria-label={`${switchOffer.offer.label} is near its ${windowWords(switchOffer.offer.window)} limit: switch account`}
                         title={`${switchOffer.offer.label}: ${switchOffer.offer.over ? 'spent' : `${switchOffer.offer.leftPct}% left`} ${windowWords(switchOffer.offer.window)}. Switch account`}
                         className="shrink-0 px-1 text-[var(--warning)]"
-                        onClick={(event) => { event.stopPropagation(); switchOffer.onSwitch(row.provider); }} />
+                        onClick={(event) => { event.stopPropagation(); switchOffer.onSwitch(row.provider, switchOffer.offer.targets[0]?.label); }} />
                 ) : null}
             </div>
 
@@ -485,7 +485,7 @@ export interface DashboardProps {
     /** Every known account and the standing switch offers (Tynn #483): the header's account chips. Absent = the pills alone. */
     accounts?: AccountsSnapshot | undefined;
     /** One click to switch a provider's account (S9): the provider's own login, in its one home. */
-    onSwitchAccount?: ((provider: string) => void) | undefined;
+    onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
     /** Not now on a switch offer. */
     onDismissSwitchOffer?: ((id: string) => void) | undefined;
     /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
@@ -861,7 +861,7 @@ export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount,
     now?: number;
     /** Every known account and the standing offers (Tynn #483): a provider with accounts draws its account chip instead. */
     accounts?: AccountsSnapshot | undefined;
-    onSwitchAccount?: ((provider: string) => void) | undefined;
+    onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
     onDismissSwitchOffer?: ((id: string) => void) | undefined;
 }) {
     // Re-read twice a minute: a window that resets while the header is open turns Refreshed without a new reading.

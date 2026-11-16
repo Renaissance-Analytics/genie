@@ -277,7 +277,8 @@ export interface GenieBridge {
      * SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps. How it came out
      * arrives as an `account-switch` action. Absent on an older host.
      */
-    switchAccount?(provider: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `choose`: the account the person pressed Switch on, named in the login's steps (Tynn #483). */
+    switchAccount?(provider: string, choose?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** Every known account with its readings, and the standing switch offers (Tynn #483); `null` while the host cannot answer. */
     accounts?(): Promise<AccountsSnapshot | null>;
     /** Not now on a switch offer (Tynn #481): it goes, and is not made again in that window. */

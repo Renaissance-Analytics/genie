@@ -1,6 +1,6 @@
 import { Avatar, Badge, Button, Callout, Icon, Popover, Progress } from '@particle-academy/react-fancy';
 import { useState } from 'react';
-import { activeAccountOf, type AccountView, type AccountWindowRow, type ProviderAccountsView } from '../../core/accounts-view.js';
+import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, type ProviderAccountsView } from '../../core/accounts-view.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import { limitLevel, resetsIn, windowWords, type LimitLevel } from '../../core/headroom.js';
 import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
@@ -17,7 +17,7 @@ export interface AccountsChipProps {
     readonly view: ProviderAccountsView;
     readonly offer: SwitchOffer | null;
     readonly now: number;
-    readonly onSwitch?: ((provider: string) => void) | undefined;
+    readonly onSwitch?: ((provider: string, choose?: string) => void) | undefined;
     readonly onDismissOffer?: ((id: string) => void) | undefined;
 }
 
@@ -49,7 +49,11 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer }: Acc
     const tight = tightest(active);
     const level: LimitLevel = tight ? limitLevel(tight) : 'ok';
     // The switch opens the provider's login in a window of its own; the popover stays as it is under it.
-    const switchNow = () => { onSwitch?.(provider); };
+    const switchTo = (choose?: string) => { onSwitch?.(provider, choose); };
+    // The offer's Switch names its first suggestion (Tynn #483): the person chooses it in the provider's login.
+    const firstTarget = offer?.targets[0];
+    const firstAccount = firstTarget ? view.accounts.find((a) => a.id === firstTarget.accountId) : undefined;
+    const offerChoose = firstAccount ? chooseWords(firstAccount) : firstTarget?.label;
     return (
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
             <Popover.Trigger>
@@ -83,12 +87,12 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer }: Acc
                                 ? <p className="text-[var(--fg-3)]">Room: {offer.targets.map(targetWords).join(', ')}</p>
                                 : <p className="text-[var(--fg-3)]">No other {name} account has room.</p>}
                             <div className="mt-1.5 flex gap-1.5">
-                                {offer.targets.length > 0 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="switch-offer-switch" onClick={switchNow}>Switch</Button> : null}
+                                {offer.targets.length > 0 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="switch-offer-switch" onClick={() => switchTo(offerChoose)}>Switch</Button> : null}
                                 <Button type="button" size="xs" variant="ghost" data-action="switch-offer-dismiss" onClick={() => onDismissOffer?.(offer.id)}>Not now</Button>
                             </div>
                         </Callout>
                     ) : null}
-                    {view.accounts.map((a) => <AccountSection key={a.id} account={a} now={now} onSwitch={switchNow} />)}
+                    {view.accounts.map((a) => <AccountSection key={a.id} account={a} now={now} onSwitch={() => switchTo(chooseWords(a))} />)}
                 </div>
             </Popover.Content>
         </Popover>

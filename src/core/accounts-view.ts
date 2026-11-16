@@ -16,6 +16,8 @@ export interface AccountView {
     readonly id: string;
     readonly provider: string;
     readonly label: string;
+    /** The provider-reported email, when known: what its own login shows, so a switch's steps name it. */
+    readonly email: string | null;
     readonly plan: string | null;
     readonly active: boolean;
     readonly windows: readonly AccountWindowRow[];
@@ -47,11 +49,16 @@ export function accountsView(known: readonly KnownAccountRecord[], readings: rea
                 ...STANDARD_WINDOWS.map((w): AccountWindowRow => reported.find((x) => x.window === w) ?? { unknown: true, window: w }),
                 ...reported.filter((x) => !STANDARD_WINDOWS.includes(x.window)),
             ];
-            return { id: a.id, provider, label: a.label, plan: a.identity.plan ?? r?.room.plan ?? null, active: active[provider] === a.id, windows };
+            return { id: a.id, provider, label: a.label, email: a.identity.email, plan: a.identity.plan ?? r?.room.plan ?? null, active: active[provider] === a.id, windows };
         });
         out.push({ provider, accounts: [...accounts.filter((a) => a.active), ...accounts.filter((a) => !a.active)] });
     }
     return out;
+}
+
+/** The words a switch's steps use for an account: its email when known (what the provider's login shows), else its label. */
+export function chooseWords(account: Pick<AccountView, 'email' | 'label'>): string {
+    return account.email ?? account.label;
 }
 
 /** The account the chip names: the provider's active one, or its first when the book names none. */

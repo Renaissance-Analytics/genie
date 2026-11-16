@@ -47,8 +47,10 @@ export function loginTerminalOf(route: string): string | null {
 }
 
 /** The Take Over window's route for a sign-in terminal: the window only shows it (Tynn #479). */
-export function loginRoute(terminalId: string, provider: string, switching = false): string {
-    return `genie://takeover/${terminalId}?login=${encodeURIComponent(provider)}${switching ? '&switch=1' : ''}`;
+export function loginRoute(terminalId: string, provider: string, switching = false, choose?: string): string {
+    // A switch may name the account to choose (Tynn #483); the window's steps say it.
+    const named = switching && choose ? `&choose=${encodeURIComponent(choose)}` : '';
+    return `genie://takeover/${terminalId}?login=${encodeURIComponent(provider)}${switching ? '&switch=1' : ''}${named}`;
 }
 
 export interface LoginHostOptions {

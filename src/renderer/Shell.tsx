@@ -130,7 +130,7 @@ export interface ShellProps {
     /** Every known account and the standing switch offers, for the header's account chips (Tynn #483). */
     accounts?: AccountsSnapshot | undefined;
     /** One click to switch a provider's account (S9). */
-    onSwitchAccount?: ((provider: string) => void) | undefined;
+    onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
     /** Not now on a switch offer (S8). */
     onDismissSwitchOffer?: ((id: string) => void) | undefined;
     /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
