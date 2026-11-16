@@ -110,7 +110,7 @@ describe('S10: the chip and its popover', () => {
         render(SNAPSHOT(), { onSwitchAccount });
         click(chip());
         click(popover()!.querySelector(`[data-account="${B}"] [data-action="account-switch"]`)!);
-        expect(onSwitchAccount).toHaveBeenCalledWith('claude');
+        expect(onSwitchAccount).toHaveBeenCalledWith('claude', 'ada@example.invalid');
         expect(popover()!.querySelector(`[data-account="${A}"] [data-action="account-switch"]`)).toBeNull();
     });
     it('a standing offer is a Callout in the popover: Switch starts the switch, Not now dismisses that offer', () => {
@@ -123,7 +123,7 @@ describe('S10: the chip and its popover', () => {
         expect(offer.textContent).toContain('Work Max');
         expect(offer.textContent).toContain('ada@example.invalid');
         click(offer.querySelector('[data-action="switch-offer-switch"]')!);
-        expect(onSwitchAccount).toHaveBeenCalledWith('claude');
+        expect(onSwitchAccount).toHaveBeenCalledWith('claude', 'ada@example.invalid');
         click(offer.querySelector('[data-action="switch-offer-dismiss"]')!);
         expect(onDismissSwitchOffer).toHaveBeenCalledWith(OFFER.id);
     });

@@ -186,7 +186,7 @@ describe('S9: one click from a window, and the outcome back to it', () => {
         const main = source('src/main/main.ts');
         expect(main).toMatch(/ipcMain\.handle\('genie:account-switch'/);
         expect(main).toMatch(/signal\.kind === 'account-switch'/);
-        expect(source('src/main/preload.ts')).toMatch(/switchAccount: \(provider\) => ipcRenderer\.invoke\('genie:account-switch', provider\)/);
+        expect(source('src/main/preload.ts')).toMatch(/switchAccount: \(provider, choose\) => ipcRenderer\.invoke\('genie:account-switch', provider, choose\)/);
     });
     it('the window shows the outcome with accountSwitchToast, Retry calling the bridge\'s switch', () => {
         expect(source('src/renderer/App.tsx')).toMatch(/accountSwitchToast\([^)]*\(provider\) => \{ void resolvedBridge\?\.switchAccount\?\.\(provider\)/);
