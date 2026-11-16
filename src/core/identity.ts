@@ -313,3 +313,6 @@ export function withAgentAccount(record: AgentRecord): AgentRecord {
     if (record.accountId === accountId && record.threadIds === threadIds && record.leftAt === leftAt) return record;
     return { ...record, accountId, ...(threadIds !== undefined ? { threadIds } : {}), ...(leftAt !== undefined ? { leftAt } : {}) };
 }
+
+/** RED STUB (Tynn #751): inert; the corrected model drops the per-agent account at the read boundary. */
+export function withoutAgentAccount(record: AgentRecord): AgentRecord { return record; }

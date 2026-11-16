@@ -96,6 +96,10 @@ export class AccountsHost {
     list(): readonly AccountRecord[] { return this.#accounts.map(detached); }
     get(id: string): AccountRecord | null { const a = this.#accounts.find(a => a.id === id); return a ? detached(a) : null; }
     defaultFor(provider: AcpProvider): AccountRecord | null { return this.get(legacyAccountId(provider)); }
+    /** RED STUB (Tynn #751): the active account is not built yet; every provider reads as its legacy account. */
+    activeFor(provider: AcpProvider): AccountRecord { return this.defaultFor(provider)!; }
+    /** RED STUB (Tynn #751): inert. */
+    setActive(_provider: AcpProvider, _id: string): Promise<void> { return Promise.resolve(); }
 
     add(input: { provider: AcpProvider; label?: string }): Promise<AccountRecord> {
         return this.#queue(async () => {

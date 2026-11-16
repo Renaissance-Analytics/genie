@@ -647,6 +647,8 @@ export class SessionHost {
         driverFor?: DriverFor;
         /** The one host account book; absent only for standalone legacy hosts/tests. */
         accountById?: (id: string) => AccountRecord | null;
+        /** RED STUB (Tynn #751): accepted, not read yet. The provider's ONE active account, which every agent launches on. */
+        activeAccount?: (provider: string) => AccountRecord | null;
         clock?: () => number;
         processTree?: ProcessTree;
         /**
