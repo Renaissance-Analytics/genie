@@ -1857,7 +1857,7 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, onNavigate, section, workspaces = [], remoteConnect, query, update, providers, marketplace, accountsSettings }: SurfaceProps & { section: SectionId | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined; providers?: readonly ProviderStatus[] | undefined; marketplace?: MarketplaceApi | undefined; accountsSettings?: Pick<AccountsSettingsProps, 'snapshot' | 'onSwitch' | 'onAct'> | undefined }) {
+export function SettingsSurface({ data, onAction, onNavigate, section, workspaces = [], remoteConnect, query, update, providers, marketplace, accountsSettings }: SurfaceProps & { section: SectionId | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined; providers?: readonly ProviderStatus[] | undefined; marketplace?: MarketplaceApi | undefined; accountsSettings?: Pick<AccountsSettingsProps, 'snapshot' | 'onSwitch' | 'onAct' | 'onDesignSignIn'> | undefined }) {
     const values = data.settings.values;
     const active: SectionId = section ?? 'general';
     // SEARCH across every page (§6.9). Transient view state: a query is not a place, so it is not in the route.

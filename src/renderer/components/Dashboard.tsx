@@ -488,6 +488,8 @@ export interface DashboardProps {
     onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
     /** Not now on a switch offer. */
     onDismissSwitchOffer?: ((id: string) => void) | undefined;
+    /** Design sign-in for the machine (Tynn #480). */
+    onDesignSignIn?: (() => void) | undefined;
     /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
     now?: number | undefined;
     /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
@@ -635,7 +637,7 @@ export const GENIE_ROW = 'genie:';
 
 const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, accounts, onSwitchAccount, onDismissSwitchOffer, now, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, now, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
@@ -791,7 +793,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent">
                     {['J', 'K', '↵'].map((key) => <kbd key={key} className="rounded border border-[var(--border-1)] px-1 font-mono">{key}</kbd>)}
                 </span>
-                <RateLimitPills limits={rateLimits ?? {}} accounts={accounts} onSwitchAccount={onSwitchAccount} onDismissSwitchOffer={onDismissSwitchOffer} {...(now !== undefined ? { now } : {})} />
+                <RateLimitPills limits={rateLimits ?? {}} accounts={accounts} onSwitchAccount={onSwitchAccount} onDismissSwitchOffer={onDismissSwitchOffer} onDesignSignIn={onDesignSignIn} {...(now !== undefined ? { now } : {})} />
                 <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie">Chat <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span></Button>
             </div>
             {/* "Dismiss all stale" or "Dismiss all older" refused: said under the header (Tynn #600). */}
@@ -856,13 +858,14 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
  * window. A click or Enter opens a POPOVER with every window (the owner, 2026-10-31: "can we make these cleaner? this
  * should be a popover not a tooltip"). Buffered in main, so this redraws at most once per provider per buffer.
  */
-export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer }: {
+export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn }: {
     limits: Readonly<Record<string, Headroom>>;
     now?: number;
     /** Every known account and the standing offers (Tynn #483): a provider with accounts draws its account chip instead. */
     accounts?: AccountsSnapshot | undefined;
     onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
     onDismissSwitchOffer?: ((id: string) => void) | undefined;
+    onDesignSignIn?: (() => void) | undefined;
 }) {
     // Re-read twice a minute: a window that resets while the header is open turns Refreshed without a new reading.
     const now = useNow(true, pinned, 30_000);
@@ -873,7 +876,7 @@ export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount,
         <div data-rate-limits="" className="flex items-center gap-1.5">
             {providers.map((p) => {
                 const view = viewOf(p);
-                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} />;
+                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} />;
                 return limits[p] ? <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} /> : null;
             })}
         </div>

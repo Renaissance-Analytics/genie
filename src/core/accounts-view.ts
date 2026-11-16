@@ -1,6 +1,7 @@
 import type { AccountHeadroom } from './headroom-board.js';
 import { STANDARD_WINDOWS, type WindowReading } from './headroom.js';
 import type { SwitchOffer } from './switch-offer.js';
+import type { DesignAuthView } from './design-auth.js';
 
 /**
  * THE ACCOUNTS A WINDOW IS SHOWN (Tynn #483, Accounts S10). One active account per provider is signed in on the host and every
@@ -28,7 +29,12 @@ export interface AccountView {
 export interface ProviderAccountsView { readonly provider: string; readonly accounts: readonly AccountView[] }
 
 /** What `engine.accounts` answers: every provider's accounts, and the switch offers standing (S8). */
-export interface AccountsSnapshot { readonly providers: readonly ProviderAccountsView[]; readonly offers: readonly SwitchOffer[] }
+export interface AccountsSnapshot {
+    readonly providers: readonly ProviderAccountsView[];
+    readonly offers: readonly SwitchOffer[];
+    /** Claude Design's authorization, one for the machine (Tynn #480); absent from an older host. */
+    readonly design?: DesignAuthView | undefined;
+}
 
 export interface KnownAccountRecord {
     readonly id: string;

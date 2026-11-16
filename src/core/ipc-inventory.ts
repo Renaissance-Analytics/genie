@@ -46,6 +46,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:accounts-act', 'window-port'],
     ['genie:switch-offer-dismiss', 'window-port'],
     ['genie:design-login', 'window-port'],
+    ['genie:design-sign-in', 'window-port'],
     ['genie:provider-login', 'window-port'],
     ['genie:take-over', 'window-port'],
     // Take over from another machine (Tynn #529 part A): this machine's Take Over window, and its ticket read once.

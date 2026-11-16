@@ -570,6 +570,7 @@ export class SessionHost {
     readonly #onTurnEnd: ((agentId: AgentId, cause: 'interrupted' | 'restarted') => void) | undefined;
     readonly #onPersonTurn: ((agentId: AgentId) => void) | undefined;
     readonly #onHeadroom: ((provider: string, headroom: Headroom, stamp?: ReadingStamp) => void) | undefined;
+    readonly #onDesignAuth: ((agentId: string, event: import('../core/design-auth.js').DesignAuthEvent) => void) | undefined;
     readonly #onMcpServers: ((agentId: AgentId, reports: readonly McpServerReport[]) => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
@@ -702,6 +703,8 @@ export class SessionHost {
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
         onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
+        /** Claude Design's authorization, as each Claude agent's calls show it (Tynn #480). */
+        onDesignAuth?: (agentId: string, event: import('../core/design-auth.js').DesignAuthEvent) => void;
         /** Each MCP server's state as an agent's provider reports it (genie#1202): main decides whether one is missing. */
         onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
         serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -760,6 +763,7 @@ export class SessionHost {
         this.#onTurnEnd = options.onTurnEnd;
         this.#onPersonTurn = options.onPersonTurn;
         this.#onHeadroom = options.onHeadroom;
+        this.#onDesignAuth = options.onDesignAuth;
         this.#onMcpServers = options.onMcpServers;
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
@@ -1214,6 +1218,7 @@ export class SessionHost {
             onRateLimit: (readings, message) => this.#limitReport(this.#loginFor(record.provider), readings, message),
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: this.#activeId(record.provider), runId }) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
+            ...(this.#onDesignAuth && record.provider === 'claude' ? { onDesignAuth: (event: import('../core/design-auth.js').DesignAuthEvent) => this.#onDesignAuth!(record.id, event) } : {}),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
             // Autonomous answers the same questions, at the same moment (Tynn #439): Claude's shell calls, and what Codex asks.

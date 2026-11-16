@@ -48,6 +48,7 @@ import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
 import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
 import { accountsView } from '../core/accounts-view.js';
+import { DesignAuthBook } from '../core/design-auth.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
@@ -1062,6 +1063,7 @@ async function main(): Promise<void> {
     let switchOffersNow: SwitchOfferService | null = null;
     let headroomFeedNow: HeadroomFeed | null = null;
     let saveBoardNow: (() => void) | null = null;
+    let designAuthNow: DesignAuthBook | null = null;
     // Settings → Providers → Accounts (Tynn #484): rename, or forget (the signed-in account refused, saying so); a forgotten
     // account's readings leave the board. Only the book changes; no credential is touched.
     const accountsAct = async (action: AccountsAction): Promise<AccountsActResult> => {
@@ -1104,7 +1106,7 @@ async function main(): Promise<void> {
         switchOffers: { offers: () => switchOffersNow?.offers() ?? [], dismiss: (id) => switchOffersNow?.dismiss(id) ?? false },
         // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
         accountsAct: (action) => accountsAct(action),
-        accounts: () => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [] }),
+        accounts: () => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() }),
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
@@ -1246,6 +1248,15 @@ async function main(): Promise<void> {
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     headroomFeedNow = headroomFeed;
+    // CLAUDE DESIGN'S AUTHORIZATION, ONE FOR THE MACHINE (Tynn #480, core/design-auth.ts): Authorized only after the call
+    // that needed it succeeds. Kept on disk; a change tells the windows to read the accounts again.
+    const designAuthFile = join(home, 'claude-design-state.json');
+    const designAuth = new DesignAuthBook(
+        () => { try { return JSON.parse(readFileSync(designAuthFile, 'utf8')); } catch { return undefined; } },
+        (state) => { try { writeFileSync(designAuthFile, JSON.stringify(state)); } catch (error) { say(`Claude Design: could not save its state: ${error instanceof Error ? error.message : String(error)}`); } },
+    );
+    designAuthNow = designAuth;
+    designAuth.onChange(() => { engine.callback({ name: 'toolSignal', signal: { kind: 'accounts-changed' } }); });
     // EACH ACCOUNT'S LAST READINGS SURVIVE A RESTART (Tynn #485): how an idle account's room is known. Read here, written as they change.
     const headroomBoardFile = join(home, 'headroom-board.json');
     headroomFeed.restore(((): unknown => { try { return JSON.parse(readFileSync(headroomBoardFile, 'utf8')); } catch { return []; } })());
@@ -1297,6 +1308,7 @@ async function main(): Promise<void> {
         // The window still plays the sound; the host decides whether the agent is nudged (it no longer asks a window to).
         onAction: (agentId, kind) => { engineHostOptions.onAction(agentId, kind); if (kind === 'replied') planKeepalive?.turnEnded(agentId, 'replied'); },
         onTurnEnd: (agentId, cause) => { planKeepalive?.turnEnded(agentId, cause); },
+        onDesignAuth: (_agentId, event) => designAuth.apply(event),
         onPersonTurn: (agentId) => { planKeepalive?.personTurn(agentId); },
         serviceEnvFor: (workspaceId) => ({ ...engineHostOptions.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId) }),
         // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
@@ -1428,7 +1440,7 @@ async function main(): Promise<void> {
             });
         },
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
-        onDesignLoginEnded: () => { tellDesignLoginRan(host); },
+        onDesignLoginEnded: () => { designAuth.apply({ kind: 'login-ended' }); tellDesignLoginRan(host); },
         // A switch's login is over (Tynn #482): the flow reads who is signed in and says so.
         onSwitchEnded: (provider, signedIn) => { void switchFlow?.settle(provider, signedIn); },
     });
