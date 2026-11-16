@@ -5,6 +5,7 @@ import { SETTINGS } from './settings.js';
 import type { LiveModel } from './workspace-save.js';
 import { flowsDeclaration, type FlowSource } from './workspace-flows.js';
 import { processesDeclaration, type ProcessSource } from './workspace-processes.js';
+import { tabsDeclaration } from './workspace-tabs-save.js';
 
 /**
  * SERVICES, WORKSPACE SETTINGS AND ISSUEWATCH AS WHAT A REPO KEEPS OF THEM (Tynn #756, PR3), against shared-schemas v0.5.0.
@@ -244,10 +245,14 @@ export function withElements(model: LiveModel, sources: ElementSources, workspac
     }
     const flows = sources.flows === undefined ? null : flowsDeclaration(sources.flows, workspaceId);
     const processes = sources.processes === undefined ? null : processesDeclaration(sources.processes, workspaceId, workspacePath);
+    // The workspace's tabs, its splits and its terminal layout are three of its own settings: read as they are kept (Tynn #756, PR7).
+    const overrides = sources.workspace.overrides;
+    const tabs = tabsDeclaration({ tabs: String(overrides.workspace_tabs ?? ''), panelSplits: String(overrides.panel_splits ?? ''), panelLayout: String(overrides.panel_layout ?? '') }, workspacePath);
     const files = [
-        ...model.files.filter((f) => !(flows !== null && f.path.startsWith('.flows/')) && !(processes !== null && f.path.startsWith('.processes/'))),
+        ...model.files.filter((f) => !(flows !== null && f.path.startsWith('.flows/')) && !(processes !== null && f.path.startsWith('.processes/')) && !(tabs.files.length > 0 && f.path === '.genie/tabs.json')),
         ...(flows?.files ?? []),
         ...(processes?.files ?? []),
+        ...tabs.files,
     ];
-    return { model: { ...model, manifest, files }, excluded: [...services.excluded, ...settings.excluded, ...(flows?.excluded ?? []), ...(processes?.excluded ?? [])] };
+    return { model: { ...model, manifest, files }, excluded: [...services.excluded, ...settings.excluded, ...(flows?.excluded ?? []), ...(processes?.excluded ?? []), ...tabs.excluded] };
 }
