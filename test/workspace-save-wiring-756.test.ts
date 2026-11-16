@@ -74,8 +74,8 @@ describe('the protocol', () => {
     });
 
     it('the window reaches them through the local session and the remote bridge', () => {
-        expect(src('src/renderer/remote-bridge.ts')).toContain("answer('workspaces.savePreview'");
-        expect(src('src/renderer/remote-bridge.ts')).toContain("answer('workspaces.save'");
+        expect(src('src/renderer/remote-bridge.ts')).toContain("call('workspaces.savePreview'");
+        expect(src('src/renderer/remote-bridge.ts')).toContain("call('workspaces.save'");
         expect(src('src/renderer/local-session.ts')).toContain('savePreview: (id) =>');
         expect(src('src/renderer/local-session.ts')).toContain('save: (id, choices) =>');
     });
