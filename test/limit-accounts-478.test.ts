@@ -12,8 +12,9 @@ import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js'
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
- * A HOLD BELONGS TO AN ACCOUNT (Tynn #478, Accounts S5). Two Claude accounts are two logins: a limit on A holds A's
- * agents and never B's, and a reading carries the account and run the agent was LAUNCHED on. Fixtures use no real person.
+ * A HOLD BELONGS TO AN ACCOUNT (Tynn #478, Accounts S5), AND EVERY AGENT RUNS ON THE ACTIVE ONE (Tynn #751, Accounts R1).
+ * Two Claude accounts are two logins, each with its own limit; the active account's limit holds every agent of the provider,
+ * and a reading carries the account that was active when it arrived. Fixtures use no real person.
  */
 const MIN = 60_000;
 const ACCOUNT_A = `account_${'a'.repeat(32)}`;
@@ -42,16 +43,18 @@ const driverFor: DriverFor = (record) => {
 };
 
 let host: SessionHost;
+let activeId = ACCOUNT_A;
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-limit-accounts-'));
     now = Date.UTC(2026, 10, 15, 3, 0, 0);
     timers = [];
+    activeId = ACCOUNT_A;
     events.clear();
     sent.clear();
     readings.length = 0;
     host = new SessionHost({
         userData: dir, driverFor, clock: () => now, processTree: noTree,
-        accountById: (id) => book.get(id) ?? null,
+        activeAccount: () => book.get(activeId) ?? null,
         onHeadroom: (provider, room, stamp) => { readings.push({ provider, room, stamp }); },
         rateLimit: {
             gate: new RateLimitGate({ marginMs: 2 * MIN }),
@@ -64,7 +67,7 @@ afterEach(async () => {
     await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
-const record = (name: string, accountId: string): AgentRecord => ({ ...agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name }), accountId });
+const record = (name: string): AgentRecord => agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name });
 const meta = (status: string, resetsAtMs: number, utilization = 1) => ({
     sessionUpdate: 'notice', notice: { level: 'info', message: status === 'allowed' ? 'rate limit ok' : "You've hit your limit" },
     _meta: { 'particle.academy/rate_limit': { status, rateLimitType: 'five_hour', resetsAtMs, windows: { five_hour: { utilization, resetsAtMs } }, raw: {} } },
@@ -73,67 +76,76 @@ const rejected = (name: string, resetsAtMs: number) => events.get(name)!.onUpdat
 const failTurn = (name: string) => events.get(name)!.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution' });
 const hitLimit = (a: AgentRecord, resetsAtMs: number) => { host.prompt(a.id, 'build it', 'you'); rejected(a.name, resetsAtMs); failTurn(a.name); };
 
-describe('a hold on A does not hold B', () => {
-    it('A’s agents are held; B’s agent on the same provider keeps working; the probe says so', () => {
-        const a1 = record('atlas', ACCOUNT_A); const a2 = record('wren', ACCOUNT_A); const b1 = record('kai', ACCOUNT_B);
-        for (const r of [a1, a2, b1]) expect(host.start(r, dir)).toEqual({ ok: true });
+const switchTo = (id: string) => { activeId = id; };
+
+describe('the active account’s hold holds every agent of the provider', () => {
+    it('one limit on the active account: every agent waits, the probe says so', () => {
+        const a1 = record('atlas'); const a2 = record('wren'); const a3 = record('kai');
+        for (const r of [a1, a2, a3]) expect(host.start(r, dir)).toEqual({ ok: true });
         hitLimit(a1, now + 60 * MIN);
-        expect(host.probe(a1.id)?.limit).toMatchObject({ state: 'paused' });
-        expect(host.probe(a2.id)?.limit).toMatchObject({ state: 'paused' });
-        expect(host.probe(b1.id)?.limit).toEqual({ state: 'open' });
+        for (const r of [a1, a2, a3]) expect(host.probe(r.id)?.limit).toMatchObject({ state: 'paused' });
         host.prompt(a2.id, 'hello', 'you');
         expect(sent.get('wren')).toEqual([]);
-        host.prompt(b1.id, 'go', 'you');
-        expect(sent.get('kai')).toEqual(['go']);
     });
 
-    it('an agent STARTED on B while A is held is not held; one started on A is', () => {
-        const a1 = record('atlas', ACCOUNT_A);
+    it('an agent STARTED after a switch to B is not held by A’s limit; one started on A again is', () => {
+        const a1 = record('atlas');
         host.start(a1, dir);
         hitLimit(a1, now + 60 * MIN);
-        const onB = record('lateb', ACCOUNT_B); const onA = record('latea', ACCOUNT_A);
-        host.start(onB, dir); host.start(onA, dir);
-        host.prompt(onB.id, 'hi', 'you'); host.prompt(onA.id, 'hi', 'you');
+        switchTo(ACCOUNT_B);
+        const onB = record('lateb');
+        host.start(onB, dir);
+        host.prompt(onB.id, 'hi', 'you');
         expect(sent.get('lateb')).toEqual(['hi']);
+        switchTo(ACCOUNT_A);
+        const onA = record('latea');
+        host.start(onA, dir);
+        host.prompt(onA.id, 'hi', 'you');
         expect(sent.get('latea')).toEqual([]);
     });
 
-    it('the held logins name the account, one per account', () => {
-        const a1 = record('atlas', ACCOUNT_A); const b1 = record('kai', ACCOUNT_B);
+    it('the held logins name the active account, one login however many agents it holds', () => {
+        const a1 = record('atlas'); const b1 = record('kai');
         host.start(a1, dir); host.start(b1, dir);
         hitLimit(a1, now + 60 * MIN);
         expect(host.heldLogins()).toMatchObject([{ provider: 'claude', account: ACCOUNT_A, view: { state: 'paused' } }]);
         expect(host.heldLogins()).toHaveLength(1);
     });
 
-    it('both held: Resume now on A releases A and leaves B held', () => {
-        const a1 = record('atlas', ACCOUNT_A); const b1 = record('kai', ACCOUNT_B);
-        host.start(a1, dir); host.start(b1, dir);
+    it('both accounts limited: Resume now opens the ACTIVE account’s hold only, and A is still limited when it is made active again', () => {
+        const a1 = record('atlas');
+        host.start(a1, dir);
         hitLimit(a1, now + 60 * MIN);
+        switchTo(ACCOUNT_B);
+        const b1 = record('kai');
+        host.start(b1, dir);
         hitLimit(b1, now + 90 * MIN);
-        expect(host.probe(a1.id)?.limit).toMatchObject({ state: 'paused' });
         expect(host.probe(b1.id)?.limit).toMatchObject({ state: 'paused' });
-        host.resumeLimit('claude', ACCOUNT_A);
-        expect(host.probe(a1.id)?.limit).toEqual({ state: 'open' });
-        expect(host.probe(b1.id)?.limit).toMatchObject({ state: 'paused' });
+        host.resumeLimit('claude');
+        expect(host.probe(b1.id)?.limit).toEqual({ state: 'open' });
+        switchTo(ACCOUNT_A);
+        const again = record('again');
+        host.start(again, dir);
+        expect(host.probe(again.id)?.limit).toMatchObject({ state: 'paused' });
     });
 
     it('CONTROL: two agents on the SAME account share one hold', () => {
-        const a1 = record('atlas', ACCOUNT_A); const a2 = record('wren', ACCOUNT_A);
+        const a1 = record('atlas'); const a2 = record('wren');
         host.start(a1, dir); host.start(a2, dir);
         hitLimit(a1, now + 60 * MIN);
         expect(host.probe(a2.id)?.limit).toMatchObject({ state: 'paused' });
-        host.resumeLimit('claude', ACCOUNT_A);
+        host.resumeLimit('claude');
         expect(host.probe(a1.id)?.limit).toEqual({ state: 'open' });
         expect(host.probe(a2.id)?.limit).toEqual({ state: 'open' });
     });
 });
 
-describe('a reading is stamped with the account and run the agent was launched on', () => {
-    it('each launch stamps its own account and a run id of its own', () => {
-        host.start(record('atlas', ACCOUNT_A), dir);
-        host.start(record('kai', ACCOUNT_B), dir);
+describe('a reading is stamped with the account that is ACTIVE when it arrives', () => {
+    it('before and after a switch, the stamp follows the active account; each run keeps a run id of its own', () => {
+        host.start(record('atlas'), dir);
+        host.start(record('kai'), dir);
         events.get('atlas')!.onUpdate?.(meta('allowed', now + 60 * MIN, 0.4));
+        switchTo(ACCOUNT_B);
         events.get('kai')!.onUpdate?.(meta('allowed', now + 60 * MIN, 0.5));
         const stamps = readings.map((r) => r.stamp);
         expect(stamps).toHaveLength(2);
@@ -144,26 +156,21 @@ describe('a reading is stamped with the account and run the agent was launched o
     });
 });
 
-describe('a per-agent Resume now opens only that agent’s account (Tynn #478)', () => {
-    it('resuming one agent on A leaves B held, and the account rides the engine protocol', () => {
-        const a1 = record('atlas', ACCOUNT_A); const b1 = record('kai', ACCOUNT_B);
-        host.start(a1, dir); host.start(b1, dir);
+describe('Resume now opens the provider’s ACTIVE account (Tynn #478, #751)', () => {
+    it('a per-agent Resume now names the provider only', () => {
+        const a1 = record('atlas');
+        host.start(a1, dir);
         hitLimit(a1, now + 60 * MIN);
-        hitLimit(b1, now + 90 * MIN);
-        // What host-api's resumeLimit does for an agent: its provider and ITS account.
-        host.resumeLimit(a1.provider, a1.accountId);
+        host.resumeLimit(a1.provider);
         expect(host.probe(a1.id)?.limit).toEqual({ state: 'open' });
-        expect(host.probe(b1.id)?.limit).toMatchObject({ state: 'paused' });
-        host.resumeLimit(b1.provider, b1.accountId);
-        expect(host.probe(b1.id)?.limit).toEqual({ state: 'open' });
     });
 
-    it('host-api passes the agent’s account; the client sends it and the server hands it to the host', () => {
+    it('host-api passes the provider only; the client sends it and the server hands it to the host', () => {
         const read = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8').replace(/\r\n/g, '\n');
-        expect(read('src/main/host-api.ts')).toContain('deps.host.resumeLimit(r.provider, r.accountId);');
+        expect(read('src/main/host-api.ts')).toContain('deps.host.resumeLimit(r.provider);');
         expect(read('src/main/session-engine-client.ts')).toContain("this.call('engine.resumeLimit', accountId === undefined ? [provider] : [provider, accountId])");
-        // A flow paused at a limit: Resume now lifts the paused agent's own account (Tynn #749 + #478).
-        expect(read('src/main/genie-host.ts')).toContain('host.resumeLimit(record.provider, record.accountId);');
+        // A flow paused at a limit: Resume now lifts the provider's active account's hold (Tynn #749 + #751).
+        expect(read('src/main/genie-host.ts')).toContain('host.resumeLimit(record.provider);');
         expect(read('src/main/session-engine-server.ts')).toContain("host.resumeLimit(str(0), typeof args[1] === 'string' ? args[1] : undefined);");
     });
 });

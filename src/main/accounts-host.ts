@@ -18,11 +18,13 @@ export interface AccountsOptions {
 }
 
 const MANAGED_ID = /^account_[0-9a-f]{32}$/;
-type Book = { version: 1; accounts: readonly AccountRecord[] };
+/** `active` names the ONE account each provider runs on; absent (or a provider missing from it) = the legacy account. */
+type Book = { version: 1; accounts: readonly AccountRecord[]; active?: Readonly<Partial<Record<AcpProvider, string>>> };
+type Parsed = { accounts: AccountRecord[]; active: Partial<Record<AcpProvider, string>> };
 const detached = (account: AccountRecord): AccountRecord => ({ ...account, identity: { ...account.identity } });
 const homeFor = (root: string, provider: AcpProvider, id: string): string => join(root, 'accounts', provider, id);
 
-function parseBook(value: unknown, root: string): AccountRecord[] {
+function parseBook(value: unknown, root: string): Parsed {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Invalid account book');
     const book = value as Record<string, unknown>;
     if (book.version !== 1 || !Array.isArray(book.accounts)) throw new Error('Invalid account book version or accounts');
@@ -40,7 +42,15 @@ function parseBook(value: unknown, root: string): AccountRecord[] {
             identity: accountIdentityOf(a.identity), createdAt: a.createdAt };
     });
     for (const provider of ACP_PROVIDERS) if (!seen.has(legacyAccountId(provider))) throw new Error('Invalid account book: missing legacy default');
-    return accounts;
+    const active: Partial<Record<AcpProvider, string>> = {};
+    if (book.active !== undefined) {
+        if (typeof book.active !== 'object' || book.active === null || Array.isArray(book.active)) throw new Error('Invalid active accounts');
+        for (const [provider, id] of Object.entries(book.active as Record<string, unknown>)) {
+            if (!isAcpProvider(provider) || typeof id !== 'string' || !accounts.some(a => a.id === id && a.provider === provider)) throw new Error('Invalid active account');
+            active[provider] = id;
+        }
+    }
+    return { accounts, active };
 }
 
 /** Only generated Genie content. Never enumerate, read or copy a provider's existing home.
@@ -67,10 +77,11 @@ export class AccountsHost {
     readonly #options: AccountsOptions;
     readonly #file: string;
     #accounts: readonly AccountRecord[];
+    #active: Readonly<Partial<Record<AcpProvider, string>>>;
     #tail: Promise<unknown> = Promise.resolve();
 
-    private constructor(options: AccountsOptions, accounts: readonly AccountRecord[]) {
-        this.#options = options; this.#accounts = accounts;
+    private constructor(options: AccountsOptions, accounts: readonly AccountRecord[], active: Readonly<Partial<Record<AcpProvider, string>>> = {}) {
+        this.#options = options; this.#accounts = accounts; this.#active = active;
         this.#file = join(runtimeDir(options.root), 'accounts.json');
     }
 
@@ -80,7 +91,7 @@ export class AccountsHost {
         const at = join(runtimeDir(root), 'accounts.json');
         const missing = Symbol('missing account book');
         const stored = await readJson<unknown>(at, missing);
-        if (stored !== missing) return new AccountsHost({ ...options, root }, parseBook(stored, root));
+        if (stored !== missing) { const parsed = parseBook(stored, root); return new AccountsHost({ ...options, root }, parsed.accounts, parsed.active); }
         const createdAt = (options.now ?? (() => new Date().toISOString()))();
         const accounts = ACP_PROVIDERS.map((provider): AccountRecord => {
             const home = options.legacyHomes[provider];
@@ -89,13 +100,31 @@ export class AccountsHost {
                 legacy: true, identity: unknownAccountIdentity(), createdAt };
         });
         const host = new AccountsHost({ ...options, root }, accounts);
-        await host.#write(accounts);
+        await host.#write(accounts, {});
         return host;
     }
 
     list(): readonly AccountRecord[] { return this.#accounts.map(detached); }
     get(id: string): AccountRecord | null { const a = this.#accounts.find(a => a.id === id); return a ? detached(a) : null; }
-    defaultFor(provider: AcpProvider): AccountRecord | null { return this.get(legacyAccountId(provider)); }
+    /**
+     * THE ACCOUNT EVERY AGENT OF THE PROVIDER RUNS ON (Tynn #751; the owner: "the logged in account is the active account
+     * on the host machine. All agents use the logged in account"). One per provider; the legacy account until another is chosen.
+     */
+    activeFor(provider: AcpProvider): AccountRecord {
+        return this.get(this.#active[provider] ?? legacyAccountId(provider)) ?? this.get(legacyAccountId(provider))!;
+    }
+
+    /** Choose the provider's active account: durable BEFORE it is visible; an unknown account, or another provider's, is refused. */
+    setActive(provider: AcpProvider, id: string): Promise<void> {
+        return this.#queue(async () => {
+            if (!isAcpProvider(provider)) throw new Error('Invalid account provider');
+            const account = this.#accounts.find(a => a.id === id);
+            if (!account) throw new Error('Unknown account');
+            if (account.provider !== provider) throw new Error('That account belongs to another provider');
+            const next = { ...this.#active, [provider]: id };
+            await this.#write(this.#accounts, next); this.#active = next;
+        });
+    }
 
     add(input: { provider: AcpProvider; label?: string }): Promise<AccountRecord> {
         return this.#queue(async () => {
@@ -115,7 +144,7 @@ export class AccountsHost {
             await mkdir(account.home, { mode: 0o700 });
             await (this.#options.provision ?? provisionAccountHome)(detached(account));
             const next = [...this.#accounts, account];
-            await this.#write(next); this.#accounts = next;
+            await this.#write(next, this.#active); this.#accounts = next;
             return detached(account);
         });
     }
@@ -136,7 +165,7 @@ export class AccountsHost {
         return this.#queue(async () => {
             if (!this.get(id)) throw new Error('Unknown account');
             const next = this.#accounts.map(a => a.id === id ? update(detached(a)) : a);
-            await this.#write(next); this.#accounts = next;
+            await this.#write(next, this.#active); this.#accounts = next;
         });
     }
 
@@ -146,8 +175,8 @@ export class AccountsHost {
         return next;
     }
 
-    #write(accounts: readonly AccountRecord[]): Promise<void> {
-        const book: Book = { version: 1, accounts };
+    #write(accounts: readonly AccountRecord[], active: Readonly<Partial<Record<AcpProvider, string>>>): Promise<void> {
+        const book: Book = { version: 1, accounts, ...(Object.keys(active).length > 0 ? { active } : {}) };
         return writeJsonAtomic(this.#file, book);
     }
 }
