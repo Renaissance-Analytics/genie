@@ -1,3 +1,4 @@
+import type { AccountSwitchOutcome, SwitchAccountRef } from '../core/account-switch.js';
 import { accountSwitchSteps, providerLogin } from '../core/provider-login.js';
 
 /**
@@ -25,4 +26,18 @@ export function startAccountSwitch(ports: AccountSwitchLoginPorts, provider: str
     const started = ports.login.startSwitch(provider);
     if (!started.ok) return started;
     return { ok: true, terminalId: started.terminalId, instructions: accountSwitchSteps(provider) };
+}
+
+/** RED stub (Tynn #482). */
+export interface AccountSwitchFlowPorts extends AccountSwitchLoginPorts {
+    readonly active: (provider: string) => SwitchAccountRef;
+    readonly readIdentity: (provider: string) => Promise<void>;
+    readonly emit: (outcome: AccountSwitchOutcome) => void;
+}
+
+export class AccountSwitchFlow {
+    readonly #p: AccountSwitchFlowPorts;
+    constructor(ports: AccountSwitchFlowPorts) { this.#p = ports; }
+    start(provider: string): AccountSwitchStart | { ok: true; terminalId: string } { return this.#p.login.startSwitch(provider); }
+    async settle(_provider: string, _signedIn: boolean): Promise<AccountSwitchOutcome | null> { return null; }
 }
