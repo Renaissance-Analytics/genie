@@ -1,4 +1,4 @@
-import { providerAccountEnv, type ProviderAccountHome } from '../core/accounts.js';
+import { type ProviderAccountHome } from '../core/accounts.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { type Burst, type TakeOverProbe } from '../core/observed.js';
 import { randomUUID } from 'node:crypto';
@@ -120,12 +120,11 @@ export class TakeOverHost {
         // different key and stays the terminal host's. This host is the one place that maps the two.
         const mcp = this.#mcp();
         const callerId = `takeover_${randomUUID()}`;
-        let env = mcp === null ? undefined : takeOverEnv({ mcpUrl: mcp.mcpUrl, token: mcp.token, terminalId: callerId });
+        // The provider's normal home, whichever account is signed in to it: no home variable is set here (Tynn #753).
+        const env = mcp === null ? undefined : takeOverEnv({ mcpUrl: mcp.mcpUrl, token: mcp.token, terminalId: callerId });
         if (this.#accountFor) {
             const account = this.#accountFor(record);
             if (!account || account.provider !== record.provider) return { ok: false, reason: 'The agent’s provider account is unavailable; repair its account before Take Over.' };
-            try { env = providerAccountEnv(account, env ?? {}); }
-            catch { return { ok: false, reason: 'The agent’s provider account home is invalid; repair it before Take Over.' }; }
         }
         // A WORKSPACE terminal. There is no agent parameter to pass, which is the point.
         const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, personal: true, limited: false, ...(env === undefined ? {} : { env }) });

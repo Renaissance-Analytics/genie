@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DESIGN_LOGIN } from '../core/design-login.js';
-import { providerAccountEnv, type ProviderAccountHome } from '../core/accounts.js';
+import { type ProviderAccountHome } from '../core/accounts.js';
 import { providerLogin } from '../core/provider-login.js';
 import type { TerminalHost } from './terminal-host.js';
 
@@ -47,16 +47,16 @@ export function loginTerminalOf(route: string): string | null {
 }
 
 /** The Take Over window's route for a sign-in terminal: the window only shows it (Tynn #479). */
-export function loginRoute(terminalId: string, provider: string): string {
-    return `genie://takeover/${terminalId}?login=${encodeURIComponent(provider)}`;
+export function loginRoute(terminalId: string, provider: string, switching = false): string {
+    return `genie://takeover/${terminalId}?login=${encodeURIComponent(provider)}${switching ? '&switch=1' : ''}`;
 }
 
 export interface LoginHostOptions {
     terminals: Pick<TerminalHost, 'open' | 'onExit' | 'close'>;
     openWindow: (route: string) => void;
-    /** Run a status command in `cwd` through the shell; resolves with its exit code. */
-    runStatus: (command: string, cwd: string, env?: Readonly<Record<string, string>>) => Promise<number>;
-    /** The host book's account. Provider-only UI login remains legacy scoped until S6. */
+    /** Run a status command in `cwd` through the shell, in the provider's normal home; resolves with its exit code. */
+    runStatus: (command: string, cwd: string) => Promise<number>;
+    /** The host book's account, to refuse a provider it does not know; it sets no environment (Tynn #753). */
     accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string }) | null;
     onSignedIn: (provider: string, accountId?: string) => void;
     /** The Claude Design login window ended (there is no status to ask): the agents that waited are told to retry. */
@@ -77,8 +77,8 @@ interface Live {
     accountId?: string | undefined;
     terminalId: string;
     scratch: string;
-    /** Captured before opening, so status reads exactly the home the person signed in to. */
-    env?: Readonly<Record<string, string>>;
+    /** An account switch (Tynn #753): the provider's own login, in its one home, with the steps on screen. */
+    switching?: boolean;
 }
 
 const OS_WORKSPACE = '__genie__';
@@ -121,14 +121,11 @@ export class LoginHost {
         if (!design && !PLAIN_NAME.test(provider)) return { ok: false, reason: 'That provider’s login could not start: its name is not one Genie can run.' };
         // Claude Design's login runs in Claude Code's own CLI.
         const cli = design ? 'claude' : provider;
-        let env: Readonly<Record<string, string>> | undefined;
         let resolvedId: string | undefined;
         if (this.#options.accountFor) {
             const account = this.#options.accountFor(cli, design ? undefined : accountId);
             if (!account || account.provider !== cli) return { ok: false, reason: 'The provider account is unavailable; reconnect Genie’s host before logging in.' };
             resolvedId = account.id;
-            try { env = providerAccountEnv(account, process.env); }
-            catch { return { ok: false, reason: 'The provider account home is invalid; repair the account before logging in.' }; }
         }
         // One sign-in per ACCOUNT: two clicks on one account join it; another account of the provider gets its own (Tynn #479).
         const key = design ? DESIGN_LOGIN : resolvedId ?? provider;
@@ -150,12 +147,50 @@ export class LoginHost {
         }
         let opened: { id: string };
         try {
-            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false, ...(env ? { env } : {}) });
+            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false });
         } catch (error) {
             rmSync(scratch, { recursive: true, force: true });
             return { ok: false, reason: `The ${known?.name ?? provider} login could not start: ${(error as Error).message}` };
         }
-        const live: Live = { key, provider, ...(resolvedId !== undefined ? { accountId: resolvedId } : {}), terminalId: opened.id, scratch, ...(env ? { env } : {}) };
+        const live: Live = { key, provider, ...(resolvedId !== undefined ? { accountId: resolvedId } : {}), terminalId: opened.id, scratch };
+        this.#live.set(key, live);
+        this.#options.openWindow(this.#route(live));
+        return { ok: true, terminalId: opened.id };
+    }
+
+    /**
+     * SWITCH ACCOUNT (Tynn #753): the provider's OWN login, unmodified, in the provider's one normal home, so every agent keeps
+     * its threads. Claude Code's interactive CLI opens (the person types `/logout`, then `/login`); Codex runs its own
+     * `logout` then its own `login`. The window says what to do (`accountSwitchSteps`). Genie types nothing and sees no code
+     * or token. When the terminal ends and the provider's status says signed in, `onSignedIn` re-reads who it is.
+     */
+    startSwitch(provider: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
+        const known = providerLogin(provider);
+        if (!known || !PLAIN_NAME.test(provider)) return { ok: false, reason: `Genie has no account switch for the provider "${provider}".` };
+        const key = `switch:${provider}`;
+        const existing = this.#live.get(key);
+        if (existing) {
+            this.#options.openWindow(this.#route(existing));
+            return { ok: true, terminalId: existing.terminalId };
+        }
+        const binary = this.#options.binaryFor?.(provider) ?? null;
+        if (binary !== null && !quotable(binary)) return { ok: false, reason: `The ${known.name} switch could not start: the path set for it has a character Genie will not put in a command.` };
+        const program = binary === null ? provider : `"${binary}"`;
+        const command = provider === 'codex' ? `${program} logout && ${program} login` : program;
+        let scratch: string;
+        try {
+            scratch = mkdtempSync(join(this.#options.scratch(), `genie-login-${provider}-`));
+        } catch (error) {
+            return { ok: false, reason: `The ${known.name} switch could not start: its scratch folder could not be made (${(error as Error).message}).` };
+        }
+        let opened: { id: string };
+        try {
+            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false });
+        } catch (error) {
+            rmSync(scratch, { recursive: true, force: true });
+            return { ok: false, reason: `The ${known.name} switch could not start: ${(error as Error).message}` };
+        }
+        const live: Live = { key, provider, terminalId: opened.id, scratch, switching: true };
         this.#live.set(key, live);
         this.#options.openWindow(this.#route(live));
         return { ok: true, terminalId: opened.id };
@@ -185,7 +220,7 @@ export class LoginHost {
     }
 
     #route(live: Live): string {
-        return loginRoute(live.terminalId, live.provider);
+        return loginRoute(live.terminalId, live.provider, live.switching === true);
     }
 
     async #finish(live: Live): Promise<void> {
@@ -198,7 +233,7 @@ export class LoginHost {
             if (known) {
                 const binary = this.#options.binaryFor?.(live.provider) ?? null;
                 const status = binary === null ? known.status : `"${binary}"${known.status.slice(known.status.indexOf(' '))}`;
-                const code = await (live.env ? this.#options.runStatus(status, live.scratch, live.env) : this.#options.runStatus(status, live.scratch)).catch(() => 1);
+                const code = await this.#options.runStatus(status, live.scratch).catch(() => 1);
                 if (code === 0) this.#options.onSignedIn(live.provider, live.accountId);
             }
         } catch {

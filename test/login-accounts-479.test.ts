@@ -29,7 +29,7 @@ function fakes(options: { statusExit?: number; statusThrows?: boolean; openThrow
     const closed: string[] = [];
     const windows: string[] = [];
     const signedIn: Array<[string, string | undefined]> = [];
-    const statuses: Array<{ cwd: string; env?: Readonly<Record<string, string>> | undefined }> = [];
+    const statuses: Array<{ cwd: string }> = [];
     const listeners: Array<(id: string, code: number) => void> = [];
     const terminals = {
         open: (o: { cwd: string; env?: Record<string, string> }) => {
@@ -45,8 +45,8 @@ function fakes(options: { statusExit?: number; statusThrows?: boolean; openThrow
         scratch: () => scratch,
         accountFor: (provider, id) => [A, B].find((a) => a.provider === provider && a.id === (id ?? A.id)) ?? null,
         openWindow: (route) => windows.push(route),
-        runStatus: async (_command, cwd, env) => {
-            statuses.push({ cwd, env });
+        runStatus: async (_command, cwd) => {
+            statuses.push({ cwd });
             if (options.statusThrows) throw new Error('status blew up');
             return options.statusExit ?? 0;
         },
@@ -66,13 +66,13 @@ describe('a sign-in is keyed by the ACCOUNT', () => {
         expect(f.windows).toEqual(['genie://takeover/t1?login=claude', 'genie://takeover/t1?login=claude']);
     });
 
-    it('different accounts of one provider sign in at once, each in its own terminal and home', () => {
+    it('different accounts of one provider sign in at once, each in its own terminal, in the one normal provider home (Tynn #753)', () => {
         const f = fakes();
         expect(f.host.start('claude', A.id)).toEqual({ ok: true, terminalId: 't1' });
         expect(f.host.start('claude', B.id)).toEqual({ ok: true, terminalId: 't2' });
         expect(f.opened).toHaveLength(2);
-        expect(f.opened[0]!.env?.CLAUDE_CONFIG_DIR).toBe('/profiles/a');
-        expect(f.opened[1]!.env?.CLAUDE_CONFIG_DIR).toBe('/profiles/b');
+        expect(f.opened[0]!.env).toBeUndefined();
+        expect(f.opened[1]!.env).toBeUndefined();
     });
 
     it('an account Genie does not have opens nothing', () => {
@@ -83,14 +83,13 @@ describe('a sign-in is keyed by the ACCOUNT', () => {
         expect(readdirSync(f.scratch)).toEqual([]);
     });
 
-    it('B finishing signs B in, with B’s home read, while A’s sign-in stays open', async () => {
+    it('B finishing signs B in while A’s sign-in stays open', async () => {
         const f = fakes();
         f.host.start('claude', A.id);
         f.host.start('claude', B.id);
         f.exit('t2');
         await flush();
         expect(f.statuses).toHaveLength(1);
-        expect(f.statuses[0]!.env?.CLAUDE_CONFIG_DIR).toBe('/profiles/b');
         expect(f.signedIn).toEqual([['claude', B.id]]);
         expect(f.closed).toEqual(['t2']);
     });

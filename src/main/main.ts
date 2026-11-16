@@ -727,6 +727,8 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
 let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let signIn: ((provider: string, accountId?: string) => Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>) | null = null;
+// SWITCH ACCOUNT (Tynn #753): the provider's own login in its one home, in a window that shows the steps. The entry the UI calls.
+let switchAccountWindow: ((provider: string) => Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }>) | null = null;
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
@@ -1918,6 +1920,11 @@ async function boot(): Promise<void> {
     signIn = async (provider, accountId) => {
         const started = await (agentEngineLink?.client.login(provider, accountId) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
         if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider), 'user-gesture');
+        return started;
+    };
+    switchAccountWindow = async (provider) => {
+        const started = await (agentEngineLink?.client.switchAccount(provider) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
+        if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider, true), 'user-gesture');
         return started;
     };
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());

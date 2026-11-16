@@ -175,6 +175,7 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             return withQuery(`${ws}/browser`, params);
         case 'takeover':
             if (r.login) params.set('login', r.login);
+            if (r.login && r.switching) params.set('switch', '1');
             return withQuery(`${ws}/takeover/${r.terminalId}`, params);
         // The flow editor window keeps its route as it is (genie#1302): it is a window's identity, never a page in the
         // bar, and main finds an open editor by it (`openFlowEditorWindow`). The default below would have written
@@ -228,7 +229,7 @@ function routeOfPage(address: string, ctx: AddressContext): string | null {
         case 'hosting': return `genie://hosting${q(keep(['tab', 'process', 'workspace']))}`;
         case 'settings': return third ? `genie://settings/${third}` : 'genie://settings';
         case 'browser': return `genie://browser${q(keep(['url']))}`;
-        case 'takeover': return third ? `genie://takeover/${third}${q(keep(['login']))}` : null;
+        case 'takeover': return third ? `genie://takeover/${third}${q(keep(['login', 'switch']))}` : null;
         case 'knowledge': case 'flows': return `genie://${second}`;
         // The old Toolchain page is a Settings section now (beta.33 item 20): its address lands there.
         case 'toolchain': return 'genie://settings/toolchain';

@@ -61,7 +61,7 @@ export const ENGINE_METHODS = [
     // A provider sign-in for one account, run in the host (Tynn #479). `[provider, accountId?]`; `[accountId]` cancels.
     'engine.login',
     'engine.cancelLogin',
-    // Make one account the provider's ACTIVE one and move every agent of it onto it now (Tynn #751). `[provider, accountId]`.
+    // SWITCH ACCOUNT (Tynn #753): open the provider's own login in its one home, with the steps. No agent is touched. `[provider]`.
     'engine.switchAccount',
     'engine.resumeLimit',
     'engine.clearDesignLogin',

@@ -1,7 +1,7 @@
 import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { posix, win32 } from 'node:path';
 import { ACP_PROVIDERS } from '../core/engine.js';
-import { providerAccountEnv, type ProviderAccountHome } from '../core/accounts.js';
+import { type ProviderAccountHome } from '../core/accounts.js';
 import { judgeProviderHealth, type CommandAnswer, type ProgramFile, type ProviderHealth } from '../core/provider-health.js';
 import { providerLogin } from '../core/provider-login.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
@@ -101,9 +101,10 @@ export function locateProviderProgram(provider: string, ports: ProviderHealthPor
     return null;
 }
 
-async function answer(ports: ProviderHealthPorts, binary: string, args: readonly string[], timeoutMs: number, account?: ProviderAccountHome): Promise<CommandAnswer> {
+async function answer(ports: ProviderHealthPorts, binary: string, args: readonly string[], timeoutMs: number): Promise<CommandAnswer> {
     try {
-        const r = await ports.run(binary, args, { timeoutMs, ...(account ? { env: providerAccountEnv(account, ports.env) } : {}) });
+        // No environment of Genie's making: the provider is asked in its normal home (Tynn #753).
+        const r = await ports.run(binary, args, { timeoutMs });
         const output = r.streams ? [r.streams.stdout, r.streams.stderr].filter(Boolean).join('\n') : r.stdout;
         return { exitCode: r.exitCode, output };
     } catch (error) {
@@ -126,11 +127,11 @@ export async function checkProviderHealth(provider: string, ports: ProviderHealt
     const program = locateProviderProgram(provider, ports);
     const before = judgeProviderHealth({ ...base, program, version: null, status: null });
     if (program === null || program.configured === true || (before.fault !== null && !before.installed)) return before;
-    const version = await answer(ports, ...argvFor(provider, program, ['--version'], ports), VERSION_TIMEOUT_MS, account);
+    const version = await answer(ports, ...argvFor(provider, program, ['--version'], ports), VERSION_TIMEOUT_MS);
     const ran = judgeProviderHealth({ ...base, program, version, status: null });
     if (!ran.installed) return ran;
     const statusArgs = providerLogin(provider)?.status.split(/\s+/).slice(1) ?? null;
-    const status = statusArgs === null ? null : await answer(ports, ...argvFor(provider, program, statusArgs, ports), STATUS_TIMEOUT_MS, account);
+    const status = statusArgs === null ? null : await answer(ports, ...argvFor(provider, program, statusArgs, ports), STATUS_TIMEOUT_MS);
     return judgeProviderHealth({ ...base, program, version, status });
 }
 

@@ -51,10 +51,11 @@ describe('S3: the persisted home reaches the existing login without opening an a
         expect(host).toMatch(/providerAccount: provider => isAcpProvider\(provider\) \? accounts\.activeFor\(provider\) : null/);
         expect(host).toMatch(/realListModels\(provider, accounts\.activeFor\(provider\)\)/);
         expect(host).toMatch(/checkProviderHealth\(provider, realProviderHealthPorts\(execFileRunner\), accounts\.activeFor\(provider\)\)/);
-        expect(host).toMatch(/env: providerAccountEnv\(account, process\.env\)/);
+        // Tynn #753: ONE HOME PER PROVIDER, so nothing here builds an environment for an account.
+        expect(host).not.toContain('providerAccountEnv');
         // S6 (Tynn #479): the sign-in runs in the host, per account, from the host book; the window opens no book and runs no status.
         expect(host).toMatch(/accountFor: \(provider, accountId\) => \{[\s\S]{0,200}accounts\.get\(accountId\)/);
-        expect(host).toMatch(/runStatus: \(command, cwd, env\) => execFileRunner\(/);
+        expect(host).toMatch(/runStatus: \(command, cwd\) => execFileRunner\(/);
         expect(window).not.toMatch(/new LoginHost/);
         expect(window).not.toMatch(/AccountsHost\.open/);
     });
@@ -73,11 +74,12 @@ describe('S3 (R1, Tynn #751): the observed Take Over TUI uses the provider activ
             openWindow: () => {}, mcp: () => mcp ? { mcpUrl: 'http://127.0.0.1:9/mcp', token: 'fixture-bearer' } : null });
         return { host, record, account, opened };
     }
-    it.each(['claude', 'codex'] as const)('%s Take Over launches in the selected home beside its own MCP attribution', provider => {
+    it.each(['claude', 'codex'] as const)('%s Take Over sets no home variable beside its own MCP attribution (Tynn #753)', provider => {
         const f = fixture(provider);
         expect(f.host.start(f.record, '/fixture', provider)).toMatchObject({ ok: true });
         const env = f.opened[0]!.env!;
-        expect(env[provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']).toBe(f.account.home);
+        expect(env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+        expect(env).not.toHaveProperty('CODEX_HOME');
         expect(env.GENIE_MCP_TOKEN).toBe('fixture-bearer');
         expect(env.GENIE_TERMINAL_ID).toMatch(/^takeover_/);
         expect(f.host.callerFor(env.GENIE_TERMINAL_ID!)).toMatchObject({ agentId: f.record.id });
@@ -90,7 +92,7 @@ describe('S3 (R1, Tynn #751): the observed Take Over TUI uses the provider activ
     it('a home without an MCP server invents no MCP caller or token', () => {
         const f = fixture('claude', 'matching', false);
         expect(f.host.start(f.record, '/fixture', 'claude')).toMatchObject({ ok: true });
-        expect(f.opened[0]!.env).toEqual({ CLAUDE_CONFIG_DIR: f.account.home });
+        expect(f.opened[0]!.env).toBeUndefined();
         expect(f.host.callers()).toEqual({});
     });
     it.each(['claude', 'codex'] as const)('%s legacy Take Over keeps an unset home unset beside its MCP attribution', provider => {

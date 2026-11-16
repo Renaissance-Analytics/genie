@@ -19,24 +19,11 @@ export interface AccountRecord {
     readonly createdAt: string;
 }
 
-/** Explicit launch semantics must travel with a home, including across the window's metadata projection. */
+/**
+ * The home a provider runs in. R2 (Tynn #753): ONE home per provider, the provider's own normal one, never an environment of
+ * Genie's making; this describes an account, it is not a launch input.
+ */
 export type ProviderAccountHome = Pick<AccountRecord, 'provider' | 'home' | 'legacy'>;
-
-/** Managed homes are explicit; legacy homes inherit. No credential I/O or mutation of the parent's env. */
-export function providerAccountEnv(account: ProviderAccountHome, parentEnv: Readonly<Record<string, string | undefined>>): Record<string, string> {
-    const { provider, home, legacy } = account;
-    // Pure because the account model is also used by the renderer. Accept absolute POSIX, drive and UNC paths.
-    if ((provider !== 'claude' && provider !== 'codex') || typeof legacy !== 'boolean' || typeof home !== 'string' || /[\x00-\x1f\x7f]/.test(home) ||
-        !(home.startsWith('/') || /^[A-Za-z]:[\\/]/.test(home) || /^\\\\[^\\]+\\[^\\]+/.test(home))) throw new Error('Invalid provider account home');
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parentEnv)) {
-        if (value !== undefined && (legacy || !/^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(key))) env[key] = value;
-    }
-    // Explicit ~/.claude is NOT equivalent to unset: Claude changes its global config/keychain lookup.
-    // Keep both providers' existing variable presence and values for a legacy launch.
-    if (!legacy) env[provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] = home;
-    return env;
-}
 
 /** S4 supplies ONLY fields returned by the provider's own status command. */
 export function accountLabel(email: string | null, ordinal: number): string {
