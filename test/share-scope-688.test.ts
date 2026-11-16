@@ -115,6 +115,9 @@ const FAMILIES: Record<string, readonly Row[]> = {
         // Save to repo writes the owner's repo and runs the owner's git: never from a link to one workspace (Tynn #756).
         row('workspaces.savePreview', 'refuse', ['tynn']),
         row('workspaces.save', 'refuse', ['tynn', {}]),
+        // The offers a clone's repo brings are the owner's to see and apply: never from a link to one workspace (Tynn #756).
+        row('workspaces.cloneOffers', 'refuse', ['tynn']),
+        row('workspaces.applyOffer', 'refuse', ['tynn', 'flow:.flows/a.json']),
     ],
     'the shared workspace itself': [
         row('workspaces.listRepos', 'allow', ['tynn'], [['fancy']]),

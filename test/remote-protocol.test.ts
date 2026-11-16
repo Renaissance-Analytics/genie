@@ -104,7 +104,8 @@ describe('the capability table', () => {
         // 161 with `updates.forceDrain` (Tynn #616's graceful upgrade, its drain forced): the owner's, as every upgrade.
         expect(capabilityOf('updates.forceDrain')).toBe('upgrade');
         // 163 with `workspaces.savePreview` (a read) and `workspaces.save` (a write): Save to repo (Tynn #756), the owner's, workspace-scoped.
-        expect(REMOTE_METHODS.length).toBe(163);
+        // 165 with `workspaces.cloneOffers` (a read) and `workspaces.applyOffer` (a write): the offers a clone's repo brings (Tynn #756), the owner's, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(165);
         expect(capabilityOf('agents.attachment')).toBe('read');
         expect(AGENT_SCOPED_METHODS).toContain('agents.attachment');
         for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');
