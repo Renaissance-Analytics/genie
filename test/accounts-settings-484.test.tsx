@@ -180,6 +180,32 @@ describe('S11: the Accounts block in Settings → Providers', () => {
     });
 });
 
+describe('S11: a reset placeholder is not a blank row (the coordinator, 2026-11-16)', () => {
+    const P = `account_legacy_claude`;
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    let host: HTMLDivElement;
+    let root: Root;
+    beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host); });
+    afterEach(() => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ''; });
+    it('an account with no email, no reading and not signed in is listed nowhere until a sign-in claims it', () => {
+        const view = accountsView([
+            { id: P, provider: 'claude', label: 'Account 1', identity: { email: null, plan: null } },
+            { id: B, provider: 'claude', label: 'Home', identity: { email: 'ada@example.invalid', plan: null } },
+        ], [], { claude: B });
+        expect(view.find((v) => v.provider === 'claude')!.accounts.map((a) => a.id)).toEqual([B]);
+        act(() => root.render(<AccountsSettings snapshot={{ providers: view, offers: [] }} offerWindows="both" onSetOfferWindows={() => {}} now={NOW} />));
+        expect([...host.querySelectorAll('[data-settings-account]')].map((r) => r.getAttribute('data-settings-account'))).toEqual([B]);
+    });
+    it('CONTROL: the signed-in account is listed even before its identity is read, and one with a reading is too', () => {
+        const reading = { provider: 'claude', accountId: B, runId: 'r', windows: [], room: { plan: null, window: '5h', leftPct: 40, resetsAtMs: 0, over: false, windows: [] } };
+        const view = accountsView([
+            { id: P, provider: 'claude', label: 'Account 1', identity: { email: null, plan: null } },
+            { id: B, provider: 'claude', label: 'Account 2', identity: { email: null, plan: null } },
+        ], [reading], { claude: P });
+        expect(view.find((v) => v.provider === 'claude')!.accounts.map((a) => a.id)).toEqual([P, B]);
+    });
+});
+
 describe('S11: wired through', () => {
     it('genie-host acts on the book and the board; main and the preload carry it; Shell hands the accounts to Settings', () => {
         expect(source('src/main/genie-host.ts')).toMatch(/accountsAct: \(action\) => accountsAct\(/);
