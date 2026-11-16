@@ -31,7 +31,6 @@ import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { formatBytes, type StorageView } from '../core/workspace-storage.js';
 import { threadAttachmentFiles } from '../core/thread-store.js';
 import { AccountsHost } from './accounts-host.js';
-import { providerAccountEnv } from '../core/accounts.js';
 import { isAcpProvider } from '../core/engine.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
@@ -143,7 +142,7 @@ import { PlaywrightHost, osConnections } from './playwright-host.js';
 import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
-import { switchActiveAccount, type AccountSwitchResult } from './account-switch-host.js';
+import { startAccountSwitch, type AccountSwitchStart } from './account-switch-host.js';
 import { afterSignedIn, LoginHost, statusCommandFor } from './login-host.js';
 import { accountIdentityFrom, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { tellDesignLoginRan } from '../core/design-login.js';
@@ -1042,8 +1041,8 @@ async function main(): Promise<void> {
     // whenever a provider's status is measured again.
     // A sign-in per ACCOUNT runs here, in this host; a window only shows its terminal (Tynn #479). Composed once the sessions exist.
     let logins: LoginHost | null = null;
-    // Switching a provider's ACTIVE account moves every agent of it at once (Tynn #751). Composed once the sessions exist.
-    let switchAccount: ((provider: string, accountId: string) => Promise<AccountSwitchResult>) | null = null;
+    // Switching accounts = the provider's own login in its one home; no agent is touched (Tynn #753). Composed once the sessions exist.
+    let switchAccount: ((provider: string) => AccountSwitchStart) | null = null;
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
@@ -1071,7 +1070,7 @@ async function main(): Promise<void> {
         providerAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
         cancelLogin: (accountId) => { logins?.cancel(accountId); },
-        switchAccount: (provider, accountId) => switchAccount?.(provider, accountId) ?? Promise.resolve({ ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' }),
+        switchAccount: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
@@ -1241,8 +1240,7 @@ async function main(): Promise<void> {
                 if (!isAcpProvider(provider)) return null;
                 const command = statusCommandFor(provider, providerBinary(provider as AgentRecord['provider']) ?? null);
                 if (command === null) return null;
-                const account = accounts.activeFor(provider);
-                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000, env: providerAccountEnv(account, process.env) });
+                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000 });
                 return r.exitCode === 0 ? accountIdentityFrom(r.streams.stdout) : null;
             },
         },
@@ -1293,16 +1291,12 @@ async function main(): Promise<void> {
         await host.deliverOwed(id);
         return { ok: true };
     };
-    switchAccount = async (provider, accountId) => {
-        if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent.` };
-        const switched = await switchActiveAccount({ accounts, registry: hostRegistry, host, cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome }, provider, accountId);
-        if (switched.ok) {
-            // The provider's CLI, its models and who the account is are read again, from the account every agent is on now.
-            void providerHealth.refresh(provider);
-            void accountIdentity.refreshProvider(provider);
-            void providerModels.get(provider, { refresh: true });
-        }
-        return switched;
+    // SWITCH ACCOUNT (Tynn #753): the provider's own login, in its one home, in a terminal with the steps on screen. No agent is
+    // stopped or started again; when the login ends the identity read (onSignedIn below) records which account is signed in.
+    switchAccount = (provider) => {
+        const login = logins;
+        if (login === null) return { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' };
+        return startAccountSwitch({ login }, provider);
     };
     hostVerdicts = new TrustVerdicts({
         agentsOf: (workspaceId) => hostRegistry.listAgents().filter((a) => a.workspaceId === workspaceId).map((a) => a.id),
@@ -1340,16 +1334,19 @@ async function main(): Promise<void> {
         // Where the window shows it is the window's: a person's click opens the route this returns the terminal for.
         openWindow: () => {},
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
-        runStatus: (command, cwd, env) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000, ...(env ? { env } : {}) }).then((r) => r.exitCode, () => 1),
-        onSignedIn: (provider, accountId) => {
-            // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698), and who the account is now (#477).
+        runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
+        onSignedIn: (provider) => {
+            // ONE HOME PER PROVIDER (Tynn #753): who is signed in is READ (S4) and recorded first: the book's active account is the
+            // one now signed in, usage counts against it, and a hold lifts if that account has headroom. No agent is stopped or
+            // started again; only the agents the provider had signed out are brought back.
             void providerHealth.refresh(provider);
-            if (accountId !== undefined) void accountIdentity.refresh(accountId); else if (isAcpProvider(provider)) void accountIdentity.refreshProvider(provider);
-            afterSignedIn(provider, {
-                signedOutAgents: (p, id) => host.signedOutAgents(p, id),
-                restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
-                resumeLimit: (p, id) => host.resumeLimit(p, id),
-            }, accountId);
+            void (isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve()).then(() => {
+                afterSignedIn(provider, {
+                    signedOutAgents: (p, id) => host.signedOutAgents(p, id),
+                    restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+                    resumeLimit: (p, id) => host.resumeLimit(p, id),
+                });
+            });
         },
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
         onDesignLoginEnded: () => { tellDesignLoginRan(host); },

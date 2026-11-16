@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { childEnv } from '@particle-academy/prism-acp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { legacyAccountId, providerAccountEnv, type AccountRecord } from '../src/core/accounts.js';
+import { legacyAccountId, type AccountRecord } from '../src/core/accounts.js';
 import type { AcpProvider } from '../src/core/engine.js';
 import type { Headroom, ReadingStamp } from '../src/core/headroom.js';
 import { AGENT_RECORD_FIELDS, agentRecord, mintAgentId, withoutAgentAccount, type AgentRecord } from '../src/core/identity.js';
@@ -39,7 +39,7 @@ describe('R1: the book holds ONE active account per provider', () => {
         dir = await mkdtemp(join(tmpdir(), 'genie-active-751-'));
         let n = 0;
         options = { root: join(dir, 'genie'), legacyHomes: { claude: join(dir, 'old-claude'), codex: join(dir, 'old-codex') },
-            now: () => '2026-11-16T00:00:00.000Z', mintId: () => `account_${String(++n).padStart(32, '0')}`, provision: async () => {} };
+            now: () => '2026-11-16T00:00:00.000Z', mintId: () => `account_${String(++n).padStart(32, '0')}` };
     });
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
@@ -118,7 +118,8 @@ describe('R1: every agent launches on the provider’s active account', () => {
         expect(f.host.start(agent('wren', provider), f.dir)).toEqual({ ok: true });
         await vi.waitFor(() => expect(f.seen).toHaveLength(2));
         expect(f.seen.map(s => s.account)).toEqual([active, active]);
-        for (const s of f.seen) expect(s.env[variable(provider)]).toBe(active.home);
+        // ONE HOME PER PROVIDER (Tynn #753): the account an agent is launched for never sets a home variable.
+        for (const s of f.seen) expect(s.env[variable(provider)]).toBeUndefined();
     });
 
     it('a deferred launch (connections prepared first) uses the active account too', async () => {
@@ -155,11 +156,6 @@ describe('R1: every agent launches on the provider’s active account', () => {
         expect(f.seen[0]!.env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
         expect(f.seen[0]!.env).not.toHaveProperty('CODEX_HOME');
         expect(f.seen[0]!.env.DB_PORT).toBe('4312');
-    });
-
-    it.each(['claude', 'codex'] as const)('CONTROL: %s legacy account env is the parent env, exactly', provider => {
-        const parent = Object.freeze({ PATH: '/bin', FIXTURE: 'kept' });
-        expect(providerAccountEnv({ provider, home: `/profile/.${provider}`, legacy: true }, parent)).toEqual(parent);
     });
 });
 

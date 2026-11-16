@@ -1303,13 +1303,13 @@ export class SessionEngineClient {
     }
 
     /**
-     * Make an account the provider's ACTIVE one (Tynn #751): the host moves every agent of the provider onto it straight away,
-     * each resuming with a note naming the switch. `failed` names the agents that could not start again.
+     * SWITCH ACCOUNT (Tynn #753): the host opens the provider's own login in its one home; the answer names the terminal and the
+     * steps to show. No agent is stopped or started again.
      */
-    async switchAccount(provider: string, accountId: string): Promise<{ ok: true; moved: string[]; failed: Array<{ id: string; reason: string }> } | { ok: false; reason: string }> {
-        const reply = await this.call('engine.switchAccount', [provider, accountId]);
+    async switchAccount(provider: string): Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.switchAccount', [provider]);
         if (!reply.ok) return { ok: false, reason: reply.reason };
-        return reply.value as { ok: true; moved: string[]; failed: Array<{ id: string; reason: string }> } | { ok: false; reason: string };
+        return reply.value as { ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string };
     }
 
     /** The persisted legacy account home, or unknown while the host/book cannot answer. */

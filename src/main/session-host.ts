@@ -1,6 +1,5 @@
 import { isOsAgent } from '../core/os-agent.js';
-import { providerAccountEnv, type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
-import { isAcpProvider } from '../core/engine.js';
+import { type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
@@ -137,7 +136,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
-import { legacyProviderHomes, sessionsDir } from './paths.js';
+import { sessionsDir } from './paths.js';
 
 /**
  * THE RUNNING AGENTS — one place that owns sessions, and counts them.
@@ -189,6 +188,10 @@ const SCRIPT = /\.(mjs|cjs|js)$/i;
  * interpreter is Electron itself, run as Node: `ELECTRON_RUN_AS_NODE=1`, allowed through to that provider alone. A real
  * binary is passed as it always was; nothing configured is the provider's default. The workspace's service variables
  * ride along in every case (`serviceEnvDriverOptions`).
+ *
+ * ONE HOME PER PROVIDER (Tynn #753): `account` changes nothing about the environment. A launch uses the provider's normal
+ * home exactly as it did before accounts existed, so every agent's session files stay in it and a thread carries on across a
+ * re-login. It is accepted only so a caller can name the account it launches for.
  */
 export function providerLaunchOptions(
     configured: string | undefined,
@@ -215,11 +218,6 @@ export function providerLaunchOptions(
             parentEnv[key] = value;
         }
         service = { parentEnv, allowEnv: [...(service.allowEnv ?? []).filter((name) => !overridden.has(name.toUpperCase())), ...overridden] };
-    }
-    if (account) {
-        service = { parentEnv: providerAccountEnv(account, service.parentEnv ?? process.env),
-            allowEnv: [...(service.allowEnv ?? []).filter(key => !/^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(key)),
-                account.provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] };
     }
     if (!configured) return service;
     if (!SCRIPT.test(configured)) return { binary: configured, ...service };
@@ -426,8 +424,7 @@ export function listModelsOptionsFor(
 export const realListModels = (provider: Parameters<ListProviderModels>[0], account?: ProviderAccountHome): ReturnType<ListProviderModels> => {
     const problem = providerStartProblem(provider);
     if (problem !== null) return Promise.reject(new Error(problem));
-    const bound = account ?? { provider, home: legacyProviderHomes()[provider], legacy: true };
-    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, undefined, bound));
+    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, undefined, account));
 };
 
 /** How often a held login is read again while it waits (genie#1195). */
@@ -494,10 +491,8 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
     // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
-    // Production SessionHost supplies the provider's ACTIVE account from the book (Tynn #751); standalone legacy
-    // harnesses keep their existing home.
-    const account = extras?.account ?? (isAcpProvider(record.provider) ? { provider: record.provider, home: legacyProviderHomes()[record.provider], legacy: true } : undefined);
-    const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) }, account);
+    // The provider's normal home, whichever account is signed in to it (Tynn #753).
+    const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
 
     switch (record.provider) {
         case 'claude':
@@ -1076,11 +1071,8 @@ export class SessionHost {
         let account: AccountRecord | undefined;
         if (this.#activeAccount) {
             const found = this.#activeAccount(record.provider);
-            let reason: string | null = !found || found.provider !== record.provider ? 'This provider has no active account; choose its account before starting.' : null;
-            if (found && reason === null) {
-                try { providerAccountEnv(found, {}); account = found; }
-                catch { reason = 'The provider’s active account has an invalid home; repair its account before starting.'; }
-            }
+            const reason: string | null = !found || found.provider !== record.provider ? 'This provider has no active account; choose its account before starting.' : null;
+            if (found && reason === null) account = found;
             if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
         }
         const mcpServers = this.#mcpServersFor?.(record) ?? [];

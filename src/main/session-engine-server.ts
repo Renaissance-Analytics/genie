@@ -133,8 +133,8 @@ export interface EngineServerOptions {
     /** A sign-in for one account, run here (Tynn #479). */
     readonly login?: (provider: string, accountId: string | undefined) => { ok: true; terminalId: string } | { ok: false; reason: string };
     readonly cancelLogin?: (accountId: string) => void;
-    /** Make an account the provider's active one and move every agent of the provider onto it (Tynn #751). */
-    readonly switchAccount?: (provider: string, accountId: string) => Promise<import('./account-switch-host.js').AccountSwitchResult>;
+    /** Open the provider's own login in its one home so the person can switch accounts; no agent is touched (Tynn #753). */
+    readonly switchAccount?: (provider: string) => import('./account-switch-host.js').AccountSwitchStart;
     /** After a login: read the provider's account identity again (Tynn #477). */
     readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
@@ -654,7 +654,7 @@ export class SessionEngineServer {
         if (method === 'engine.switchAccount') {
             if (!conn.local || !conn.window) throw new Error('Switching accounts needs this machine’s own window.');
             if (!this.#options.switchAccount) throw new Error('Switching accounts is not ready in the host yet.');
-            return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'string' ? args[1] : '');
+            return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '');
         }
         if (method === 'engine.refreshAccountIdentity') {
             if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');

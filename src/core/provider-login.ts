@@ -56,7 +56,28 @@ export const SIGNED_IN_AGAIN =
 export const ACCOUNT_BACK =
     'Your provider had paused this account, and the person says it is put right. Carry on with what you were doing: the last message to you may not have reached you, so read the conversation above before you act.';
 
-/** What a person does in the login window to switch accounts in the provider's one home (Tynn #753). Stub: not implemented yet. */
-export function accountSwitchSteps(_provider: string): readonly string[] {
+/**
+ * WHAT THE PERSON DOES TO SWITCH ACCOUNTS (Tynn #753). Every account of a provider signs in to the provider's ONE normal home,
+ * the one the person's agents already use, so their conversations carry on. The steps are the provider's own; Genie runs its
+ * CLI and shows these words, types nothing, and never sees a code or a token. Empty for a provider Genie has no switch for.
+ */
+export function accountSwitchSteps(provider: string): readonly string[] {
+    const closing = 'When it says you are signed in, close this window. Genie then reads which account is signed in; your agents are not stopped and keep their conversations.';
+    if (provider === 'claude') {
+        return [
+            'Genie has opened Claude Code in the terminal below, in the same place your agents already use.',
+            'Type /logout and press Enter.',
+            'Then type /login and press Enter, and choose the other account. A browser may open: sign in there, then come back to this window.',
+            closing,
+        ];
+    }
+    if (provider === 'codex') {
+        return [
+            'Genie is running codex logout and then codex login in the terminal below, in the same place your agents already use.',
+            'Follow codex login: choose the other account. A browser may open: sign in there, then come back to this window.',
+            'If it stops after codex logout, type codex login and press Enter.',
+            closing,
+        ];
+    }
     return [];
 }
