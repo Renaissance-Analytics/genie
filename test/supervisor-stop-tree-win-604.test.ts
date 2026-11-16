@@ -1,3 +1,4 @@
+// CI: WINDOWS ONLY (supervisor.stop ending a process tree is measured through the real Windows pty and its job object; the Linux pty helper is covered by fancy-pty-lifecycle)
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
