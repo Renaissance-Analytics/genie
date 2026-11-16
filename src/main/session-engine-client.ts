@@ -1287,6 +1287,21 @@ export class SessionEngineClient {
         await this.#value('engine.refreshAccountIdentity', [provider], false);
     }
 
+    /**
+     * Sign one account of a provider in (Tynn #479). The host runs the sign-in and owns its terminal; the window only shows it.
+     * Two calls for one account join one sign-in. With no account named, the provider's default account.
+     */
+    async login(provider: string, accountId?: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.login', accountId === undefined ? [provider] : [provider, accountId]);
+        if (!reply.ok) return { ok: false, reason: reply.reason };
+        return reply.value as { ok: true; terminalId: string } | { ok: false; reason: string };
+    }
+
+    /** The person closed or cancelled the sign-in window: the host kills its terminal and signs nobody in. */
+    async cancelLogin(accountId: string): Promise<void> {
+        await this.#value('engine.cancelLogin', [accountId], false);
+    }
+
     /** The persisted legacy account home, or unknown while the host/book cannot answer. */
     async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null> {
         return this.#value('engine.providerAccount', [provider], null);

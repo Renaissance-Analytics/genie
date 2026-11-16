@@ -967,8 +967,9 @@ export class SessionHost {
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.accountPaused !== null).map(([id]) => id);
     }
 
-    signedOutAgents(provider: string): AgentId[] {
-        return [...this.#running].filter(([, e]) => e.provider === provider && e.session.signedOut).map(([id]) => id);
+    signedOutAgents(provider: string, accountId?: string): AgentId[] {
+        // One account's sign-in resumes that account's agents only (Tynn #479); with no account named, the provider's.
+        return [...this.#running].filter(([, e]) => e.provider === provider && (accountId === undefined || e.accountId === accountId) && e.session.signedOut).map(([id]) => id);
     }
 
     /** The running agents a tool refused for want of Claude Design's login (#1081) — told to retry once it has run. */

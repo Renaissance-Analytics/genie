@@ -12,11 +12,13 @@ import type { TerminalHost } from './terminal-host.js';
  *
  * `start(provider)` makes a fresh scratch folder under the caller's scratch (`<root>/cache/tmp/<this process>`, P7), runs the provider's own login there
  * (`core/provider-login.ts`) — or, for a provider Genie has no login for, its own CLI — and opens it in a window of its own
- * (`genie://takeover/<id>?login=<provider>`), whose notice says what to do. One login per provider: a second click brings
- * the same window back.
+ * (`genie://takeover/<id>?login=<provider>`), whose notice says what to do. One login per ACCOUNT (Tynn #479): a second click on
+ * the same account brings the same window back, and another account of the provider signs in beside it. It runs in genie-host;
+ * a window only shows the terminal. The terminal is killed and removed, and the folder deleted, on every way the step ends:
+ * the status answered, the status failed, `cancel`, or `dispose` (Genie 1's wizard did the same on close, cancel or finish).
  *
  * When that terminal ends, the provider's status command is asked (exit 0 = signed in) in the same folder; signed in,
- * `onSignedIn` brings the provider's signed-out agents back. The scratch folder is removed either way — it is the one
+ * `onSignedIn` brings THAT ACCOUNT's signed-out agents back. The scratch folder is removed either way — it is the one
  * path this host created, removed by that exact path.
  *
  * CLAUDE DESIGN (#1081): `start(DESIGN_LOGIN)` opens the interactive `claude` itself — no arguments; `/design-login` as an
@@ -29,19 +31,34 @@ import type { TerminalHost } from './terminal-host.js';
  * #699: the owner switched accounts at his limit and his agent never resumed) — every agent held on that provider's limit is
  * released and what waited goes, as when the limit resets.
  */
-export function afterSignedIn(provider: string, deps: { signedOutAgents: (provider: string) => readonly string[]; restart: (id: string) => void; resumeLimit: (provider: string) => void }): void {
-    for (const id of deps.signedOutAgents(provider)) deps.restart(id);
-    deps.resumeLimit(provider);
+export function afterSignedIn(provider: string, deps: { signedOutAgents: (provider: string, accountId?: string) => readonly string[]; restart: (id: string) => void; resumeLimit: (provider: string, accountId?: string) => void }, accountId?: string): void {
+    // One account's sign-in resumes that account's agents and that account's hold, never another account's (Tynn #479).
+    for (const id of accountId === undefined ? deps.signedOutAgents(provider) : deps.signedOutAgents(provider, accountId)) deps.restart(id);
+    if (accountId === undefined) deps.resumeLimit(provider);
+    else deps.resumeLimit(provider, accountId);
+}
+
+/** The sign-in terminal a Take Over route shows, or `null` when the route is not a sign-in's. */
+export function loginTerminalOf(route: string): string | null {
+    const prefix = 'genie://takeover/';
+    if (!route.startsWith(prefix)) return null;
+    const [id, query] = route.slice(prefix.length).split('?');
+    return id && query?.startsWith('login=') ? decodeURIComponent(id) : null;
+}
+
+/** The Take Over window's route for a sign-in terminal: the window only shows it (Tynn #479). */
+export function loginRoute(terminalId: string, provider: string): string {
+    return `genie://takeover/${terminalId}?login=${encodeURIComponent(provider)}`;
 }
 
 export interface LoginHostOptions {
-    terminals: Pick<TerminalHost, 'open' | 'onExit'>;
+    terminals: Pick<TerminalHost, 'open' | 'onExit' | 'close'>;
     openWindow: (route: string) => void;
     /** Run a status command in `cwd` through the shell; resolves with its exit code. */
     runStatus: (command: string, cwd: string, env?: Readonly<Record<string, string>>) => Promise<number>;
     /** The host book's account. Provider-only UI login remains legacy scoped until S6. */
-    accountFor?: (provider: string) => ProviderAccountHome | null;
-    onSignedIn: (provider: string) => void;
+    accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string }) | null;
+    onSignedIn: (provider: string, accountId?: string) => void;
     /** The Claude Design login window ended (there is no status to ask): the agents that waited are told to retry. */
     onDesignLoginEnded?: (() => void) | undefined;
     /** The provider CLI's resolved path, when it is not simply on PATH (`providerBinary`). */
@@ -53,7 +70,11 @@ export interface LoginHostOptions {
 }
 
 interface Live {
+    /** What the sign-in is keyed by: the ACCOUNT's id (or the Design key; or the provider when no book is composed). */
+    key: string;
     provider: string;
+    /** The account signed in to; `undefined` when no book is composed. */
+    accountId?: string | undefined;
     terminalId: string;
     scratch: string;
     /** Captured before opening, so status reads exactly the home the person signed in to. */
@@ -86,31 +107,35 @@ export class LoginHost {
     constructor(options: LoginHostOptions) {
         this.#options = options;
         options.terminals.onExit((id) => {
-            for (const [provider, live] of this.#live) {
+            for (const [key, live] of this.#live) {
                 if (live.terminalId !== id) continue;
-                this.#live.delete(provider);
+                this.#live.delete(key);
                 void this.#finish(live);
             }
         });
     }
 
-    start(provider: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
-        const existing = this.#live.get(provider);
-        if (existing) {
-            this.#options.openWindow(this.#route(existing));
-            return { ok: true, terminalId: existing.terminalId };
-        }
+    start(provider: string, accountId?: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
         const design = provider === DESIGN_LOGIN;
         const known = design ? null : providerLogin(provider);
         if (!design && !PLAIN_NAME.test(provider)) return { ok: false, reason: 'That provider’s login could not start: its name is not one Genie can run.' };
         // Claude Design's login runs in Claude Code's own CLI.
         const cli = design ? 'claude' : provider;
         let env: Readonly<Record<string, string>> | undefined;
+        let resolvedId: string | undefined;
         if (this.#options.accountFor) {
-            const account = this.#options.accountFor(cli);
+            const account = this.#options.accountFor(cli, design ? undefined : accountId);
             if (!account || account.provider !== cli) return { ok: false, reason: 'The provider account is unavailable; reconnect Genie’s host before logging in.' };
+            resolvedId = account.id;
             try { env = providerAccountEnv(account, process.env); }
             catch { return { ok: false, reason: 'The provider account home is invalid; repair the account before logging in.' }; }
+        }
+        // One sign-in per ACCOUNT: two clicks on one account join it; another account of the provider gets its own (Tynn #479).
+        const key = design ? DESIGN_LOGIN : resolvedId ?? provider;
+        const existing = this.#live.get(key);
+        if (existing) {
+            this.#options.openWindow(this.#route(existing));
+            return { ok: true, terminalId: existing.terminalId };
         }
         const binary = this.#options.binaryFor?.(cli) ?? null;
         if (binary !== null && !quotable(binary)) return { ok: false, reason: `The ${known?.name ?? provider} login could not start: the path set for it has a character Genie will not put in a command.` };
@@ -130,14 +155,37 @@ export class LoginHost {
             rmSync(scratch, { recursive: true, force: true });
             return { ok: false, reason: `The ${known?.name ?? provider} login could not start: ${(error as Error).message}` };
         }
-        const live: Live = { provider, terminalId: opened.id, scratch, ...(env ? { env } : {}) };
-        this.#live.set(provider, live);
+        const live: Live = { key, provider, ...(resolvedId !== undefined ? { accountId: resolvedId } : {}), terminalId: opened.id, scratch, ...(env ? { env } : {}) };
+        this.#live.set(key, live);
         this.#options.openWindow(this.#route(live));
         return { ok: true, terminalId: opened.id };
     }
 
+    /**
+     * The person closed or cancelled the sign-in window: its terminal is killed and removed and its folder deleted. Nobody is
+     * signed in and no agent moves, so the agent stays on its old account. A key that is not live is nothing to do.
+     */
+    cancel(key: string): void {
+        // By the account's key, or — from a window that only knows the terminal it shows — by that terminal's id.
+        const live = this.#live.get(key) ?? [...this.#live.values()].find((l) => l.terminalId === key);
+        if (!live) return;
+        this.#live.delete(live.key);
+        this.#release(live);
+    }
+
+    /** Genie's host is going: every sign-in still open is cancelled. */
+    dispose(): void {
+        for (const key of [...this.#live.keys()]) this.cancel(key);
+    }
+
+    /** The one place a sign-in's terminal and folder are removed, whichever way the step ended. */
+    #release(live: Live): void {
+        try { this.#options.terminals.close(live.terminalId); } catch { /* already gone */ }
+        rmSync(live.scratch, { recursive: true, force: true });
+    }
+
     #route(live: Live): string {
-        return `genie://takeover/${live.terminalId}?login=${encodeURIComponent(live.provider)}`;
+        return loginRoute(live.terminalId, live.provider);
     }
 
     async #finish(live: Live): Promise<void> {
@@ -151,10 +199,12 @@ export class LoginHost {
                 const binary = this.#options.binaryFor?.(live.provider) ?? null;
                 const status = binary === null ? known.status : `"${binary}"${known.status.slice(known.status.indexOf(' '))}`;
                 const code = await (live.env ? this.#options.runStatus(status, live.scratch, live.env) : this.#options.runStatus(status, live.scratch)).catch(() => 1);
-                if (code === 0) this.#options.onSignedIn(live.provider);
+                if (code === 0) this.#options.onSignedIn(live.provider, live.accountId);
             }
+        } catch {
+            // A failed hand-off is not a reason to leave a terminal behind; the step is over either way.
         } finally {
-            rmSync(live.scratch, { recursive: true, force: true });
+            this.#release(live);
         }
     }
 }

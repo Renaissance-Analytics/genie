@@ -51,10 +51,10 @@ describe('S3: the persisted home reaches the existing login without opening an a
         expect(host).toMatch(/realListModels\(provider, accounts\.defaultFor\(provider\) \?\? undefined\)/);
         expect(host).toMatch(/checkProviderHealth\(provider, realProviderHealthPorts\(execFileRunner\), accounts\.defaultFor\(provider\) \?\? undefined\)/);
         expect(host).toMatch(/env: providerAccountEnv\(account, process\.env\)/);
-        expect(window).toMatch(/accountFor: provider => loginAccounts\.get\(provider\) \?\? null/);
-        expect(window).toMatch(/void refreshLoginAccounts\?\.\(client\)\.catch\(/);
-        expect(window).toMatch(/const account = await client\.providerAccount\(provider\)/);
-        expect(window).toMatch(/runStatus: \(command, cwd, env\) => execFileRunner\(/);
+        // S6 (Tynn #479): the sign-in runs in the host, per account, from the host book; the window opens no book and runs no status.
+        expect(host).toMatch(/accountFor: \(provider, accountId\) => \{[\s\S]{0,200}accounts\.get\(accountId\)/);
+        expect(host).toMatch(/runStatus: \(command, cwd, env\) => execFileRunner\(/);
+        expect(window).not.toMatch(/new LoginHost/);
         expect(window).not.toMatch(/AccountsHost\.open/);
     });
 });

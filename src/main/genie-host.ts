@@ -140,8 +140,9 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
-import { statusCommandFor } from './login-host.js';
-import { accountIdentityFrom } from '../core/provider-login.js';
+import { afterSignedIn, LoginHost, statusCommandFor } from './login-host.js';
+import { accountIdentityFrom, SIGNED_IN_AGAIN } from '../core/provider-login.js';
+import { tellDesignLoginRan } from '../core/design-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
@@ -1035,6 +1036,8 @@ async function main(): Promise<void> {
     // what "installed" and "signed in" read. A CLI that cannot run is said in the log by name.
     // Tynn #477: who each account is, as its provider reports it (never a credential file): at host start, after a login, and
     // whenever a provider's status is measured again.
+    // A sign-in per ACCOUNT runs here, in this host; a window only shows its terminal (Tynn #479). Composed once the sessions exist.
+    let logins: LoginHost | null = null;
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
@@ -1060,6 +1063,8 @@ async function main(): Promise<void> {
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
         providerAccount: provider => isAcpProvider(provider) ? accounts.defaultFor(provider) : null,
+        login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
+        cancelLogin: (accountId) => { logins?.cancel(accountId); },
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
@@ -1285,6 +1290,32 @@ async function main(): Promise<void> {
     let githubNow: GithubAccount | null = null;
     void githubOpening.then((account) => { githubNow = account; }, () => {});
     const hostScratch = scratchArea(home);
+    // `Log in` for one ACCOUNT (Tynn #479): its own terminal and folder, its own status in that account's home. Signed in, THAT
+    // account's signed-out agents restart and that account's hold opens; another account's agents are never touched.
+    logins = new LoginHost({
+        accountFor: (provider, accountId) => {
+            if (!isAcpProvider(provider)) return null;
+            return accountId === undefined ? accounts.defaultFor(provider) : accounts.get(accountId);
+        },
+        scratch: () => hostScratch.directory(),
+        terminals: terminalHost,
+        // Where the window shows it is the window's: a person's click opens the route this returns the terminal for.
+        openWindow: () => {},
+        binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
+        runStatus: (command, cwd, env) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000, ...(env ? { env } : {}) }).then((r) => r.exitCode, () => 1),
+        onSignedIn: (provider, accountId) => {
+            // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698), and who the account is now (#477).
+            void providerHealth.refresh(provider);
+            if (accountId !== undefined) void accountIdentity.refresh(accountId); else if (isAcpProvider(provider)) void accountIdentity.refreshProvider(provider);
+            afterSignedIn(provider, {
+                signedOutAgents: (p, id) => host.signedOutAgents(p, id),
+                restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+                resumeLimit: (p, id) => host.resumeLimit(p, id),
+            }, accountId);
+        },
+        // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
+        onDesignLoginEnded: () => { tellDesignLoginRan(host); },
+    });
     const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }), { accountById: (id) => accounts.get(id) });
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
@@ -1839,6 +1870,7 @@ async function main(): Promise<void> {
             if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
             lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
             browserService.quit();
+            logins?.dispose();
             const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
             // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
             // host nobody wants.
