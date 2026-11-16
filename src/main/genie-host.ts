@@ -1250,7 +1250,7 @@ async function main(): Promise<void> {
     headroomFeedNow = headroomFeed;
     // CLAUDE DESIGN'S AUTHORIZATION, ONE FOR THE MACHINE (Tynn #480, core/design-auth.ts): Authorized only after the call
     // that needed it succeeds. Kept on disk; a change tells the windows to read the accounts again.
-    const designAuthFile = join(home, 'design-auth.json');
+    const designAuthFile = join(home, 'claude-design-state.json');
     const designAuth = new DesignAuthBook(
         () => { try { return JSON.parse(readFileSync(designAuthFile, 'utf8')); } catch { return undefined; } },
         (state) => { try { writeFileSync(designAuthFile, JSON.stringify(state)); } catch (error) { say(`Claude Design: could not save its state: ${error instanceof Error ? error.message : String(error)}`); } },
