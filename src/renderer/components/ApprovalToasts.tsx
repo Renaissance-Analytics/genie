@@ -3,6 +3,7 @@ import { useEffect, useReducer } from 'react';
 import { personText } from '../../core/person-text.js';
 import type { DeckItem } from '../../core/deck.js';
 import { EMPTY_TOASTS, toastReducer, toastView, type ToastStackView } from '../../core/approval-toasts.js';
+import { workspaceLabel } from '../../core/workspace-label.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
@@ -35,13 +36,28 @@ export interface ApprovalToastStackProps {
     onOpenAgent?: ((item: DeckItem) => void) | undefined;
     /** Trust the item's workspace from its card (Tynn #618). Absent = not offered. */
     onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
+    /**
+     * The workspaces this window knows (the snapshot's). An item can arrive with a workspaceId and no name; the toast reads
+     * the name here, the way the Dashboard row does, rather than call the workspace unknown.
+     */
+    workspaces?: readonly { id: string; path: string; name?: string | undefined; color?: string | undefined }[] | null | undefined;
+    /** The agents this window knows, for an item that carries its agent but no workspace. */
+    agents?: readonly { id: string; workspaceId: string }[] | null | undefined;
 }
 
-function workspaceOf(item: DeckItem): string {
-    return item.workspaceName?.trim() || 'a workspace not known here';
+type Where = { name: string; color: string | undefined };
+
+function workspaceOf(item: DeckItem, { workspaces, agents }: Pick<ApprovalToastStackProps, 'workspaces' | 'agents'>): Where {
+    const own = item.workspaceName?.trim();
+    if (own) return { name: own, color: item.workspaceColor };
+    const id = item.workspaceId ?? agents?.find((a) => a.id === item.agentId)?.workspaceId ?? null;
+    const known = id === null ? undefined : workspaces?.find((w) => w.id === id);
+    if (!known) return { name: 'a workspace not known here', color: item.workspaceColor };
+    return { name: workspaceLabel(workspaces, known.id), color: item.workspaceColor ?? known.color };
 }
 
-function ToastCard({ item, busy, onAnswer, onOpenAgent, onTrustWorkspace }: { item: DeckItem; busy: boolean } & Pick<ApprovalToastStackProps, 'onAnswer' | 'onOpenAgent' | 'onTrustWorkspace'>) {
+function ToastCard({ item, busy, onAnswer, onOpenAgent, onTrustWorkspace, workspaces, agents }: { item: DeckItem; busy: boolean } & Pick<ApprovalToastStackProps, 'onAnswer' | 'onOpenAgent' | 'onTrustWorkspace' | 'workspaces' | 'agents'>) {
+    const where = workspaceOf(item, { workspaces, agents });
     const options = item.answer.kind === 'inline' ? item.answer.options : [];
     return (
         <div data-approval-toast={item.id} className="rounded-lg border border-[var(--warning)]/40 bg-[var(--bg-1)] p-3 text-[13px] shadow-lg">
@@ -49,8 +65,8 @@ function ToastCard({ item, busy, onAnswer, onOpenAgent, onTrustWorkspace }: { it
                 <span data-approval-toast-agent="" className="font-semibold text-[var(--fg-1)]">{item.agentName ?? 'An agent'}</span>
                 <span aria-hidden="true">·</span>
                 {/* The workspace's colour beside its name (genie#1300). */}
-                <WorkspaceSwatch color={item.workspaceColor} />
-                <span data-approval-toast-workspace="" className="min-w-0 flex-1 truncate">{workspaceOf(item)}</span>
+                <WorkspaceSwatch color={where.color} />
+                <span data-approval-toast-workspace="" className="min-w-0 flex-1 truncate">{where.name}</span>
                 {onOpenAgent && item.agentId ? (
                     <Button type="button" size="xs" variant="ghost" data-toast-open={item.id} onClick={() => onOpenAgent(item)} title="Open this agent's chat">Open</Button>
                 ) : null}
@@ -69,7 +85,7 @@ function ToastCard({ item, busy, onAnswer, onOpenAgent, onTrustWorkspace }: { it
 }
 
 /** The stack itself: a pure function of its view — no state, so a test can render it and read its handlers. */
-export function ApprovalToastStack({ view, onAnswer, onExpand, onOpenAgent, onTrustWorkspace }: ApprovalToastStackProps) {
+export function ApprovalToastStack({ view, onAnswer, onExpand, onOpenAgent, onTrustWorkspace, workspaces, agents }: ApprovalToastStackProps) {
     if (view.total === 0) return null;
     return (
         <div
@@ -84,7 +100,7 @@ export function ApprovalToastStack({ view, onAnswer, onExpand, onOpenAgent, onTr
         >
             {view.shown.map((item) => (
                 <div key={item.id} className="pointer-events-auto">
-                    <ToastCard item={item} busy={view.answering.includes(item.id)} onAnswer={onAnswer} onOpenAgent={onOpenAgent} onTrustWorkspace={onTrustWorkspace} />
+                    <ToastCard item={item} busy={view.answering.includes(item.id)} onAnswer={onAnswer} onOpenAgent={onOpenAgent} onTrustWorkspace={onTrustWorkspace} workspaces={workspaces} agents={agents} />
                 </div>
             ))}
             {view.more > 0 ? (

@@ -104,3 +104,54 @@ describe('the title bar', () => {
         expect(html).not.toContain('data-flow-pill="b"');
     });
 });
+
+describe('the title bar lays the pills out beside the address, never over it', () => {
+    const bar = (extra: object) => renderToStaticMarkup(<TitleBar route="genie://studio/some/long/route" workstation={null} onNavigate={() => {}} onOpenPalette={() => {}} {...extra} />);
+    const flows = { live: [live('a')], ended: [], now: NOW, onOpen: () => {} };
+    const tag = (html: string, attr: string): string => html.match(new RegExp(`<[a-z]+[^>]*${attr}[^>]*>`))![0];
+
+    it('the pills and the address are both direct children of the bar flex row', () => {
+        const html = bar({ flows });
+        const open = html.indexOf('data-controls-inset');
+        expect(tag(html, 'data-controls-inset')).toMatch(/\bflex\b/);
+        // Nesting depth below the bar's open tag: equal depth = siblings in the one row.
+        const depthAt = (attr: string): number => {
+            let depth = 0;
+            for (const m of html.slice(open, html.indexOf(attr)).matchAll(/<(\/?)([a-z0-9]+)[^>]*?(\/?)>/g)) {
+                if (['svg', 'path', 'circle', 'line', 'rect', 'polyline', 'input', 'img', 'br'].includes(m[2]!) || m[3] === '/') continue;
+                depth += m[1] ? -1 : 1;
+            }
+            return depth;
+        };
+        expect(depthAt('data-flow-pills')).toBe(depthAt('data-route'));
+    });
+
+    it('the pills take their own space: shrink-0 and no absolute positioning', () => {
+        const pills = tag(bar({ flows }), 'data-flow-pills');
+        expect(pills).toMatch(/\bshrink-0\b/);
+        expect(pills).not.toMatch(/\b(absolute|fixed)\b/);
+    });
+
+    it('each pill refuses to shrink under its text and stays one line', () => {
+        const pill = tag(bar({ flows }), 'data-flow-pill=');
+        expect(pill).toMatch(/\bshrink-0\b/);
+        expect(pill).not.toMatch(/\b(absolute|fixed)\b/);
+    });
+
+    it('the address is the part that gives way: min-w-0 and truncate', () => {
+        const route = tag(bar({ flows }), 'data-route');
+        expect(route).toMatch(/\bmin-w-0\b/);
+        expect(route).toMatch(/\btruncate\b/);
+    });
+
+    it('a narrow window collapses to fewer pills and a +N (maxShown)', () => {
+        const out = flowPills({ live: [live('a'), live('b'), live('c')], ended: [], now: NOW, workspaceId: null, max: 1 });
+        expect(out.shown.map((p) => p.flowId)).toEqual(['a']);
+        expect(out.more.map((p) => p.flowId)).toEqual(['b', 'c']);
+    });
+
+    it('CONTROL: without a max it is still two', () => {
+        const out = flowPills({ live: [live('a'), live('b'), live('c')], ended: [], now: NOW, workspaceId: null });
+        expect(out.shown).toHaveLength(2);
+    });
+});
