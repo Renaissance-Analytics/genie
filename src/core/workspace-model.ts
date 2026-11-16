@@ -1,3 +1,4 @@
+import { SHARED_SCHEMAS_PIN } from './shared-schemas-pin.js';
 /**
  * WORKSPACES AND AGENTS (§6.1, §6.2) — the pure half of what was still missing.
  *
@@ -84,10 +85,11 @@ export function gitAddPlan(input: { url: string; parent: string; folderExists: b
 }
 
 /**
- * Civicognita/shared-schemas publishes the envelope schema by git tag; this Genie writes this revision. v0.4.0 adds
- * `agents` (Tynn #693/#694: an agent's config); every v0.3.0 document is a valid v0.4.0 one once its `$schema` moves.
+ * Civicognita/shared-schemas publishes the envelope schema by git tag; this Genie writes this revision, the one core/shared-schemas-pin.ts
+ * names. v0.4.0 added `agents` (Tynn #693/#694: an agent's config); v0.5.0 adds `services`, the `workspace` allow-list, an agent's
+ * `issueWatch` and typed `sites` (Tynn #756). Every earlier document is a valid one once its `$schema` moves.
  */
-export const SCHEMA_REVISION = '0.4.0';
+export const SCHEMA_REVISION = SHARED_SCHEMAS_PIN.revision;
 const SCHEMA_BASE = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v';
 const SCHEMA_TAIL = '/schemas/workspace/project.schema.json';
 
