@@ -1,6 +1,7 @@
 import { SHARED_SCHEMAS_PIN } from './shared-schemas-pin.js';
 import { folderWithin } from './v1-processes.js';
 import type { Exclusion } from './workspace-elements.js';
+import { cwdProblem } from './workspace-save-guard.js';
 import { parseTabs, type Panel, type TabsState, type WorkspaceTab } from './workspace-tabs.js';
 
 /**
@@ -9,7 +10,7 @@ import { parseTabs, type Panel, type TabsState, type WorkspaceTab } from './work
  * UI preference rather than automation, so one file, and the order of the tabs is kept.
  *
  * What is live on this machine is not saved: a `terminal` panel is a terminal id (an empty cell), and a `files` panel's folder is
- * relative to the workspace or not saved. On a clone, what it can show it restores; a `site` panel whose site is not there yet
+ * relative to the workspace or not saved (the same `cwd` rule the guard applies, `cwdProblem`). On a clone, what it can show it restores; a `site` panel whose site is not there yet
  * is an empty cell, said. Nothing a clone already has is overwritten.
  */
 
@@ -20,23 +21,6 @@ const LAYOUT_MODES: readonly string[] = ['single', 'columns', 'rows', 'grid'];
 const MIN_FRACTION = 0.1;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-
-/** Why a `files` panel's folder is not one inside the workspace, or null (the same rule the guard applies to a `cwd`). */
-function folderProblem(ref: string): string | null {
-    if (ref.trim() === '') return 'is empty';
-    if (/^[\\/]/.test(ref)) return 'starts with a slash, so it is an absolute path';
-    if (/^[A-Za-z]:/.test(ref)) return 'starts with a drive letter';
-    if (ref.startsWith('~')) return 'starts with ~, the home folder';
-    let depth = 0;
-    for (const segment of ref.split(/[\\/]+/)) {
-        if (segment === '' || segment === '.') continue;
-        if (segment === '..') {
-            depth -= 1;
-            if (depth < 0) return 'climbs out of the workspace with ..';
-        } else depth += 1;
-    }
-    return null;
-}
 
 const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/])/;
 
@@ -81,7 +65,7 @@ export function tabsDeclaration(input: { tabs: string; panelSplits: string; pane
                     }
                     ref = inside === '' ? '.' : inside;
                 }
-                const problem = folderProblem(ref);
+                const problem = cwdProblem(ref);
                 if (problem !== null) {
                     excluded.push({ field, reason: `its folder ${problem}, so it is saved as an empty cell` });
                     return null;
@@ -125,7 +109,7 @@ export function tabsRestore(file: unknown, ctx: { workspacePath: string; siteHos
             const where = `${tab.name}, cell ${i + 1}`;
             if (cell.kind === 'terminal') { notes.push(`${where}: a terminal cannot come from a file, so it is empty`); return null; }
             if (cell.kind === 'files' && cell.ref !== null) {
-                const problem = folderProblem(cell.ref);
+                const problem = cwdProblem(cell.ref);
                 if (problem !== null) { notes.push(`${where}: its folder ${problem}, so it is empty`); return null; }
             }
             if (cell.kind === 'site' && cell.ref !== null && !ctx.siteHosts.includes(cell.ref)) { notes.push(`${where}: the site ${cell.ref} is not in this workspace (yet), so it is empty`); return null; }
