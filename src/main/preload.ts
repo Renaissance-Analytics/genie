@@ -36,7 +36,7 @@ const bridge: PreloadBridge = {
         return () => ipcRenderer.removeListener('genie:workspace-pulse', listener);
     },
     onAction: (onAction) => {
-        const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string }): void => onAction(action);
+        const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string; sound?: string; title?: string; body?: string }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
         return () => ipcRenderer.removeListener('genie:action', listener);
     },

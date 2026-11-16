@@ -21,6 +21,7 @@ import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.j
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
+import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
@@ -1947,6 +1948,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                                 <>
                                     <SetSection title="Notifications" desc="The master switch for every sound.">{rows('notifications')}</SetSection>
                                     <AlertSounds values={values} onAction={onAction} />
+                                    <RateLimitAlerts raw={values === null ? undefined : values[LIMIT_ALERTS_SETTING]} onAction={onAction} />
                                 </>
                             ) : null}
                             {active === 'keyboard' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
@@ -2038,6 +2040,73 @@ function AlertSounds({ values, onAction }: { values: Readonly<Record<string, boo
                     </ul>
                 </div>
             ))}
+        </section>
+    );
+}
+
+
+/**
+ * RATE-LIMIT ALERTS (Tynn #748; the owner, 2026-11-15): the person adds alerts at the thresholds they choose — percent of a
+ * window used, which window (5-hour, weekly, any) and a sound of its own, picked with the sound popover (each with its own
+ * play button). Ordered by threshold. None by default: nothing new is heard until one is added. genie-host fires them.
+ */
+function RateLimitAlerts({ raw, onAction }: { raw: boolean | string | undefined; onAction: SurfaceProps['onAction'] }) {
+    const alerts = parseLimitAlerts(raw);
+    const save = (next: readonly RateLimitAlert[]): void => onAction({ kind: 'settings.set', key: LIMIT_ALERTS_SETTING, value: serializeLimitAlerts(next) });
+    // A new alert starts at 90% on any window with the Default chime; the person edits it in place.
+    const add = (): void => save(upsertLimitAlert(alerts, { id: newLimitAlertId(Date.now(), Math.random()), thresholdPct: 90, window: 'any', sound: 'synth' }));
+    const canPreview = (v: string): boolean => v !== 'off' && v !== 'custom';
+    return (
+        <section data-rate-limit-alerts className="border-b border-[var(--border-1)] px-5 py-3">
+            <div className="text-sm font-medium">Rate-limit alerts</div>
+            <div className="mb-2 text-xs text-[var(--fg-3)]">Hear it when an account passes a share of its rate limit. Each alert has its own sound; it plays once per window and again after the window resets. Do not disturb holds the sound.</div>
+            {alerts.length === 0 ? <p className="py-2 text-sm text-[var(--fg-3)]">No rate-limit alerts yet. Add one to be told at the share you choose.</p> : null}
+            <ul className="divide-y divide-[var(--border-1)]">
+                {alerts.map((alert) => (
+                    <li key={alert.id} data-rate-limit-alert={alert.id} className="flex items-center gap-3 py-2">
+                        <span className="flex items-center gap-1.5 text-sm">
+                            At
+                            <Input
+                                data-limit-threshold={alert.id}
+                                aria-label="Threshold, percent of the window used"
+                                type="number"
+                                min={1}
+                                max={100}
+                                defaultValue={String(alert.thresholdPct)}
+                                className="w-20"
+                                onBlur={(e) => {
+                                    const pct = Number(e.target.value);
+                                    if (Number.isInteger(pct) && pct >= 1 && pct <= 100) { if (pct !== alert.thresholdPct) save(upsertLimitAlert(alerts, { ...alert, thresholdPct: pct })); } else e.target.value = String(alert.thresholdPct);
+                                }}
+                            />
+                            % used
+                        </span>
+                        <span data-limit-window={alert.id}>
+                            <Select
+                                list={LIMIT_WINDOW_CHOICES.map((c) => ({ value: c.value, label: c.label }))}
+                                value={alert.window}
+                                onValueChange={(v) => save(upsertLimitAlert(alerts, { ...alert, window: v as LimitWindowChoice }))}
+                                aria-label="Window this alert watches"
+                            />
+                        </span>
+                        <span className="flex-1" />
+                        <SoundPicker
+                            value={alert.sound}
+                            label={`Sound for the ${alert.thresholdPct}% rate-limit alert`}
+                            onSelect={(v) => { if (v !== 'custom') save(upsertLimitAlert(alerts, { ...alert, sound: v })); }}
+                            onPreview={(v) => playPreviewSound(limitAlertSound(v, {}))}
+                            canPreview={canPreview}
+                        />
+                        <Button data-action="limit-alert-remove" type="button" size="sm" variant="ghost" className="justify-start" aria-label={`Remove the ${alert.thresholdPct}% rate-limit alert`} onClick={() => save(removeLimitAlert(alerts, alert.id))}>
+                            <Icon name="trash-2" size="sm" />
+                        </Button>
+                    </li>
+                ))}
+            </ul>
+            <Button data-action="limit-alert-add" type="button" size="sm" className="mt-2 justify-start" onClick={add}>
+                <Icon name="plus" size="sm" />
+                Add an alert
+            </Button>
         </section>
     );
 }
