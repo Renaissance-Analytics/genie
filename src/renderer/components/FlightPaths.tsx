@@ -65,16 +65,22 @@ export function FlightPaths({ arcs, size, pointer, reducedMotion }: { arcs: read
                             </g>
                         ) : null}
                         <circle cx={arc.end.x} cy={arc.end.y} r={3} style={{ fill: color }} />
-                        <text
-                            data-arc-label=""
-                            x={arc.label.x}
-                            y={arc.label.y}
-                            fontSize={10.5}
-                            fontFamily="var(--font-mono, ui-monospace, monospace)"
-                            style={{ fill: color, paintOrder: 'stroke', stroke: 'var(--bg-1)', strokeWidth: 3 }}
-                        >
-                            {arc.label.text}
-                        </text>
+                        {arc.label ? (
+                            <text
+                                data-arc-label=""
+                                data-x={arc.label.x}
+                                data-y={arc.label.y}
+                                data-w={arc.label.w}
+                                data-h={arc.label.h}
+                                x={arc.label.x}
+                                y={arc.label.y}
+                                fontSize={10.5}
+                                fontFamily="var(--font-mono, ui-monospace, monospace)"
+                                style={{ fill: color, paintOrder: 'stroke', stroke: 'var(--bg-1)', strokeWidth: 3 }}
+                            >
+                                {arc.label.text}
+                            </text>
+                        ) : null}
                     </g>
                 );
             })}

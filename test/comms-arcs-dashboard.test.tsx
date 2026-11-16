@@ -35,6 +35,13 @@ function layOut(): void {
         row.getBoundingClientRect = rect(100, 100 + i * ROW_H, 1200, ROW_H);
         const name = row.querySelector<HTMLElement>('[data-agent-name]')!;
         name.getBoundingClientRect = rect(160, 100 + i * ROW_H + 8, 100, 16);
+        // Every other text leaf in the row: laid out in columns from x 300 to 520, so the right of the board is free.
+        let col = 0;
+        row.querySelectorAll<HTMLElement>('*').forEach((el) => {
+            if (el === name || el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
+            el.getBoundingClientRect = rect(300 + (col % 3) * 74, 100 + i * ROW_H + 8, 70, 16);
+            col += 1;
+        });
     });
 }
 const cell = (id: string) => host.querySelector<HTMLElement>(`[data-agent="${id}"] [data-comms-cell]`)!;
@@ -131,6 +138,27 @@ describe('hovering a Comms cell', () => {
         const text = [...host.querySelectorAll('[data-arc-label]')].map((t) => t.textContent);
         expect(text).toContain('kai › wren 8s');
         expect(text).toContain('moth › kai 10m');
+    });
+
+    it('no label covers row text or another label, and every drawn label is on the board', () => {
+        over(cell('kai'), 700, 120);
+        // Row text in overlay coordinates (the surface is at 100, 50): the name boxes and the stubbed leaves.
+        const text: Array<{ x: number; y: number; w: number; h: number }> = [];
+        host.querySelectorAll<HTMLElement>('[data-agent] *').forEach((el) => {
+            if (el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
+            const r = el.getBoundingClientRect();
+            if (r.width > 0) text.push({ x: r.left - 100, y: r.top - 50, w: r.width, h: r.height });
+        });
+        expect(text.length).toBeGreaterThan(8);
+        const labels = [...host.querySelectorAll<SVGTextElement>('[data-arc-label]')].map((t) => ({ x: Number(t.dataset.x), y: Number(t.dataset.y) - 10, w: Number(t.dataset.w), h: Number(t.dataset.h) }));
+        expect(labels.length).toBeGreaterThan(0);
+        const hit = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+        for (const [i, l] of labels.entries()) {
+            expect(l.w).toBeGreaterThan(0);
+            expect(l.x).toBeGreaterThanOrEqual(0);
+            for (const t of text) expect(hit(l, t)).toBe(false);
+            for (const other of labels.slice(i + 1)) expect(hit(l, other)).toBe(false);
+        }
     });
 
     it('under prefers-reduced-motion static arrows replace the moving dots', () => {

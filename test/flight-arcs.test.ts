@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { commsOf } from '../src/core/comms.js';
-import { ARC_CAP, ARC_WINDOW_SECONDS, arcGeometry, arcsFor, bezierAt, type ArcInput } from '../src/core/flight-arcs.js';
+import { ARC_CAP, ARC_WINDOW_SECONDS, arcGeometry, arcsFor, bezierAt, labelRect, rectsOverlap, type ArcInput, type Rect } from '../src/core/flight-arcs.js';
 
 /**
  * THE COMMS FLIGHT PATHS (Tynn #750, option D) — the geometry and the flags, decided without a DOM. An arch starts at the
@@ -94,15 +94,47 @@ describe('arcsFor', () => {
     it('labels read sender › receiver with the age, and sit between the pointer and the partner', () => {
         const out = arcsFor(input([link('a', { lastFrom: 'self', ageSeconds: 120 })]))[0]!;
         const inn = arcsFor(input([link('a', { lastFrom: 'peer', ageSeconds: 7200 })]))[0]!;
-        expect(out.label.text).toBe('kai › a 2m');
-        expect(inn.label.text).toBe('a › kai 2h');
-        expect(out.label.x).toBeGreaterThan(300);
-        expect(out.label.x).toBeLessThan(700);
+        expect(out.label!.text).toBe('kai › a 2m');
+        expect(inn.label!.text).toBe('a › kai 2h');
+        expect(out.label!.x + out.label!.w).toBeGreaterThan(300);
+        expect(out.label!.x).toBeLessThan(700);
     });
 
-    it('labels of different arches are staggered along their paths', () => {
-        const arcs = arcsFor(input([link('a'), link('b'), link('c')]));
-        expect(new Set(arcs.map((a) => a.label.t)).size).toBe(3);
+    it('no two labels overlap, however many arches share the pointer', () => {
+        const arcs = arcsFor(input(['a', 'b', 'c', 'wren', 'd', 'e', 'f', 'g', 'moth'].map((p, i) => link(p, { ageSeconds: 30 + i }))));
+        const boxes = arcs.filter((a) => a.label).map((a) => labelRect(a.label!));
+        expect(boxes.length).toBeGreaterThan(1);
+        for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) expect(rectsOverlap(boxes[i]!, boxes[j]!)).toBe(false);
+    });
+
+    it('a label never covers the row text, and moves to free space instead (positive control: with no text it takes its first spot)', () => {
+        const free = arcsFor(input([link('a')]))[0]!.label!;
+        // Text laid right over that first spot, and the strip beside it.
+        const text: Rect[] = [{ x: free.x - 4, y: free.y - 14, w: free.w + 8, h: 22 }];
+        const moved = arcsFor({ ...input([link('a')]), obstacles: text })[0]!.label!;
+        expect(moved).not.toBeNull();
+        expect(rectsOverlap(labelRect(moved), text[0]!)).toBe(false);
+        expect(`${moved.x},${moved.y}`).not.toBe(`${free.x},${free.y}`);
+    });
+
+    it('a label never covers the pointer', () => {
+        for (const label of arcsFor(input([link('a'), link('b'), link('c')])).map((a) => a.label!)) {
+            expect(rectsOverlap(labelRect(label), { x: pointer.x - 14, y: pointer.y - 14, w: 28, h: 28 })).toBe(false);
+        }
+    });
+
+    it('with no room the label is dropped, and the arch is still drawn', () => {
+        const everywhere: Rect[] = [{ x: 0, y: -400, w: 2000, h: 1200 }];
+        const arcs = arcsFor({ ...input([link('a'), link('b')]), obstacles: everywhere });
+        expect(arcs).toHaveLength(2);
+        for (const arc of arcs) {
+            expect(arc.label).toBeNull();
+            expect(arc.d.length).toBeGreaterThan(10);
+        }
+    });
+
+    it('zero-sized text boxes (a layout that has not happened) are ignored, not treated as walls', () => {
+        expect(arcsFor({ ...input([link('a')]), obstacles: [{ x: 300, y: 40, w: 0, h: 0 }] })[0]!.label).not.toBeNull();
     });
 });
 

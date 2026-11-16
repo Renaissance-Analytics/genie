@@ -282,6 +282,20 @@ try {
     check('amber for the unanswered, dots on every arc', hover.arcs.some((a) => a.tone === 'waiting') && hover.arcs.every((a) => a.dots > 0), hover.arcs.map((a) => ({ peer: a.peer, tone: a.tone, direction: a.direction, pulse: a.pulse, label: a.label })));
     check('the other rows dim and the partners are tinted', hover.dimmed > 0 && hover.peers === 6, { dimmed: hover.dimmed, peers: hover.peers });
     holdAt(cell.x, cell.y);
+    // No label covers row text or another label, measured in the real layout (getBoundingClientRect of each label and each text leaf).
+    const overlaps = JSON.parse(await ev(`(() => {
+      const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      const labels = [...document.querySelectorAll('[data-arc-label]')].map((t) => ({ text: t.textContent, r: t.getBoundingClientRect() }));
+      const leaves = [...document.querySelectorAll('[data-surface="dashboard"] [data-agent] *')].filter((e) => e.childElementCount === 0 && (e.textContent ?? '').trim() !== '').map((e) => ({ text: e.textContent.trim().slice(0, 24), r: e.getBoundingClientRect() })).filter((l) => l.r.width > 0);
+      const onText = [], onLabel = [];
+      labels.forEach((l, i) => {
+        leaves.forEach((t) => { if (hit(l.r, t.r)) onText.push(l.text + ' over ' + t.text); });
+        labels.slice(i + 1).forEach((o) => { if (hit(l.r, o.r)) onLabel.push(l.text + ' over ' + o.text); });
+      });
+      return JSON.stringify({ labels: labels.length, onText, onLabel });
+    })()`));
+    proof.labels = overlaps;
+    check('arcs carry labels, and none covers row text or another label', overlaps.labels > 0 && overlaps.onText.length === 0 && overlaps.onLabel.length === 0, overlaps);
     await shot('02-hover');
     release();
 

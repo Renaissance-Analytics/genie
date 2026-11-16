@@ -1,6 +1,6 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, revealOf, type Reveal } from '../../core/reveal.js';
-import { ARC_WINDOW_SECONDS, arcsFor, type Point } from '../../core/flight-arcs.js';
+import { ARC_WINDOW_SECONDS, arcsFor, type Point, type Rect } from '../../core/flight-arcs.js';
 import { FlightPaths } from './FlightPaths.js';
 import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
@@ -534,6 +534,8 @@ interface ArcState {
     readonly focus: string;
     readonly pointer: Point;
     readonly targets: Readonly<Record<string, Point>>;
+    /** Every row's text, measured once on entering: the labels keep off it. */
+    readonly obstacles: readonly Rect[];
     readonly size: { width: number; height: number };
     readonly reducedMotion: boolean;
 }
@@ -559,11 +561,19 @@ function useFlightPaths(shown: readonly AgentRow[]) {
             const r = name.getBoundingClientRect();
             targets[link.peer] = { x: r.right - box.left + 8, y: r.top + r.height / 2 - box.top };
         }
+        // Every text leaf of every row, read in one go with the targets (no writes in between): what a label must not cover.
+        const obstacles: Rect[] = [];
+        host.querySelectorAll<HTMLElement>('[data-agent] *').forEach((el) => {
+            if (el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) obstacles.push({ x: r.left - box.left - 2, y: r.top - box.top - 1, w: r.width + 4, h: r.height + 2 });
+        });
         live.current = true;
         setState({
             focus: id,
             pointer: { x: event.clientX - box.left, y: event.clientY - box.top },
             targets,
+            obstacles,
             size: { width: box.width, height: host.scrollHeight || box.height },
             reducedMotion: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
         });
@@ -592,7 +602,7 @@ function useFlightPaths(shown: readonly AgentRow[]) {
     const row = state ? shown.find((r) => r.id === state.focus) : undefined;
     const paths = state && row
         ? {
-            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), pointer: state.pointer }),
+            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, obstacles: state.obstacles, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), pointer: state.pointer }),
             size: state.size,
             pointer: state.pointer,
             reducedMotion: state.reducedMotion,
