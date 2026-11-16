@@ -51,7 +51,7 @@ const child = (base: string, key: string): string => (base === '' ? key : `${bas
 
 function scanString(text: string, path: string, out: GuardViolation[]): void {
     if (text.startsWith('//')) return;
-    if (ABSOLUTE_PATH.test(text)) out.push({ path, rule: 'absolute-path', reason: `${path} holds an absolute path; it names this machine and would not exist in a clone` });
+    if (ABSOLUTE_PATH.test(text)) out.push({ path, rule: 'absolute-path', reason: `${path} holds an absolute path; it names this machine and would not exist in a clone. Move what it runs into the workspace and use a relative path inside the workspace` });
     if (LIVE_PORT.test(text)) out.push({ path, rule: 'port', reason: `${path} holds a loopback address with a port; Genie hands out ports on each machine, so a saved one points at nothing` });
     if (SECRET_VALUE.some((re) => re.test(text))) out.push({ path, rule: 'secret-value', reason: `${path} looks like a secret (a key, token or private key)` });
 }

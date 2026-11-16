@@ -26,10 +26,12 @@ export interface LiveModel {
     readonly manifestText: string;
     /** Element files: `.flows/<n>.json`, `.processes/<n>.json`, `.genie/tabs.json`. */
     readonly files: readonly { readonly path: string; readonly value: unknown }[];
+    /** What the loader did on the way (a path made relative, a repo a clone would not have): shown to the person, never silent. */
+    readonly notes?: readonly string[];
 }
 
 export type SavePlan =
-    | { ok: true; files: SaveFile[]; backups: SaveFile[]; stampedTo: string | null }
+    | { ok: true; files: SaveFile[]; backups: SaveFile[]; stampedTo: string | null; notes?: string[] }
     | { ok: false; reason: string; violations: GuardViolation[] };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -82,7 +84,7 @@ export function planSave(model: LiveModel, options: { revision?: string } = {}):
     const files: SaveFile[] = [{ path: 'project.json', text: formatLike(model.manifestText, manifest) }];
     for (const f of model.files) files.push({ path: f.path, text: `${JSON.stringify(f.value, null, 2)}\n` });
     const backups = stamped && stamp.from === null ? [{ path: `project.json.pre-schema-${revision}.bak`, text: model.manifestText }] : [];
-    return { ok: true, files, backups, stampedTo: stamped ? revision : null };
+    return { ok: true, files, backups, stampedTo: stamped ? revision : null, ...(model.notes && model.notes.length > 0 ? { notes: [...model.notes] } : {}) };
 }
 
 export type FileStatus = 'added' | 'changed' | 'unchanged';

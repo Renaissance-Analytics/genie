@@ -1,4 +1,5 @@
 import { withElements, type ElementSources } from '../core/workspace-elements.js';
+import { withPortableSites } from '../core/workspace-sites.js';
 import { applyMerge, diffFiles, mergeElements, planSave, type LiveModel, type MergeDecision, type SaveChoices, type SavePreview, type SaveResult } from '../core/workspace-save.js';
 
 export type { SavePreview, SaveResult } from '../core/workspace-save.js';
@@ -191,9 +192,12 @@ export function workspaceSaveOps(options: {
     const saverFor = (workspaceId: string) => new WorkspaceSave({
         fs: options.fs,
         git: options.git,
+        // Sites save portably (Tynn #756, PR4): paths relative to the folder they run in, ports as the placeholder.
         liveModel: async (path) => {
-            const model = await liveModelOf(options.fs, path);
-            if (model === null || !options.elements) return model;
+            const loaded = await liveModelOf(options.fs, path);
+            if (loaded === null) return null;
+            const model = withPortableSites(loaded, path);
+            if (!options.elements) return model;
             return withElements(model, await options.elements(workspaceId), workspaceId).model;
         },
         ...(options.mayReadFolder ? { mayReadFolder: options.mayReadFolder } : {}),

@@ -25,6 +25,8 @@ export interface SaveDialogView {
     readonly warning: string | null;
     readonly info: string | null;
     readonly files: readonly { path: string; label: string; status: FileStatus; words: string }[];
+    /** What was rewritten for the repo on the way (a path made relative, a port made the placeholder). */
+    readonly notes: readonly string[];
     readonly incoming: readonly { id: string; label: string }[];
     readonly conflicts: readonly { id: string; label: string; local: string; incoming: string; choice: 'local' | 'incoming' | null }[];
     readonly canSave: boolean;
@@ -76,7 +78,7 @@ export function saveDialogView(input: SaveDialogInput): SaveDialogView {
     const done = saved === null ? null
         : saved.length === 1 ? 'Saved 1 file. It is an ordinary change in git: review and commit it.'
         : `Saved ${saved.length} files. They are ordinary changes in git: review and commit them.`;
-    const empty = { loading: false, refusal: null, warning: null, info: null, files: [], incoming: [], conflicts: [], canSave: false, saveLabel: busy ? 'Saving…' : 'Save', note: null, error, done } satisfies SaveDialogView;
+    const empty = { loading: false, refusal: null, warning: null, info: null, files: [], notes: [], incoming: [], conflicts: [], canSave: false, saveLabel: busy ? 'Saving…' : 'Save', note: null, error, done } satisfies SaveDialogView;
     if (preview === null) return { ...empty, loading: error === null };
 
     const upstream = preview.upstream;
@@ -94,5 +96,5 @@ export function saveDialogView(input: SaveDialogInput): SaveDialogView {
     const open = conflicts.filter((c) => c.choice === null).length;
     const nothing = files.every((f) => f.status === 'unchanged') && incoming.length === 0 && conflicts.length === 0;
     const note = open > 0 ? `Choose yours or theirs for ${open} ${plural(open, 'conflict', 'conflicts')} before saving.` : nothing ? 'Nothing to save: the repo already matches.' : null;
-    return { ...empty, refusal: null, warning, info, files, incoming, conflicts, canSave: !busy && saved === null && open === 0 && !nothing, note };
+    return { ...empty, refusal: null, warning, info, files, notes: preview.plan.notes ?? [], incoming, conflicts, canSave: !busy && saved === null && open === 0 && !nothing, note };
 }
