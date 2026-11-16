@@ -6,6 +6,7 @@ import type { TynnTabHost } from '../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../core/tynn-issues.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { deviceExpiryAlert } from '../core/device-expiry.js';
 import { PairPrompt } from './components/PairPrompt.js';
 import type { MailSignal } from '../core/mail-signals.js';
@@ -131,6 +132,8 @@ export interface ShellProps {
     accounts?: AccountsSnapshot | undefined;
     /** One click to switch a provider's account (S9). */
     onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
+    /** Rename or forget a known account (Tynn #484). */
+    onAccountsAct?: ((action: AccountsAction) => Promise<AccountsActResult>) | undefined;
     /** Not now on a switch offer (S8). */
     onDismissSwitchOffer?: ((id: string) => void) | undefined;
     /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
@@ -384,6 +387,7 @@ export function Shell({
     accounts,
     onSwitchAccount,
     onDismissSwitchOffer,
+    onAccountsAct,
     now,
     mailSignals,
     workspaceFaults,
@@ -900,7 +904,7 @@ export function Shell({
                     {canServe && parsed.surface === 'knowledge' ? <ErrorBoundary surface="Knowledge"><KnowledgeSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'flows' ? <ErrorBoundary surface="Flows"><FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'hosting' ? <ErrorBoundary surface="Hosting" resetKeys={[parsed.tab]}><HostingSurface tab={parsed.tab} commandRun={parsed.commandRun} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /></ErrorBoundary> : null}
-                    {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} marketplace={marketplace} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} marketplace={marketplace} accountsSettings={{ snapshot: accounts, onSwitch: onSwitchAccount, onAct: onAccountsAct }} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'browser' ? <ErrorBoundary surface="Browser"><BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /></ErrorBoundary> : null}
 
 

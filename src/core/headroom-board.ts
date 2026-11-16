@@ -38,6 +38,11 @@ export class HeadroomBoard {
         return true;
     }
 
+    /** A forgotten account's readings leave the board (Tynn #484). */
+    forget(accountId: string): void {
+        for (const [key, s] of this.#shown) if (s.source.accountId === accountId) this.#shown.delete(key);
+    }
+
     /** Every account's last shown reading, each window read at `nowMs`: one past its reset time is Refreshed. */
     accounts(nowMs: number): AccountHeadroom[] {
         return [...this.#shown.values()].map((s) => ({ ...s.source, runId: s.runId, room: s.room, windows: s.room.windows.map((w) => readLimitWindow(w, nowMs)) }));
@@ -78,6 +83,11 @@ export class HeadroomFeed {
 
     view(): Record<string, Headroom> {
         return this.#board.view();
+    }
+
+    /** A forgotten account's readings go (Tynn #484). */
+    forget(accountId: string): void {
+        this.#board.forget(accountId);
     }
 
     /** Every account's reading, each window read now (a window past its reset is Refreshed). */

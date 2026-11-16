@@ -48,6 +48,7 @@ import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
 import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
 import { accountsView } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -1059,6 +1060,17 @@ async function main(): Promise<void> {
     // Switch offers (Tynn #481): made from the rate-limit board, composed with it below.
     let switchOffersNow: SwitchOfferService | null = null;
     let headroomFeedNow: HeadroomFeed | null = null;
+    // Settings → Providers → Accounts (Tynn #484): rename, or forget (the signed-in account refused, saying so); a forgotten
+    // account's readings leave the board. Only the book changes; no credential is touched.
+    const accountsAct = async (action: AccountsAction): Promise<AccountsActResult> => {
+        try {
+            if (action.kind === 'rename') await accounts.rename(action.id, action.label);
+            else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); }
+            return { ok: true };
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
+    };
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
@@ -1089,6 +1101,7 @@ async function main(): Promise<void> {
         switchAccount: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         switchOffers: { offers: () => switchOffersNow?.offers() ?? [], dismiss: (id) => switchOffersNow?.dismiss(id) ?? false },
         // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
+        accountsAct: (action) => accountsAct(action),
         accounts: () => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [] }),
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,

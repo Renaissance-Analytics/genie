@@ -1,4 +1,5 @@
 import type { AccountRecord } from '../core/accounts.js';
+import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
 import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
@@ -140,6 +141,8 @@ export interface EngineServerOptions {
     readonly switchOffers?: { offers(): readonly import('../core/switch-offer.js').SwitchOffer[]; dismiss(id: string): boolean };
     /** Every known account with its readings, and the standing offers (Tynn #483): this machine's window only. No credential. */
     readonly accounts?: () => import('../core/accounts-view.js').AccountsSnapshot;
+    /** Rename or forget a known account (Tynn #484): this machine's window only. */
+    readonly accountsAct?: (action: import('../core/account-settings.js').AccountsAction) => Promise<import('../core/account-settings.js').AccountsActResult>;
     /** After a login: read the provider's account identity again (Tynn #477). */
     readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
@@ -662,6 +665,13 @@ export class SessionEngineServer {
             if (!conn.local || !conn.window) throw new Error('Switching accounts needs this machine’s own window.');
             if (!this.#options.switchAccount) throw new Error('Switching accounts is not ready in the host yet.');
             return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '');
+        }
+        if (method === 'engine.accountsAct') {
+            if (!conn.local || !conn.window) throw new Error('Accounts need this machine’s own window.');
+            if (!this.#options.accountsAct) throw new Error('The accounts are not ready in the host yet.');
+            const action = accountsActionOf(args[0]);
+            if (!action) throw new Error('That is not an account action.');
+            return this.#options.accountsAct(action);
         }
         if (method === 'engine.accounts') {
             if (!conn.local || !conn.window) throw new Error('Accounts need this machine’s own window.');
