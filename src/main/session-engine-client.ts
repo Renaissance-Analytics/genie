@@ -47,6 +47,7 @@ import { forwardedCallContext, type CallContext, type ClientTransport } from '..
 import type { LiveSession } from '../core/roster.js';
 import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import type { SwitchOffer } from '../core/switch-offer.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
@@ -1322,6 +1323,17 @@ export class SessionEngineClient {
         const reply = await this.call('engine.switchAccount', [provider]);
         if (!reply.ok) return { ok: false, reason: reply.reason };
         return reply.value as { ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string };
+    }
+
+    /** The switch offers standing in the host (Tynn #481); none while the host cannot answer. */
+    async switchOffers(): Promise<SwitchOffer[]> {
+        const offers = await this.#value<unknown>('engine.switchOffers', [], []);
+        return Array.isArray(offers) ? (offers as SwitchOffer[]) : [];
+    }
+
+    /** Not now on an offer: it goes, and the host does not make it again in that window. */
+    async dismissSwitchOffer(id: string): Promise<boolean> {
+        return (await this.#value<unknown>('engine.dismissSwitchOffer', [id], false)) === true;
     }
 
     /** The persisted legacy account home, or unknown while the host/book cannot answer. */

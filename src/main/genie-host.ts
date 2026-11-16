@@ -31,7 +31,7 @@ import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { formatBytes, type StorageView } from '../core/workspace-storage.js';
 import { threadAttachmentFiles } from '../core/thread-store.js';
 import { AccountsHost } from './accounts-host.js';
-import { isAcpProvider } from '../core/engine.js';
+import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { readTynnPage } from './tynn-page-client.js';
@@ -46,6 +46,7 @@ import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
+import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -1054,6 +1055,8 @@ async function main(): Promise<void> {
     // Switching accounts = the provider's own login in its one home; no agent is touched (Tynn #753). Composed once the sessions exist.
     let switchAccount: ((provider: string) => AccountSwitchStart) | null = null;
     let switchFlow: AccountSwitchFlow | null = null;
+    // Switch offers (Tynn #481): made from the rate-limit board, composed with it below.
+    let switchOffersNow: SwitchOfferService | null = null;
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
@@ -1082,6 +1085,7 @@ async function main(): Promise<void> {
         login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
         cancelLogin: (accountId) => { logins?.cancel(accountId); },
         switchAccount: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
+        switchOffers: { offers: () => switchOffersNow?.offers() ?? [], dismiss: (id) => switchOffersNow?.dismiss(id) ?? false },
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
@@ -1241,7 +1245,16 @@ async function main(): Promise<void> {
         emit: (signal) => { limitNotices.record(signal); engine.callback({ name: 'toolSignal', signal }); },
     });
     // Checked whenever the feed shows a reading (one inside its buffer reaches nothing), so onHeadroom below stays S5's wiring.
-    headroomFeed.subscribe(() => { limitAlerts.check(); });
+    // SWITCH OFFERS (Tynn #481, core/switch-offer.ts): the ACTIVE account's chosen window near its limit makes one offer per
+    // window per reset, suggesting another known account with room. Only offered: a switch is the person's own sign-in.
+    const switchOffers = new SwitchOfferService({
+        readings: () => headroomFeed.accounts(),
+        known: () => accounts.list().map((a) => ({ id: a.id, provider: a.provider, label: a.label })),
+        active: () => Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])),
+        choice: () => settings.snapshot()[SWITCH_OFFER_WINDOWS_SETTING],
+    });
+    switchOffersNow = switchOffers;
+    headroomFeed.subscribe(() => { limitAlerts.check(); switchOffers.check(); });
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
     bootStep('lock identity', stepAt);
