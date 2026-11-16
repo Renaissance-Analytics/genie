@@ -197,6 +197,7 @@ import { readV1Settings } from './v1-settings.js';
 import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
 import { wireHostMailWake } from './host-mail-wake.js';
+import { wireHostPlanKeepalive, type HostPlanKeepalive } from './host-plan-keepalive.js';
 import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
 import { TYNN_ISSUES_FEED } from './tynn-issues-live.js';
 import { TYNN_FEATURES_FEED } from './tynn-features-live.js';
@@ -1214,10 +1215,16 @@ async function main(): Promise<void> {
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
     bootStep('lock identity', stepAt);
+    // THE PLAN KEEPALIVE (Tynn #754): built below, once the host exists; a turn that ends before then has nothing to nudge.
+    let planKeepalive: HostPlanKeepalive | null = null;
     const host = new SessionHost({
         activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         userData: home,
         ...engineHostOptions,
+        // The window still plays the sound; the host decides whether the agent is nudged (it no longer asks a window to).
+        onAction: (agentId, kind) => { engineHostOptions.onAction(agentId, kind); if (kind === 'replied') planKeepalive?.turnEnded(agentId, 'replied'); },
+        onTurnEnd: (agentId, cause) => { planKeepalive?.turnEnded(agentId, cause); },
+        onPersonTurn: (agentId) => { planKeepalive?.personTurn(agentId); },
         serviceEnvFor: (workspaceId) => ({ ...engineHostOptions.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId) }),
         // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
         endToolCalls: (agentId, intent) => toolCalls.end(agentId, intent),
@@ -1773,6 +1780,8 @@ async function main(): Promise<void> {
     };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
+    planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); } });
+    clocks.push(planKeepalive);
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);
     mcp = startHostMcp({

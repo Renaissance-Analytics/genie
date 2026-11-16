@@ -572,6 +572,8 @@ export class SessionHost {
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
+    readonly #onTurnEnd: ((agentId: AgentId, cause: 'interrupted' | 'restarted') => void) | undefined;
+    readonly #onPersonTurn: ((agentId: AgentId) => void) | undefined;
     readonly #onHeadroom: ((provider: string, headroom: Headroom, stamp?: ReadingStamp) => void) | undefined;
     readonly #onMcpServers: ((agentId: AgentId, reports: readonly McpServerReport[]) => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
@@ -695,6 +697,14 @@ export class SessionHost {
          * pushes it to the window, which plays the sound the person chose for it.
          */
         onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
+        /**
+         * A TURN THAT ENDED BUT WAS NOT A REPLY, by a stop that was not the person's (Tynn #754): `interrupted` = it ended and
+         * the same session can take another; `restarted` = Genie ended the run and started a new one on the same conversation
+         * (an interrupt the provider did not confirm). The plan keepalive nudges both; a reply is `onAction`'s `replied`.
+         */
+        onTurnEnd?: (agentId: AgentId, cause: 'interrupted' | 'restarted') => void;
+        /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
+        onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
         onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
         /** Each MCP server's state as an agent's provider reports it (genie#1202): main decides whether one is missing. */
@@ -752,6 +762,8 @@ export class SessionHost {
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
+        this.#onTurnEnd = options.onTurnEnd;
+        this.#onPersonTurn = options.onPersonTurn;
         this.#onHeadroom = options.onHeadroom;
         this.#onMcpServers = options.onMcpServers;
         this.#serviceEnvFor = options.serviceEnvFor;
@@ -1243,6 +1255,10 @@ export class SessionHost {
                         // reply from a turn that was already running never lets another agent's hold go.
                         const login = this.#loginFor(record.provider);
                         if (this.#gate.view(login, this.#clock()).state === 'open') this.#gate.ok(login);
+                    } else if (session.lastTurnEnd === 'stopped' && !session.stoppedByYou && !session.needsNewDriver) {
+                        // Stopped, but not by the person, and this session can go on: the keepalive's to weigh (Tynn #754).
+                        // One that needs a new driver is restarted (`#restartForQueue`), which says so itself.
+                        this.#onTurnEnd?.(record.id, 'interrupted');
                     }
                     entry.sounded.clear();
                 }
@@ -1431,6 +1447,7 @@ export class SessionHost {
     deliver(agentId: AgentId, text: string, by: string | null = 'you'): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
+        if (by === 'you') this.#onPersonTurn?.(agentId);
         entry.session.deliver(text, by);
         this.#emit(agentId);
         return true;
@@ -1448,6 +1465,7 @@ export class SessionHost {
         if (command !== null) return command;
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
+        if (by === 'you') this.#onPersonTurn?.(agentId);
         try {
             entry.session.deliver(text, by, attachments.length === 0 ? null : { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
         } catch (error) {
@@ -1700,6 +1718,11 @@ export class SessionHost {
         return true;
     }
 
+    /** Whether the agent's last turn ended on the PERSON's Stop (`AgentSession.stoppedByYou`); `false` with no session. */
+    stoppedByYou(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.stoppedByYou ?? false;
+    }
+
     /** How the agent's last turn ended (`AgentSession.lastTurnEnd`); `null` when it has no session or no turn ended. */
     lastTurnEnd(agentId: AgentId): AgentSession['lastTurnEnd'] {
         return this.#running.get(agentId)?.session.lastTurnEnd ?? null;
@@ -1736,6 +1759,7 @@ export class SessionHost {
         // The phone's text-only message comes this way: the same check as the composer's (Tynn #440).
         const command = this.#yourCommand(agentId, entry, text, by, false);
         if (command !== null) return command.ok ? { queued: null } : null;
+        if (by === 'you') this.#onPersonTurn?.(agentId);
         const queued = entry.session.deliver(text, by, null, context);
         this.#emit(agentId);
         return { queued };
@@ -1775,6 +1799,8 @@ export class SessionHost {
                 if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
                 const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
                 if (!started.ok) return;
+                // The new session has had no turn of its own: the plan keepalive weighs it (Tynn #754).
+                this.#onTurnEnd?.(id, 'restarted');
                 await this.deliverOwed(id);
             })().catch(() => { /* what waited stays owed: the chat offers Send all now */ });
         }, 0);
