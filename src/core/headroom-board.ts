@@ -1,5 +1,26 @@
 import { readLimitWindow, type Headroom, type ReadingStamp, type WindowReading } from './headroom.js';
 
+/** One account's last reading as saved (Tynn #485). */
+export interface SavedReading { readonly source: HeadroomSource; readonly runId: string; readonly room: Headroom }
+
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+function savedWindow(v: unknown): Headroom['windows'][number] | null {
+    if (!isRec(v) || typeof v['window'] !== 'string' || !finite(v['usedPct']) || !finite(v['leftPct']) || !finite(v['resetsAtMs']) || typeof v['over'] !== 'boolean') return null;
+    return { window: v['window'], usedPct: v['usedPct'], leftPct: v['leftPct'], resetsAtMs: v['resetsAtMs'], over: v['over'] };
+}
+function savedReading(v: unknown): SavedReading | null {
+    if (!isRec(v) || !isRec(v['source']) || !isRec(v['room'])) return null;
+    const s = v['source'], r = v['room'];
+    if (typeof s['provider'] !== 'string' || typeof s['accountId'] !== 'string' || !s['provider'] || !s['accountId']) return null;
+    if (!Array.isArray(r['windows']) || typeof r['window'] !== 'string' || !finite(r['leftPct']) || !finite(r['resetsAtMs']) || typeof r['over'] !== 'boolean') return null;
+    if (r['plan'] !== null && typeof r['plan'] !== 'string') return null;
+    const windows = r['windows'].map(savedWindow);
+    if (windows.some((w) => w === null)) return null;
+    return { source: { provider: s['provider'], accountId: s['accountId'] }, runId: typeof v['runId'] === 'string' ? v['runId'] : '',
+        room: { plan: (r['plan'] as string | null), window: r['window'], leftPct: r['leftPct'], resetsAtMs: r['resetsAtMs'], over: r['over'], windows: windows as Headroom['windows'] } };
+}
+
 /** Whose reading it is: the provider, and the account the agent was launched on. */
 export interface HeadroomSource {
     readonly provider: string;
@@ -41,6 +62,25 @@ export class HeadroomBoard {
     /** A forgotten account's readings leave the board (Tynn #484). */
     forget(accountId: string): void {
         for (const [key, s] of this.#shown) if (s.source.accountId === accountId) this.#shown.delete(key);
+    }
+
+    /** Every account's last reading, as JSON, so a host restart still knows an idle account's room (Tynn #485). */
+    snapshot(): SavedReading[] {
+        return [...this.#shown.values()].map((s) => ({ source: { ...s.source }, runId: s.runId, room: s.room }));
+    }
+
+    /**
+     * The saved readings, back; anything that is not one is dropped. They take no buffer: the next reading of an account is shown
+     * at once. A reading arriving before the restore wins over the saved one.
+     */
+    restore(saved: unknown): void {
+        if (!Array.isArray(saved)) return;
+        for (const raw of saved) {
+            const r = savedReading(raw);
+            if (!r) continue;
+            const key = `${r.source.provider}:${r.source.accountId}`;
+            if (!this.#shown.has(key)) this.#shown.set(key, { room: r.room, at: Number.NEGATIVE_INFINITY, source: r.source, runId: r.runId });
+        }
     }
 
     /** Every account's last shown reading, each window read at `nowMs`: one past its reset time is Refreshed. */
@@ -90,9 +130,15 @@ export class HeadroomFeed {
         this.#board.forget(accountId);
     }
 
-    /** RED stub (Tynn #485). */
-    snapshot(): unknown[] { return []; }
-    restore(_saved: unknown): void {}
+    /** Every account's last reading, to save (Tynn #485). */
+    snapshot(): SavedReading[] {
+        return this.#board.snapshot();
+    }
+
+    /** The saved readings, back after a restart (Tynn #485). Tells no listener: nothing new was read. */
+    restore(saved: unknown): void {
+        this.#board.restore(saved);
+    }
 
     /** Every account's reading, each window read now (a window past its reset is Refreshed). */
     accounts(): AccountHeadroom[] {

@@ -157,9 +157,33 @@ export interface SwitchOfferServiceOptions {
     /** The `switch_offer_windows` setting as stored, read at every check and every list. */
     readonly choice: () => unknown;
     readonly now?: () => number;
-    /** RED stub (Tynn #485): ignored. */
+    /** What was saved (Tynn #485): read once, at start; anything that is not a saved state is nothing. */
     readonly load?: () => unknown;
-    readonly save?: (state: unknown) => void;
+    /** Called whenever what has been offered, or what still stands, changes. */
+    readonly save?: (state: SavedSwitchOffers) => void;
+}
+
+/** What survives a restart (Tynn #485): what has been offered (so a window is not offered twice) and the offers still standing. */
+export interface SavedSwitchOffers { readonly offered: OfferedState; readonly pending: readonly SwitchOffer[] }
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isStr = (v: unknown): v is string => typeof v === 'string' && v !== '';
+
+/** A saved standing offer, or `null`: its suggestions are read again from the board when it is listed. */
+function savedOffer(v: unknown): SwitchOffer | null {
+    if (!isObj(v)) return null;
+    if (!isStr(v['id']) || !isStr(v['provider']) || !isStr(v['accountId']) || typeof v['label'] !== 'string' || !isStr(v['window'])) return null;
+    if (!isNum(v['leftPct']) || typeof v['over'] !== 'boolean' || !isNum(v['resetsAtMs'])) return null;
+    return { id: v['id'], provider: v['provider'], accountId: v['accountId'], label: v['label'], window: v['window'], leftPct: v['leftPct'], over: v['over'], resetsAtMs: v['resetsAtMs'], targets: [] };
+}
+
+export function parseSavedSwitchOffers(raw: unknown): SavedSwitchOffers {
+    if (!isObj(raw)) return { offered: {}, pending: [] };
+    const offered: OfferedState = {};
+    if (isObj(raw['offered'])) for (const [k, at] of Object.entries(raw['offered'])) if (isNum(at)) offered[k] = at;
+    const pending = Array.isArray(raw['pending']) ? raw['pending'].map(savedOffer).filter((o): o is SwitchOffer => o !== null) : [];
+    return { offered, pending };
 }
 
 /**
@@ -170,16 +194,32 @@ export interface SwitchOfferServiceOptions {
  */
 export class SwitchOfferService {
     readonly #o: SwitchOfferServiceOptions;
-    readonly #watcher = new SwitchOfferWatcher();
+    readonly #watcher: SwitchOfferWatcher;
     #pending: SwitchOffer[] = [];
+    #saved = '';
 
     constructor(options: SwitchOfferServiceOptions) {
         this.#o = options;
+        const saved = parseSavedSwitchOffers(((): unknown => { try { return options.load?.(); } catch { return undefined; } })());
+        this.#watcher = new SwitchOfferWatcher(saved.offered);
+        this.#pending = [...saved.pending];
+        this.#saved = JSON.stringify(this.#state());
+    }
+
+    #state(): SavedSwitchOffers { return { offered: this.#watcher.snapshot(), pending: this.#pending.map((p) => ({ ...p, targets: [] })) }; }
+
+    /** Saved only when something changed: a reading that changes nothing writes nothing. */
+    #persist(): void {
+        const now = JSON.stringify(this.#state());
+        if (now === this.#saved) return;
+        this.#saved = now;
+        try { this.#o.save?.(this.#state()); } catch { /* the host logs its own write failures */ }
     }
 
     check(): void {
         const made = this.#watcher.check({ choice: parseSwitchOfferWindows(this.#o.choice()), active: this.#o.active(), readings: this.#o.readings(), known: this.#o.known() });
         if (made.length > 0) this.#pending = [...this.#pending.filter((p) => !made.some((m) => m.id === p.id)), ...made];
+        this.#persist();
     }
 
     offers(): SwitchOffer[] {
@@ -187,6 +227,7 @@ export class SwitchOfferService {
         const choice = parseSwitchOfferWindows(this.#o.choice());
         const active = this.#o.active();
         this.#pending = this.#pending.filter((p) => p.resetsAtMs > now);
+        this.#persist();
         const readings = this.#o.readings();
         const known = this.#o.known();
         return this.#pending
@@ -199,6 +240,7 @@ export class SwitchOfferService {
         const next = this.#pending.filter((p) => p.id !== id);
         if (next.length === this.#pending.length) return false;
         this.#pending = next;
+        this.#persist();
         return true;
     }
 }
