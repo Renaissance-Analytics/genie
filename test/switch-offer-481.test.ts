@@ -221,7 +221,7 @@ describe('S8: a window reads and dismisses the host\'s offers', () => {
         expect(await client.dismissSwitchOffer('o1')).toBe(true);
         expect(dismissed).toEqual(['o1']);
     });
-    it('CONTROL: another connection is refused', async () => {
+    it('another connection is refused', async () => {
         const client = await connection({ switchOffers: { offers: () => { throw new Error('must not be read'); }, dismiss: () => true } }, false);
         expect(await client.call('engine.switchOffers', [])).toMatchObject({ ok: false });
     });
