@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accountSwitchToast, accountSwitchWords, switchOutcome, type AccountSwitchOutcome } from '../src/core/account-switch.js';
+import { accountSwitchOutcomeOf, accountSwitchSignal, accountSwitchToast, accountSwitchWords, switchOutcome, type AccountSwitchOutcome } from '../src/core/account-switch.js';
 import { AccountSwitchFlow, type AccountSwitchFlowPorts } from '../src/main/account-switch-host.js';
 import { LoginHost } from '../src/main/login-host.js';
 
@@ -18,6 +18,19 @@ const WORK = { id: `account_${'a'.repeat(32)}`, label: 'Work Max' };
 const HOME = { id: `account_${'b'.repeat(32)}`, label: 'ada@example.invalid' };
 
 describe('S9: what a finished switch says', () => {
+    // Measured in GREEN 1116-161825-6a677f (tsc TS2783): `{ kind: 'account-switch', ...outcome }` let the outcome's own `kind`
+    // overwrite the signal's, so main's `signal.kind === 'account-switch'` never matched and no window heard a switch.
+    it('the signal to the windows keeps its own kind and carries the outcome whole, for every outcome', () => {
+        for (const o of [
+            switchOutcome({ provider: 'claude', before: WORK, after: HOME, signedIn: true }),
+            switchOutcome({ provider: 'claude', before: WORK, after: WORK, signedIn: true }),
+            switchOutcome({ provider: 'codex', before: WORK, after: WORK, signedIn: false }),
+        ]) {
+            const signal = accountSwitchSignal(o);
+            expect(signal.kind).toBe('account-switch');
+            expect(accountSwitchOutcomeOf(JSON.parse(JSON.stringify(signal)).outcome)).toEqual(o);
+        }
+    });
     it('another account read afterwards = switched: it names the account now active, and the agents keep going', () => {
         const o = switchOutcome({ provider: 'claude', before: WORK, after: HOME, signedIn: true });
         expect(o).toEqual({ kind: 'switched', provider: 'claude', accountId: HOME.id, label: HOME.label, fromAccountId: WORK.id, fromLabel: WORK.label });
@@ -180,12 +193,12 @@ describe('S9: one click from a window, and the outcome back to it', () => {
         const host = source('src/main/genie-host.ts');
         expect(host).toMatch(/new AccountSwitchFlow\(/);
         expect(host).toMatch(/onSwitchEnded: \(provider, signedIn\) => \{ void switchFlow\?\.settle\(provider, signedIn\)/);
-        expect(host).toMatch(/kind: 'account-switch'/);
+        expect(host).toMatch(/signal: accountSwitchSignal\(outcome\)/);
     });
     it('main opens the switch window from the bridge and hands the outcome to every window', () => {
         const main = source('src/main/main.ts');
         expect(main).toMatch(/ipcMain\.handle\('genie:account-switch'/);
-        expect(main).toMatch(/signal\.kind === 'account-switch'/);
+        expect(main).toMatch(/signal\.kind === 'account-switch'\) broadcast\('genie:action', \{ agentId: null, kind: 'account-switch', outcome: \(raw as \{ outcome\?: unknown \}\)\.outcome \}\)/);
         expect(source('src/main/preload.ts')).toMatch(/switchAccount: \(provider, choose\) => ipcRenderer\.invoke\('genie:account-switch', provider, choose\)/);
     });
     it('the window shows the outcome with accountSwitchToast, Retry calling the bridge\'s switch', () => {

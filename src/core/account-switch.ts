@@ -51,3 +51,11 @@ export function accountSwitchOutcomeOf(value: unknown): AccountSwitchOutcome | n
     }
     return null;
 }
+
+/**
+ * The host's signal to its windows: its own kind, and the outcome WHOLE under `outcome`. Spreading the outcome into the signal
+ * let the outcome's `kind` overwrite the signal's (measured: tsc TS2783), and main never recognised a switch.
+ */
+export function accountSwitchSignal(o: AccountSwitchOutcome): { readonly kind: 'account-switch'; readonly outcome: AccountSwitchOutcome } {
+    return { kind: 'account-switch', outcome: o };
+}

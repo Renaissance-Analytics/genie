@@ -95,7 +95,7 @@ describe('S11: a window renames and forgets through the host', () => {
         expect(await client.accountsAct({ kind: 'forget', id: 'account_a' })).toEqual({ ok: false, reason: 'Work Max is signed in.' });
         expect(seen).toEqual([{ kind: 'rename', id: 'account_a', label: 'Work Max' }, { kind: 'forget', id: 'account_a' }]);
     });
-    it('CONTROL: another connection is refused', async () => {
+    it('another connection is refused', async () => {
         const client = await connection(async () => { throw new Error('must not run'); }, false);
         expect(await client.call('engine.accountsAct', [{ kind: 'forget', id: 'x' }])).toMatchObject({ ok: false });
     });

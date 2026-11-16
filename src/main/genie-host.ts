@@ -154,6 +154,7 @@ import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
 import { AccountSwitchFlow, type AccountSwitchStart } from './account-switch-host.js';
+import { accountSwitchSignal } from '../core/account-switch.js';
 import { afterSignedIn, LoginHost, statusCommandFor } from './login-host.js';
 import { accountIdentityFrom, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { tellDesignLoginRan } from '../core/design-login.js';
@@ -1436,7 +1437,7 @@ async function main(): Promise<void> {
         login: switchLogin,
         active: (provider) => { const a = isAcpProvider(provider) ? accounts.activeFor(provider) : null; return a ? { id: a.id, label: a.label } : { id: '', label: provider }; },
         readIdentity: (provider) => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
-        emit: (outcome) => { engine.callback({ name: 'toolSignal', signal: { kind: 'account-switch', ...outcome } }); },
+        emit: (outcome) => { engine.callback({ name: 'toolSignal', signal: accountSwitchSignal(outcome) }); },
     });
     const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
