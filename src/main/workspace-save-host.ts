@@ -1,3 +1,4 @@
+import { withElements, type ElementSources } from '../core/workspace-elements.js';
 import { applyMerge, diffFiles, mergeElements, planSave, type LiveModel, type MergeDecision, type SaveChoices, type SavePreview, type SaveResult } from '../core/workspace-save.js';
 
 export type { SavePreview, SaveResult } from '../core/workspace-save.js';
@@ -177,11 +178,24 @@ export const WORKSPACE_SAVE_UNAVAILABLE: WorkspaceSaveOps = {
     save: async () => ({ ok: false, reason: 'this host cannot save a workspace to its repo', written: [] }),
 };
 
-export function workspaceSaveOps(options: { fs: SaveFs; git: SaveGit; pathOf: (workspaceId: string) => string | null; mayReadFolder?: (path: string) => boolean; revision?: string }): WorkspaceSaveOps {
-    const saver = new WorkspaceSave({
+export function workspaceSaveOps(options: {
+    fs: SaveFs;
+    git: SaveGit;
+    pathOf: (workspaceId: string) => string | null;
+    mayReadFolder?: (path: string) => boolean;
+    revision?: string;
+    /** What the workspace holds that a save declares (its services, settings and agents' IssueWatch). Absent: project.json as it is. */
+    elements?: (workspaceId: string) => ElementSources | Promise<ElementSources>;
+}): WorkspaceSaveOps {
+    /** The saver for one workspace: its live model is project.json with that workspace's declarations in it. */
+    const saverFor = (workspaceId: string) => new WorkspaceSave({
         fs: options.fs,
         git: options.git,
-        liveModel: (path) => liveModelOf(options.fs, path),
+        liveModel: async (path) => {
+            const model = await liveModelOf(options.fs, path);
+            if (model === null || !options.elements) return model;
+            return withElements(model, await options.elements(workspaceId), workspaceId).model;
+        },
         ...(options.mayReadFolder ? { mayReadFolder: options.mayReadFolder } : {}),
         ...(options.revision ? { revision: options.revision } : {}),
     });
@@ -189,11 +203,11 @@ export function workspaceSaveOps(options: { fs: SaveFs; git: SaveGit; pathOf: (w
     return {
         async savePreview(id) {
             const path = pathOf(id);
-            return path === null ? refusedPreview(NO_WORKSPACE) : saver.preview(path);
+            return path === null ? refusedPreview(NO_WORKSPACE) : saverFor(id as string).preview(path);
         },
         async save(id, choices) {
             const path = pathOf(id);
-            return path === null ? { ok: false, reason: NO_WORKSPACE, written: [] } : saver.save(path, parseSaveChoices(choices));
+            return path === null ? { ok: false, reason: NO_WORKSPACE, written: [] } : saverFor(id as string).save(path, parseSaveChoices(choices));
         },
     };
 }

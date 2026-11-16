@@ -246,6 +246,7 @@ import { IssueWatchReplica } from './issue-watch-replica.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nodeSaveGit, WORKSPACE_SAVE_UNAVAILABLE, workspaceSaveOps, type WorkspaceSaveOps } from './workspace-save-host.js';
+import { elementSourcesFor } from './workspace-save-sources.js';
 import { nestGoverned } from '../core/rail-view.js';
 import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
 
@@ -1435,7 +1436,9 @@ async function boot(): Promise<void> {
     // without a colour (one just added), and at most every 5 s otherwise, so an agent's edit of the colour is picked up.
     const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
     workspaceColors = colors;
-    workspaceSaver = workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => theRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true });
+    workspaceSaver = workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => theRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true,
+        // What a save declares: this workspace's engines, its own settings and its agents' IssueWatch, read when the dialog asks.
+        elements: (id) => elementSourcesFor({ services: { list: () => services?.engines.list() ?? [] }, settings: { workspaceValues: (w) => services?.settings.workspaceValues(w) ?? {} }, registry: theRegistry }, id) });
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
     let colorPassAt = 0;
     let colorPassQueued = false;

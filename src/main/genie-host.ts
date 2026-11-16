@@ -71,6 +71,7 @@ import { TakeOverHost } from './take-over-host.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nodeSaveGit, workspaceSaveOps } from './workspace-save-host.js';
+import { elementSourcesFor } from './workspace-save-sources.js';
 import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
@@ -1620,7 +1621,9 @@ async function main(): Promise<void> {
             stagingDirectory: () => hostScratch.directory(),
         },
         colors: workspaceColors,
-        workspaceSave: workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => hostRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true }),
+        workspaceSave: workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => hostRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true,
+            // What a save declares: this workspace's engines, its own settings and its agents' IssueWatch, read when the dialog asks.
+            elements: (id) => elementSourcesFor({ services: { list: () => hostingStack?.engines.list() ?? [] }, settings: { workspaceValues: (w) => settings.workspaceValues(w) }, registry: hostRegistry }, id) }),
         tynnTab: { board: hostTynnBoard, readPage: readHostTynnPage },
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),
