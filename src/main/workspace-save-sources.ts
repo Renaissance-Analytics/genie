@@ -17,6 +17,8 @@ export interface SourcePorts {
         listAgents(): readonly { id: string; name: string; workspaceId: string; issueWatch?: IssueWatchSetting }[];
         listWorkspaces(): readonly { id: string; envFile?: string }[];
     };
+    /** The flow store (Tynn #756, PR5). Absent: flows are not saved. */
+    readonly flows?: { list(workspaceId?: string): readonly { name: string; workspaceId: string; document: Record<string, unknown> }[] };
 }
 
 export function elementSourcesFor(ports: SourcePorts, workspaceId: string): ElementSources {
@@ -31,6 +33,8 @@ export function elementSourcesFor(ports: SourcePorts, workspaceId: string): Elem
             mcpOff: ports.registry.workspaceMcpOff(workspaceId),
         },
         agents: agents.map((a) => ({ name: a.name, issueWatch: a.issueWatch ?? null })),
+        // Name, workspace and document only: the store's id, arming, runs and history stay on this machine.
+        ...(ports.flows ? { flows: ports.flows.list(workspaceId).filter((f) => f.workspaceId === workspaceId).map((f) => ({ name: f.name, workspaceId: f.workspaceId, document: f.document })) } : {}),
     };
 }
 

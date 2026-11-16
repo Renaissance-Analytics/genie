@@ -3,6 +3,7 @@ import type { IssueWatchSetting } from './issue-watch.js';
 import type { ServiceInstance } from './services.js';
 import { SETTINGS } from './settings.js';
 import type { LiveModel } from './workspace-save.js';
+import { flowsDeclaration, type FlowSource } from './workspace-flows.js';
 
 /**
  * SERVICES, WORKSPACE SETTINGS AND ISSUEWATCH AS WHAT A REPO KEEPS OF THEM (Tynn #756, PR3), against shared-schemas v0.5.0.
@@ -209,6 +210,8 @@ export interface ElementSources {
     readonly workspace: WorkspaceSettingsInput;
     /** Each of the workspace's agents and how it hears IssueWatch (`null` = never chosen). */
     readonly agents: readonly { readonly name: string; readonly issueWatch: IssueWatchSetting | null }[];
+    /** This workspace's flows (Tynn #756, PR5), saved as `.flows/<name>.json`. Absent: the model's files are left as they are. */
+    readonly flows?: readonly FlowSource[];
 }
 
 /**
@@ -236,5 +239,7 @@ export function withElements(model: LiveModel, sources: ElementSources, workspac
         }
         manifest.agents = agents;
     }
-    return { model: { ...model, manifest }, excluded: [...services.excluded, ...settings.excluded] };
+    const flows = sources.flows === undefined ? null : flowsDeclaration(sources.flows, workspaceId);
+    const files = flows === null ? model.files : [...model.files.filter((f) => !f.path.startsWith('.flows/')), ...flows.files];
+    return { model: { ...model, manifest, files }, excluded: [...services.excluded, ...settings.excluded, ...(flows?.excluded ?? [])] };
 }
