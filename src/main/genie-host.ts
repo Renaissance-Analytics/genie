@@ -1061,12 +1061,13 @@ async function main(): Promise<void> {
     // Switch offers (Tynn #481): made from the rate-limit board, composed with it below.
     let switchOffersNow: SwitchOfferService | null = null;
     let headroomFeedNow: HeadroomFeed | null = null;
+    let saveBoardNow: (() => void) | null = null;
     // Settings → Providers → Accounts (Tynn #484): rename, or forget (the signed-in account refused, saying so); a forgotten
     // account's readings leave the board. Only the book changes; no credential is touched.
     const accountsAct = async (action: AccountsAction): Promise<AccountsActResult> => {
         try {
             if (action.kind === 'rename') await accounts.rename(action.id, action.label);
-            else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); }
+            else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); saveBoardNow?.(); }
             return { ok: true };
         } catch (error) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
@@ -1245,6 +1246,12 @@ async function main(): Promise<void> {
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     headroomFeedNow = headroomFeed;
+    // EACH ACCOUNT'S LAST READINGS SURVIVE A RESTART (Tynn #485): how an idle account's room is known. Read here, written as they change.
+    const headroomBoardFile = join(home, 'headroom-board.json');
+    headroomFeed.restore(((): unknown => { try { return JSON.parse(readFileSync(headroomBoardFile, 'utf8')); } catch { return []; } })());
+    const saveHeadroomBoard = (): void => { try { writeFileSync(headroomBoardFile, JSON.stringify(headroomFeed.snapshot())); } catch (error) { say(`rate limits: could not save the board: ${error instanceof Error ? error.message : String(error)}`); } };
+    headroomFeed.subscribe(saveHeadroomBoard);
+    saveBoardNow = saveHeadroomBoard;
     // RATE-LIMIT ALERTS (Tynn #748, core/limit-alerts.ts): the person's thresholds are read at each reading; what fired is kept
     // on disk so a restart does not tell a crossing twice. The window plays the sound the alert names and shows the notice.
     const limitAlertsFile = join(home, 'limit-alerts-armed.json');
@@ -1266,7 +1273,11 @@ async function main(): Promise<void> {
     // Checked whenever the feed shows a reading (one inside its buffer reaches nothing), so onHeadroom below stays S5's wiring.
     // SWITCH OFFERS (Tynn #481, core/switch-offer.ts): the ACTIVE account's chosen window near its limit makes one offer per
     // window per reset, suggesting another known account with room. Only offered: a switch is the person's own sign-in.
+    // What has been offered and what still stands survive a restart (Tynn #485).
+    const switchOffersFile = join(home, 'switch-offers.json');
     const switchOffers = new SwitchOfferService({
+        load: () => { try { return JSON.parse(readFileSync(switchOffersFile, 'utf8')); } catch { return undefined; } },
+        save: (state) => { try { writeFileSync(switchOffersFile, JSON.stringify(state)); } catch (error) { say(`switch offers: could not save them: ${error instanceof Error ? error.message : String(error)}`); } },
         readings: () => headroomFeed.accounts(),
         known: () => accounts.list().map((a) => ({ id: a.id, provider: a.provider, label: a.label })),
         active: () => Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])),
