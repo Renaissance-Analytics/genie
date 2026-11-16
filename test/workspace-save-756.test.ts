@@ -58,11 +58,16 @@ describe('the guard: no machine in a repo', () => {
         expect(found.map((v) => [v.path, v.rule])).toEqual([['note', 'secret-value'], ['other', 'secret-value'], ['pem', 'secret-value']]);
     });
 
-    it('catches machine state and capability grants: pid, workspaceId, armed, wanted, cwd, ports, autoApprove, permissions', () => {
-        const planted = { pid: 4242, workspaceId: '01ARZ3NDEKTSV4RRFFQ69G5FAV', armed: true, wanted: true, cwd: 'x', publishedPort: 55432, containerName: 'c', autoApprove: true, permissions: { write: true }, approval_gates: 'none', lastRunAt: 1 };
+    it('catches machine state and capability grants: pid, workspaceId, armed, wanted, ports, autoApprove, permissions', () => {
+        const planted = { pid: 4242, workspaceId: '01ARZ3NDEKTSV4RRFFQ69G5FAV', armed: true, wanted: true, publishedPort: 55432, containerName: 'c', autoApprove: true, permissions: { write: true }, approval_gates: 'none', lastRunAt: 1 };
         const found = scanForMachineState({ item: planted });
         expect(found.map((v) => v.path).sort()).toEqual(Object.keys(planted).map((k) => `item.${k}`).sort());
         expect(found.every((v) => v.rule === 'machine-key')).toBe(true);
+    });
+
+    it('a `cwd` is a folder like any other: relative is fine (a flow step runs in one), and an absolute one is caught as a path', () => {
+        expect(scanForMachineState({ config: { cwd: 'repos/app' } })).toEqual([]);
+        expect(scanForMachineState({ config: { cwd: 'C:/Users/x/app' } }).map((v) => [v.path, v.rule])).toEqual([['config.cwd', 'absolute-path']]);
     });
 
     it('CONTROL: a clean entry (relative folder, the {port} token, https URL, hostPort, envKeys names) has no violations', () => {

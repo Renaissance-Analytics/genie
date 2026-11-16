@@ -22,7 +22,7 @@ export interface GuardViolation {
 
 /** Keys that name a machine's run state or a capability grant: never saved, at any depth. */
 const MACHINE_KEYS: ReadonlySet<string> = new Set([
-    'pid', 'ppid', 'port', 'publishedPort', 'livePort', 'containerName', 'cwd', 'workspaceId',
+    'pid', 'ppid', 'port', 'publishedPort', 'livePort', 'containerName', 'workspaceId',
     'armed', 'wanted', 'changedAt', 'lastRunAt', 'lastRunStatus', 'runs', 'inFlight', 'refusals',
     'autoApprove', 'permissions', 'manageTabs', 'drivePages', 'approval_gates', 'approvalGates',
 ]);
