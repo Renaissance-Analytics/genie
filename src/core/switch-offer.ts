@@ -40,8 +40,20 @@ export function nearLimit(r: WindowReading): boolean {
 
 export interface KnownAccount { readonly id: string; readonly provider: string; readonly label: string }
 
-/** An account the offer suggests. `leftPct: null` = its window has reset since its last reading: its room is back. */
-export interface SwitchTarget { readonly accountId: string; readonly label: string; readonly leftPct: number | null; readonly resetsAtMs: number | null }
+/**
+ * An account the offer suggests, and what is known of its room in the window: `reported` (its last reading, with the figure),
+ * `reset` (its window has reset since that reading: its room is back) or `unknown` (no reading of this window yet: not used
+ * since Genie has been counting, so its room is not known).
+ */
+export type TargetRoom = 'reported' | 'reset' | 'unknown';
+export interface SwitchTarget {
+    readonly accountId: string;
+    readonly label: string;
+    readonly room: TargetRoom;
+    /** Only for `reported`. */
+    readonly leftPct: number | null;
+    readonly resetsAtMs: number | null;
+}
 
 export interface SwitchOffer {
     readonly id: string;
@@ -52,31 +64,33 @@ export interface SwitchOffer {
     readonly leftPct: number;
     readonly over: boolean;
     readonly resetsAtMs: number;
-    /** Best first; empty = no other known account has room in this window (the offer says so and suggests nobody). */
+    /** Accounts with room best first, then those whose room is unknown; empty = no other account to suggest (the offer says so). */
     readonly targets: readonly SwitchTarget[];
 }
 
 /**
  * WHO TO SUGGEST (decision 3): the provider's other known accounts whose SAME window has more room than the near one, and is
- * not near itself; a window reset since its last reading counts as full. An account with no reading of that window is not
- * suggested: its room is unknown, and an offer claims room.
+ * not near itself, best first; a window reset since its last reading counts as full. Then (the coordinator, 2026-11-16) the
+ * accounts with no reading of that window, marked room unknown, in the book's order: a second account that has never been
+ * active is exactly the one the person would switch to. One near or spent is never suggested.
  */
 export function switchTargets(
     from: { provider: string; accountId: string; window: string; leftPct: number },
     readings: readonly AccountHeadroom[],
     known: readonly KnownAccount[],
 ): SwitchTarget[] {
-    const out: SwitchTarget[] = [];
+    const withRoom: SwitchTarget[] = [];
+    const unknown: SwitchTarget[] = [];
     for (const account of known) {
         if (account.provider !== from.provider || account.id === from.accountId) continue;
         const r = readings.find((x) => x.provider === from.provider && x.accountId === account.id)?.windows.find((w) => w.window === from.window);
-        if (!r) continue;
-        if (r.refreshed) { out.push({ accountId: account.id, label: account.label, leftPct: null, resetsAtMs: null }); continue; }
+        if (!r) { unknown.push({ accountId: account.id, label: account.label, room: 'unknown', leftPct: null, resetsAtMs: null }); continue; }
+        if (r.refreshed) { withRoom.push({ accountId: account.id, label: account.label, room: 'reset', leftPct: null, resetsAtMs: null }); continue; }
         if (nearLimit(r) || r.leftPct <= from.leftPct) continue;
-        out.push({ accountId: account.id, label: account.label, leftPct: r.leftPct, resetsAtMs: r.resetsAtMs });
+        withRoom.push({ accountId: account.id, label: account.label, room: 'reported', leftPct: r.leftPct, resetsAtMs: r.resetsAtMs });
     }
     const room = (t: SwitchTarget): number => t.leftPct ?? 101;
-    return out.sort((a, b) => room(b) - room(a) || a.label.localeCompare(b.label));
+    return [...withRoom.sort((a, b) => room(b) - room(a) || a.label.localeCompare(b.label)), ...unknown];
 }
 
 /** What has been offered: for each `account|window`, the reset time of the window it was offered in. Plain JSON. */
