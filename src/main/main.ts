@@ -1540,6 +1540,8 @@ async function boot(): Promise<void> {
                 const target = BrowserWindow.getFocusedWindow() ?? window;
                 if (target && !target.isDestroyed()) target.webContents.send('genie:action', { agentId: null, kind: TERMINAL_NEEDS_YOU, workspaceId: signal.workspaceId, terminalId: signal.terminalId, agentName: signal.agentName ?? 'An agent' });
             } else if (signal.kind === 'limit-alert' && typeof signal.title === 'string' && typeof signal.body === 'string') broadcast('genie:action', { agentId: null, kind: 'limit-alert', sound: typeof signal.sound === 'string' ? signal.sound : 'synth', title: signal.title, body: signal.body });
+            // How an account switch came out (Tynn #482): every window shows it, with Retry when nothing changed.
+            else if (signal.kind === 'account-switch') broadcast('genie:action', { agentId: null, kind: 'account-switch', outcome: raw });
             else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
@@ -1947,6 +1949,12 @@ async function boot(): Promise<void> {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
         const started = await signIn!(DESIGN_LOGIN);
+        return started.ok ? { ok: true } : started;
+    });
+    // SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps.
+    ipcMain.handle('genie:account-switch', async (_event, raw: unknown) => {
+        if (typeof raw !== 'string' || raw === '') return { ok: false, reason: 'No provider named.' };
+        const started = await (switchAccountWindow?.(raw) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
         return started.ok ? { ok: true } : started;
     });
     ipcMain.handle('genie:provider-login', async (_event, raw: unknown) => {

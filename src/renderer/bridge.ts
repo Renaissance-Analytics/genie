@@ -253,7 +253,7 @@ export interface GenieBridge {
      */
     onWorkspacePulse?(onPulse: (pulse: WorkspacePulse) => void): () => void;
     /** What an agent just did (Tynn #766 C), for its sound. Absent on a remote bridge for now: the host's own window plays it. */
-    onAction?(onAction: (action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string; sound?: string; title?: string; body?: string }) => void): () => void;
+    onAction?(onAction: (action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string; sound?: string; title?: string; body?: string; outcome?: unknown }) => void): () => void;
     /** Each provider's rate limit for the Dashboard header, buffered in main; the current ones at once, then each change. */
     onHeadroom?(onHeadroom: (limits: Readonly<Record<string, Headroom>>) => void): () => void;
 
@@ -272,6 +272,11 @@ export interface GenieBridge {
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */
     providerLogin(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /**
+     * SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps. How it came out
+     * arrives as an `account-switch` action. Absent on an older host.
+     */
+    switchAccount?(provider: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
     accountRetry?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to Claude Design` (#1081): the interactive `claude` in the login window on this machine. Absent on an older host. */
