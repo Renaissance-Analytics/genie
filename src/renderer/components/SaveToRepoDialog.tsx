@@ -51,6 +51,14 @@ export function SaveToRepoView({ workspaceName, view, onChoose, onSave, onClose 
                     ))}
                 </ul>
             ) : null}
+            {view.notes.length > 0 ? (
+                <div data-save-notes="" className="flex flex-col gap-1">
+                    <h3 className="text-xs font-medium">Rewritten for the repo</h3>
+                    <ul className="flex flex-col gap-0.5">
+                        {view.notes.map((n) => <li key={n} className="break-all font-mono text-[11px] text-[var(--fg-2)]">{n}</li>)}
+                    </ul>
+                </div>
+            ) : null}
             {view.incoming.length > 0 ? (
                 <div className="flex flex-col gap-1">
                     <h3 className="text-xs font-medium">From your teammates, coming in</h3>
