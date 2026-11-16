@@ -63,6 +63,21 @@ export interface CloneRestore {
 const EMPTY = { created: [], present: [], differs: [], waiting: [], refused: [], ignored: [] };
 const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** A workspace's `.genie/tabs.json` restored: a tab the clone lacks is added, nothing it has is overwritten. Also what applying one offered tabs file does (Tynn #756, PR9c). */
+export async function restoreTabsFile(workspace: { id: string; path: string }, tabsText: string, ports: CloneRestorePorts): Promise<TabsRestoreReport> {
+    let file: unknown;
+    try { file = JSON.parse(tabsText); } catch (error) { throw new Error(`.genie/tabs.json is not valid JSON (${reasonOf(error)})`); }
+    const restored = tabsRestore(file, { workspacePath: workspace.path, siteHosts: ports.tabs.siteHosts(workspace.id) });
+    const have = ports.tabs.values(workspace.id);
+    const plan = tabsRestorePlan(restored.state, parseTabs(have.tabs));
+    const chosen = ports.tabs.overridden(workspace.id);
+    const wrote: string[] = [];
+    if (plan.add.length > 0) { await ports.tabs.write(workspace.id, 'workspace_tabs', serializeTabs(plan.state)); wrote.push('workspace_tabs'); }
+    if (restored.panelSplits !== null && !('panel_splits' in chosen)) { await ports.tabs.write(workspace.id, 'panel_splits', restored.panelSplits); wrote.push('panel_splits'); }
+    if (restored.panelLayout !== null && !('panel_layout' in chosen)) { await ports.tabs.write(workspace.id, 'panel_layout', restored.panelLayout); wrote.push('panel_layout'); }
+    return { added: plan.add.map((t) => t.id), present: plan.present, differs: plan.differs, wrote, notes: restored.notes };
+}
+
 export async function restoreClone(workspace: { id: string; path: string }, ports: CloneRestorePorts): Promise<CloneRestore> {
     const order: string[] = [];
     const skipped: { step: string; reason: string }[] = [];
@@ -98,17 +113,7 @@ export async function restoreClone(workspace: { id: string; path: string }, port
     if (tabsText !== null) {
         order.push('tabs');
         try {
-            let file: unknown;
-            try { file = JSON.parse(tabsText); } catch (error) { throw new Error(`.genie/tabs.json is not valid JSON (${reasonOf(error)})`); }
-            const restored = tabsRestore(file, { workspacePath: workspace.path, siteHosts: ports.tabs.siteHosts(workspace.id) });
-            const have = ports.tabs.values(workspace.id);
-            const plan = tabsRestorePlan(restored.state, parseTabs(have.tabs));
-            const chosen = ports.tabs.overridden(workspace.id);
-            const wrote: string[] = [];
-            if (plan.add.length > 0) { await ports.tabs.write(workspace.id, 'workspace_tabs', serializeTabs(plan.state)); wrote.push('workspace_tabs'); }
-            if (restored.panelSplits !== null && !('panel_splits' in chosen)) { await ports.tabs.write(workspace.id, 'panel_splits', restored.panelSplits); wrote.push('panel_splits'); }
-            if (restored.panelLayout !== null && !('panel_layout' in chosen)) { await ports.tabs.write(workspace.id, 'panel_layout', restored.panelLayout); wrote.push('panel_layout'); }
-            tabs = { added: plan.add.map((t) => t.id), present: plan.present, differs: plan.differs, wrote, notes: restored.notes };
+            tabs = await restoreTabsFile(workspace, tabsText, ports);
         } catch (error) {
             skipped.push({ step: 'tabs', reason: reasonOf(error) });
         }
