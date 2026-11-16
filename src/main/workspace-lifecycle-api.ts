@@ -21,6 +21,7 @@ import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { addWorkspace, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, createWorkspace, hibernateWorkspace, listTynnOwners, listTynnProjects, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { repoOpsPorts } from './workspace-reads-api.js';
+import type { WorkspaceSaveOps } from './workspace-save-host.js';
 
 /**
  * ADDING, SLEEPING AND CHANGING A WORKSPACE, ONE WIRING FOR EVERY PROCESS THAT ANSWERS IT (Tynn #553, host split P5d.5e). The
@@ -136,7 +137,7 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
 
 type LifecycleKeys = 'previewAdd' | 'previewAddFromGit' | 'tynnProjects' | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'locateRepo' | 'confirmAdd' | 'create'
     | 'confirmAddFromGit' | 'readSource' | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'confirmAddFromTynn' | 'hibernate' | 'wake' | 'remove' | 'listRepos' | 'addRepo'
-    | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer';
+    | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer' | 'savePreview' | 'save';
 
 const NOT_A_REMOTE = { ok: false as const, reason: 'that is not a remote Genie understands; choose None, GitHub or Paste URL' };
 /** A new envelope's remote, parsed here, never trusted. No choice = None (an older window). */
@@ -147,6 +148,8 @@ export function workspaceLifecycleApi(
     wiring: Pick<WorkspaceLifecycleWiring, 'registry' | 'github'>,
     touch: () => void,
     setColor: (id: string, color: string) => Promise<unknown>,
+    /** Save to repo (Tynn #756). Absent: the host refuses it in words. */
+    saveOps?: WorkspaceSaveOps,
 ): Pick<HostApiDeps['workspaceOps'], LifecycleKeys> {
     const { workspaceOps, envelopePorts, adoptionPorts, repoOps } = parts;
     return {
@@ -190,5 +193,6 @@ export function workspaceLifecycleApi(
         setDefaultAgent: (id, agentId) => wiring.registry()!.setDefaultAgent(id, agentId),
         setMcpServer: (id, name, on) => wiring.registry()!.setWorkspaceMcpServer(id, name, on).finally(touch),
         setColor,
+        ...(saveOps ? { savePreview: (id: unknown) => saveOps.savePreview(id), save: (id: unknown, choices: unknown) => saveOps.save(id, choices) } : {}),
     };
 }

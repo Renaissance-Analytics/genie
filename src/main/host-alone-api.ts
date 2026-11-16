@@ -18,6 +18,7 @@ import type { HostApi } from './remote-host.js';
 import type { SessionHost } from './session-host.js';
 import { startForWork, startForYourMessage } from './start-on-demand.js';
 import type { SettingsStore } from './settings-store.js';
+import { WORKSPACE_SAVE_UNAVAILABLE, type WorkspaceSaveOps } from './workspace-save-host.js';
 
 /**
  * THE PHONE'S METHODS, ANSWERED BY GENIE-HOST WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2).
@@ -62,6 +63,7 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
     'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn',
     'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.locateRepo',
     'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.setMcpServer',
+    'workspaces.savePreview', 'workspaces.save',
 ]);
 
 /** The Tynn tab, read and changed (Tynn #553, P5d.5f). A live view's change reads stay the local window's. */
@@ -109,6 +111,8 @@ export interface HostAlonePorts {
     readonly workspaceLifecycle: Omit<WorkspaceLifecycleWiring, 'registry' | 'engine' | 'finished'>;
     /** A workspace's colour, written to its project.json. */
     readonly colors: { set(path: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** Save to repo (Tynn #756), over this host's registry, disk and git. Absent: refused in words. */
+    readonly workspaceSave?: WorkspaceSaveOps;
     /** genie-host's Tynn account, as the Tynn tab reaches it, and its page reader. */
     readonly tynnTab: { board: Parameters<typeof workspaceTynnApi>[0]; readPage: Parameters<typeof workspaceTynnApi>[1] };
     readonly updates?: HostApiDeps['updates'];
@@ -203,7 +207,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
             onSettingsChanged: (listener) => ports.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
             ...workspaceSettingsOps(() => ports.settings),
-            ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor),
+            ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor, ports.workspaceSave ?? WORKSPACE_SAVE_UNAVAILABLE),
             ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),

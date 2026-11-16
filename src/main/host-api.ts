@@ -225,6 +225,9 @@ export interface HostApiDeps {
         setMcpServer(workspaceId: string, name: unknown, on: unknown): Promise<unknown>;
         /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
         setColor?(workspaceId: string, color: string): Promise<unknown>;
+        /** Save to repo (Tynn #756): the preview, then the save with the person's choices. Optional: a host without them refuses. */
+        savePreview?(workspaceId: unknown): Promise<unknown>;
+        save?(workspaceId: unknown, choices: unknown): Promise<unknown>;
     };
     agentOps: {
         /** THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. */
@@ -628,6 +631,10 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.setDefaultAgent(str(args[0]), typeof args[1] === 'string' && args[1] !== '' ? args[1] : null);
             case 'workspaces.setMcpServer':
                 return deps.workspaceOps.setMcpServer(str(args[0]), args[1], args[2]);
+            case 'workspaces.savePreview':
+                return deps.workspaceOps.savePreview ? deps.workspaceOps.savePreview(args[0]) : { plan: { ok: false, reason: 'this host cannot save a workspace to its repo', violations: [] }, files: [], upstream: { fetched: false, ref: null }, decisions: [], conflicts: [] };
+            case 'workspaces.save':
+                return deps.workspaceOps.save ? deps.workspaceOps.save(args[0], args[1]) : { ok: false, reason: 'this host cannot save a workspace to its repo', written: [] };
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
             case 'addWorkspace':

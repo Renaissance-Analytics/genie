@@ -207,6 +207,8 @@ export interface ShellProps {
     /** The Dashboard's row click: that agent's chat, docked beside the Dashboard, which stays (genie#1209). */
     onChatAgent?: ((agentId: string) => void) | undefined;
     onAddAgent: (workspaceId: string) => void;
+    /** Open Save to repo for a workspace (Tynn #756). Absent = this host cannot save, so no button. */
+    onSaveToRepo?: ((workspaceId: string) => void) | undefined;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
     onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
@@ -394,6 +396,7 @@ export function Shell({
     onOpenAgent,
     onChatAgent: onChatAgentProp,
     onAddAgent,
+    onSaveToRepo,
     onAddWorkspace,
     onWakeWorkspace,
     onOpenBrowser,
@@ -1014,6 +1017,7 @@ export function Shell({
                             onOpenAgent={onOpenAgent}
                             agentTabs={agentTabsOf(snapshot.agents, parsed.workspaceId)}
                             onAddAgent={readOnly ? undefined : () => onAddAgent(parsed.workspaceId)}
+                            {...(readOnly || !onSaveToRepo ? {} : { onSaveToRepo: () => onSaveToRepo(parsed.workspaceId) })}
                             // Another tab leaves the Files tab (beta.35 #41) — unless the files are popped out into their own window.
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view, ...(parsed.detached ? {} : { panel: null, file: null, line: null, filter: null }) }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}

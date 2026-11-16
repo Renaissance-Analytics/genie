@@ -255,6 +255,8 @@ export interface WorkspaceProps {
     /** Open a file of this workspace in its file panel at a line (a path clicked in a terminal, Tynn #763). */
     onOpenFile?: ((path: string, line: number | null) => void) | undefined;
     onAddAgent?: (() => void) | undefined;
+    /** Save this workspace to its repo (Tynn #756): the dashboard's header button. Absent = the host cannot, so no button. */
+    onSaveToRepo?: (() => void) | undefined;
     /** The tabs ask for a view; the shell writes it into the route. */
     onViewChange?: ((view: WorkspaceView) => void) | undefined;
 }
@@ -265,7 +267,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], artboardItem = null, pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, storage = null, onStorageAction, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], artboardItem = null, pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, storage = null, onStorageAction, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onSaveToRepo, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -968,7 +970,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             {/* HOME — the workspace dashboard. */}
             {onScreen === 'home' ? (
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
-                    <ErrorBoundary surface="Workspace dashboard" resetKeys={[workspace.id]}><WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} /></ErrorBoundary>
+                    <ErrorBoundary surface="Workspace dashboard" resetKeys={[workspace.id]}><WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} {...(onSaveToRepo ? { onSaveToRepo } : {})} onStartAgent={onStartAgent} /></ErrorBoundary>
                 </div>
             ) : null}
             {/* THE ARTBOARD — ITS OWN TAB, BESIDE FILES (Tynn #739): what agents made, every version and verdict kept; a link opens it on one item. */}
@@ -1030,7 +1032,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                 );
                             }
                             if (p.kind === 'files') return files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => {}} onPause={onPauseAgent} onResume={onResumeAgent} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">This window has no file host.</p>;
-                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />;
+                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} {...(onSaveToRepo ? { onSaveToRepo } : {})} onStartAgent={onStartAgent} />;
                             if (p.kind === 'artboard') {
                                 const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
                                 return board ? <PluginPane panel={board} workspace={workspace} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;

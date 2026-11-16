@@ -24,6 +24,7 @@ import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
 import { localArtboardClient } from './local-artboard-client.js';
+import type { SavePreview, SaveResult } from '../core/workspace-save.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -469,6 +470,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
             setMcpServer: (workspaceId, name, on) => answer('workspaces.setMcpServer', workspaceId, name, on),
             setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
+            // The preview and the save are not ok/reason shapes themselves; a host's refusal still takes that shape.
+            savePreview: async (workspaceId) => { const r = await call('workspaces.savePreview', workspaceId); return r.ok ? (r.value as SavePreview) : { ok: false as const, reason: r.reason }; },
+            save: async (workspaceId, choices) => { const r = await call('workspaces.save', workspaceId, choices); return r.ok ? (r.value as SaveResult) : { ok: false as const, reason: r.reason }; },
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),

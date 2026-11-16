@@ -83,6 +83,7 @@ import { GITHUB_ROUTE, type RepoListing } from '../core/github.js';
 import type { TynnLinkApi } from './components/TynnProjectLink.js';
 import { ImportedAgentsModal } from './components/ImportedAgents.js';
 import { NewAgentModal } from './components/NewAgentModal.js';
+import { SaveToRepoDialog } from './components/SaveToRepoDialog.js';
 import { importedAgentsOffer, type ImportedAgent } from '../core/agent-adoption.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
@@ -1229,6 +1230,9 @@ function DesktopApp({ bridge }: AppProps) {
     const [cameWith, setCameWith] = useState<{ workspaceId: string; agents: readonly ImportedAgent[] } | null>(null);
     /** The workspace whose New agent form is open, or `null`. */
     const [newAgentFor, setNewAgentFor] = useState<string | null>(null);
+    /** Save to repo (Tynn #756): the workspace whose dialog is open. */
+    const [saveFor, setSaveFor] = useState<string | null>(null);
+    const loadSavePreview = useCallback(() => (saveFor !== null && resolvedBridge?.workspaces.savePreview ? resolvedBridge.workspaces.savePreview(saveFor) : Promise.resolve({ ok: false as const, reason: 'this host cannot save to the repo' })), [saveFor, resolvedBridge]);
     const offerAgentsRef = useRef<(id: string) => void>(() => {});
     offerAgentsRef.current = (id) => {
         const read = resolvedBridge?.workspaces.importedAgents;
@@ -2154,6 +2158,7 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             // Every "+ Add agent" opens the New agent form (Genie 1's); nothing is created until it is filled in.
             onAddAgent={(workspaceId) => setNewAgentFor(workspaceId)}
+            {...(resolvedBridge?.workspaces.savePreview && resolvedBridge.workspaces.save ? { onSaveToRepo: (workspaceId: string) => setSaveFor(workspaceId) } : {})}
             onAddWorkspace={previewAdd}
             // The Genie browser window: this machine's sites, or — in a window driving a Tynn workstation — that workstation's.
             onOpenBrowser={resolvedBridge?.browserWindow ? () => { void resolvedBridge.browserWindow?.open(); } : undefined}
@@ -2307,6 +2312,14 @@ function DesktopApp({ bridge }: AppProps) {
             onClose={() => setWizardRead(null)}
             tynn={tynnLinkApi}
         />
+        {saveFor !== null && resolvedBridge?.workspaces.save ? (
+            <SaveToRepoDialog
+                workspaceName={workspaceLabel(snapshot.workspaces, saveFor)}
+                load={loadSavePreview}
+                save={(choices) => resolvedBridge.workspaces.save!(saveFor, choices)}
+                onClose={() => setSaveFor(null)}
+            />
+        ) : null}
         {newAgentFor !== null && resolvedBridge ? (
             <NewAgentModal
                 workspaceName={workspaceLabel(snapshot.workspaces, newAgentFor)}

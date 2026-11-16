@@ -1,4 +1,6 @@
-import { applyMerge, diffFiles, mergeElements, planSave, type FileStatus, type LiveModel, type MergeDecision, type SavePlan } from '../core/workspace-save.js';
+import { applyMerge, diffFiles, mergeElements, planSave, type LiveModel, type MergeDecision, type SaveChoices, type SavePreview, type SaveResult } from '../core/workspace-save.js';
+
+export type { SavePreview, SaveResult } from '../core/workspace-save.js';
 import { withinGitLimit } from './git-ports.js';
 import { gitMayRun } from './git-read-policy.js';
 
@@ -28,18 +30,6 @@ export interface SaveGit {
     show(cwd: string, ref: string, path: string): Promise<string | null>;
 }
 
-export interface SavePreview {
-    readonly plan: SavePlan;
-    readonly files: readonly { path: string; status: FileStatus }[];
-    readonly upstream: { fetched: boolean; ref: string | null; reason?: string };
-    /** Every element, and whether it is ours, theirs, the same or a conflict. Empty without an upstream. */
-    readonly decisions: readonly MergeDecision[];
-    /** The ids of the conflicts the person must settle before a save writes. */
-    readonly conflicts: readonly string[];
-}
-
-export type SaveResult = { ok: true; written: string[] } | { ok: false; reason: string; written: string[] };
-
 export interface WorkspaceSaveOptions {
     readonly fs: SaveFs;
     readonly git: SaveGit;
@@ -68,7 +58,8 @@ export class WorkspaceSave {
         const fetched = await git.fetchUpstream(workspacePath);
         const ref = await git.upstream(workspacePath);
         const upstream: SavePreview['upstream'] = fetched.ok ? { fetched: true, ref } : { fetched: false, ref, reason: fetched.reason };
-        const model = await this.#options.liveModel(workspacePath);
+        let model: LiveModel | null;
+        try { model = await this.#options.liveModel(workspacePath); } catch (error) { return { ...refusedPreview(error instanceof Error ? error.message : String(error)), upstream }; }
         if (model === null) return { ...refusedPreview('this workspace has no project.json'), upstream };
         const plan = planSave(model, this.#options.revision === undefined ? {} : { revision: this.#options.revision });
         if (!plan.ok) return { plan, files: [], upstream, decisions: [], conflicts: [] };
@@ -92,7 +83,7 @@ export class WorkspaceSave {
     }
 
     /** `choices` maps a conflict's id to the side the person kept. */
-    async save(workspacePath: string, choices: Readonly<Record<string, 'local' | 'incoming'>> = {}): Promise<SaveResult> {
+    async save(workspacePath: string, choices: SaveChoices = {}): Promise<SaveResult> {
         const preview = await this.preview(workspacePath);
         const plan = preview.plan;
         if (!plan.ok) return { ok: false, reason: plan.reason, written: [] };
@@ -152,6 +143,57 @@ export function nodeSaveGit(): SaveGit {
         async show(cwd, ref, path) {
             const r = await git(cwd, ['show', `${ref}:${path}`], 15_000);
             return r.ok ? r.out : null;
+        },
+    };
+}
+
+/** The workspace as repo files: today project.json as it is on disk. Each element's own writer adds its files as its PR lands. */
+async function liveModelOf(fs: SaveFs, workspacePath: string): Promise<LiveModel | null> {
+    const manifestText = await fs.readText(inFolder(workspacePath, 'project.json'));
+    if (manifestText === null) return null;
+    let parsed: unknown;
+    try { parsed = JSON.parse(manifestText); } catch (error) { throw new Error(`project.json is not valid JSON (${error instanceof Error ? error.message : String(error)}); fix it by hand, nothing was changed`); }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('project.json is not a JSON object; nothing was changed');
+    return { manifest: parsed as Record<string, unknown>, manifestText, files: [] };
+}
+
+/** What the dialog sends for its conflicts: only "local" and "incoming" for a string id are kept; nothing else is guessed. */
+export function parseSaveChoices(raw: unknown): SaveChoices {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, 'local' | 'incoming'] => entry[1] === 'local' || entry[1] === 'incoming'));
+}
+
+/** Save to repo as the bridge calls it: a workspace id in, the preview or the save out. Every refusal is in words. */
+export interface WorkspaceSaveOps {
+    savePreview(workspaceId: unknown): Promise<SavePreview>;
+    save(workspaceId: unknown, choices: unknown): Promise<SaveResult>;
+}
+
+const NO_WORKSPACE = 'name a workspace';
+
+/** A host that cannot save (no disk or git wired): it says so. */
+export const WORKSPACE_SAVE_UNAVAILABLE: WorkspaceSaveOps = {
+    savePreview: async () => refusedPreview('this host cannot save a workspace to its repo'),
+    save: async () => ({ ok: false, reason: 'this host cannot save a workspace to its repo', written: [] }),
+};
+
+export function workspaceSaveOps(options: { fs: SaveFs; git: SaveGit; pathOf: (workspaceId: string) => string | null; mayReadFolder?: (path: string) => boolean; revision?: string }): WorkspaceSaveOps {
+    const saver = new WorkspaceSave({
+        fs: options.fs,
+        git: options.git,
+        liveModel: (path) => liveModelOf(options.fs, path),
+        ...(options.mayReadFolder ? { mayReadFolder: options.mayReadFolder } : {}),
+        ...(options.revision ? { revision: options.revision } : {}),
+    });
+    const pathOf = (id: unknown): string | null => (typeof id === 'string' ? options.pathOf(id) : null);
+    return {
+        async savePreview(id) {
+            const path = pathOf(id);
+            return path === null ? refusedPreview(NO_WORKSPACE) : saver.preview(path);
+        },
+        async save(id, choices) {
+            const path = pathOf(id);
+            return path === null ? { ok: false, reason: NO_WORKSPACE, written: [] } : saver.save(path, parseSaveChoices(choices));
         },
     };
 }
