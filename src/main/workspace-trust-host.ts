@@ -1,7 +1,9 @@
 import { join, relative, isAbsolute } from 'node:path';
 import { firstStartWords, readEnvelopeSites, siteRunFingerprint, type ServableSite } from '../core/envelope-sites.js';
 import { listRepos } from '../core/repo-registry.js';
-import { npmRunTarget, trustHash, trustVerdict, unsafeGitKeys, type GitConfigEntry, type TrustHook, type TrustList, type TrustServer } from '../core/workspace-trust.js';
+import { flowTrustItems } from '../core/workspace-flows.js';
+import { processTrustItems } from '../core/workspace-processes.js';
+import { npmRunTarget, trustHash, trustVerdict, unsafeGitKeys, type GitConfigEntry, type TrustFlow, type TrustHook, type TrustList, type TrustProcess, type TrustServer } from '../core/workspace-trust.js';
 import { isExactlyGenieStopHook } from './config-sync-targets.js';
 
 /**
@@ -14,6 +16,8 @@ export interface TrustListPorts {
     gitConfig(cwd: string): Promise<GitConfigEntry[]>;
     /** Whether git tracks this file. Throws, or is absent, when it can't say, which counts as yes. */
     isTracked?(root: string, relativePath: string): Promise<boolean>;
+    /** The names of the files in a folder (Tynn #756, PR9b: `.flows/` and `.processes/`). Rejects when it is not there; absent = those folders are not read. */
+    listDir?(dir: string): Promise<string[]>;
 }
 
 export interface TrustView { readonly trusted: boolean; readonly changed: boolean; readonly list: TrustList }
@@ -140,7 +144,26 @@ export async function readTrustList(path: string, ports: TrustListPorts): Promis
             if (!seen.has(id)) { seen.add(id); gitKeys.push(entry); }
         }
     }
-    return { sites, hooks, servers, gitKeys, approvals };
+    // What a CLONE brings (Tynn #756, PR9b): the commands in `.flows/` and `.processes/`, shown before anything is created.
+    const flows = await rowsIn(path, '.flows', ports, (file, value) => flowTrustItems([{ path: file, value }]));
+    const processes = await rowsIn(path, '.processes', ports, (file, value) => processTrustItems([{ path: file, value }]));
+    return { sites, hooks, servers, gitKeys, approvals, ...(flows.length > 0 ? { flows } : {}), ...(processes.length > 0 ? { processes } : {}) };
+}
+
+/** The `.json` files of one folder of the workspace that would run something, in name order; a folder that is not there, or a file that is not JSON, has none. */
+async function rowsIn(root: string, dir: string, ports: TrustListPorts, rowsOf: (file: string, value: unknown) => readonly (TrustFlow | TrustProcess)[]): Promise<(TrustFlow | TrustProcess)[]> {
+    if (!ports.listDir) return [];
+    let names: string[];
+    try { names = await ports.listDir(join(root, dir)); } catch { return []; }
+    const out: (TrustFlow | TrustProcess)[] = [];
+    for (const name of names.filter((n) => n.toLowerCase().endsWith('.json')).sort()) {
+        const text = await ports.readText(join(root, dir, name));
+        if (text === null) continue;
+        let value: unknown;
+        try { value = JSON.parse(text); } catch { continue; }
+        out.push(...rowsOf(`${dir}/${name}`, value));
+    }
+    return out;
 }
 
 const inside = (root: string, path: string): boolean => {
@@ -153,6 +176,7 @@ export class WorkspaceTrust {
     readonly #views = new Map<string, { path: string; view: TrustView }>();
     readonly #redockEpoch = new Map<string, symbol>();
     readonly #redocking = new Set<string>();
+    readonly #trustedListeners = new Set<(workspaceId: string) => void>();
 
     constructor(ports: WorkspaceTrustPorts) {
         this.#ports = ports;
@@ -200,7 +224,15 @@ export class WorkspaceTrust {
         ensure();
         const view: TrustView = { trusted: true, changed: false, list };
         this.#keep(workspaceId, workspace.path, view);
+        // Told after the yes is kept (Tynn #756, PR9b): what waited for it is restored. One listener failing costs nobody the yes or the next listener.
+        for (const listener of [...this.#trustedListeners]) { try { listener(workspaceId); } catch { /* the yes stands */ } }
         return view;
+    }
+
+    /** Told each time the person says yes to a workspace (and only then: not a refresh, not an Untrust). */
+    onTrusted(listener: (workspaceId: string) => void): () => void {
+        this.#trustedListeners.add(listener);
+        return () => { this.#trustedListeners.delete(listener); };
     }
 
     /** The person takes the yes back: the only thing that ends a workspace's trust. Forgotten first: a save that fails leaves it trusted, and says why. `null` = no such workspace here. */
@@ -242,6 +274,7 @@ export class WorkspaceTrust {
         return {
             readText: (path) => { ensure(); return this.#ports.readText(path); },
             gitConfig: (path) => { ensure(); return this.#ports.gitConfig(path); },
+            ...(this.#ports.listDir ? { listDir: (dir: string) => { ensure(); return this.#ports.listDir!(dir); } } : {}),
             ...(this.#ports.isTracked ? { isTracked: (root: string, path: string) => { ensure(); return this.#ports.isTracked!(root, path); } } : {}),
         };
     }

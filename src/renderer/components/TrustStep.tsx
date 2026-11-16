@@ -21,7 +21,9 @@ const Code = ({ children }: { children: ReactNode }) => <code className="break-a
 
 export function TrustStepBody({ step, phase, onTrust }: { step: TrustStepView; phase: TrustPhase; onTrust: () => void }) {
     const { sites, hooks, servers, gitKeys, approvals } = step.list;
-    const nothing = sites.length + hooks.length + servers.length + gitKeys.length + approvals.length === 0;
+    const flows = step.list.flows ?? [];
+    const processes = step.list.processes ?? [];
+    const nothing = sites.length + hooks.length + servers.length + gitKeys.length + approvals.length + flows.length + processes.length === 0;
     const busy = phase.kind === 'pending';
     return (
         <section data-trust-step={step.workspaceId} className="flex max-h-[45vh] shrink-0 flex-col gap-2 overflow-auto border-b border-[var(--border-1)] px-4 py-3 text-sm">
@@ -42,6 +44,9 @@ export function TrustStepBody({ step, phase, onTrust }: { step: TrustStepView; p
             {hooks.length > 0 ? <Group label="Hooks and settings">{hooks.map((hook) => <li key={`${hook.file}\n${hook.event}\n${hook.command}`}><span className="text-[var(--fg-3)]">{hook.file} · {hook.event}</span> <Code>{hook.command}</Code></li>)}</Group> : null}
             {servers.length > 0 ? <Group label="Servers">{servers.map((server) => <li key={`${server.file}\n${server.name}`}><span className="text-[var(--fg-3)]">{server.file} · {server.name}</span> <Code>{server.command}</Code></li>)}</Group> : null}
             {gitKeys.length > 0 ? <Group label="Git settings">{gitKeys.map((entry) => <li key={`${entry.key}\n${entry.value}`}><Code>{entry.key}</Code> <Code>{entry.value}</Code></li>)}</Group> : null}
+            {flows.length > 0 ? <Group label="Flows">{flows.map((flow) => <li key={flow.file}><span className="text-[var(--fg-3)]">{flow.file}</span>{flow.commands.map((command) => <span key={command}> <Code>{command}</Code></span>)}</li>)}</Group> : null}
+            {processes.length > 0 ? <Group label="Processes">{processes.map((process) => <li key={process.file}><span className="text-[var(--fg-3)]">{process.file}</span>{process.commands.map((command) => <span key={command}> <Code>{command}</Code></span>)}</li>)}</Group> : null}
+            {flows.length + processes.length > 0 ? <p data-trust-clone-note className="text-xs text-[var(--fg-3)]">After you trust it, these come in disarmed and stopped: a flow is not armed and a process is not running until you do it yourself.</p> : null}
             {approvals.length > 0 ? <Group label="Commands already approved here">{approvals.map((approval) => <li key={approval}><Code>{approval}</Code></li>)}</Group> : null}
             <p data-trust-agents-note className="text-xs text-[var(--fg-3)]">Until then, agents here don't load its instructions or their personas.</p>
             {phase.kind === 'failed' ? (

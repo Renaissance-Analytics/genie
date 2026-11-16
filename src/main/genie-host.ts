@@ -1811,7 +1811,7 @@ async function main(): Promise<void> {
     // OPENING A FRESH CLONE (Tynn #756, PR9a): a workspace that appears here is restored in order (its settings, its tabs, the trust
     // verdict, its flows DISARMED, its processes STOPPED), in the host that owns the stores. What it did, and what it left waiting
     // for the person's trust, is logged.
-    watchNewWorkspaces({ workspaceStates: () => hostRegistry.workspaceStates(), subscribe: (listener) => phoneRegistry.subscribe(() => listener()) }, (workspaceId) => {
+    const restoreWorkspaceClone = (workspaceId: string): void => {
         const workspace = hostRegistry.workspace(workspaceId);
         if (!workspace) return;
         const ports = cloneRestorePorts({
@@ -1836,7 +1836,10 @@ async function main(): Promise<void> {
         void restoreClone({ id: workspace.id, path: workspace.path }, ports)
             .then((report) => lifecycleLog(`clone ${workspace.id} restored: ${report.order.join(' > ')}${report.skipped.length > 0 ? `; skipped ${report.skipped.map((s) => `${s.step} (${s.reason})`).join(', ')}` : ''}${(report.flows?.waiting.length ?? 0) + (report.processes?.waiting.length ?? 0) > 0 ? '; waiting for the workspace to be trusted' : ''}`))
             .catch((error: unknown) => say(`clone ${workspace.id} could not be restored: ${error instanceof Error ? error.message : String(error)}`));
-    });
+    };
+    watchNewWorkspaces({ workspaceStates: () => hostRegistry.workspaceStates(), subscribe: (listener) => phoneRegistry.subscribe(() => listener()) }, restoreWorkspaceClone);
+    // The person's yes (Tynn #756, PR9b): what waited for it is restored now, by the same restore (it leaves what is already here alone).
+    hostingStack?.trust.onTrusted?.((id) => restoreWorkspaceClone(id));
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
     planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); } });

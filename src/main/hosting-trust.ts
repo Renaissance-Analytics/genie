@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { isAbsolute, relative } from 'node:path';
 import type { TrustList } from '../core/workspace-trust.js';
 import type { EnvelopeSites, WorkspaceRef } from './envelope-sites-host.js';
@@ -36,6 +36,8 @@ export interface TrustApi {
     trust(workspaceId: string): Promise<TrustView | null>;
     /** The person takes the yes back: the only thing that ends a workspace's trust (Tynn #618). */
     untrust(workspaceId: string): Promise<TrustView | null>;
+    /** Told each time the person says yes to a workspace (Tynn #756, PR9b): what waited for the trust is restored. Absent on a view that only reads. */
+    onTrusted?(listener: (workspaceId: string) => void): () => void;
     /** A registered workspace's folder takes Genie's files only once trusted. A folder that is no workspace is not this rule's. */
     mayWriteInto(folder: string): Promise<boolean>;
     /** A verdict moved. Fired after the record and the views are updated, so a reader then reads the new verdict. */
@@ -86,6 +88,8 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
         readText: input.readText,
         gitConfig: folderGitConfig,
         isTracked: fileIsTracked,
+        // `.flows/` and `.processes/` (Tynn #756, PR9b): what a clone would create, listed on the step before anything is.
+        listDir: async (dir) => (await readdir(dir, { withFileTypes: true })).filter((e) => e.isFile()).map((e) => e.name),
         workspaces: input.workspaces,
         record: () => input.envelopeSites.trustRecord(),
         recordWorkspace: (id, hash) => input.envelopeSites.recordWorkspace(id, hash),
@@ -137,6 +141,7 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
         refresh: (id, purpose) => workspaceTrust.refresh(id, purpose),
         trust: (id) => workspaceTrust.trust(id),
         untrust: (id) => workspaceTrust.untrust(id),
+        onTrusted: (listener) => workspaceTrust.onTrusted(listener),
         mayWriteInto: async (folder) => {
             const workspace = input.workspaces().find((w) => w.path === folder);
             if (!workspace) return true;
