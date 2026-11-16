@@ -42,6 +42,8 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:window-overlay-colors-current', 'window-port'],
     ['genie:renderer-stall', 'window-port'],
     ['genie:account-switch', 'window-port'],
+    ['genie:accounts', 'window-port'],
+    ['genie:switch-offer-dismiss', 'window-port'],
     ['genie:design-login', 'window-port'],
     ['genie:provider-login', 'window-port'],
     ['genie:take-over', 'window-port'],

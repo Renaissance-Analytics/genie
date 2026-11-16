@@ -30,15 +30,17 @@ export interface TakeOverWindowProps {
     login?: string | undefined;
     /** That login is an ACCOUNT SWITCH (Tynn #753): the provider's own login in its one home, with its own steps. */
     switching?: boolean | undefined;
+    /** The account the person pressed Switch on (Tynn #483), named in the steps. */
+    choose?: string | undefined;
 }
 
 /**
  * THE LOGIN NOTICE (the owner, 2026-10-18: "make sure the window … includes a loud notice that tells the user what to do"):
  * what is running in the terminal below, and every step. A provider Genie has no login for gets the steps by hand.
  */
-function LoginNotice({ provider, switching }: { provider: string; switching?: boolean | undefined }) {
+function LoginNotice({ provider, switching, choose }: { provider: string; switching?: boolean | undefined; choose?: string | undefined }) {
     // SWITCH ACCOUNT (Tynn #753): the steps are the provider's own, and the agents are not stopped.
-    const steps = switching ? accountSwitchSteps(provider) : [];
+    const steps = switching ? accountSwitchSteps(provider, choose) : [];
     if (steps.length > 0) {
         return (
             <section data-login-notice={provider} data-account-switch={provider} className="shrink-0 border-b-2 border-[var(--warning)] bg-[var(--warning)]/15 px-5 py-3 text-[var(--fg-1)]">
@@ -86,7 +88,7 @@ function LoginNotice({ provider, switching }: { provider: string; switching?: bo
     );
 }
 
-export function TakeOverWindow({ terminalId, terminals, login, switching }: TakeOverWindowProps) {
+export function TakeOverWindow({ terminalId, terminals, login, switching, choose }: TakeOverWindowProps) {
     // Batched, kept to the cap, and written as appended (Tynn #544): see terminal-output-view.ts.
     const [stream, setStream] = useState<OutputStream | null>(null);
     const [exited, setExited] = useState<number | null>(null);
@@ -109,7 +111,7 @@ export function TakeOverWindow({ terminalId, terminals, login, switching }: Take
     return (
         <main data-surface="takeover" data-terminal={terminalId} className="flex h-screen w-screen flex-col bg-[var(--bg-0)]">
             {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
-            {login ? <LoginNotice provider={login} switching={switching} /> : null}
+            {login ? <LoginNotice provider={login} switching={switching} choose={choose} /> : null}
             <div className="relative min-h-0 flex-1">
             {Pane ? (
                 <Pane

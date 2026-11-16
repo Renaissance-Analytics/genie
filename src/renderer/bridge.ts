@@ -6,6 +6,7 @@ import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } fro
 import type { TynnPage, TynnPageActionInput, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
 import type { IssueActionInput, IssueFilters, TynnIssuesHost } from '../core/tynn-issues.js';
 import type { Headroom } from '../core/headroom.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { AgentPermissions } from '../core/identity.js';
@@ -276,7 +277,12 @@ export interface GenieBridge {
      * SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps. How it came out
      * arrives as an `account-switch` action. Absent on an older host.
      */
-    switchAccount?(provider: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `choose`: the account the person pressed Switch on, named in the login's steps (Tynn #483). */
+    switchAccount?(provider: string, choose?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Every known account with its readings, and the standing switch offers (Tynn #483); `null` while the host cannot answer. */
+    accounts?(): Promise<AccountsSnapshot | null>;
+    /** Not now on a switch offer (Tynn #481): it goes, and is not made again in that window. */
+    dismissSwitchOffer?(id: string): Promise<boolean>;
     /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
     accountRetry?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to Claude Design` (#1081): the interactive `claude` in the login window on this machine. Absent on an older host. */

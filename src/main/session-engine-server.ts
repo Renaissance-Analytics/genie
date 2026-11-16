@@ -138,6 +138,8 @@ export interface EngineServerOptions {
     readonly switchAccount?: (provider: string) => import('./account-switch-host.js').AccountSwitchStart;
     /** The switch offers genie-host keeps (Tynn #481): listed, and dismissed (Not now), by this machine's window only. */
     readonly switchOffers?: { offers(): readonly import('../core/switch-offer.js').SwitchOffer[]; dismiss(id: string): boolean };
+    /** Every known account with its readings, and the standing offers (Tynn #483): this machine's window only. No credential. */
+    readonly accounts?: () => import('../core/accounts-view.js').AccountsSnapshot;
     /** After a login: read the provider's account identity again (Tynn #477). */
     readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
@@ -660,6 +662,11 @@ export class SessionEngineServer {
             if (!conn.local || !conn.window) throw new Error('Switching accounts needs this machine’s own window.');
             if (!this.#options.switchAccount) throw new Error('Switching accounts is not ready in the host yet.');
             return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '');
+        }
+        if (method === 'engine.accounts') {
+            if (!conn.local || !conn.window) throw new Error('Accounts need this machine’s own window.');
+            if (!this.#options.accounts) throw new Error('The accounts are not ready in the host yet.');
+            return this.#options.accounts();
         }
         if (method === 'engine.switchOffers' || method === 'engine.dismissSwitchOffer') {
             if (!conn.local || !conn.window) throw new Error('Switch offers need this machine’s own window.');

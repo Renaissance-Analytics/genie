@@ -733,7 +733,7 @@ let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let signIn: ((provider: string, accountId?: string) => Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>) | null = null;
 // SWITCH ACCOUNT (Tynn #753): the provider's own login in its one home, in a window that shows the steps. The entry the UI calls.
-let switchAccountWindow: ((provider: string) => Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }>) | null = null;
+let switchAccountWindow: ((provider: string, choose?: string) => Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }>) | null = null;
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
@@ -1933,9 +1933,9 @@ async function boot(): Promise<void> {
         if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider), 'user-gesture');
         return started;
     };
-    switchAccountWindow = async (provider) => {
+    switchAccountWindow = async (provider, choose) => {
         const started = await (agentEngineLink?.client.switchAccount(provider) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
-        if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider, true), 'user-gesture');
+        if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider, true, choose), 'user-gesture');
         return started;
     };
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
@@ -1951,10 +1951,15 @@ async function boot(): Promise<void> {
         const started = await signIn!(DESIGN_LOGIN);
         return started.ok ? { ok: true } : started;
     });
+    // THE HEADER'S ACCOUNT CHIPS (Tynn #483): every known account with its readings, and the standing offers, read from genie-host.
+    ipcMain.handle('genie:accounts', async () => (await agentEngineLink?.client.accounts()) ?? null);
+    ipcMain.handle('genie:switch-offer-dismiss', async (_event, raw: unknown) => typeof raw === 'string' && raw !== '' ? (await agentEngineLink?.client.dismissSwitchOffer(raw)) ?? false : false);
     // SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps.
-    ipcMain.handle('genie:account-switch', async (_event, raw: unknown) => {
+    ipcMain.handle('genie:account-switch', async (_event, raw: unknown, rawChoose: unknown) => {
         if (typeof raw !== 'string' || raw === '') return { ok: false, reason: 'No provider named.' };
-        const started = await (switchAccountWindow?.(raw) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
+        // The account to choose is words for the steps only, kept short and on one line (it goes into a route).
+        const choose = typeof rawChoose === 'string' && rawChoose.trim() && rawChoose.length <= 320 && !/[\x00-\x1f\x7f]/.test(rawChoose) ? rawChoose.trim() : undefined;
+        const started = await (switchAccountWindow?.(raw, choose) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
         return started.ok ? { ok: true } : started;
     });
     ipcMain.handle('genie:provider-login', async (_event, raw: unknown) => {
