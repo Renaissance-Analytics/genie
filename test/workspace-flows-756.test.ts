@@ -84,7 +84,7 @@ describe('the file a flow is saved as', () => {
         expect(clean).toHaveLength(1);
         expect(scanForMachineState(clean.map((f) => f.value))).toEqual([]);
         const dirty = flowsDeclaration([source('Elsewhere', docOf(command('npm run backup', 'C:/Users/x/app')))], WS).files;
-        expect(scanForMachineState(dirty.map((f) => f.value)).map((v) => v.rule)).toEqual(['absolute-path']);
+        expect(scanForMachineState(dirty.map((f) => f.value)).map((v) => v.rule)).toEqual(['unsafe-cwd']);
     });
 });
 

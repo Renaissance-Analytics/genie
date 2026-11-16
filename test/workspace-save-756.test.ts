@@ -65,9 +65,9 @@ describe('the guard: no machine in a repo', () => {
         expect(found.every((v) => v.rule === 'machine-key')).toBe(true);
     });
 
-    it('a `cwd` is a folder like any other: relative is fine (a flow step runs in one), and an absolute one is caught as a path', () => {
+    it('a `cwd` is a folder like any other: relative is fine (a flow step runs in one), and one outside the workspace is its own violation', () => {
         expect(scanForMachineState({ config: { cwd: 'repos/app' } })).toEqual([]);
-        expect(scanForMachineState({ config: { cwd: 'C:/Users/x/app' } }).map((v) => [v.path, v.rule])).toEqual([['config.cwd', 'absolute-path']]);
+        expect(scanForMachineState({ config: { cwd: 'C:/Users/x/app' } }).map((v) => [v.path, v.rule])).toEqual([['config.cwd', 'unsafe-cwd']]);
     });
 
     it('CONTROL: a clean entry (relative folder, the {port} token, https URL, hostPort, envKeys names) has no violations', () => {
