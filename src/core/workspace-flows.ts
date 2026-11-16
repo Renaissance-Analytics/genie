@@ -1,4 +1,5 @@
 import { canonicalFlowDocument } from './flow-form.js';
+import { fileStem } from './workspace-file-names.js';
 import type { Exclusion } from './workspace-elements.js';
 
 /**
@@ -15,12 +16,7 @@ export const WORKSPACE_TOKEN = '${workspace}';
 
 /** The file stem for a flow's name: lower case, words joined by dashes, never empty, never one already taken. */
 export function flowFileName(name: string, taken: ReadonlySet<string>): string {
-    const stem = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '') || 'flow';
-    if (!taken.has(stem)) return stem;
-    for (let n = 2; ; n++) {
-        const candidate = `${stem}-${n}`;
-        if (!taken.has(candidate)) return candidate;
-    }
+    return fileStem(name, taken, 'flow');
 }
 
 /** What a save reads of a flow: its name, its workspace and its document. Nothing else of the store's record. */
