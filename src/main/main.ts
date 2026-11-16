@@ -118,18 +118,15 @@ import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
 import { providerBinary } from './session-host.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
-import { afterSignedIn } from './login-host.js';
+import { loginRoute, loginTerminalOf } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
-import { LoginHost } from './login-host.js';
-import type { AccountRecord } from '../core/accounts.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
-import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
-import { DESIGN_LOGIN, tellDesignLoginRan } from '../core/design-login.js';
-import { PlanKeepalive } from '../core/plan-keepalive.js';
+import { ACCOUNT_BACK } from '../core/provider-login.js';
+import { DESIGN_LOGIN } from '../core/design-login.js';
 import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
@@ -729,8 +726,9 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
 }
 let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
-let loginHost: LoginHost | null = null;
-let refreshLoginAccounts: ((client: SessionEngineClient) => Promise<void>) | null = null;
+let signIn: ((provider: string, accountId?: string) => Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>) | null = null;
+// SWITCH ACCOUNT (Tynn #753): the provider's own login in its one home, in a window that shows the steps. The entry the UI calls.
+let switchAccountWindow: ((provider: string) => Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }>) | null = null;
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
@@ -781,8 +779,6 @@ function reportProxies(client: SessionEngineClient, log: (line: string) => void)
         log,
     });
 }
-/** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
-let keepaliveNow: PlanKeepalive | null = null;
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
 let activityFeeds: ActivityFeeds | null = null;
 
@@ -833,6 +829,9 @@ function openTakeOverWindow(route: string, activation: Activation): void {
     }
     const win = takeOverWindow(route, request, null);
     win.on('closed', () => {
+        // A sign-in's window closing is the person leaving the step: the host kills and removes its terminal (Tynn #479).
+        const login = loginTerminalOf(route);
+        if (login !== null) void agentEngineLink?.client.cancelLogin(login);
         takeOvers?.windowClosed(terminalId);
         scratchTerminals?.windowClosed(terminalId);
     });
@@ -1455,22 +1454,7 @@ async function boot(): Promise<void> {
                 .then(() => moveAgentConfigs(current.filter((w) => theRegistry.workspaceStates().find((s) => s.path === w.path)?.asleep !== true)));
         }, 0);
     });
-    // AN AUTOMATED AGENT WITH AN OPEN PLAN DOES NOT JUST STOP (the owner, 2026-10-21; core/plan-keepalive.ts): a turn that
-    // ends with steps left is nudged once after a short grace — never while the person is the next move.
-    const keepalive = new PlanKeepalive({
-        graceMs: 5_000,
-        schedule: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        read: (id) => {
-            const record = registry?.find(id as AgentId);
-            const live = host?.probe(id as AgentId) ?? null;
-            if (!record || !live) return null;
-            const asked = services?.attention.pending().some((q) => q.agentId === id) ?? false;
-            return { mode: record.mode, lastTurnEnd: host?.lastTurnEnd(id as AgentId) ?? null, plan: live.plan ?? null, promptable: host?.promptable(id as AgentId) != null, waitingOnPerson: asked || live.pendingApproval !== null, background: live.background ?? null };
-        },
-        prompt: (id, text) => { host?.prompt(id as AgentId, text, 'genie'); },
-        stalled: (id, text) => { host?.notice(id as AgentId, text); },
-    });
-    keepaliveNow = keepalive;
+    // THE PLAN KEEPALIVE runs in genie-host now (main/host-plan-keepalive.ts, Tynn #754): it reads the sessions there.
     /*
      * THE SPAWN LEDGER AND THE LIFECYCLE LOG (hosting plan 1.5 / 1.6). Every agent run's processes are written down as
      * they start and forgotten when a stop VERIFIES they ended; whatever a previous Genie left running — a crash, a
@@ -1501,7 +1485,7 @@ async function boot(): Promise<void> {
         // Each plan is kept on the agent's record as it arrives, so its next run (after a relaunch too) shows it at once.
         onPlan: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
-        onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
+        onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
         onHeadroom: (provider: string, room: Headroom, stamp?: ReadingStamp) => headroomFeed.offer(provider, room, stamp),
@@ -1619,7 +1603,6 @@ async function boot(): Promise<void> {
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
                 followGappsChanged(client);
-                void refreshLoginAccounts?.(client).catch(error => console.error('Could not refresh provider account homes', error));
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
@@ -1932,42 +1915,19 @@ async function boot(): Promise<void> {
     // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
     const scratch = scratchArea(genieRoot());
     scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
-    // Provider-only login stays on the persisted legacy account until S6. A window never opens the book or a credential.
-    const loginAccounts = new Map<string, Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'>>();
-    refreshLoginAccounts = async client => {
-        loginAccounts.clear();
-        for (const provider of ['claude', 'codex']) {
-            const account = await client.providerAccount(provider);
-            if (account) loginAccounts.set(provider, account);
-        }
+    // THE SIGN-IN RUNS IN GENIE-HOST, per account (Tynn #479): this window asks for it and only SHOWS the terminal it returns.
+    // Two clicks on one account join one sign-in; another account signs in beside it; closing the window cancels it, and the host
+    // kills and removes that terminal. A login starts from the tray or the agent view's Log in button only (genie#1235).
+    signIn = async (provider, accountId) => {
+        const started = await (agentEngineLink?.client.login(provider, accountId) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
+        if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider), 'user-gesture');
+        return started;
     };
-    await refreshLoginAccounts(agentEngineLink.client);
-    const logins = new LoginHost({
-        accountFor: provider => loginAccounts.get(provider) ?? null,
-        scratch: () => scratch.directory(),
-        terminals: terminalsForTakeOver,
-        // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
-        openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
-        binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
-        runStatus: (command, cwd, env) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000, ...(env ? { env } : {}) }).then((r) => r.exitCode, () => 1),
-        onSignedIn: (provider) => {
-            // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698).
-            void providerHealth.refresh(provider);
-            void agentEngineLink?.client.refreshAccountIdentity(provider);
-            afterSignedIn(provider, {
-                signedOutAgents: (p) => host?.signedOutAgents(p) ?? [],
-                restart: (id) => { void restartAgent(agentOps, id as AgentId, 'graceful').then((r) => { if (r.ok) host?.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch()); },
-                resumeLimit: (p) => { host?.resumeLimit(p); refreshTray(); },
-            });
-        },
-        // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry; a retry that
-        // is refused again raises the prompt again. They are not restarted: only a tool failed, never their session.
-        onDesignLoginEnded: () => {
-            if (host) tellDesignLoginRan(host);
-            registry?.touch();
-        },
-    });
-    loginHost = logins;
+    switchAccountWindow = async (provider) => {
+        const started = await (agentEngineLink?.client.switchAccount(provider) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
+        if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider, true), 'user-gesture');
+        return started;
+    };
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
@@ -1975,16 +1935,17 @@ async function boot(): Promise<void> {
             void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, ACCOUNT_BACK, 'genie'); }).finally(() => registry?.touch());
         }
     };
-    ipcMain.handle('genie:design-login', (_event, raw: unknown) => {
+    ipcMain.handle('genie:design-login', async (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
-        const started = logins.start(DESIGN_LOGIN);
+        const started = await signIn!(DESIGN_LOGIN);
         return started.ok ? { ok: true } : started;
     });
-    ipcMain.handle('genie:provider-login', (_event, raw: unknown) => {
+    ipcMain.handle('genie:provider-login', async (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
-        const started = logins.start(record.provider);
+        // The provider's ACTIVE account (Tynn #751): the one every agent runs on.
+        const started = await signIn!(record.provider);
         return started.ok ? { ok: true } : started;
     });
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
@@ -2999,7 +2960,7 @@ async function boot(): Promise<void> {
         openExternal: async url => { if (!/^https:\/\//i.test(url)) throw new Error('only an HTTPS sign-in page can be opened'); await shell.openExternal(url); },
         openInBrowser: openInBrowserFor('user-gesture'),
         rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); return { ok: true as const }; } },
-        login: async provider => loginHost?.start(provider) ?? { ok: false, reason: 'Genie’s login window is not ready yet; try again in a moment' },
+        login: async provider => signIn?.(provider) ?? { ok: false, reason: 'Genie’s login window is not ready yet; try again in a moment' },
         browser: {
             snapshot: () => browserPane?.state() ?? { url: null, canGoBack: false, canGoForward: false },
             navigate: async url => { if (!browserPane) throw new Error('this caller has no browser pane'); const shown = await browserPane.show(url); if (!shown.ok) throw new Error(shown.reason); },
@@ -3125,13 +3086,11 @@ async function boot(): Promise<void> {
         // New scratch terminal (Tynn #761; the owner, 2026-10-19: in Genie's own workspace): home folder, its own window.
         // A signed-out login named in the tray (#967): its own login, in a window of its own.
         onProviderLogin: (provider) => {
-            const r = loginHost?.start(provider);
-            if (r && !r.ok) console.error('[genie] provider login:', r.reason);
+            void signIn?.(provider).then((r) => { if (!r.ok) console.error('[genie] provider login:', r.reason); });
         },
         // Claude Design's login (#1081): the same login window, running the interactive `claude`.
         onDesignLogin: () => {
-            const r = loginHost?.start(DESIGN_LOGIN);
-            if (r && !r.ok) console.error('[genie] Claude Design login:', r.reason);
+            void signIn?.(DESIGN_LOGIN).then((r) => { if (!r.ok) console.error('[genie] Claude Design login:', r.reason); });
         },
         onScratchTerminal: () => {
             if (!scratchTerminals) return;
@@ -3403,8 +3362,6 @@ const quitPorts: QuitPorts = {
         // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
         // (genie-test-windows, job Q0), and a quit needs main for its own steps.
         stallProfiler?.stop();
-        // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
-        keepaliveNow?.stop();
         // Every supervised process, the front door, an in-flight flow run, the knowledge database.
         void services?.shutdown();
         // The spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then

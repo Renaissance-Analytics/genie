@@ -12,6 +12,7 @@ import { installPythonVersion, listPythonVersions, managedPython, pythonVersions
 import { dotnetVersionsRoot, installDotnetVersion, listDotnetVersions, managedDotnet, removeDotnetVersion, type DotnetVersionsPorts } from './dotnet-versions.js';
 import { installRustVersion, listRustVersions, managedRust, removeRustVersion, rustVersionsRoot, type RustVersionsPorts } from './rust-versions.js';
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, rubyVersionsRoot, type RubyVersionsPorts } from './ruby-versions.js';
+import { installPlaywrightBrowsers, listPlaywrightBrowsers, nodePlaywrightFs, type PlaywrightBrowsersPorts } from './playwright-browsers.js';
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
@@ -126,6 +127,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         fetchText: httpFetch.text,
         progress: (step) => deps.busy(step),
     });
+    const playwrightPorts = (): PlaywrightBrowsersPorts => ({ platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodePlaywrightFs(), run: longRunner, progress: (step) => { deps.busy(step); } });
     const javaVersionsPorts = (): JavaVersionsPorts => ({
         platform: process.platform as JavaVersionsPorts['platform'],
         arch: process.arch === 'arm64' ? 'arm64' : 'x64',
@@ -274,6 +276,11 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
                 list: () => listRubyVersions(rubyVersionsPorts()),
                 install: (version, consent) => installRubyVersion(version, consent, rubyVersionsPorts()),
                 remove: (version) => removeRubyVersion(version, rubyVersionsPorts()),
+            },
+            // Genie's one Playwright browser install (main/playwright-browsers.ts, Tynn #604) — same busy line.
+            playwright: {
+                list: () => listPlaywrightBrowsers(playwrightPorts()),
+                install: (version, browsers, consent) => installPlaywrightBrowsers(version, browsers, consent, playwrightPorts()),
             },
             // Genie's own Java (main/java-versions.ts; Temurin) — same busy line. Windows and Linux.
             java: {

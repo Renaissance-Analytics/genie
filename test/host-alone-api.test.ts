@@ -137,7 +137,7 @@ describe('genie-host answers the phone itself', () => {
         expect(await api.invoke('answerApproval', [atlas.id, 'allow', 'go ahead'])).toEqual({ ok: true });
         expect(await api.invoke('resumeLimit', [atlas.id])).toEqual({ ok: true });
         expect(await api.invoke('agents.restart', [atlas.id, 'graceful'])).toEqual({ ok: true, kind: 'graceful' });
-        expect(calls).toEqual(['answerApproval allow go ahead', `resumeLimit claude ${atlas.accountId}`, 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
+        expect(calls).toEqual(['answerApproval allow go ahead', 'resumeLimit claude undefined', 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
     });
 
     it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {

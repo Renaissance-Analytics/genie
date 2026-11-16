@@ -1,7 +1,6 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import type { CarryOver } from '../core/carry-over.js';
-import { accountIdIsValid, accountThreadKey, legacyAccountId } from '../core/accounts.js';
 import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, type PlanStepRecord, threadIdIsResumable } from '../core/identity.js';
 import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
@@ -54,14 +53,8 @@ export { OS_WORKSPACE };
 /** What the registry can see of a running session. Supplied by whatever owns the sessions. */
 export type SessionProbe = (id: AgentId) => LiveSession | null;
 
-/** Trusted host book lookup for the internal assignment primitive; this adds no account-switch tool or UI. */
-export interface RegistryAccounts {
-    accountById(id: string): { readonly id: string; readonly provider: AcpProvider } | null;
-}
-
 export class Registry {
     #store: RegistryStore;
-    readonly #accounts: RegistryAccounts | undefined;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
     #registrations: Promise<void> = Promise.resolve();
@@ -85,9 +78,8 @@ export class Registry {
     /** A workspace's colour (genie#1300: project.json `appearance.color`, main/workspace-color-host.ts); `null` = none yet. */
     #colorer: (path: string) => string | null = () => null;
 
-    constructor(store: RegistryStore, accounts?: RegistryAccounts) {
+    constructor(store: RegistryStore) {
         this.#store = store;
-        this.#accounts = accounts;
     }
 
     /** Read and write through `store` instead (genie-host's, P3.2). Before `load` only: a loaded model is not re-homed. */
@@ -654,28 +646,20 @@ export class Registry {
     /**
      * Switch provider (Tynn story #380): identity, inbox, history, plan and the conversation stay with the agent. Each
      * provider keeps ITS OWN native session — a Claude session id means nothing to Codex — so the one it leaves is PARKED
-     * under the old provider AND account (`threadIds`) with when it left (`leftAt`), and the destination's is resumed when it has one
+     * under the old provider (`threadIds`) with when it left (`leftAt`), and the destination's is resumed when it has one
      * (`null` = it never ran there). `carryOver` is what the next prompt carries (core/carry-over.ts); a switch always
      * REPLACES it, never stacks. The model goes with the old provider unless the caller found it in the new provider's own
      * list (`keepModel`). The owner, 2026-10-21: "I need to be able to change provider as well as model". The same
-     * provider and account change nothing. Without an explicit account the same provider keeps its binding, and a
-     * different provider uses its legacy default. Person-driven account switching is a separate orchestration story.
+     * provider changes nothing. An agent has no account: the provider's ONE active account is the host's (Tynn #751).
      */
-    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean; carryOver?: CarryOver | null; now?: string; accountId?: string }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
+    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean; carryOver?: CarryOver | null; now?: string }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
         if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return { ok: false, reason: `No agent ${agentId}.` };
-        const previousAccount = existing.accountId ?? legacyAccountId(existing.provider);
-        const accountId = options.accountId ?? (existing.provider === provider ? previousAccount : legacyAccountId(provider));
-        if (!accountIdIsValid(provider, accountId)) return { ok: false, reason: 'That account is not valid for this provider.' };
-        if (existing.provider === provider && previousAccount === accountId) return { ok: true, record: existing };
-        if (accountId !== legacyAccountId(provider)) {
-            const account = this.#accounts?.accountById(accountId);
-            if (!account || account.id !== accountId || account.provider !== provider) return { ok: false, reason: 'The host account book does not know that account for this provider.' };
-        }
+        if (existing.provider === provider) return { ok: true, record: existing };
         const { model: _oldModel, carryOver: _oldCarry, ...withoutModel } = existing;
         const { carryOver: _carry, ...keptModel } = existing;
-        const from = accountThreadKey(existing.provider, previousAccount), to = accountThreadKey(provider, accountId);
+        const from = existing.provider, to = provider;
         const parked: Record<string, string> = { ...(existing.threadIds ?? {}) };
         if (existing.threadId) parked[from] = existing.threadId;
         else delete parked[from];
@@ -685,7 +669,6 @@ export class Registry {
         const record: AgentRecord = {
             ...(options.keepModel ? keptModel : withoutModel),
             provider,
-            accountId,
             threadId: resumed,
             threadIds: parked,
             leftAt,

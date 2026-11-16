@@ -1235,6 +1235,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
             {tc?.dotnet ? <DotnetVersions dotnet={tc.dotnet} current={tc.defaults?.dotnet ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'dotnet' && r.version !== undefined)} /> : null}
             {tc?.rust ? <RustVersions rust={tc.rust} current={tc.defaults?.rust ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'rust' && r.version !== undefined)} /> : null}
             {tc?.ruby ? <RubyVersions ruby={tc.ruby} current={tc.defaults?.ruby ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'ruby' && r.version !== undefined)} /> : null}
+            {tc?.playwright ? <PlaywrightBrowsers playwright={tc.playwright} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'playwright')} /> : null}
             {tc?.java ? <JavaVersions java={tc.java} check={checkRows.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
@@ -1453,6 +1454,48 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
  * GENIE'S OWN JAVA (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6d): the Temurin JDKs Genie manages, the java on
  * PATH, and an Install per LTS line (its release for this OS) — or, on macOS, why not.
  */
+function formatBytes(bytes: number): string {
+    if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`;
+    return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+/** Genie's one Playwright browser install: version, size, Update (Tynn #604). Every workspace and worktree uses it. */
+function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { playwright: NonNullable<NonNullable<FeatureData['toolchain']>['playwright']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const newest = playwright.sets[0]?.version ?? null;
+    const outdated = playwright.latest !== null && newest !== playwright.latest;
+    return (
+        <section data-playwright-browsers={playwright.sets.length} className="border-b border-[var(--border-1)]">
+            <div className="flex items-center gap-3 px-5 pt-3">
+                <h3 className="text-sm font-medium">Playwright browsers</h3>
+                <span data-playwright-size="" className="text-xs text-[var(--fg-3)]">{formatBytes(playwright.totalBytes)}</span>
+            </div>
+            <p className="px-5 py-1 text-xs text-[var(--fg-3)]">One install for every workspace and worktree: <span className="font-mono">{playwright.browsersPath}</span></p>
+            {refusals.map((r) => (
+                <p key={r.version ?? 'latest'} data-playwright-refusal={r.version ?? 'latest'} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <ul className="divide-y divide-[var(--border-1)]">
+                {playwright.sets.map((s) => (
+                    <li key={s.version} data-playwright-version={s.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">Playwright {s.version}</span>
+                        <span className="text-xs text-[var(--fg-3)]">{s.browsers.join(', ')}</span>
+                        {s.version === newest && outdated ? (
+                            <Button size="xs" type="button" data-playwright-update={playwright.latest} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: s.browsers, consent: true })}>Update to {playwright.latest}</Button>
+                        ) : null}
+                    </li>
+                ))}
+            </ul>
+            <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                {playwright.sets.length === 0 ? (
+                    <Button size="xs" type="button" data-playwright-install="latest" disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: ['chromium'], consent: true })}>Install Chromium</Button>
+                ) : null}
+                {newest !== null ? playwright.optional.filter((b) => !(playwright.sets[0]?.browsers ?? []).includes(b)).map((b) => (
+                    <Button size="xs" key={b} type="button" data-playwright-add={b} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: newest, browsers: [b], consent: true })}>Add {b}</Button>
+                )) : null}
+            </div>
+        </section>
+    );
+}
+
 function JavaVersions({ java, current = null, busy, onAction, refusals = [], check }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = java.available.filter((a) => !a.installed);
     return (

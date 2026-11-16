@@ -75,6 +75,24 @@ async function git(cwd: string, args: readonly string[]): Promise<{ ok: true; ou
     }
 }
 
+/**
+ * WHEN A FAILED GIT CALL IS WORTH ANOTHER TRY: Windows refuses to rename a folder for a moment while a scanner, the indexer or
+ * a process that just exited still holds a handle inside it (git's own words: "Permission denied", "Access is denied", "being
+ * used by another process"). The same call a moment later succeeds. Anything else (a locked worktree, a missing path) is final.
+ */
+export const TRANSIENT_GIT_FAILURE = /permission denied|access is denied|being used by another process|resource busy|device or resource busy|unable to rename|EBUSY|EPERM|EACCES/i;
+const TRY_AGAIN_MS = 250;
+
+/** Run `call` until it succeeds, fails for a reason that is not transient, or `attempts` are spent; waits longer each time. */
+export async function retryTransient<R extends { ok: boolean; error?: string }>(call: () => Promise<R>, attempts = 8, wait: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms))): Promise<R> {
+    let last = await call();
+    for (let n = 1; n < attempts && !last.ok && TRANSIENT_GIT_FAILURE.test(last.error ?? ''); n += 1) {
+        await wait(TRY_AGAIN_MS * n);
+        last = await call();
+    }
+    return last;
+}
+
 const isDir = async (p: string): Promise<boolean> => { try { const s = await lstat(p); return s.isDirectory(); } catch { return false; } };
 const exists = async (p: string): Promise<boolean> => { try { await lstat(p); return true; } catch { return false; } };
 
@@ -273,9 +291,9 @@ export class WorkspaceStorage {
                 origin: { kind: 'worktree', repoRel: w.repoRel, rel: w.rel, branch: w.branch, head: w.head, external: w.external },
                 label: w.rel,
                 run: async (payload) => {
-                    const moved = await git(w.repoAbs, ['worktree', 'move', w.abs, payload]);
+                    const moved = await retryTransient(() => git(w.repoAbs, ['worktree', 'move', w.abs, payload]));
                     if (!moved.ok) throw new Error(`git did not move the worktree into .trash (it cannot across drives, nor with submodules): ${moved.error}`);
-                    const locked = await git(w.repoAbs, ['worktree', 'lock', '--reason', 'In the workspace .trash (Genie)', payload]);
+                    const locked = await retryTransient(() => git(w.repoAbs, ['worktree', 'lock', '--reason', 'In the workspace .trash (Genie)', payload]));
                     if (!locked.ok) throw new Error(`git moved the worktree but did not lock it: ${locked.error}`);
                 },
             };
@@ -347,9 +365,9 @@ export class WorkspaceStorage {
                 if (o.repoRel !== '.' && inside(rootReal, repo) !== o.repoRel) return cannot;
                 if (await exists(target)) return taken(o.rel);
                 await mkdir(dirname(target), { recursive: true });
-                const unlocked = await git(repo, ['worktree', 'unlock', payload]);
+                const unlocked = await retryTransient(() => git(repo, ['worktree', 'unlock', payload]));
                 if (!unlocked.ok) return { ok: false, reason: `git did not unlock the worktree: ${unlocked.error}` };
-                const moved = await git(repo, ['worktree', 'move', payload, target]);
+                const moved = await retryTransient(() => git(repo, ['worktree', 'move', payload, target]));
                 if (!moved.ok) {
                     await git(repo, ['worktree', 'lock', '--reason', 'In the workspace .trash (Genie)', payload]);
                     return { ok: false, reason: `git did not move the worktree back: ${moved.error}` };
@@ -388,7 +406,7 @@ export class WorkspaceStorage {
             if (e.origin.kind === 'worktree') {
                 const repo = e.origin.repoRel === '.' ? rootReal : join(rootReal, ...e.origin.repoRel.split('/'));
                 if (await isDir(repo)) {
-                    await git(repo, ['worktree', 'remove', '--force', '--force', join(entry, PAYLOAD)]);
+                    await retryTransient(() => git(repo, ['worktree', 'remove', '--force', '--force', join(entry, PAYLOAD)]));
                     repos.add(repo);
                 }
             }

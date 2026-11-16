@@ -1921,12 +1921,12 @@ function DesktopApp({ bridge }: AppProps) {
                 <div className="flex h-full flex-col">
                     <RemoteRefusalBar refusal={remote.state.lastRefusal} needsBaton={false} driver={remote.state.driver} onTakeControl={() => {}} onDismiss={remote.clearRefusal} />
                     <div className="min-h-0 flex-1">
-                        <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />
+                        <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} switching={parsed.switching} />
                     </div>
                 </div>
             );
         }
-        return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />;
+        return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} switching={parsed.switching} />;
     }
     // THE FLOW EDITOR IN ITS OWN WINDOW (genie#1204, Genie 1's genie#505): fancy-flow's canvas and nothing else.
     if (parsed.surface === 'flow') {

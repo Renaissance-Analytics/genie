@@ -5,7 +5,7 @@ import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { DESIGN_LOGIN } from '../../core/design-login.js';
-import { providerLogin } from '../../core/provider-login.js';
+import { accountSwitchSteps, providerLogin } from '../../core/provider-login.js';
 import { ProviderLogo } from './ProviderLogo.js';
 
 /**
@@ -28,13 +28,28 @@ export interface TakeOverWindowProps {
     terminals: GenieBridge['terminals'];
     /** A provider's LOGIN window (main/login-host.ts): the provider, for the notice that says what to do. */
     login?: string | undefined;
+    /** That login is an ACCOUNT SWITCH (Tynn #753): the provider's own login in its one home, with its own steps. */
+    switching?: boolean | undefined;
 }
 
 /**
  * THE LOGIN NOTICE (the owner, 2026-10-18: "make sure the window … includes a loud notice that tells the user what to do"):
  * what is running in the terminal below, and every step. A provider Genie has no login for gets the steps by hand.
  */
-function LoginNotice({ provider }: { provider: string }) {
+function LoginNotice({ provider, switching }: { provider: string; switching?: boolean | undefined }) {
+    // SWITCH ACCOUNT (Tynn #753): the steps are the provider's own, and the agents are not stopped.
+    const steps = switching ? accountSwitchSteps(provider) : [];
+    if (steps.length > 0) {
+        return (
+            <section data-login-notice={provider} data-account-switch={provider} className="shrink-0 border-b-2 border-[var(--warning)] bg-[var(--warning)]/15 px-5 py-3 text-[var(--fg-1)]">
+                <h1 className="flex items-center gap-2 text-base font-semibold"><ProviderLogo provider={provider} size="lg" className="text-[var(--fg-1)]" />Switch account</h1>
+                <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[13px]">
+                    {steps.map((step) => <li key={step}>{step}</li>)}
+                    <li>This is the provider&apos;s own sign-in, run unchanged: Genie never sees or keeps your sign-in code or token.</li>
+                </ol>
+            </section>
+        );
+    }
     // CLAUDE DESIGN (#1081): Claude Code's interactive CLI is open; `/design-login` is typed by the person, never passed in.
     if (provider === DESIGN_LOGIN) {
         return (
@@ -57,6 +72,7 @@ function LoginNotice({ provider }: { provider: string }) {
                     <li>Genie is running <code className="font-mono">{known.login}</code> in the terminal below, in a scratch folder of its own.</li>
                     <li>Follow its prompts. A browser may open: sign in there, then come back to this window.</li>
                     <li>If it asks you to paste a code, paste it into the terminal below and press Enter.</li>
+                    <li>This is {known.name}&apos;s own sign-in, run unchanged: Genie never sees or keeps your sign-in code or token.</li>
                     <li>When it says you are signed in, close this window. Genie checks the login and brings your {known.name} agents back.</li>
                 </ol>
             ) : (
@@ -70,7 +86,7 @@ function LoginNotice({ provider }: { provider: string }) {
     );
 }
 
-export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowProps) {
+export function TakeOverWindow({ terminalId, terminals, login, switching }: TakeOverWindowProps) {
     // Batched, kept to the cap, and written as appended (Tynn #544): see terminal-output-view.ts.
     const [stream, setStream] = useState<OutputStream | null>(null);
     const [exited, setExited] = useState<number | null>(null);
@@ -93,7 +109,7 @@ export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowP
     return (
         <main data-surface="takeover" data-terminal={terminalId} className="flex h-screen w-screen flex-col bg-[var(--bg-0)]">
             {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
-            {login ? <LoginNotice provider={login} /> : null}
+            {login ? <LoginNotice provider={login} switching={switching} /> : null}
             <div className="relative min-h-0 flex-1">
             {Pane ? (
                 <Pane

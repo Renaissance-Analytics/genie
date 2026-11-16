@@ -15,7 +15,7 @@ import type { MachineFeaturePorts } from './feature-machine.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -31,7 +31,6 @@ import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { formatBytes, type StorageView } from '../core/workspace-storage.js';
 import { threadAttachmentFiles } from '../core/thread-store.js';
 import { AccountsHost } from './accounts-host.js';
-import { providerAccountEnv } from '../core/accounts.js';
 import { isAcpProvider } from '../core/engine.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
@@ -54,7 +53,8 @@ import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.js';
 import { setGitExecRoute } from './git-exec.js';
-import { ProcessSupervisor } from './process-supervisor.js';
+import { ProcessSupervisor, osPidAlive } from './process-supervisor.js';
+import { endChildTrees } from './end-child-trees.js';
 import { SupervisorService } from './supervisor-host.js';
 import { LinkGate } from './linked-stream.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
@@ -139,10 +139,14 @@ import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
+import { PlaywrightHost, osConnections } from './playwright-host.js';
+import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
-import { statusCommandFor } from './login-host.js';
-import { accountIdentityFrom } from '../core/provider-login.js';
+import { startAccountSwitch, type AccountSwitchStart } from './account-switch-host.js';
+import { afterSignedIn, LoginHost, statusCommandFor } from './login-host.js';
+import { accountIdentityFrom, SIGNED_IN_AGAIN } from '../core/provider-login.js';
+import { tellDesignLoginRan } from '../core/design-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
@@ -193,6 +197,7 @@ import { readV1Settings } from './v1-settings.js';
 import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
 import { wireHostMailWake } from './host-mail-wake.js';
+import { wireHostPlanKeepalive, type HostPlanKeepalive } from './host-plan-keepalive.js';
 import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
 import { TYNN_ISSUES_FEED } from './tynn-issues-live.js';
 import { TYNN_FEATURES_FEED } from './tynn-features-live.js';
@@ -535,7 +540,7 @@ async function main(): Promise<void> {
     const terminalsService = new TerminalsService(terminalHost);
     // TAKE OVER'S ONE OWNER (Tynn #553, P5d.5c): who has a TUI open. This host opens no window; whoever clicked opens its own.
     const takeOverHost = new TakeOverHost({
-        accountFor: record => accounts.get(record.accountId ?? `account_legacy_${record.provider}`),
+        accountFor: record => accounts.activeFor(record.provider),
         terminals: terminalHost,
         openWindow: () => {},
         mcp: () => { const e = mcp?.endpoint() ?? null; return e ? { mcpUrl: e.url, token: e.token } : null; },
@@ -1031,16 +1036,20 @@ async function main(): Promise<void> {
     };
     const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
     // ONE cache of each provider's models (core/provider-models.ts): a window's ask and a phone's read the same answer.
-    const providerModels = new ProviderModelCache(provider => realListModels(provider, accounts.defaultFor(provider) ?? undefined));
+    const providerModels = new ProviderModelCache(provider => realListModels(provider, accounts.activeFor(provider)));
     // Tynn #698: each provider CLI MEASURED (the file the agent runs, its version, its own status call), when the host starts:
     // what "installed" and "signed in" read. A CLI that cannot run is said in the log by name.
     // Tynn #477: who each account is, as its provider reports it (never a credential file): at host start, after a login, and
     // whenever a provider's status is measured again.
+    // A sign-in per ACCOUNT runs here, in this host; a window only shows its terminal (Tynn #479). Composed once the sessions exist.
+    let logins: LoginHost | null = null;
+    // Switching accounts = the provider's own login in its one home; no agent is touched (Tynn #753). Composed once the sessions exist.
+    let switchAccount: ((provider: string) => AccountSwitchStart) | null = null;
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
         if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
-        const health = await checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.defaultFor(provider) ?? undefined);
+        const health = await checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.activeFor(provider));
         void accountIdentity.refreshProvider(provider);
         return health;
     });
@@ -1060,7 +1069,10 @@ async function main(): Promise<void> {
         features: featureCallers,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
-        providerAccount: provider => isAcpProvider(provider) ? accounts.defaultFor(provider) : null,
+        providerAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
+        login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
+        cancelLogin: (accountId) => { logins?.cancel(accountId); },
+        switchAccount: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
@@ -1178,6 +1190,26 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    // GENIE'S PLAYWRIGHT (Tynn #604): the browsers path is Genie's own environment; the server and a workspace's endpoint are made here, on demand.
+    const playwrightHost = new PlaywrightHost({
+        toolchainDir: join(home, 'genie2-toolchain'),
+        server: {
+            supervisor: processSupervisor, workspaceId: 'genie', cwd: home,
+            cliDir: (version) => join(home, 'genie2-toolchain', 'playwright', 'cli', version),
+            allocatePort: () => 20_000 + (randomBytes(2).readUInt16BE(0) % 20_000),
+            mintToken: () => randomBytes(32).toString('base64url'),
+            now: () => Date.now(),
+            connections: (port) => osConnections(port, process.platform, async (binary, args) => { const r = await execFileRunner(binary, args, { timeoutMs: 10_000 }); return { exitCode: r.exitCode, stdout: r.streams.stdout }; }),
+            idleMs: 10 * 60_000, pidAlive: osPidAlive, /* a server that will not exit is ended with all it started, by the process tree rules (never taskkill /T) */ forceEnd: (pid) => endChildTrees([{ pid, exitCode: null, signalCode: null, kill: () => { try { process.kill(pid); return true; } catch { return false; } }, once: () => undefined }], systemProcessTree),
+        },
+        workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null,
+        optIn: (id) => settings.snapshotFor(id).playwright_server !== false,
+        fs: nodePhpVersionsFs(),
+        platform: process.platform as 'win32' | 'linux' | 'darwin',
+        link: (target, path, kind) => { symlinkSync(target, path, kind); },
+    });
+    const playwrightSweep = setInterval(() => { void playwrightHost.server.sweep().catch(() => {}); }, 60_000);
+    playwrightSweep.unref();
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     // RATE-LIMIT ALERTS (Tynn #748, core/limit-alerts.ts): the person's thresholds are read at each reading; what fired is kept
@@ -1203,10 +1235,17 @@ async function main(): Promise<void> {
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
     bootStep('lock identity', stepAt);
+    // THE PLAN KEEPALIVE (Tynn #754): built below, once the host exists; a turn that ends before then has nothing to nudge.
+    let planKeepalive: HostPlanKeepalive | null = null;
     const host = new SessionHost({
-        accountById: id => accounts.get(id),
+        activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         userData: home,
         ...engineHostOptions,
+        // The window still plays the sound; the host decides whether the agent is nudged (it no longer asks a window to).
+        onAction: (agentId, kind) => { engineHostOptions.onAction(agentId, kind); if (kind === 'replied') planKeepalive?.turnEnded(agentId, 'replied'); },
+        onTurnEnd: (agentId, cause) => { planKeepalive?.turnEnded(agentId, cause); },
+        onPersonTurn: (agentId) => { planKeepalive?.personTurn(agentId); },
+        serviceEnvFor: (workspaceId) => ({ ...engineHostOptions.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId) }),
         // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
         endToolCalls: (agentId, intent) => toolCalls.end(agentId, intent),
         // What the agent's workspace has off by default (Tynn #628), read from the registry at each launch.
@@ -1229,9 +1268,7 @@ async function main(): Promise<void> {
                 if (!isAcpProvider(provider)) return null;
                 const command = statusCommandFor(provider, providerBinary(provider as AgentRecord['provider']) ?? null);
                 if (command === null) return null;
-                const account = accounts.defaultFor(provider);
-                if (!account) return null;
-                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000, env: providerAccountEnv(account, process.env) });
+                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000 });
                 return r.exitCode === 0 ? accountIdentityFrom(r.streams.stdout) : null;
             },
         },
@@ -1282,6 +1319,13 @@ async function main(): Promise<void> {
         await host.deliverOwed(id);
         return { ok: true };
     };
+    // SWITCH ACCOUNT (Tynn #753): the provider's own login, in its one home, in a terminal with the steps on screen. No agent is
+    // stopped or started again; when the login ends the identity read (onSignedIn below) records which account is signed in.
+    switchAccount = (provider) => {
+        const login = logins;
+        if (login === null) return { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' };
+        return startAccountSwitch({ login }, provider);
+    };
     hostVerdicts = new TrustVerdicts({
         agentsOf: (workspaceId) => hostRegistry.listAgents().filter((a) => a.workspaceId === workspaceId).map((a) => a.id),
         untrustedNow: (id) => { const record = hostRegistry.find(id); return record ? hostUntrustedNow(record) : false; },
@@ -1306,7 +1350,36 @@ async function main(): Promise<void> {
     let githubNow: GithubAccount | null = null;
     void githubOpening.then((account) => { githubNow = account; }, () => {});
     const hostScratch = scratchArea(home);
-    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }), { accountById: (id) => accounts.get(id) });
+    // `Log in` for one ACCOUNT (Tynn #479): its own terminal and folder, its own status in that account's home. Signed in, THAT
+    // account's signed-out agents restart and that account's hold opens; another account's agents are never touched.
+    logins = new LoginHost({
+        accountFor: (provider, accountId) => {
+            if (!isAcpProvider(provider)) return null;
+            return accountId === undefined ? accounts.activeFor(provider) : accounts.get(accountId);
+        },
+        scratch: () => hostScratch.directory(),
+        terminals: terminalHost,
+        // Where the window shows it is the window's: a person's click opens the route this returns the terminal for.
+        openWindow: () => {},
+        binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
+        runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
+        onSignedIn: (provider) => {
+            // ONE HOME PER PROVIDER (Tynn #753): who is signed in is READ (S4) and recorded first: the book's active account is the
+            // one now signed in, usage counts against it, and a hold lifts if that account has headroom. No agent is stopped or
+            // started again; only the agents the provider had signed out are brought back.
+            void providerHealth.refresh(provider);
+            void (isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve()).then(() => {
+                afterSignedIn(provider, {
+                    signedOutAgents: (p, id) => host.signedOutAgents(p, id),
+                    restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+                    resumeLimit: (p, id) => host.resumeLimit(p, id),
+                });
+            });
+        },
+        // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
+        onDesignLoginEnded: () => { tellDesignLoginRan(host); },
+    });
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));
@@ -1488,7 +1561,7 @@ async function main(): Promise<void> {
     hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
         roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
         mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
-        runFlow: id => hostFlows.runNow(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider, record.accountId); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
+        runFlow: id => hostFlows.runNow(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
         ...(hostingStack ? { hosting: { api: hostingStack, supervisor: processSupervisor, processes: hostBook,
             processScheduler: { runNow: id => hostBook.runNow(id) }, workspaceVisible: id => !hiddenWorkspaces().includes(id) } } : {}),
         machine: {
@@ -1727,6 +1800,8 @@ async function main(): Promise<void> {
     };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
+    planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); } });
+    clocks.push(planKeepalive);
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);
     mcp = startHostMcp({
@@ -1752,7 +1827,7 @@ async function main(): Promise<void> {
         // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.
         terminalEnv: (workspaceId) => {
             const endpoint = mcp?.endpoint() ?? null;
-            return { ...engine.serviceEnvFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
+            return { ...engine.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
         },
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
         // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
@@ -1862,6 +1937,7 @@ async function main(): Promise<void> {
             if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
             lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
             browserService.quit();
+            logins?.dispose();
             const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
             // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
             // host nobody wants.

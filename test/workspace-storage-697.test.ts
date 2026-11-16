@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { open, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,7 +8,7 @@ import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { approvalFor, parseWorktreeList, suggestedCleanup, type StorageReport } from '../src/core/workspace-storage.js';
 import { sizeOf } from '../src/main/dir-size.js';
-import { WorkspaceStorage, type ChatFile } from '../src/main/workspace-storage-host.js';
+import { WorkspaceStorage, retryTransient, type ChatFile } from '../src/main/workspace-storage-host.js';
 
 /**
  * A WORKSPACE'S DISK, AND ITS CLUTTER (Tynn #697). The owner: "genie needs to track disk usage by workspace including trash
@@ -293,8 +293,9 @@ describe('Move to .trash', () => {
 
 describe('Empty trash — permanent, only with approval, only inside .trash', () => {
     async function fill() {
-        await storage.moveToTrash(root, 'ci-artifacts:repos/app/ci-out', { chatFiles: [] });
-        await storage.moveToTrash(root, 'worktrees:wt/clean', { chatFiles: [] });
+        // Both moves must succeed, and say why if not: a Windows failure once showed only "deleted 1, expected 2".
+        expect(await storage.moveToTrash(root, 'ci-artifacts:repos/app/ci-out', { chatFiles: [] })).toMatchObject({ ok: true });
+        expect(await storage.moveToTrash(root, 'worktrees:wt/clean', { chatFiles: [] })).toMatchObject({ ok: true });
         return (await storage.measure(root, { chatFiles: [] })).trash;
     }
 
@@ -338,6 +339,37 @@ describe('Empty trash and symlinks', () => {
         expect(trash[0]!.bytes).toBe(0);
         expect(await storage.emptyTrash(root, approvalFor(trash))).toMatchObject({ ok: true, deleted: 1 });
         expect(existsSync(join(outside, 'big.bin'))).toBe(true);
+    });
+});
+
+describe('a handle another process still holds (Windows: git cannot rename the folder for a moment)', () => {
+    it('retryTransient: tries again after a permission failure, gives up on a final one, stops at the limit', async () => {
+        const waits: number[] = [];
+        const wait = async (ms: number) => { waits.push(ms); };
+        let n = 0;
+        const flaky = async () => (++n < 3 ? { ok: false as const, error: "fatal: failed to move 'a' to 'b': Permission denied" } : { ok: true as const });
+        expect(await retryTransient(flaky, 8, wait)).toEqual({ ok: true });
+        expect(n).toBe(3);
+        expect(waits).toEqual([250, 500]);
+        // CONTROL: a final failure is not retried; a transient one that never clears stops at the attempt limit.
+        let final = 0;
+        expect(await retryTransient(async () => { final += 1; return { ok: false as const, error: "fatal: cannot move a locked working tree" }; }, 8, wait)).toMatchObject({ ok: false });
+        expect(final).toBe(1);
+        let stuck = 0;
+        await retryTransient(async () => { stuck += 1; return { ok: false as const, error: 'Access is denied.' }; }, 4, wait);
+        expect(stuck).toBe(4);
+    });
+
+    it('Move to .trash of a worktree succeeds although a file inside it is held open for a moment, and Empty trash then removes it', async () => {
+        // On Windows an open handle makes the folder rename fail until it is closed; elsewhere the rename never fails and this passes too.
+        const held = await open(join(root, 'wt', 'clean', 'README.md'), 'r');
+        const release = setTimeout(() => { void held.close(); }, 600);
+        try {
+            expect(await storage.moveToTrash(root, 'worktrees:wt/clean', { chatFiles: [] })).toMatchObject({ ok: true });
+        } finally { clearTimeout(release); await held.close().catch(() => undefined); }
+        const trash = (await storage.measure(root, { chatFiles: [] })).trash;
+        expect(await storage.emptyTrash(root, approvalFor(trash))).toMatchObject({ ok: true, deleted: 1 });
+        expect(existsSync(join(root, 'wt', 'clean'))).toBe(false);
     });
 });
 

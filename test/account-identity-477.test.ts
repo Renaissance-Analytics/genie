@@ -75,34 +75,28 @@ describe('Codex identity comes only from account/read with refreshToken:false', 
     });
 });
 
-describe('the reads run the provider in the account\'s own home', () => {
-    it('Claude: `claude auth status` with the managed home, and the parsed identity', async () => {
+describe('the reads run the provider in its one normal home (Tynn #753)', () => {
+    it('Claude: `claude auth status`, and the parsed identity', async () => {
         const run = vi.fn(async () => answer(claudeStatus({ email: EMAIL, plan: 'pro' })));
         const identity = await readAccountIdentity(record('claude', false), portsFor(run, { PATH: '/bin', CLAUDE_CONFIG_DIR: '/elsewhere' }));
         expect(identity).toEqual({ name: null, email: EMAIL, plan: 'pro' });
         expect(run).toHaveBeenCalledTimes(1);
-        const [binary, args, options] = run.mock.calls[0] as unknown as [string, string[], { env: Record<string, string> }];
+        const [binary, args, options] = run.mock.calls[0] as unknown as [string, string[], { env?: Record<string, string> }];
         expect(binary).toBe('/bin/claude');
         expect(args).toEqual(['auth', 'status']);
-        expect(options.env.CLAUDE_CONFIG_DIR).toBe('/genie/accounts/claude/a');
+        // No environment of Genie making: the provider answers from its own normal home.
+        expect(options.env).toBeUndefined();
     });
 
-    it('a legacy account inherits the parent environment exactly: an unset variable stays unset', async () => {
-        const run = vi.fn(async () => answer(claudeStatus({ email: EMAIL })));
-        await readAccountIdentity(record('claude', true), portsFor(run, { PATH: '/bin' }));
-        const options = (run.mock.calls as unknown as unknown[][])[0]![2] as { env: Record<string, string> };
-        expect(Object.keys(options.env).filter((k) => /^(CLAUDE_CONFIG_DIR|CODEX_HOME)$/i.test(k))).toEqual([]);
-    });
-
-    it('Codex: the App Server with CODEX_HOME, the account/read conversation as its input, and nothing else run', async () => {
+    it('Codex: the App Server, the account/read conversation as its input, and nothing else run', async () => {
         const run = vi.fn(async () => answer(codexReply({ type: 'chatgpt', email: EMAIL, planType: 'pro' })));
         const identity = await readAccountIdentity(record('codex', false, 'b'), portsFor(run));
         expect(identity).toEqual({ name: null, email: EMAIL, plan: 'pro' });
         expect(run).toHaveBeenCalledTimes(1);
-        const [binary, args, options] = run.mock.calls[0] as unknown as [string, string[], { env: Record<string, string>; input: string }];
+        const [binary, args, options] = run.mock.calls[0] as unknown as [string, string[], { env?: Record<string, string>; input: string }];
         expect(binary).toBe('/bin/codex');
         expect(args).toEqual(['app-server', '--listen', 'stdio://']);
-        expect(options.env.CODEX_HOME).toBe('/genie/accounts/codex/b');
+        expect(options.env).toBeUndefined();
         expect(options.input).toBe(codexAccountReadInput());
     });
 
@@ -113,11 +107,11 @@ describe('the reads run the provider in the account\'s own home', () => {
     });
 });
 
-describe('the reader feeds AccountsHost.recordIdentity', () => {
+describe('the reader feeds AccountsHost.recordSignedIn (Tynn #753)', () => {
     let dir = '';
     afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = ''; });
 
-    it('records each account, the label follows the email unless the person renamed it, and an unchanged identity is not rewritten', async () => {
+    it('names the account in use by its email, a new email is a new known account that becomes active, and a rename is kept', async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie-identity-477-'));
         const host = await AccountsHost.open({ root: join(dir, 'genie'), legacyHomes: { claude: join(dir, 'old-claude'), codex: join(dir, 'old-codex') } });
         const run = vi.fn(async (binary: string) => answer(binary.endsWith('claude') ? claudeStatus({ email: EMAIL }) : codexReply({ type: 'chatgpt', email: 'second@example.test', planType: 'team' })));
@@ -128,10 +122,10 @@ describe('the reader feeds AccountsHost.recordIdentity', () => {
         await host.rename('account_legacy_claude', 'Work');
         run.mockImplementation(async () => answer(claudeStatus({ email: 'third@example.test' })));
         await reader.refreshProvider('claude');
-        expect(host.get('account_legacy_claude')).toMatchObject({ label: 'Work', identity: { email: 'third@example.test' } });
-        const spy = vi.spyOn(host, 'recordIdentity');
+        expect(host.get('account_legacy_claude')).toMatchObject({ label: 'Work', identity: { email: EMAIL } });
+        expect(host.activeFor('claude')).toMatchObject({ label: 'third@example.test', identity: { email: 'third@example.test' } });
         await reader.refreshProvider('claude');
-        expect(spy).not.toHaveBeenCalled();
+        expect(host.list().filter((x) => x.provider === 'claude')).toHaveLength(2);
     });
 
     it('a failed read keeps the last identity', async () => {

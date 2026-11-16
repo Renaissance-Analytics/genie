@@ -85,7 +85,7 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     update_channel: 'general', launch_at_login: 'general', start_minimized: 'general', rate_limit_refresh: 'general',
     do_not_disturb: 'general', dnd_reply: 'general', dnd_question_sound: 'general',
     // How much finished history genie-host keeps (Tynn #549): the owner changes the three numbers here.
-    finished_kept_per_agent: 'general', finished_seen_days: 'general', handoff_kept_kb: 'general',
+    finished_kept_per_agent: 'general', finished_seen_days: 'general', handoff_kept_kb: 'general', turn_stall_minutes: 'general',
     notification_sounds: 'notifications', rate_limit_alerts: 'notifications',
     command_window_hotkey: 'keyboard', ftq_nudge_hotkey: 'keyboard', send_key: 'keyboard',
     // Drawn as its own row (a folder + Browse) on General, not a generic one.
@@ -95,7 +95,7 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     theme: 'appearance', sidebar_width: 'appearance',
 
     default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',
-    app_inbox: 'workspace-defaults',
+    app_inbox: 'workspace-defaults', playwright_server: 'workspace-defaults',
     limit_terminals: 'workspace-defaults', limit_processes: 'workspace-defaults',
     saved_prompts: 'prompts',
     mcp_sync_claude: 'agent-mcp', mcp_sync_cursor: 'agent-mcp', mcp_sync_codex: 'agent-mcp', mcp_sync_hooks: 'agent-mcp',
