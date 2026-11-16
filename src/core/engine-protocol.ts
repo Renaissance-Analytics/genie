@@ -144,6 +144,7 @@ export const ENGINE_METHODS = [
     'engine.featureQuestion',
     'client.featureEffect',
     'engine.processes',
+    'engine.cloneOffers',
     // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
     // Their state is sent as `plugins.event` before `engine.ready` and again on every change.
     'engine.plugins',

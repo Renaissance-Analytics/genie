@@ -53,7 +53,10 @@ import type { RepoListing } from '../core/github.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
+import type { CloneOffer } from '../core/clone-offers.js';
 import type { SaveChoices, SavePreviewReply, SaveReply } from '../core/workspace-save.js';
+
+export type CloneOffersReply = { ok: true; offers: CloneOffer[]; trusted: boolean } | { ok: false; reason: string };
 
 /**
  * THE RENDERER'S ONLY WINDOW ONTO THE MAIN PROCESS.
@@ -419,6 +422,9 @@ export interface GenieBridge {
         savePreview?(workspaceId: string): Promise<SavePreviewReply>;
         /** Write the preview's files, with each conflict settled by `choices`. Never commits. */
         save?(workspaceId: string, choices: SaveChoices): Promise<SaveReply>;
+        /** What a clone's repo brings that this machine does not have yet (Tynn #756): listed, and one applied (a new one only). */
+        cloneOffers?(workspaceId: string): Promise<CloneOffersReply>;
+        applyOffer?(workspaceId: string, offerId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */

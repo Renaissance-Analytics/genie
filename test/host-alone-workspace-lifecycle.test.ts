@@ -105,6 +105,8 @@ const CALLS: Array<[RemoteMethod, () => unknown[]]> = [
     ['workspaces.setMcpServer', () => ['tynn', 'slack', false]],
     ['workspaces.savePreview', () => ['tynn']],
     ['workspaces.save', () => ['tynn', {}]],
+    ['workspaces.cloneOffers', () => ['tynn']],
+    ['workspaces.applyOffer', () => ['tynn', 'flow:.flows/a.json']],
 ];
 
 describe('each is answered with no window', () => {

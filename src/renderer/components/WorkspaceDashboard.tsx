@@ -68,6 +68,8 @@ export interface WorkspaceDashboardProps {
     onAddAgent: () => void;
     /** Open Save to repo for this workspace (Tynn #756). Absent = the host cannot save, so no button. */
     onSaveToRepo?: (() => void) | undefined;
+    /** What the repo brings that this machine lacks (Tynn #756): the count, and the click that opens them. Absent or 0 = no badge. */
+    offers?: { count: number; onOpen: () => void } | undefined;
     /** Start a stopped agent (the session host's start-or-reattach). Absent = no Start is offered. */
     onStartAgent?: ((agentId: string) => void) | undefined;
 }
@@ -168,12 +170,14 @@ function Lane({ lane, onOpenAgent, onOpenDeckItem, onStartAgent }: { lane: DashL
     );
 }
 
-export function WorkspaceDashboard({ name, workspaceId, view, onOpenAgent, onOpenDeckItem, onAddAgent, onSaveToRepo, onStartAgent }: WorkspaceDashboardProps) {
+export function WorkspaceDashboard({ name, workspaceId, view, onOpenAgent, onOpenDeckItem, onAddAgent, onSaveToRepo, offers, onStartAgent }: WorkspaceDashboardProps) {
     return (
         <div data-workspace-dashboard={workspaceId} className="flex h-full min-w-0 flex-1 flex-col gap-2 overflow-y-auto bg-[var(--bg-1)] px-5 py-4">
             {/* ANOTHER AGENT, ALWAYS (Tynn story #381): a fixed row above the lanes, the same with none, one or many — it never moves. */}
             <div data-dash-header="" className="flex h-7 shrink-0 items-center justify-end gap-2">
                 {/* SAVE TO REPO (Tynn #756): one click from the workspace, beside Add agent; shown only when the host can save. */}
+                {/* WHAT THE REPO BRINGS (Tynn #756): a teammate's flows, processes or tabs, offered and never applied by themselves. */}
+                {offers && offers.count > 0 ? <Button type="button" size="xs" data-action="clone-offers" data-clone-offers={workspaceId} onClick={offers.onOpen}>{offers.count === 1 ? '1 change in the repo' : `${offers.count} changes in the repo`}</Button> : null}
                 {onSaveToRepo ? <Button type="button" size="xs" data-action="save-to-repo" data-save-to-repo={workspaceId} onClick={onSaveToRepo}>Save to repo</Button> : null}
                 <Button type="button" size="xs" icon="plus" data-action="add-agent" data-add-agent={workspaceId} onClick={onAddAgent}>Add agent</Button>
             </div>

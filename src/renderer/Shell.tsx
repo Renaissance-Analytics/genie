@@ -209,6 +209,8 @@ export interface ShellProps {
     onAddAgent: (workspaceId: string) => void;
     /** Open Save to repo for a workspace (Tynn #756). Absent = this host cannot save, so no button. */
     onSaveToRepo?: ((workspaceId: string) => void) | undefined;
+    /** What the routed workspace's repo brings (Tynn #756): its count, and the click that opens them. */
+    cloneOffers?: { workspaceId: string; count: number; onOpen: () => void } | undefined;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
     onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
@@ -397,6 +399,7 @@ export function Shell({
     onChatAgent: onChatAgentProp,
     onAddAgent,
     onSaveToRepo,
+    cloneOffers,
     onAddWorkspace,
     onWakeWorkspace,
     onOpenBrowser,
@@ -1018,6 +1021,7 @@ export function Shell({
                             agentTabs={agentTabsOf(snapshot.agents, parsed.workspaceId)}
                             onAddAgent={readOnly ? undefined : () => onAddAgent(parsed.workspaceId)}
                             {...(readOnly || !onSaveToRepo ? {} : { onSaveToRepo: () => onSaveToRepo(parsed.workspaceId) })}
+                            {...(readOnly || !cloneOffers || cloneOffers.workspaceId !== parsed.workspaceId ? {} : { offers: { count: cloneOffers.count, onOpen: cloneOffers.onOpen } })}
                             // Another tab leaves the Files tab (beta.35 #41) — unless the files are popped out into their own window.
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view, ...(parsed.detached ? {} : { panel: null, file: null, line: null, filter: null }) }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}

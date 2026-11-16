@@ -38,6 +38,7 @@ import type { SupervisorService } from './supervisor-host.js';
 import type { HostingService } from './hosting-host.js';
 import type { AppInboxHost } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
+import type { CloneOffersService } from './clone-offers-service.js';
 import type { ProcessesService } from './processes-host.js';
 import type { BrowserService } from './browser-service.js';
 import type { FlowsService } from './flows-host.js';
@@ -185,6 +186,8 @@ export interface EngineServerOptions {
     readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
+    /** The offers a clone's repo brings (Tynn #756: clone-offers-service.ts). Absent = `engine.cloneOffers` is refused. */
+    readonly cloneOffers?: CloneOffersService;
     /** Between the window and the Genie browser's process (P2b: browser-service.ts). Absent = `engine.browser` is refused. */
     readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
@@ -847,6 +850,9 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.cloneOffers':
+                if (!this.#options.cloneOffers) throw new Error('This host does not watch a workspace’s repo.');
+                return this.#options.cloneOffers.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.plugins':
                 if (!this.#options.plugins) throw new Error('This host keeps no plugins.');
                 if (!conn.local) throw new Error('Genie’s plugins are changed from a local window only.');
