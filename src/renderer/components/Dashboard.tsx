@@ -10,6 +10,9 @@ import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
+import { AccountsChip } from './AccountsChip.js';
+import type { AccountsSnapshot } from '../../core/accounts-view.js';
+import type { SwitchOffer } from '../../core/switch-offer.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 import { agentStatusStyle } from '../agent-status-color.js';
@@ -245,7 +248,7 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
     );
 }
 
-function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting, switchOffer }: {
     row: AgentRow;
     workspaceName: string;
     workspaceColor?: string | undefined;
@@ -267,6 +270,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     waiting?: { badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void } | undefined;
     /** The windows column (Tynn #706): absent = this row has none (Genie's own, or a workspace this window may not open). */
     windows?: { onTerminal?: (() => void) | undefined; onFiles?: (() => void) | undefined } | undefined;
+    /** Its provider's standing switch offer (Tynn #483): one click starts the switch. Absent = none. */
+    switchOffer?: { offer: SwitchOffer; onSwitch: (provider: string) => void } | undefined;
 }) {
     const role = reveal ? (reveal.focus === row.id ? 'focus' : reveal.peers[row.id] ? 'peer' : 'dim') : null;
     const peerLink = role === 'peer' ? reveal!.peers[row.id]! : null;
@@ -294,6 +299,13 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 <span data-agent-name="" className="truncate font-medium">{row.name}</span>
                 {emoji ? <span data-row-emoji={emoji} className="shrink-0 animate-pulse" aria-label="what it just did">{emoji}</span> : null}
                 <ProviderLogo provider={row.provider} />
+                {switchOffer ? (
+                    <Button type="button" size="xs" variant="ghost" icon="arrow-right-left" data-switch-offer-row={switchOffer.offer.id}
+                        aria-label={`${switchOffer.offer.label} is near its ${windowWords(switchOffer.offer.window)} limit: switch account`}
+                        title={`${switchOffer.offer.label}: ${switchOffer.offer.over ? 'spent' : `${switchOffer.offer.leftPct}% left`} ${windowWords(switchOffer.offer.window)}. Switch account`}
+                        className="shrink-0 px-1 text-[var(--warning)]"
+                        onClick={(event) => { event.stopPropagation(); switchOffer.onSwitch(row.provider); }} />
+                ) : null}
             </div>
 
             <div data-column="workspace" data-workspace={row.workspaceId} {...(workspacePulsed ? { 'data-workspace-pulse': 'true' } : {})} className={`flex min-w-0 items-center gap-1.5${workspacePulsed ? ` ${WORKSPACE_PULSE}` : ''}`}>
@@ -470,6 +482,12 @@ export interface DashboardProps {
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** Each provider's rate limit, buffered in main (the header's pills). */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** Every known account and the standing switch offers (Tynn #483): the header's account chips. Absent = the pills alone. */
+    accounts?: AccountsSnapshot | undefined;
+    /** One click to switch a provider's account (S9): the provider's own login, in its one home. */
+    onSwitchAccount?: ((provider: string) => void) | undefined;
+    /** Not now on a switch offer. */
+    onDismissSwitchOffer?: ((id: string) => void) | undefined;
     /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
     now?: number | undefined;
     /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
@@ -617,7 +635,7 @@ export const GENIE_ROW = 'genie:';
 
 const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, now, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, accounts, onSwitchAccount, onDismissSwitchOffer, now, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
@@ -773,7 +791,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent">
                     {['J', 'K', '↵'].map((key) => <kbd key={key} className="rounded border border-[var(--border-1)] px-1 font-mono">{key}</kbd>)}
                 </span>
-                <RateLimitPills limits={rateLimits ?? {}} {...(now !== undefined ? { now } : {})} />
+                <RateLimitPills limits={rateLimits ?? {}} accounts={accounts} onSwitchAccount={onSwitchAccount} onDismissSwitchOffer={onDismissSwitchOffer} {...(now !== undefined ? { now } : {})} />
                 <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie">Chat <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span></Button>
             </div>
             {/* "Dismiss all stale" or "Dismiss all older" refused: said under the header (Tynn #600). */}
@@ -802,7 +820,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={row.id === genie?.id || windowEntriesFor(row.workspaceId, scopeWorkspaceId).length === 0 ? undefined : { onTerminal: onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined, onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined }} />
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={row.id === genie?.id || windowEntriesFor(row.workspaceId, scopeWorkspaceId).length === 0 ? undefined : { onTerminal: onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined, onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined }} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
                     {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}
@@ -838,14 +856,26 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
  * window. A click or Enter opens a POPOVER with every window (the owner, 2026-10-31: "can we make these cleaner? this
  * should be a popover not a tooltip"). Buffered in main, so this redraws at most once per provider per buffer.
  */
-export function RateLimitPills({ limits, now: pinned }: { limits: Readonly<Record<string, Headroom>>; now?: number }) {
+export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer }: {
+    limits: Readonly<Record<string, Headroom>>;
+    now?: number;
+    /** Every known account and the standing offers (Tynn #483): a provider with accounts draws its account chip instead. */
+    accounts?: AccountsSnapshot | undefined;
+    onSwitchAccount?: ((provider: string) => void) | undefined;
+    onDismissSwitchOffer?: ((id: string) => void) | undefined;
+}) {
     // Re-read twice a minute: a window that resets while the header is open turns Refreshed without a new reading.
     const now = useNow(true, pinned, 30_000);
-    const providers = Object.keys(limits).sort();
+    const viewOf = (p: string) => accounts?.providers.find((v) => v.provider === p) ?? null;
+    const providers = [...new Set([...Object.keys(limits), ...(accounts?.providers.map((v) => v.provider) ?? [])])].sort();
     if (providers.length === 0) return null;
     return (
         <div data-rate-limits="" className="flex items-center gap-1.5">
-            {providers.map((p) => <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} />)}
+            {providers.map((p) => {
+                const view = viewOf(p);
+                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} />;
+                return limits[p] ? <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} /> : null;
+            })}
         </div>
     );
 }

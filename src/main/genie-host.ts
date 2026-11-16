@@ -47,6 +47,7 @@ import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
 import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
+import { accountsView } from '../core/accounts-view.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -1057,6 +1058,7 @@ async function main(): Promise<void> {
     let switchFlow: AccountSwitchFlow | null = null;
     // Switch offers (Tynn #481): made from the rate-limit board, composed with it below.
     let switchOffersNow: SwitchOfferService | null = null;
+    let headroomFeedNow: HeadroomFeed | null = null;
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
@@ -1086,6 +1088,8 @@ async function main(): Promise<void> {
         cancelLogin: (accountId) => { logins?.cancel(accountId); },
         switchAccount: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         switchOffers: { offers: () => switchOffersNow?.offers() ?? [], dismiss: (id) => switchOffersNow?.dismiss(id) ?? false },
+        // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
+        accounts: () => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [] }),
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
@@ -1226,6 +1230,7 @@ async function main(): Promise<void> {
     playwrightSweep.unref();
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
+    headroomFeedNow = headroomFeed;
     // RATE-LIMIT ALERTS (Tynn #748, core/limit-alerts.ts): the person's thresholds are read at each reading; what fired is kept
     // on disk so a restart does not tell a crossing twice. The window plays the sound the alert names and shows the notice.
     const limitAlertsFile = join(home, 'limit-alerts-armed.json');

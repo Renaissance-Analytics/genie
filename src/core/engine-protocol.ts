@@ -66,6 +66,8 @@ export const ENGINE_METHODS = [
     // SWITCH OFFERS (Tynn #481): the offers genie-host makes when the active account's chosen window is near its limit. `[]`;
     // Not now on one: `[offerId]`.
     'engine.switchOffers',
+    // EVERY KNOWN ACCOUNT, with its readings, and the standing offers (Tynn #483): the header's account chips. `[]`.
+    'engine.accounts',
     'engine.dismissSwitchOffer',
     'engine.resumeLimit',
     'engine.clearDesignLogin',

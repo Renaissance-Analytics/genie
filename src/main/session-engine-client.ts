@@ -48,6 +48,7 @@ import type { LiveSession } from '../core/roster.js';
 import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SwitchOffer } from '../core/switch-offer.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
@@ -1323,6 +1324,12 @@ export class SessionEngineClient {
         const reply = await this.call('engine.switchAccount', [provider]);
         if (!reply.ok) return { ok: false, reason: reply.reason };
         return reply.value as { ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string };
+    }
+
+    /** Every known account and the standing offers (Tynn #483); `null` while the host cannot answer. */
+    async accounts(): Promise<AccountsSnapshot | null> {
+        const value = await this.#value<unknown>('engine.accounts', [], null);
+        return value !== null && typeof value === 'object' && Array.isArray((value as AccountsSnapshot).providers) ? (value as AccountsSnapshot) : null;
     }
 
     /** The switch offers standing in the host (Tynn #481); none while the host cannot answer. */

@@ -1951,6 +1951,9 @@ async function boot(): Promise<void> {
         const started = await signIn!(DESIGN_LOGIN);
         return started.ok ? { ok: true } : started;
     });
+    // THE HEADER'S ACCOUNT CHIPS (Tynn #483): every known account with its readings, and the standing offers, read from genie-host.
+    ipcMain.handle('genie:accounts', async () => (await agentEngineLink?.client.accounts()) ?? null);
+    ipcMain.handle('genie:switch-offer-dismiss', async (_event, raw: unknown) => typeof raw === 'string' && raw !== '' ? (await agentEngineLink?.client.dismissSwitchOffer(raw)) ?? false : false);
     // SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps.
     ipcMain.handle('genie:account-switch', async (_event, raw: unknown) => {
         if (typeof raw !== 'string' || raw === '') return { ok: false, reason: 'No provider named.' };

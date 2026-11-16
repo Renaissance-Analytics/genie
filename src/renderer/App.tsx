@@ -61,6 +61,7 @@ import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { limitAlertSound } from '../core/limit-alerts.js';
 import { accountSwitchOutcomeOf, accountSwitchToast } from '../core/account-switch.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { redialer } from './remote-redial.js';
 import { droneReconnect, type DroneHold } from './drone-reconnect.js';
@@ -1128,6 +1129,16 @@ function DesktopApp({ bridge }: AppProps) {
     // Each provider's rate limit for the Dashboard header (buffered in main; this only stores what arrives).
     const [rateLimits, setRateLimits] = useState<Readonly<Record<string, Headroom>>>({});
     useEffect(() => resolvedBridge?.onHeadroom?.(setRateLimits), [resolvedBridge]);
+    // EVERY KNOWN ACCOUNT AND THE STANDING OFFERS (Tynn #483): read from genie-host when the window opens, whenever a reading
+    // reaches it, and after a switch or a Not now. The header's account chips draw them.
+    const [accountsSnapshot, setAccountsSnapshot] = useState<AccountsSnapshot | undefined>(undefined);
+    const readAccounts = useCallback(() => { void resolvedBridge?.accounts?.().then((s) => { if (s) setAccountsSnapshot(s); }, () => {}); }, [resolvedBridge]);
+    useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
+    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch') readAccounts(); }), [resolvedBridge, readAccounts]);
+    const switchAccount = useCallback((provider: string) => {
+        void resolvedBridge?.switchAccount?.(provider).then((r) => { if (!r.ok) showAlert({ title: 'The switch could not start', body: r.reason }); }, () => {});
+    }, [resolvedBridge, showAlert]);
+    const dismissSwitchOffer = useCallback((id: string) => { void resolvedBridge?.dismissSwitchOffer?.(id).then(() => readAccounts(), () => {}); }, [resolvedBridge, readAccounts]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
         if (action.kind === 'limit-alert' && action.title && action.body) {
@@ -2043,6 +2054,9 @@ function DesktopApp({ bridge }: AppProps) {
             pulsingWorkspaces={pulsingIds(pulses)}
             rowEmoji={rowEmoji}
             rateLimits={rateLimits}
+            accounts={accountsSnapshot}
+            onSwitchAccount={switchAccount}
+            onDismissSwitchOffer={dismissSwitchOffer}
             mailSignals={mailSignalList}
             route={route}
             address={shownAddress}

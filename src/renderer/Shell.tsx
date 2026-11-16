@@ -5,6 +5,7 @@ import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnTabHost } from '../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../core/tynn-issues.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
 import { deviceExpiryAlert } from '../core/device-expiry.js';
 import { PairPrompt } from './components/PairPrompt.js';
 import type { MailSignal } from '../core/mail-signals.js';
@@ -126,6 +127,12 @@ export interface ShellProps {
     pulsingWorkspaces?: ReadonlySet<string> | undefined;
     /** Each provider's rate limit for the Dashboard header. */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** Every known account and the standing switch offers, for the header's account chips (Tynn #483). */
+    accounts?: AccountsSnapshot | undefined;
+    /** One click to switch a provider's account (S9). */
+    onSwitchAccount?: ((provider: string) => void) | undefined;
+    /** Not now on a switch offer (S8). */
+    onDismissSwitchOffer?: ((id: string) => void) | undefined;
     /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
     now?: number | undefined;
     /** Mail between agents for the Dashboard (genie#1209). */
@@ -374,6 +381,9 @@ export function Shell({
     rowEmoji,
     pulsingWorkspaces,
     rateLimits,
+    accounts,
+    onSwitchAccount,
+    onDismissSwitchOffer,
     now,
     mailSignals,
     workspaceFaults,
@@ -823,6 +833,9 @@ export function Shell({
                             pulsing={pulsingWorkspaces}
                             rowEmoji={rowEmoji}
                             rateLimits={rateLimits}
+                            accounts={accounts}
+                            onSwitchAccount={onSwitchAccount}
+                            onDismissSwitchOffer={onDismissSwitchOffer}
                             now={now}
                             mailSignals={mailSignals}
                             rows={snapshot.agents}
