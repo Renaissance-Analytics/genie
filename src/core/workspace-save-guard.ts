@@ -10,7 +10,7 @@
  * shape, so a future member added to a schema by mistake still cannot leak a password.
  */
 
-export type GuardRule = 'absolute-path' | 'port' | 'secret-key' | 'secret-value' | 'machine-key' | 'unsafe-file-path';
+export type GuardRule = 'absolute-path' | 'port' | 'secret-key' | 'secret-value' | 'machine-key' | 'unsafe-file-path' | 'unsafe-cwd';
 
 export interface GuardViolation {
     /** Where, as a path into the value: `sites.998de12a1f1278a9.command[6]`. */
@@ -49,9 +49,31 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 /** The path of a child: `a.b` for a key, `a[2]` for an index. */
 const child = (base: string, key: string): string => (base === '' ? key : `${base}.${key}`);
 
-function scanString(text: string, path: string, out: GuardViolation[]): void {
+/**
+ * Why a `cwd` (the folder something runs in) is not a folder inside the workspace, or null when it is. The generic path scan
+ * needs two segments or a well-known root, so it misses `/data`, and it cannot see a RELATIVE path that climbs out of the
+ * workspace; a `cwd` is read by its own rule: relative (no leading slash or backslash, no drive, no UNC, no `~`), and once
+ * normalised never above the workspace.
+ */
+export function cwdProblem(cwd: string): string | null {
+    if (cwd.trim() === '') return 'is empty';
+    if (/^[\\/]/.test(cwd)) return 'starts with a slash, so it is an absolute path or a network share';
+    if (/^[A-Za-z]:/.test(cwd)) return 'starts with a drive letter';
+    if (cwd.startsWith('~')) return 'starts with ~, the home folder';
+    let depth = 0;
+    for (const segment of cwd.split(/[\\/]+/)) {
+        if (segment === '' || segment === '.') continue;
+        if (segment === '..') {
+            depth -= 1;
+            if (depth < 0) return 'climbs out of the workspace with ..';
+        } else depth += 1;
+    }
+    return null;
+}
+
+function scanString(text: string, path: string, out: GuardViolation[], skipPath = false): void {
     if (text.startsWith('//')) return;
-    if (ABSOLUTE_PATH.test(text)) out.push({ path, rule: 'absolute-path', reason: `${path} holds an absolute path; it names this machine and would not exist in a clone. Move what it runs into the workspace and use a relative path inside the workspace` });
+    if (!skipPath && ABSOLUTE_PATH.test(text)) out.push({ path, rule: 'absolute-path', reason: `${path} holds an absolute path; it names this machine and would not exist in a clone. Move what it runs into the workspace and use a relative path inside the workspace` });
     if (LIVE_PORT.test(text)) out.push({ path, rule: 'port', reason: `${path} holds a loopback address with a port; Genie hands out ports on each machine, so a saved one points at nothing` });
     if (SECRET_VALUE.some((re) => re.test(text))) out.push({ path, rule: 'secret-value', reason: `${path} looks like a secret (a key, token or private key)` });
 }
@@ -65,6 +87,12 @@ function walk(value: unknown, path: string, out: GuardViolation[]): void {
     if (!isRecord(value)) return;
     for (const [key, item] of Object.entries(value)) {
         const here = child(path, key);
+        if (key === 'cwd' && typeof item === 'string') {
+            const problem = cwdProblem(item);
+            if (problem !== null) out.push({ path: here, rule: 'unsafe-cwd', reason: `${here} ${problem}; a cwd is a folder inside the workspace, like repos/app` });
+            scanString(item, here, out, true);
+            continue;
+        }
         if (MACHINE_KEYS.has(key)) out.push({ path: here, rule: 'machine-key', reason: `${here} is machine state or a permission grant (${key}); it is rebuilt or chosen on each machine, never saved` });
         else if (SECRET_KEY.test(key) && !(Array.isArray(item) && key === 'envKeys')) out.push({ path: here, rule: 'secret-key', reason: `${here} is named like a secret (${key}); values like it are never saved` });
         walk(item, here, out);

@@ -1,4 +1,5 @@
 import { canonicalFlowDocument } from '../core/flow-form.js';
+import { cwdProblem } from '../core/workspace-save-guard.js';
 import { flowTrustItems, rebindFlow } from '../core/workspace-flows.js';
 import { importFlowDocument } from './flow-kinds.js';
 
@@ -37,6 +38,16 @@ function canon(value: unknown): string {
     return JSON.stringify(value) ?? 'undefined';
 }
 
+/** The folder each step of a flow runs in (`config.cwd`), as written. */
+function stepFolders(document: unknown): string[] {
+    const graph = (document as { graph?: { nodes?: unknown } } | null)?.graph;
+    const nodes = Array.isArray(graph?.nodes) ? (graph!.nodes as unknown[]) : [];
+    return nodes.flatMap((n) => {
+        const cwd = (n as { config?: { cwd?: unknown } } | null)?.config?.cwd;
+        return typeof cwd === 'string' ? [cwd] : [];
+    });
+}
+
 const stemOf = (path: string): string => (path.split('/').at(-1) ?? path).replace(/\.json$/i, '');
 
 export async function restoreFlows(files: readonly { path: string; text: string }[], workspaceId: string, ports: FlowPorts, options: { trusted: boolean }): Promise<FlowRestore> {
@@ -60,6 +71,11 @@ export async function restoreFlows(files: readonly { path: string; text: string 
         }
         if (dropped.length > 0) out.ignored.push({ file: file.path, keys: dropped.sort() });
         const document = canonicalFlowDocument(rebindFlow(stripped, workspaceId));
+        const wandering = stepFolders(document).map((cwd) => ({ cwd, problem: cwdProblem(cwd) })).find((s) => s.problem !== null);
+        if (wandering) {
+            out.refused.push({ file: file.path, reason: `a step's cwd ${JSON.stringify(wandering.cwd)} ${wandering.problem}; a cwd is a folder inside the workspace, like repos/app` });
+            continue;
+        }
         const imported = importFlowDocument(document);
         if (!imported.ok) {
             out.refused.push({ file: file.path, reason: imported.problems.join('; ') });
