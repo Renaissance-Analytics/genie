@@ -46,10 +46,11 @@ describe('S3: the persisted home reaches the existing login without opening an a
     it('the production owners resolve launch and legacy probes from the host book, and reload login homes on reconnect', () => {
         const source = (name: string) => readFileSync(new URL(`../src/main/${name}.ts`, import.meta.url), 'utf8');
         const host = source('genie-host'), window = source('main');
-        expect(host).toMatch(/accountById: id => accounts\.get\(id\)/);
-        expect(host).toMatch(/providerAccount: provider => isAcpProvider\(provider\) \? accounts\.defaultFor\(provider\) : null/);
-        expect(host).toMatch(/realListModels\(provider, accounts\.defaultFor\(provider\) \?\? undefined\)/);
-        expect(host).toMatch(/checkProviderHealth\(provider, realProviderHealthPorts\(execFileRunner\), accounts\.defaultFor\(provider\) \?\? undefined\)/);
+        // Tynn #751: ONE active account per provider; every launch and probe reads it, never an agent's own.
+        expect(host).toMatch(/activeAccount: provider => isAcpProvider\(provider\) \? accounts\.activeFor\(provider\) : null/);
+        expect(host).toMatch(/providerAccount: provider => isAcpProvider\(provider\) \? accounts\.activeFor\(provider\) : null/);
+        expect(host).toMatch(/realListModels\(provider, accounts\.activeFor\(provider\)\)/);
+        expect(host).toMatch(/checkProviderHealth\(provider, realProviderHealthPorts\(execFileRunner\), accounts\.activeFor\(provider\)\)/);
         expect(host).toMatch(/env: providerAccountEnv\(account, process\.env\)/);
         // S6 (Tynn #479): the sign-in runs in the host, per account, from the host book; the window opens no book and runs no status.
         expect(host).toMatch(/accountFor: \(provider, accountId\) => \{[\s\S]{0,200}accounts\.get\(accountId\)/);
@@ -60,10 +61,10 @@ describe('S3: the persisted home reaches the existing login without opening an a
 });
 
 
-describe('S3: the observed Take Over TUI keeps the bound account', () => {
+describe('S3 (R1, Tynn #751): the observed Take Over TUI uses the provider active account', () => {
     function fixture(provider: 'claude' | 'codex', selected: 'matching' | 'missing' | 'mismatched' = 'matching', mcp = true, legacy = false) {
         const opened: Array<{ env?: Readonly<Record<string, string>> | undefined }> = [];
-        const record = { ...agentRecord({ id: mintAgentId(), name: 'fixture', provider, workspaceId: 'fixture' }), accountId: `account_${'a'.repeat(32)}` };
+        const record = agentRecord({ id: mintAgentId(), name: 'fixture', provider, workspaceId: 'fixture' });
         const account = { provider: selected === 'mismatched' ? (provider === 'claude' ? 'codex' as const : 'claude' as const) : provider,
             home: `/genie/accounts/${provider}/selected`, legacy };
         const host = new TakeOverHost({ accountFor: () => selected === 'missing' ? null : account,

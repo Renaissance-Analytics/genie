@@ -64,7 +64,7 @@ const inert: SessionDriverFactory = () => ({ start: () => {}, prompt: () => {}, 
 type Launch = (configured: string | undefined, service: Readonly<Record<string, string>>,
     runtime: { execPath: string; electron: boolean }, account?: AccountRecord) => ReturnType<typeof providerLaunchOptions>;
 const launch = providerLaunchOptions as Launch;
-type AccountHostOptions = ConstructorParameters<typeof SessionHost>[0] & { accountById(id: string): AccountRecord | null };
+type AccountHostOptions = ConstructorParameters<typeof SessionHost>[0];
 
 function hostFixture(dir: string, a: AccountRecord | null, deferred = false) {
     const seen: Array<{ record: AgentRecord; resume: string | null; account?: AccountRecord; env: Env }> = [];
@@ -75,7 +75,7 @@ function hostFixture(dir: string, a: AccountRecord | null, deferred = false) {
         return inert;
     };
     const options: AccountHostOptions = { userData: dir, store: memoryStore, driverFor, processTree: noProcesses,
-        serviceEnvFor: () => injected, accountById: id => a?.id === id ? a : null,
+        serviceEnvFor: () => injected, activeAccount: () => a,
         ...(deferred ? { prepareMcpServers: async () => [] } : {}) };
     const host = new SessionHost(options); hosts.push(host);
     return { host, seen };
@@ -148,10 +148,10 @@ describe('S3: the actual driver allow-list', () => {
 
 describe('S3: host launch and resume', () => {
     for (const provider of ['claude', 'codex'] as const) for (const deferred of [false, true]) for (const resume of [null, 'native-thread-A']) {
-        it(`${provider} ${deferred ? 'deferred' : 'immediate'} ${resume ? 'resume' : 'fresh'} resolves the bound account before the driver`, async () => {
+        it(`${provider} ${deferred ? 'deferred' : 'immediate'} ${resume ? 'resume' : 'fresh'} resolves the provider active account before the driver`, async () => {
             const dir = await directory(), a = account(provider);
             const f = hostFixture(dir, a, deferred);
-            const record = { ...agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider, name: 'fixture' }), accountId: a.id, threadId: resume };
+            const record = { ...agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider, name: 'fixture' }), threadId: resume };
             expect(f.host.start(record, dir)).toEqual({ ok: true });
             await vi.waitFor(() => expect(f.seen).toHaveLength(1));
             expect(f.seen[0]!.account).toEqual(a);
@@ -159,15 +159,15 @@ describe('S3: host launch and resume', () => {
             selected(f.seen[0]!.env, a);
         });
     }
-    it('a missing bound account is refused before constructing a driver', async () => {
-        const dir = await directory(), a = account('claude'), f = hostFixture(dir, null);
-        const r = f.host.start({ ...agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider: 'claude', name: 'fixture' }), accountId: a.id }, dir);
+    it('a provider with no active account is refused before constructing a driver', async () => {
+        const dir = await directory(), f = hostFixture(dir, null);
+        const r = f.host.start(agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider: 'claude', name: 'fixture' }), dir);
         expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/account/i) });
         expect(f.seen).toEqual([]);
     });
-    it('a bound account for another provider is refused before constructing a driver', async () => {
+    it('an active account that belongs to another provider is refused before constructing a driver', async () => {
         const dir = await directory(), a = account('codex'), f = hostFixture(dir, a);
-        const r = f.host.start({ ...agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider: 'claude', name: 'fixture' }), accountId: a.id }, dir);
+        const r = f.host.start(agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider: 'claude', name: 'fixture' }), dir);
         expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/account/i) });
         expect(f.seen).toEqual([]);
     });
@@ -251,7 +251,7 @@ describe('S3: an unset legacy home stays unset at every provider entry point', (
     });
     it.each(['claude', 'codex'] as const)('%s legacy agent launch ignores workspace home overrides and keeps the host home unset', async provider => {
         const a = inherited(provider), dir = await directory(), f = hostFixture(dir, a);
-        const record = { ...agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider, name: 'fixture' }), accountId: a.id };
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'fixture', provider, name: 'fixture' });
         expect(f.host.start(record, dir)).toEqual({ ok: true });
         await vi.waitFor(() => expect(f.seen).toHaveLength(1));
         noHome(f.seen[0]!.env);

@@ -57,6 +57,7 @@ function LoginNotice({ provider }: { provider: string }) {
                     <li>Genie is running <code className="font-mono">{known.login}</code> in the terminal below, in a scratch folder of its own.</li>
                     <li>Follow its prompts. A browser may open: sign in there, then come back to this window.</li>
                     <li>If it asks you to paste a code, paste it into the terminal below and press Enter.</li>
+                    <li>This is {known.name}&apos;s own sign-in, run unchanged: Genie never sees or keeps your sign-in code or token.</li>
                     <li>When it says you are signed in, close this window. Genie checks the login and brings your {known.name} agents back.</li>
                 </ol>
             ) : (

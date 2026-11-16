@@ -1954,8 +1954,8 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:provider-login', async (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
-        // The agent's OWN account (Tynn #479), never the provider's default.
-        const started = await signIn!(record.provider, record.accountId);
+        // The provider's ACTIVE account (Tynn #751): the one every agent runs on.
+        const started = await signIn!(record.provider);
         return started.ok ? { ok: true } : started;
     });
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.

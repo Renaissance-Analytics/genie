@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { OS_AGENT_NAME } from './os-agent.js';
 import { isAcpProvider, type AcpProvider } from './engine.js';
-import { accountIdIsValid, accountThreadKey, legacyAccountId } from './accounts.js';
 import type { IssueWatchSetting } from './issue-watch.js';
 import type { CarryOver } from './carry-over.js';
 
@@ -90,8 +89,6 @@ export interface AgentRecord {
     readonly id: AgentId;
     readonly workspaceId: string;
     readonly provider: AcpProvider;
-    /** Accounts S2: explicit after construction/load. Optional only for older serialized records at the read boundary. */
-    readonly accountId?: string;
     /** The human-facing name. Identity is the NAME, never the provider or a session id. */
     readonly name: string;
     /** Path to the committed persona, e.g. `.agents/atlas/AGENT.md`. */
@@ -190,12 +187,11 @@ export interface AgentRecord {
      */
     readonly plan?: readonly PlanStepRecord[];
     /**
-     * EACH PROVIDER ACCOUNT'S OWN SESSION (Tynn stories #380/#475): the native session the agent left, by provider:account,
-     * resumed when it switches back. `threadId` stays the CURRENT provider's; a record from before this field has none
+     * EACH PROVIDER'S OWN SESSION (Tynn story #380): the native session the agent left, by provider, resumed when it switches back. `threadId` stays the CURRENT provider's; a record from before this field has none
      * parked, which is what it had. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
     readonly threadIds?: Readonly<Record<string, string>>;
-    /** When the agent last LEFT each provider:account (ISO): returning carries only what happened since. OPTIONAL. */
+    /** When the agent last LEFT each provider (ISO): returning carries only what happened since. OPTIONAL. */
     readonly leftAt?: Readonly<Record<string, string>>;
     /**
      * THE CONVERSATION A SWITCH CARRIES (Tynn story #380, core/carry-over.ts): held here and attached once to the next
@@ -248,7 +244,7 @@ export function threadIdIsResumable(value: string): boolean {
 
 /** The record's own field list, so a test can assert the shape rather than trusting prose. */
 export const AGENT_RECORD_FIELDS = [
-    'id', 'workspaceId', 'provider', 'accountId', 'name', 'instructions',
+    'id', 'workspaceId', 'provider', 'name', 'instructions',
     'threadId', 'createdAt', 'lastUsedAt', 'mode', 'accessScope',
 ] as const satisfies readonly (keyof AgentRecord)[];
 
@@ -270,7 +266,6 @@ export function agentRecord(input: NewAgent): AgentRecord {
         id: input.id,
         workspaceId: input.workspaceId,
         provider: input.provider,
-        accountId: legacyAccountId(input.provider),
         name: input.name,
         instructions: input.instructions ?? null,
         threadId: null,
@@ -281,38 +276,37 @@ export function agentRecord(input: NewAgent): AgentRecord {
     };
 }
 
-/** Old provider-only slots belong ONLY to the old default home, never to a managed account. */
-function accountSlots(value: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined {
+const ACCOUNT_SLOT = /^account_(legacy_(claude|codex)|[0-9a-f]{32})$/;
+
+/**
+ * An agent's native threads are PER PROVIDER. Older records parked them under `provider:account` (Tynn #475, before the
+ * one-active-account model); they fold back to the provider. A provider's legacy-account slot wins over a managed
+ * account's, and a slot already keyed by the provider wins over both.
+ */
+function providerSlots(value: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined {
     if (value === undefined) return undefined;
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Invalid account thread slots');
-    const entries = Object.entries(value);
-    const slots: Record<string, string> = {};
-    let migrated = false;
-    for (const [key, text] of entries) {
-        if (typeof text !== 'string') throw new Error('Invalid account thread slot');
-        if (isAcpProvider(key)) {
-            slots[accountThreadKey(key, legacyAccountId(key))] = text;
-            migrated = true;
-        } else {
-            const [provider, accountId, extra] = key.split(':');
-            if (!isAcpProvider(provider) || !accountIdIsValid(provider, accountId) || extra !== undefined) throw new Error('Invalid account thread namespace');
-        }
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Invalid thread slots');
+    const ranked: Array<{ provider: string; text: string; rank: number }> = [];
+    let namespaced = false;
+    for (const [key, text] of Object.entries(value)) {
+        if (typeof text !== 'string') throw new Error('Invalid thread slot');
+        const [provider, account, extra] = key.split(':');
+        if (!isAcpProvider(provider) || extra !== undefined || (account !== undefined && !ACCOUNT_SLOT.test(account))) throw new Error('Invalid thread slot namespace');
+        if (account !== undefined) namespaced = true;
+        ranked.push({ provider, text, rank: account === undefined ? 2 : account.startsWith('account_legacy_') ? 1 : 0 });
     }
-    // A slot already written in the new format is authoritative over an older duplicate legacy slot.
-    for (const [key, text] of entries) if (!isAcpProvider(key)) slots[key] = text;
-    return migrated ? slots : value;
+    if (!namespaced) return value;
+    const slots: Record<string, string> = {};
+    for (const { provider, text } of ranked.sort((a, b) => a.rank - b.rank)) slots[provider] = text;
+    return slots;
 }
 
-/** The sole read-boundary migration. Current native thread and every unrelated agent field stay as written. */
-export function withAgentAccount(record: AgentRecord): AgentRecord {
+/** The read boundary: an agent carries no account (the provider's ACTIVE account is the host's), and its threads are the provider's. */
+export function withoutAgentAccount(record: AgentRecord): AgentRecord {
     if (!isAcpProvider(record.provider)) throw new Error('Invalid account provider');
-    const accountId = record.accountId === undefined ? legacyAccountId(record.provider) : record.accountId;
-    if (!accountIdIsValid(record.provider, accountId)) throw new Error('Invalid account id');
-    const threadIds = accountSlots(record.threadIds);
-    const leftAt = accountSlots(record.leftAt);
-    if (record.accountId === accountId && record.threadIds === threadIds && record.leftAt === leftAt) return record;
-    return { ...record, accountId, ...(threadIds !== undefined ? { threadIds } : {}), ...(leftAt !== undefined ? { leftAt } : {}) };
+    const { accountId: _account, ...rest } = record as AgentRecord & { accountId?: unknown };
+    const threadIds = providerSlots(record.threadIds);
+    const leftAt = providerSlots(record.leftAt);
+    if (!('accountId' in record) && record.threadIds === threadIds && record.leftAt === leftAt) return record;
+    return { ...rest, ...(threadIds !== undefined ? { threadIds } : {}), ...(leftAt !== undefined ? { leftAt } : {}) };
 }
-
-/** RED STUB (Tynn #751): inert; the corrected model drops the per-agent account at the read boundary. */
-export function withoutAgentAccount(record: AgentRecord): AgentRecord { return record; }

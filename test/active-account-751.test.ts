@@ -235,7 +235,7 @@ describe('R1: readings stamp the active account; a hold is the active account’
         activeId = A;
         host = new SessionHost({
             userData: dir, driverFor, clock: () => now, processTree: noTree,
-            activeAccount: (provider) => provider === 'claude' ? book.get(activeId) ?? null : null,
+            activeAccount: (provider) => provider === 'claude' ? book.get(activeId) ?? null : managed('codex', CODEX, 'c'),
             onHeadroom: (provider, room, stamp) => { readings.push({ provider, room, stamp }); },
             rateLimit: {
                 gate: new RateLimitGate({ marginMs: 2 * MIN }),

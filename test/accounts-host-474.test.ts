@@ -29,7 +29,7 @@ describe('Accounts S1: a stable host book, no provider login material', () => {
         const book = await reopen();
         expect(book.list()).toHaveLength(2);
         for (const provider of ['claude', 'codex'] as const) {
-            expect(book.defaultFor(provider)).toEqual({ id: `account_legacy_${provider}`, provider, label: 'Account 1', labelEdited: false,
+            expect(book.activeFor(provider)).toEqual({ id: `account_legacy_${provider}`, provider, label: 'Account 1', labelEdited: false,
                 home: options.legacyHomes[provider], legacy: true, identity: UNKNOWN, createdAt: NOW });
             expect(legacyAccountId(provider)).toBe(`account_legacy_${provider}`);
         }
@@ -61,7 +61,7 @@ describe('Accounts S1: a stable host book, no provider login material', () => {
         expect(account).toMatchObject({ label: 'Account 2', legacy: false, identity: UNKNOWN, createdAt: NOW });
         expect(provision).toHaveBeenCalledExactlyOnceWith(account);
         expect((await reopen()).get(account.id)).toEqual(account);
-        expect(book.defaultFor('claude')?.legacy).toBe(true);
+        expect(book.activeFor('claude')?.legacy).toBe(true);
     });
 
     it('generates instructions, a Genie plugin and skills for a fresh Claude home without copying a provider store', async () => {

@@ -1,7 +1,7 @@
 import { renameOver } from '../core/atomic-rename.js';
 import { chmod, lstat, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { AGENT_RECORD_FIELDS, asAgentId, withAgentAccount, type AgentRecord } from '../core/identity.js';
+import { AGENT_RECORD_FIELDS, asAgentId, withoutAgentAccount, type AgentRecord } from '../core/identity.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { runtimeDir } from './paths.js';
 import { restrictPrivateFile } from './private-credentials.js';
@@ -201,8 +201,7 @@ function parseRecord(value: unknown, onDrop: (why: string) => void): AgentRecord
     }
 
     const raw = value as Record<string, unknown>;
-    // accountId alone has a documented legacy migration; other missing fields still mean a broken record.
-    const missing = AGENT_RECORD_FIELDS.filter((f) => f !== 'accountId' && !(f in raw));
+    const missing = AGENT_RECORD_FIELDS.filter((f) => !(f in raw));
     if (missing.length > 0) {
         onDrop(`missing ${missing.join(', ')}`);
         return null;
@@ -215,16 +214,16 @@ function parseRecord(value: unknown, onDrop: (why: string) => void): AgentRecord
     }
 
     try {
-        return withAgentAccount({ ...(raw as unknown as AgentRecord), id });
+        return withoutAgentAccount({ ...(raw as unknown as AgentRecord), id });
     } catch {
-        onDrop('invalid account binding or thread namespace');
+        onDrop('invalid provider or thread slot namespace');
         return null;
     }
 }
 
 const accountUpgrades = new Map<string, Promise<void>>();
 
-/** The host's first read/write durably binds older rows before any session can use them. Preserve unparseable rows. */
+/** The host's first read/write durably rewrites older rows to the current shape (no per-agent account, Tynn #751) before any session can use them. Preserve unparseable rows. */
 function migrateAgentAccounts(directory: string): Promise<void> {
     const pending = accountUpgrades.get(directory);
     if (pending) return pending;

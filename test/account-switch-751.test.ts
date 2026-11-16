@@ -96,7 +96,7 @@ describe('switching moves every running agent of the provider at once', () => {
     });
 
     it('a previous run that did not end is not started again, and is reported', async () => {
-        endedVerdict = id => nameOf(id) === 'kai' ? { verified: false, reason: 'a process is still running', survivors: [] } : { verified: true, ended: 1 };
+        endedVerdict = id => nameOf(id) === 'kai' ? { verified: false, reason: 'a process is still running', survivors: [{ pid: 1 } as never] } : { verified: true, ended: 1 };
         const answer = await switchActiveAccount(ports(), 'claude', B);
         expect(answer).toMatchObject({ ok: true, failed: [{ reason: expect.stringContaining('did not end') }] });
         expect(log).not.toContain('start kai');

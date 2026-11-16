@@ -140,6 +140,7 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
+import { switchActiveAccount, type AccountSwitchResult } from './account-switch-host.js';
 import { afterSignedIn, LoginHost, statusCommandFor } from './login-host.js';
 import { accountIdentityFrom, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { tellDesignLoginRan } from '../core/design-login.js';
@@ -535,7 +536,7 @@ async function main(): Promise<void> {
     const terminalsService = new TerminalsService(terminalHost);
     // TAKE OVER'S ONE OWNER (Tynn #553, P5d.5c): who has a TUI open. This host opens no window; whoever clicked opens its own.
     const takeOverHost = new TakeOverHost({
-        accountFor: record => accounts.get(record.accountId ?? `account_legacy_${record.provider}`),
+        accountFor: record => accounts.activeFor(record.provider),
         terminals: terminalHost,
         openWindow: () => {},
         mcp: () => { const e = mcp?.endpoint() ?? null; return e ? { mcpUrl: e.url, token: e.token } : null; },
@@ -1031,18 +1032,20 @@ async function main(): Promise<void> {
     };
     const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
     // ONE cache of each provider's models (core/provider-models.ts): a window's ask and a phone's read the same answer.
-    const providerModels = new ProviderModelCache(provider => realListModels(provider, accounts.defaultFor(provider) ?? undefined));
+    const providerModels = new ProviderModelCache(provider => realListModels(provider, accounts.activeFor(provider)));
     // Tynn #698: each provider CLI MEASURED (the file the agent runs, its version, its own status call), when the host starts:
     // what "installed" and "signed in" read. A CLI that cannot run is said in the log by name.
     // Tynn #477: who each account is, as its provider reports it (never a credential file): at host start, after a login, and
     // whenever a provider's status is measured again.
     // A sign-in per ACCOUNT runs here, in this host; a window only shows its terminal (Tynn #479). Composed once the sessions exist.
     let logins: LoginHost | null = null;
+    // Switching a provider's ACTIVE account moves every agent of it at once (Tynn #751). Composed once the sessions exist.
+    let switchAccount: ((provider: string, accountId: string) => Promise<AccountSwitchResult>) | null = null;
     const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
         if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
-        const health = await checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.defaultFor(provider) ?? undefined);
+        const health = await checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.activeFor(provider));
         void accountIdentity.refreshProvider(provider);
         return health;
     });
@@ -1062,9 +1065,10 @@ async function main(): Promise<void> {
         features: featureCallers,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
-        providerAccount: provider => isAcpProvider(provider) ? accounts.defaultFor(provider) : null,
+        providerAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
         cancelLogin: (accountId) => { logins?.cancel(accountId); },
+        switchAccount: (provider, accountId) => switchAccount?.(provider, accountId) ?? Promise.resolve({ ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' }),
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
@@ -1188,7 +1192,7 @@ async function main(): Promise<void> {
     await lockIdentity;
     bootStep('lock identity', stepAt);
     const host = new SessionHost({
-        accountById: id => accounts.get(id),
+        activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         userData: home,
         ...engineHostOptions,
         // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
@@ -1213,8 +1217,7 @@ async function main(): Promise<void> {
                 if (!isAcpProvider(provider)) return null;
                 const command = statusCommandFor(provider, providerBinary(provider as AgentRecord['provider']) ?? null);
                 if (command === null) return null;
-                const account = accounts.defaultFor(provider);
-                if (!account) return null;
+                const account = accounts.activeFor(provider);
                 const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000, env: providerAccountEnv(account, process.env) });
                 return r.exitCode === 0 ? accountIdentityFrom(r.streams.stdout) : null;
             },
@@ -1266,6 +1269,17 @@ async function main(): Promise<void> {
         await host.deliverOwed(id);
         return { ok: true };
     };
+    switchAccount = async (provider, accountId) => {
+        if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent.` };
+        const switched = await switchActiveAccount({ accounts, registry: hostRegistry, host, cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome }, provider, accountId);
+        if (switched.ok) {
+            // The provider's CLI, its models and who the account is are read again, from the account every agent is on now.
+            void providerHealth.refresh(provider);
+            void accountIdentity.refreshProvider(provider);
+            void providerModels.get(provider, { refresh: true });
+        }
+        return switched;
+    };
     hostVerdicts = new TrustVerdicts({
         agentsOf: (workspaceId) => hostRegistry.listAgents().filter((a) => a.workspaceId === workspaceId).map((a) => a.id),
         untrustedNow: (id) => { const record = hostRegistry.find(id); return record ? hostUntrustedNow(record) : false; },
@@ -1295,7 +1309,7 @@ async function main(): Promise<void> {
     logins = new LoginHost({
         accountFor: (provider, accountId) => {
             if (!isAcpProvider(provider)) return null;
-            return accountId === undefined ? accounts.defaultFor(provider) : accounts.get(accountId);
+            return accountId === undefined ? accounts.activeFor(provider) : accounts.get(accountId);
         },
         scratch: () => hostScratch.directory(),
         terminals: terminalHost,
@@ -1316,7 +1330,7 @@ async function main(): Promise<void> {
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
         onDesignLoginEnded: () => { tellDesignLoginRan(host); },
     });
-    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }), { accountById: (id) => accounts.get(id) });
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));
@@ -1497,7 +1511,7 @@ async function main(): Promise<void> {
     hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
         roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
         mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
-        runFlow: id => hostFlows.runNow(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider, record.accountId); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
+        runFlow: id => hostFlows.runNow(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
         ...(hostingStack ? { hosting: { api: hostingStack, supervisor: processSupervisor, processes: hostBook,
             processScheduler: { runNow: id => hostBook.runNow(id) }, workspaceVisible: id => !hiddenWorkspaces().includes(id) } } : {}),
         machine: {
