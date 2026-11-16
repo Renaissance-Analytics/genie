@@ -13,7 +13,7 @@ import { addWorkspace, createWorkspace, hibernateWorkspace, previewAddWorkspace,
  * touches the folder. Every port is injected.
  */
 
-const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.4.0/schemas/workspace/project.schema.json';
+const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.5.0/schemas/workspace/project.schema.json';
 const rec = (id: string, workspaceId: string, name: string): AgentRecord => ({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: 't', lastUsedAt: null, mode: 'manual', accessScope: 'self' }) as unknown as AgentRecord;
 
 function fakes(over: { entries?: Record<string, string[]>; files?: Record<string, unknown>; running?: string[]; handoffAfterMs?: number; commitFails?: string } = {}) {

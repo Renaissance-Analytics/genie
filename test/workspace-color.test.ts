@@ -141,8 +141,8 @@ describe('colorWrite — through project.json, Genie\'s writer (no side file)', 
         const r = colorWrite(v02, '#0891b2');
         expect(r.ok).toBe(true);
         if (!r.ok) return;
-        expect(SCHEMA_REVISION).toBe('0.4.0');
-        expect(JSON.parse(r.text)).toEqual({ $schema: SCHEMA('0.4.0'), name: 'Tynn', repos: [], appearance: { color: '#0891b2' } });
+        expect(SCHEMA_REVISION).toBe('0.5.0');
+        expect(JSON.parse(r.text)).toEqual({ $schema: SCHEMA('0.5.0'), name: 'Tynn', repos: [], appearance: { color: '#0891b2' } });
         expect(r.text).toContain('\n    "name": "Tynn"');
         expect(r.text.endsWith('}\n')).toBe(true);
         expect(r.backup).toBeNull();
