@@ -154,6 +154,11 @@ async function waitFor(label, expression, ms = 30_000) {
     return false;
 }
 const mouse = (x, y) => cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' });
+// A CDP pointer is not the compositor's, and a window can report it gone while it stands still; a held position is re-sent so a
+// shot is of the hover, and the stationary case is measured on its own (proof.idle) with whether the browser itself still said :hover.
+let hold = null;
+const holdAt = (x, y) => { clearInterval(hold); hold = setInterval(() => { void mouse(x, y); }, 80); };
+const release = () => { clearInterval(hold); hold = null; };
 async function shot(name) {
     await sleep(900); // a frame, and the dots in flight
     const r = await cdp.send('Page.captureScreenshot', { format: 'png' });
@@ -217,6 +222,8 @@ try {
     for (const a of AGENTS) {
         await ev(`window.genieTest.agents.restart(${JSON.stringify(a.id)}, 'graceful').then((r) => JSON.stringify(r))`);
         await waitFor(`${a.key}'s session`, `window.genieTest.agentDetail(${JSON.stringify(a.id)}).then((d) => d?.session?.running === true)`, 60_000);
+        // A turn that streams for ever (the ticker): the agent reads Working, not Sleeping, and so is on the board for the whole run.
+        await ev(`window.genieTest.prompt(${JSON.stringify(a.id)}, 'keep going with the plan').then((r) => JSON.stringify(r))`);
     }
     const sessionsUp = Date.now();
     check('every session was up before the seeded mail starts', sessionsUp < launchedAt + MAIL_FROM_S * 1000, { upAfterS: Math.round((sessionsUp - launchedAt) / 1000), mailFromS: MAIL_FROM_S });
@@ -243,23 +250,33 @@ try {
     const hover = JSON.parse(await ev(MEASURE));
     proof.hover = hover;
     check('hovering the Comms icon draws the overlay', hover.overlay === true);
+    // The same hover left STILL for 1.5 s, with nothing re-sent: does the overlay stay, and does the browser still say :hover?
+    await sleep(1500);
+    proof.idle = JSON.parse(await ev(`JSON.stringify({ overlay: Boolean(document.querySelector('[data-flight-paths]')), hovered: document.querySelector(${JSON.stringify(cellSel)}).matches(':hover') })`));
+    say(`idle after 1.5 s still: ${JSON.stringify(proof.idle)}`);
+    await mouse(cell.x, cell.y);
+    await sleep(300);
     check('one arc per partner (six conversations)', hover.arcs.length === 6, hover.arcs.map((a) => a.peer));
     check('every arc has a real path, a visible stroke and a non-zero size', hover.arcs.length > 0 && hover.arcs.every((a) => a.d.length > 20 && a.strokeWidth > 0 && a.opacity > 0 && a.bbox.w > 5 && a.bbox.h > 5 && a.onScreen.w > 5 && a.onScreen.h > 5), hover.arcs.map((a) => ({ peer: a.peer, bbox: a.bbox, onScreen: a.onScreen, strokeWidth: a.strokeWidth, opacity: a.opacity })));
     check('the overlay never takes a click and sits above the table', hover.pointerEvents === 'none' && Number(hover.z) >= 10, { z: hover.z, pointerEvents: hover.pointerEvents });
     check('the arcs start at the pointer', hover.arcs.every((a) => { const m = /^M([-\d.]+),([-\d.]+)/.exec(a.d); return m !== null; }));
-    check('amber for the unanswered, dots on every arc, a pulse on the unread', hover.arcs.some((a) => a.tone === 'waiting') && hover.arcs.every((a) => a.dots > 0) && hover.arcs.some((a) => a.pulse), hover.arcs.map((a) => ({ peer: a.peer, tone: a.tone, direction: a.direction, pulse: a.pulse, label: a.label })));
+    check('amber for the unanswered, dots on every arc', hover.arcs.some((a) => a.tone === 'waiting') && hover.arcs.every((a) => a.dots > 0), hover.arcs.map((a) => ({ peer: a.peer, tone: a.tone, direction: a.direction, pulse: a.pulse, label: a.label })));
     check('the other rows dim and the partners are tinted', hover.dimmed > 0 && hover.peers === 6, { dimmed: hover.dimmed, peers: hover.peers });
+    holdAt(cell.x, cell.y);
     await shot('02-hover');
+    release();
 
     // 3. THE POINTER MOVES INSIDE THE ICON: the arcs' origin follows.
     const startOf = (arcs) => arcs.map((a) => /^M([-\d.]+),([-\d.]+)/.exec(a.d).slice(1, 3).map(Number));
     const before = startOf(hover.arcs)[0];
     await mouse(cell.x + 5, cell.y + 3);
+    holdAt(cell.x + 5, cell.y + 3);
     await sleep(300);
     const moved = JSON.parse(await ev(MEASURE));
     const after = startOf(moved.arcs)[0];
-    check('the arcs follow the pointer while it moves within the icon', moved.arcs.length === hover.arcs.length && Math.abs(after[0] - before[0] - 7) < 1.5 && Math.abs(after[1] - before[1] - 3) < 1.5, { before, after });
+    check('the arcs follow the pointer while it moves within the icon', moved.arcs.length === hover.arcs.length && Math.abs(after[0] - before[0] - 5) < 1.5 && Math.abs(after[1] - before[1] - 3) < 1.5, { before, after });
     await shot('03-follow');
+    release();
 
     // 4. THE CLIP: about three seconds of the hover, as Page.startScreencast frames, assembled into hover.gif.
     const frames = [];
