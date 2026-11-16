@@ -208,3 +208,19 @@ export function applyMerge(path: string, localText: string, decisions: readonly 
     for (const d of takes) setElement(manifest, d.id, d.incoming);
     return { ok: true, text: formatLike(localText, manifest) };
 }
+
+/** What the Save to repo dialog is told (Tynn #756): the plan, how each file differs from disk, what upstream did, and every element's merge. */
+export interface SavePreview {
+    readonly plan: SavePlan;
+    readonly files: readonly { path: string; status: FileStatus }[];
+    readonly upstream: { fetched: boolean; ref: string | null; reason?: string };
+    /** Every element, and whether it is ours, theirs, the same or a conflict. Empty without an upstream. */
+    readonly decisions: readonly MergeDecision[];
+    /** The ids of the conflicts the person must settle before a save writes. */
+    readonly conflicts: readonly string[];
+}
+
+export type SaveResult = { ok: true; written: string[] } | { ok: false; reason: string; written: string[] };
+
+/** A conflict's settlement: the side the person kept. */
+export type SaveChoices = Readonly<Record<string, 'local' | 'incoming'>>;

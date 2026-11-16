@@ -71,7 +71,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],
     'workspaces.setSetting': ['work', 'theme', 'dark'], 'workspaces.resetSetting': ['work', 'theme'],
     'workspaces.setGoverns': ['work', []], 'workspaces.setDefaultAgent': ['work', null], 'workspaces.setMcpServer': ['work', 'slack', false],
-    'workspaces.setColor': ['work', 'blue'], addWorkspace: [], takeOver: ['agent_a'],
+    'workspaces.setColor': ['work', 'blue'], 'workspaces.savePreview': ['work'], 'workspaces.save': ['work', {}], addWorkspace: [], takeOver: ['agent_a'],
     'terminals.open': ['work', { cols: 80, rows: 24 }], 'terminals.write': ['term_1', 'hello'],
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],

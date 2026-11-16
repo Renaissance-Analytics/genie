@@ -112,6 +112,9 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('workspaces.remove', 'refuse', ['tynn']),
         // A workspace that governs others reaches them: never set from a link to one workspace.
         row('workspaces.setGoverns', 'refuse', ['tynn', []]),
+        // Save to repo writes the owner's repo and runs the owner's git: never from a link to one workspace (Tynn #756).
+        row('workspaces.savePreview', 'refuse', ['tynn']),
+        row('workspaces.save', 'refuse', ['tynn', {}]),
     ],
     'the shared workspace itself': [
         row('workspaces.listRepos', 'allow', ['tynn'], [['fancy']]),

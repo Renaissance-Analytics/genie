@@ -1,4 +1,6 @@
-import { applyMerge, diffFiles, mergeElements, planSave, type FileStatus, type LiveModel, type MergeDecision, type SavePlan } from '../core/workspace-save.js';
+import { applyMerge, diffFiles, mergeElements, planSave, type LiveModel, type MergeDecision, type SaveChoices, type SavePreview, type SaveResult } from '../core/workspace-save.js';
+
+export type { SavePreview, SaveResult } from '../core/workspace-save.js';
 import { withinGitLimit } from './git-ports.js';
 import { gitMayRun } from './git-read-policy.js';
 
@@ -27,18 +29,6 @@ export interface SaveGit {
     /** `path` as of `ref`, or null when it is not there. */
     show(cwd: string, ref: string, path: string): Promise<string | null>;
 }
-
-export interface SavePreview {
-    readonly plan: SavePlan;
-    readonly files: readonly { path: string; status: FileStatus }[];
-    readonly upstream: { fetched: boolean; ref: string | null; reason?: string };
-    /** Every element, and whether it is ours, theirs, the same or a conflict. Empty without an upstream. */
-    readonly decisions: readonly MergeDecision[];
-    /** The ids of the conflicts the person must settle before a save writes. */
-    readonly conflicts: readonly string[];
-}
-
-export type SaveResult = { ok: true; written: string[] } | { ok: false; reason: string; written: string[] };
 
 export interface WorkspaceSaveOptions {
     readonly fs: SaveFs;
@@ -92,7 +82,7 @@ export class WorkspaceSave {
     }
 
     /** `choices` maps a conflict's id to the side the person kept. */
-    async save(workspacePath: string, choices: Readonly<Record<string, 'local' | 'incoming'>> = {}): Promise<SaveResult> {
+    async save(workspacePath: string, choices: SaveChoices = {}): Promise<SaveResult> {
         const preview = await this.preview(workspacePath);
         const plan = preview.plan;
         if (!plan.ok) return { ok: false, reason: plan.reason, written: [] };
@@ -153,5 +143,22 @@ export function nodeSaveGit(): SaveGit {
             const r = await git(cwd, ['show', `${ref}:${path}`], 15_000);
             return r.ok ? r.out : null;
         },
+    };
+}
+
+/** Inert stubs (RED): the workspace ops behind the bridge (Tynn #756 UI). */
+export interface WorkspaceSaveOps {
+    savePreview(workspaceId: unknown): Promise<SavePreview>;
+    save(workspaceId: unknown, choices: unknown): Promise<SaveResult>;
+}
+
+export function parseSaveChoices(_raw: unknown): SaveChoices {
+    return {};
+}
+
+export function workspaceSaveOps(_options: { fs: SaveFs; git: SaveGit; pathOf: (workspaceId: string) => string | null; mayReadFolder?: (path: string) => boolean; revision?: string }): WorkspaceSaveOps {
+    return {
+        async savePreview() { return { plan: { ok: true, files: [], backups: [], stampedTo: null }, files: [], upstream: { fetched: false, ref: null }, decisions: [], conflicts: [] }; },
+        async save() { return { ok: true, written: [] }; },
     };
 }
