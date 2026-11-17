@@ -14,7 +14,7 @@ import { connectRemote } from '../src/renderer/remote-bridge.js';
 /**
  * A SHARE-LINK GUEST GETS IN ONLY WHEN THE PERSON AT THIS MACHINE SAYS SO (Tynn #731; the owner's decision 2026-11-17).
  *
- * On the LiftPoint call a Pilot reached a client's Genie through a share link and was in before the client knew. Now a
+ * On a client onboarding call a Pilot reached a client's Genie through a share link and was in before the client knew. Now a
  * guest the Tynn relay admits (any non-owner grant) is held at the door: this machine's screen asks "Let <who> in?" with
  * Allow and Deny, and NOTHING of the connection gets through until Allow — no call, no event, no listing. Deny closes it,
  * two minutes with no answer closes it, and the answer is given on this machine only, never by another connection. The

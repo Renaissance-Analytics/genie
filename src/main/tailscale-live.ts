@@ -1,5 +1,5 @@
 /**
- * TAILSCALE, LIVE (Tynn #748, #749; the LiftPoint onboarding, 2026-11-16). Genie's one view of Tailscale on this machine.
+ * TAILSCALE, LIVE (Tynn #748, #749; a client onboarding call, 2026-11-16). Genie's one view of Tailscale on this machine.
  *
  * #748: Install Tailscale started the installer twice. Genie read Tailscale once right after the installer opened (still
  * absent: the person had not clicked through it yet), so Settings went on offering the same Install button with nothing to
