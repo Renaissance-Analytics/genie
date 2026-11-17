@@ -4,7 +4,7 @@ import { chipRow } from '../src/core/session-timeline.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
 import { Stream } from '../src/renderer/components/Stream.js';
-import { ChipsRow } from '../src/renderer/components/TimelineStrip.js';
+import { ChipsRow } from '../src/renderer/components/ChipsRow.js';
 import { control } from './helpers/control-markup.js';
 
 /**

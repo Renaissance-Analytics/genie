@@ -9,7 +9,7 @@ import { conflictBody, conflictHunks, conflictWords, takeLabel } from '../../cor
 import type { Pause } from '../../core/files-popout.js';
 import type { PanelPrefs } from '../../core/files-panel-prefs.js';
 import { EditorWand } from './EditorWand.js';
-import { EditorCursor, WordWrapSync } from './EditorSync.js';
+import { EditorCursor, PanelClickToEnd, WordWrapSync } from './EditorSync.js';
 import { CopyAnnounce } from './CopyText.js';
 import type { CopyState } from './ChatProse.js';
 
@@ -450,7 +450,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                         ) : (
                                             <div data-editor-theme={theme ?? 'auto'} className="flex h-full min-h-0 flex-col">
                                             <CodeEditor className="flex h-full min-h-0 flex-col" value={open.text} language={kind.language} readOnly={!edit} wordWrap={wordWrap} {...(baseline !== undefined ? { diffBase: baseline } : {})} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { cursorLine: line, highlightLines: [line] } : {})} theme={theme ?? 'auto'}>
-                                                <CodeEditor.Panel className="min-h-0 flex-1" />
+                                                <PanelClickToEnd className="flex min-h-0 flex-1 flex-col">
+                                                    <CodeEditor.Panel className="min-h-0 flex-1" />
+                                                </PanelClickToEnd>
                                                 <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} hunks={edit?.conflict && edit.conflict.path === open.path ? conflictHunks(open.text, edit.conflict.onDisk) : null} cursor={<EditorCursor />} />
                                                 <WordWrapSync wrap={wordWrap} />
                                                 {edit ? <EditorWand /> : null}

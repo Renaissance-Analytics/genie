@@ -22,23 +22,9 @@ const rows: TimedEvent[] = [
 const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
     renderToStaticMarkup(<AgentView agent={agent} session={working} rows={rows} tab="stream" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 4_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} {...props} />);
 
-describe('the session timeline strip', () => {
-    it('46px: SESSION, the turn segments, kind ticks, the legend, the head bar in the session’s state, the Lanes toggle', () => {
-        const html = render();
-        expect(html).toMatch(/data-session-timeline[^>]*class="[^"]*h-\[46px\]/);
-        expect(html).toContain('>Session<');
-        expect(html).toContain('data-segment="T1"');
-        expect(html).toContain('data-segment="T2"');
-        expect((html.match(/data-tick-kind="edit"/g) ?? []).length).toBe(1);
-        // The fixture's message is a chat message: no message tick and no message legend on an activity strip.
-        expect(html).not.toContain('data-tick-kind="message"');
-        for (const k of ['edit', 'thought', 'tool']) expect(html).toContain(`data-legend="${k}"`);
-        expect(html).not.toContain('data-legend="message"');
-        expect(html).toContain('data-head="ok"');
-        expect(html).toMatch(/data-action="toggle-lanes"[^>]*aria-pressed="false"/);
-    });
-
-    it('is absent — a sentence lives in the drawer instead — when no row has a time; the chips keep their counts', () => {
+describe('the session timeline strip (removed in beta.64: the agent pulse replaced it)', () => {
+    it('is not drawn, with or without timed rows; the chips keep their counts', () => {
+        expect(render()).not.toContain('data-session-timeline');
         const html = render({ rows: rows.map((r) => ({ ...r, at: null })) });
         expect(html).not.toContain('data-session-timeline');
         expect(html).toMatch(/data-lane="edits"[\s\S]*?data-lane-count="1"/);
@@ -64,11 +50,10 @@ describe('the chips row', () => {
 });
 
 describe('the Lanes drawer', () => {
-    it('is closed by default and opens with the toggle: the tracks and the drag bar, the button pressed', () => {
+    it('is closed by default and opens with `L`: the tracks and the drag bar', () => {
         expect(render()).not.toContain('data-lanes');
         const open = render({ lanesOpen: true });
         expect(open).toContain('data-lanes');
         expect(open).toContain('data-lanes-timeline');
-        expect(open).toMatch(/data-action="toggle-lanes"[^>]*aria-pressed="true"/);
     });
 });

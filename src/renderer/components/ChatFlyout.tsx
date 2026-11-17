@@ -5,7 +5,8 @@ import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { ChatQueueBar } from './ChatQueueBar.js';
 import { ChatPlanLine } from './ChatPlanLine.js';
-import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Button, Icon, PromptInput, Toast, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { ComposerFileLimit } from './ComposerFileLimit.js';
 import { toHotkey, fancyPlatform } from '../hotkey-strings.js';
 import { sendKeyHint } from '../../core/send-key.js';
 import { SentAttachments } from './SentAttachments.js';
@@ -27,7 +28,7 @@ import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
-import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
+import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
 import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
 import { applyChatInsert, type ChatInsert, type DraftHandle } from '../../core/plan-pill.js';
@@ -846,8 +847,12 @@ function ChatFlyoutBody({
                  * start empty, and react-fancy reads `defaultDraft` only at mount.
                  */}
                 {drafts !== 'loading' ? (
+                // The file limit's toast (ComposerFileLimit): fixed at the window's corner, so nothing here moves.
+                <Toast.Provider position="bottom-end" maxToasts={2}>
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
+                    // A file over MESSAGE_FILE_LIMIT is refused as it is added, counted against the draft as it is now.
+                    <ComposerFileLimit count={() => draftFileCount(composerRefs.current.get(chat)?.getDraft())}>
                     <PromptInput
                         ref={(handle: DraftHandle | null) => { if (handle) composerRefs.current.set(chat, handle); else composerRefs.current.delete(chat); }}
                         {...(contextUsage
@@ -899,8 +904,10 @@ function ChatFlyoutBody({
                         }}
                         onSubmitError={(error: unknown) => setSendErrors((e) => withSendError(e, chat, typeof error === 'string' && error !== '' ? error : errorWords(error)))}
                     />
+                    </ComposerFileLimit>
                     )}
                 </ChatComposers>
+                </Toast.Provider>
                 ) : null}
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
