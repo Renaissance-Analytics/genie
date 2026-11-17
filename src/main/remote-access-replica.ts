@@ -1,4 +1,5 @@
 import type { PairRequest } from '../core/pair-confirm.js';
+import type { PinEnded } from '../core/remote.js';
 import type { RemoteAccessEvent, RemoteAccessStatus } from './remote-access-host.js';
 import type { Device } from './remote-devices.js';
 import { isLocalEvent, type RemoteHost } from './remote-host.js';
@@ -17,6 +18,8 @@ export interface RemoteAccessView {
     unavailable(): string | null;
     locked(): boolean;
     activePin(): { code: string; expiresAt: number } | null;
+    /** Why the last PIN went without pairing (Tynn #751). */
+    pinEnded?(): PinEnded | null;
     devices(): Device[];
     connections(): ReturnType<RemoteHost['connections']>;
     issuePin(options?: { replaces?: string }): unknown;
@@ -63,6 +66,7 @@ export class RemoteAccessReplica implements RemoteAccessView {
     unavailable(): string | null { return this.#status.unavailable; }
     locked(): boolean { return this.#status.locked; }
     activePin(): { code: string; expiresAt: number } | null { return this.#status.pin; }
+    pinEnded(): PinEnded | null { return this.#status.pinEnded ?? null; }
     devices(): Device[] { return [...this.#status.devices]; }
     connections(): RemoteAccessStatus['connections'] { return [...this.#status.connections]; }
 

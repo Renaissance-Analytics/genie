@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
 import { AgentPush } from './agent-push.js';
-import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
+import { BATON_REFUSAL, type Baton, type PairingPins, type PinEnded } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
@@ -377,6 +377,11 @@ export class RemoteHost {
 
     get hostName(): string {
         return this.#hostName;
+    }
+
+    /** Why the last PIN went without pairing (Tynn #751); null while one is good, after a pairing, or before any. */
+    pinEnded(): PinEnded | null {
+        return null;
     }
 
     /** The PIN on this screen, while it is still good. */
