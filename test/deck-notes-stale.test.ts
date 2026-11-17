@@ -202,7 +202,8 @@ describe('main wires it', () => {
         expect(main.indexOf('askerLivenessKnown = host !== null;')).toBeGreaterThan(main.indexOf('await registry.load('));
     });
     it('the question window’s Dismiss sends the notes on to deck.dismiss', () => {
-        expect(main.match(/dismiss:\s*async\s*\(item,\s*notes\)\s*=>\s*\{\s*await questionAction\(\{\s*kind:\s*'deck\.dismiss',\s*item,\s*notes\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
+        // Another machine's question (Tynn #726) is dismissed on that machine, with the same notes; this machine's as before.
+        expect(main.match(/dismiss:\s*async\s*\(item,\s*notes\)\s*=>\s*\{\s*if\s*\(remoteQuestions\.owns\(item\.id\)\)\s*return remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.dismiss',\s*notes\s*\}\);\s*await questionAction\(\{\s*kind:\s*'deck\.dismiss',\s*item,\s*notes\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
         expect(main).toContain("const reply = await client.call('engine.featureQuestion', [action]);");
         expect(main).toContain('if (!reply.ok) throw new Error(reply.reason);');
     });

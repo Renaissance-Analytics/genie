@@ -35,7 +35,7 @@ function harness(sendOk = true) {
 describe('the connected machine’s questions, as the question window reads them', () => {
     it('only its live questions, each with an id of its own and the machine named where the workspace is', () => {
         const { remote } = harness();
-        expect(remote.report(PILOT_WINDOW, 'client-box', [question('q_1', 10), approval('approval:x'), question('q_old', 1, { stale: 'its agent stopped waiting' } as Partial<DeckItem>)])).toBe(true);
+        expect(remote.report(PILOT_WINDOW, 'client-box', [question('q_1', 10), approval('approval:x'), question('q_old', 1, { stale: 'earlier-run' })])).toBe(true);
         const items = remote.items();
         expect(items).toHaveLength(1);
         expect(items[0]!.id).not.toBe('q_1');

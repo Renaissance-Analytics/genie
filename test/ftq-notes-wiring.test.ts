@@ -64,7 +64,8 @@ describe('main and the renderers pass notes, never drop them', () => {
     const strip = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     it('main.ts: the window’s answer becomes deck.answerForm WITH the notes (and no overall note — the form has none)', () => {
         const main = strip('../src/main/main.ts');
-        expect(main.match(/answer:\s*async\s*\(item,\s*selections,\s*notes\)\s*=>\s*\{\s*await questionAction\(\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
+        // Another machine's question (Tynn #726) is answered on that machine, with the same notes; this machine's as before.
+        expect(main.match(/answer:\s*async\s*\(item,\s*selections,\s*notes\)\s*=>\s*\{\s*if\s*\(remoteQuestions\.owns\(item\.id\)\)\s*return remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.answerForm',\s*selections,\s*notes\s*\}\);\s*await questionAction\(\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
         expect(main).toContain("const reply = await client.call('engine.featureQuestion', [action]);");
         const server = strip('../src/main/session-engine-server.ts');
         expect(server).toContain("if (!conn.local || !conn.window || !this.#options.features) throw new Error('questions need this machine’s own window');");
