@@ -92,7 +92,7 @@ beforeEach(async () => {
     });
     await services.engines.adoptFromV1({ instances: [v1Mailpit], record: { at: '2026-10-15T00:00:00.000Z', sawV1: true, sawDocker: true } });
     callers['t-fancy'] = { agentId: mintAgentId(), agentName: 'fancy', workspaceId: WS, workspacePath: join(dir, WS) };
-    tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
+    tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
 });
 
 afterEach(async () => {

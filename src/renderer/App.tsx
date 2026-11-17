@@ -71,6 +71,7 @@ import { DRONE_MIN_BUILD } from '../core/drone-version.js';
 import { pushed, useSnapshot } from './use-snapshot.js';
 import type { AuthRequest } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
+import { copyText } from './components/CopyText.js';
 import type { TreeNode } from '../core/files-panel.js';
 import { fromBase64 } from '../core/mobile-wire.js';
 import { deviceAuth, knownHosts, moveRememberedTokens, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
@@ -836,6 +837,9 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
         setNote(null);
         const route = deckAnswerRoute(item, optionId, answerNote ?? '');
         switch (route.kind) {
+            case 'copy':
+                void copyText(route.text).then((copied) => { if (!copied) setNote('Copy failed'); });
+                return;
             case 'refused':
                 setNote(route.reason);
                 return;
@@ -2187,6 +2191,10 @@ function DesktopApp({ bridge }: AppProps) {
                 // item rather than from the URL — and the item's id says which channel it takes.
                 const route = deckAnswerRoute(item, optionId, note ?? '');
                 switch (route.kind) {
+                    case 'copy':
+                        // Copy the block (Tynn #753): in this window, through main's clipboard; nothing is answered.
+                        void copyText(route.text).then((copied) => { if (!copied) setDeckFormRefusal({ itemId: item.id, reason: 'Copy failed' }); });
+                        return;
                     case 'refused':
                         console.error('[genie] deck answer refused:', route.reason);
                         return;

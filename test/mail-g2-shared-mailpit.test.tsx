@@ -95,7 +95,7 @@ beforeEach(async () => {
     });
     services = await composing;
     callers['t-new'] = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: WS, workspacePath: join(dir, WS) };
-    tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
+    tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
 });
 
 /*

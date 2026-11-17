@@ -109,7 +109,7 @@ beforeEach(async () => {
     } as Parameters<typeof composeServices>[0]);
     await settle();
     caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'acme', workspacePath: acme };
-    tools = hostingTools({ resolveCaller: (id) => (id === 't-acme' ? caller : null), approve: (c, a, d) => services.approvals.gate(c, a, d), services });
+    tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => (id === 't-acme' ? caller : null), approve: (c, a, d) => services.approvals.gate(c, a, d), services });
 });
 
 afterEach(async () => {

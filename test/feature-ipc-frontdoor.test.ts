@@ -118,11 +118,14 @@ describe('hosting.frontDoor', () => {
         expect(services.deckItems().find((i) => i.id === TRUST_DECK_ID)).toBeUndefined();
     });
 
-    it('hosting.syncHosts tries the hosts file again after a declined prompt and the snapshot shows the outcome', async () => {
+    it('hosting.syncHosts: a new site waits for the person (Tynn #753); their declined prompt is said, and Try again asks again', async () => {
         denyElevated = true;
         services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
         await settle();
-        const before = await featureSnapshot(services, state());
+        const waiting = await featureSnapshot(services, state());
+        expect(waiting.hosting!.frontDoor).toMatchObject({ hosts: { changed: false, awaitingApproval: true } });
+        expect(content).toBe('127.0.0.1 localhost\n');
+        const before = await handleFeatureAction(services, { kind: 'hosting.syncHosts' }, state());
         expect(before.hosting!.frontDoor).toMatchObject({ hosts: { error: 'Request dismissed' } });
 
         denyElevated = false;

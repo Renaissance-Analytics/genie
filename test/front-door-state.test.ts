@@ -129,6 +129,8 @@ async function compose(caddyBin: string | null = CADDY): Promise<ComposedService
 
 const running = (s: ComposedServices) => s.externalFrontDoor as Extract<FrontDoorStatus, { running: true }>;
 const genieItems = (s: ComposedServices) => s.deckItems().filter((i) => i.source === 'genie');
+/** The hosts-file asks on the Deck (Tynn #753), by title. */
+const hostsAsks = (s: ComposedServices) => s.deckItems().filter((i) => i.id === 'genie:hosts-approval').map((i) => i.title);
 const site = (s: ComposedServices, name = 'docs') => s.sites.create({ name, workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
 
 beforeEach(async () => {
@@ -174,17 +176,24 @@ describe('the hosts file', () => {
         expect(heard.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('a refused plain write goes through the OS prompt; a declined prompt is recorded with the block to paste, and syncHosts() tries again on request', async () => {
+    it('a refused plain write WAITS for the person (Tynn #753): no prompt, the ask in the Deck; Approve is the one prompt, a declined one keeps the block, Try again asks again', async () => {
         hosts.state.denyPlain = true;
         services = await compose();
         site(services, 'tynn');
         await settle();
-        expect(services.externalFrontDoor).toMatchObject({ hosts: { changed: true, elevated: true } });
+        expect(batches).toEqual([]);
+        expect(services.externalFrontDoor).toMatchObject({ hosts: { changed: false, elevated: false, awaitingApproval: true, manualBlock: hostsFileBlock(['tynn.gen']) } });
+        expect(hostsAsks(services)).toEqual(['Genie needs administrator permission to add tynn.gen to your hosts file so your normal browser can open it']);
+        // The person's Approve (the Deck routes it to syncHosts): exactly one prompt, and the ask is gone.
+        expect(await services.syncHosts()).toEqual({ changed: true, elevated: true });
         expect(batches).toEqual([['hosts']]);
+        expect(hostsAsks(services)).toEqual([]);
 
-        hosts.state.denyElevated = true;
         site(services);
         await settle();
+        expect(batches).toEqual([['hosts']]);
+        hosts.state.denyElevated = true;
+        await services.syncHosts();
         const fd = services.externalFrontDoor as { hosts: { error: string; manualBlock: string } };
         expect(fd.hosts.error).toBe('Request dismissed');
         expect(fd.hosts.manualBlock).toBe(hostsFileBlock(['docs.gen', 'tynn.gen']));
@@ -237,25 +246,33 @@ describe('no admin prompt on a site’s start or stop (S4)', () => {
         expect(hosts.content()).toContain('::1 shop.gen');
     });
 
-    it('the same holds through the OS prompt: start/stop raise NO elevation; one new site raises one', async () => {
+    it('the same holds when the plain write is refused: start/stop raise NO elevation and no new ask; a new site is a new ask, never a prompt', async () => {
         hosts.state.denyPlain = true;
         services = await compose();
         site(services, 'docs');
         await settle();
+        expect(batches).toEqual([]);
+        expect(await services.syncHosts()).toEqual({ changed: true, elevated: true });
         expect(batches).toEqual([['hosts']]);
         for (let i = 0; i < 3; i++) { services.sites.stop('site_docs'); await settle(); services.sites.start('site_docs'); await settle(); }
         expect(batches).toEqual([['hosts']]);
+        expect(hostsAsks(services)).toEqual([]);
         site(services, 'tynn');
         await settle();
-        expect(batches).toEqual([['hosts'], ['hosts']]);
+        expect(batches).toEqual([['hosts']]);
+        expect(hostsAsks(services)).toEqual(['Genie needs administrator permission to add tynn.gen to your hosts file so your normal browser can open it']);
     });
 
-    it('a burst of N site changes is ONE write — never a prompt per site', async () => {
+    it('a burst of N site changes is ONE ask, and the person’s Approve is ONE write — never a prompt per site', async () => {
         hosts.state.denyPlain = true;
         services = await compose();
         await settle();
         for (const name of ['a', 'b', 'c', 'd', 'e']) site(services, name);
         await settle();
+        expect(hosts.writes()).toBe(0);
+        expect(batches).toEqual([]);
+        expect(hostsAsks(services)).toEqual(['Genie needs administrator permission to add a.gen, b.gen, c.gen, d.gen and e.gen to your hosts file so your normal browser can open them']);
+        await services.syncHosts();
         expect(hosts.writes()).toBe(1);
         expect(batches).toEqual([['hosts']]);
         for (const name of ['a', 'b', 'c', 'd', 'e']) expect(hosts.content()).toContain(`127.0.0.1 ${name}.gen`);

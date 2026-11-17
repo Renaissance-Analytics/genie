@@ -20,7 +20,7 @@ function rig(allowed = true) {
             list: () => [{ scope: { kind: 'shared' }, credentials: { password: 'fixture-engine-633' }, admin: { password: 'fixture-admin-633' }, slices: { work: { password: 'fixture-own-slice-633' }, other: { password: 'fixture-other-slice-633' } } }],
         },
     } as unknown as HostingServices;
-    const tools = hostingTools({ services, exec, approve, resolveCaller: (key) => key === 'owner-session' ? caller : null });
+    const tools = hostingTools({ trusted: () => true,  services, exec, approve, resolveCaller: (key) => key === 'owner-session' ? caller : null });
     const handler = tools.find((tool) => tool.definition.name === 'services')!.handler;
     const call = (args: Record<string, string | object> = {}, session = 'owner-session') => handler(
         { action: 'exec', command: 'php artisan test', ...args },

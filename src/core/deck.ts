@@ -99,6 +99,17 @@ export interface DeckItem {
     detail?: string | undefined;
 }
 
+/**
+ * COPY THE DETAIL (Tynn #753): an inline option with this id copies the item's `detail` in the window that shows it.
+ * Nothing goes to main and nothing is answered: the item stays until it is answered some other way.
+ */
+export const COPY_DETAIL_OPTION = 'copy-detail';
+
+/** The text `optionId` copies from `item`, or `null` when the option is an answer, not a copy. */
+export function deckCopyText(item: DeckItem, optionId: string): string | null {
+    return optionId === COPY_DETAIL_OPTION && typeof item.detail === 'string' && item.detail !== '' ? item.detail : null;
+}
+
 /** Why a question's agent no longer waits for it. */
 export type StaleReason = 'agent-gone' | 'session-ended' | 'earlier-run';
 

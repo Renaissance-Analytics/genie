@@ -2789,6 +2789,8 @@ async function boot(): Promise<void> {
             terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
             // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
             hosting: composed,
+            // …only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
+            workspaceTrusted: (workspaceId) => !composed.untrustedNow({ workspaceId }),
             // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235)
             // or the tab on screen, and the site's workspace pulses (genie#1265).
             openInBrowser: agentOpensSite,

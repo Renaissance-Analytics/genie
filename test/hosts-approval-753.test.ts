@@ -157,7 +157,7 @@ describe('HostsSync: begin() and changed() never elevate', () => {
         expect(t.batches).toEqual([]);
         expect(t.calls).not.toContain('stage');
         expect(t.sync.result).toMatchObject({ changed: false, elevated: false, awaitingApproval: true, manualBlock: hostsFileBlock(['shop.gen', 'docs.gen']) });
-        expect(t.sync.deckItems(5).map((i) => i.title)).toEqual(['Genie needs administrator permission to add docs.gen and shop.gen to your hosts file so your normal browser can open them']);
+        expect(t.sync.deckItems().map((i) => i.title)).toEqual(['Genie needs administrator permission to add docs.gen and shop.gen to your hosts file so your normal browser can open them']);
     });
 
     it('Not now puts the ask away until the names change; a new name asks again, still without a prompt', async () => {
@@ -166,14 +166,14 @@ describe('HostsSync: begin() and changed() never elevate', () => {
         t.sync.begin();
         await t.fire();
         t.sync.defer();
-        expect(t.sync.deckItems(5)).toEqual([]);
+        expect(t.sync.deckItems()).toEqual([]);
         t.sync.changed();
         await t.fire();
-        expect(t.sync.deckItems(5)).toEqual([]);
+        expect(t.sync.deckItems()).toEqual([]);
         t.setNames(['shop.gen', 'api.gen']);
         t.sync.changed();
         await t.fire();
-        expect(t.sync.deckItems(5).map((i) => i.title)).toEqual(['Genie needs administrator permission to add api.gen and shop.gen to your hosts file so your normal browser can open them']);
+        expect(t.sync.deckItems().map((i) => i.title)).toEqual(['Genie needs administrator permission to add api.gen and shop.gen to your hosts file so your normal browser can open them']);
         expect(t.batches).toEqual([]);
     });
 

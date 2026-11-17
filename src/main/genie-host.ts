@@ -1661,7 +1661,7 @@ async function main(): Promise<void> {
         deck: { attention: own.attention, approvals, inbox: own.inbox, deckItems: featureDeckItems,
             limitNotices,
             deliverToAgent: (id, text) => host.deliver(id as AgentId, text, 'you'),
-            ...(hostingStack ? { trustCertificate: () => hostingStack.trustCertificate(), deferTrustCertificate: () => hostingStack.deferTrustCertificate(), syncHosts: () => hostingStack.syncHosts() } : {}),
+            ...(hostingStack ? { trustCertificate: () => hostingStack.trustCertificate(), deferTrustCertificate: () => hostingStack.deferTrustCertificate(), syncHosts: () => hostingStack.syncHosts(), deferHosts: () => hostingStack.deferHosts() } : {}),
         },
     });
     hostFeatures.onChange(() => engine.featuresChanged());
@@ -1944,6 +1944,8 @@ async function main(): Promise<void> {
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
         reportPlan: (id, steps) => host.reportPlan(id, steps),
         serviceExec: makeServiceExec(systemProcessTree, processSupervisor, (id, run) => { host.commandStarted(id as AgentId, run); }),
+        // The agents' `sites` / `services` act only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
+        workspaceTrusted: (workspaceId) => !hostUntrustedNow({ workspaceId }),
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,

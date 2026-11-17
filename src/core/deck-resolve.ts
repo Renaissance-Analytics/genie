@@ -1,6 +1,7 @@
-import type { DeckItem } from './deck.js';
+import { COPY_DETAIL_OPTION, deckCopyText, type DeckItem } from './deck.js';
 import { TRUST_DECK_ID } from './gen-ca.js';
 import { ELEVATION_WAITING_DECK_ID } from './elevation-waiting.js';
+import { HOSTS_APPROVAL_DECK_ID, HOSTS_APPROVE_OPTION, HOSTS_LATER_OPTION } from './hosts-approval.js';
 import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
 import { LIMIT_NOTICE_DECK_PREFIX } from './limit-alerts.js';
 
@@ -27,6 +28,8 @@ export type DeckCommand =
     | { kind: 'defer-trust-certificate' }
     /** An elevation genie-host held for a window (core/elevation-waiting.ts): the person approves it — the hosts sync, from here. */
     | { kind: 'sync-hosts' }
+    /** The hosts-file ask's Not now (core/hosts-approval.ts): put away until the names change. */
+    | { kind: 'defer-hosts' }
     /** Genie's own record of an error the main process caught and survived (core/main-errors.ts): the person has read it. */
     | { kind: 'dismiss-main-error'; id: string }
     /** A rate-limit alert's kept notice (core/limit-alerts.ts): the person has read it. */
@@ -117,6 +120,8 @@ export function deckAnswerChannel(item: DeckItem): { kind: 'provider'; agentId: 
 export type DeckAnswerRoute =
     | { kind: 'provider'; agentId: string; optionId: string; note: string }
     | { kind: 'feature' }
+    /** Copy the item's detail in this window (COPY_DETAIL_OPTION, Tynn #753): nothing is answered. */
+    | { kind: 'copy'; text: string }
     | { kind: 'refused'; reason: string };
 
 /**
@@ -125,6 +130,8 @@ export type DeckAnswerRoute =
  * its own bridge call; everything else is a feature action main resolves against the stores.
  */
 export function deckAnswerRoute(item: DeckItem, optionId: string, note = ''): DeckAnswerRoute {
+    const copy = deckCopyText(item, optionId);
+    if (copy !== null) return { kind: 'copy', text: copy };
     const channel = deckAnswerChannel(item);
     if (channel.kind === 'refused') return channel;
     if (channel.kind === 'provider') return { kind: 'provider', agentId: channel.agentId, optionId, note };
@@ -160,6 +167,12 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
             // Genie's own asks, by id; one it does not know is refused, never guessed.
             if (item.id === TRUST_DECK_ID) return optionId === 'trust' ? { kind: 'trust-certificate' } : { kind: 'defer-trust-certificate' };
             if (item.id === ELEVATION_WAITING_DECK_ID) return { kind: 'sync-hosts' };
+            // THE HOSTS FILE ASKS FIRST (Tynn #753): Approve is the person's click, and only it raises the OS prompt.
+            if (item.id === HOSTS_APPROVAL_DECK_ID) {
+                if (optionId === HOSTS_APPROVE_OPTION) return { kind: 'sync-hosts' };
+                if (optionId === HOSTS_LATER_OPTION) return { kind: 'defer-hosts' };
+                if (optionId === COPY_DETAIL_OPTION) return refuse('the block is copied in the window that shows it; nothing was answered');
+            }
             if (item.id.startsWith(LIMIT_NOTICE_DECK_PREFIX)) return { kind: 'dismiss-limit-alert', id: item.id };
             if (item.id.startsWith(MAIN_ERROR_DECK_PREFIX)) {
                 // An action that does something (Tynn #693), beside Dismiss.

@@ -331,7 +331,7 @@ describe('at boot, through composition', () => {
         expect(live.engines.envFor(BETA)).not.toHaveProperty('MAIL_PORT');
 
         const caller = { agentId: mintAgentId(), agentName: 'beta-agent', workspaceId: BETA, workspacePath: home };
-        const tools = hostingTools({ resolveCaller: () => caller, approve: async () => 'allowed', services: live });
+        const tools = hostingTools({ trusted: () => true,  resolveCaller: () => caller, approve: async () => 'allowed', services: live });
         const reg = tools.find((t) => t.definition.name === 'services')!;
         const r = await reg.handler({ action: 'add', engine: 'mailpit', version: '1.30', scope: 'shared', terminalId: 't-beta' }, { server: 'genie', tool: 'services', headers: {} });
         expect(r.isError).toBe(false);
