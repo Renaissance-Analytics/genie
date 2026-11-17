@@ -123,6 +123,9 @@ export interface ShellProps {
     snapshot: GenieSnapshot;
     /** Every chat's kept draft (genie#1261, core/chat-draft-keeper.ts), handed to the chat; `'loading'` until read. */
     chatDrafts?: import('../core/chat-draft-keeper.js').ChatDraftKeeper | 'loading' | undefined;
+    /** What this window types, and what another window on the chat's agent is typing (Tynn #730); `label` null = the host's own window. */
+    onTyping?: ((agentId: string, text: string) => void) | undefined;
+    peerTyping?: { label: string | null; text: string } | null | undefined;
     /** What each agent just did with Genie, for its Dashboard row (genie#1209). */
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** The workspaces an agent acted in that the person has not visited since (genie#1265): their rows pulse. */
@@ -384,6 +387,8 @@ export function Shell({
     address,
     snapshot,
     chatDrafts,
+    onTyping,
+    peerTyping,
     rowEmoji,
     pulsingWorkspaces,
     rateLimits,
@@ -1157,6 +1162,8 @@ export function Shell({
                         onChooseProviderProgram={onChooseProviderProgram}
                         thread={chatThread}
                         drafts={chatDrafts}
+                        onTyping={onTyping}
+                        peerTyping={peerTyping ? { label: peerTyping.label ?? remote?.host ?? 'This machine', text: peerTyping.text } : null}
                         insert={chatInsert}
                         onInserted={onInserted}
                         onWindowLines={onChatWindowLines}

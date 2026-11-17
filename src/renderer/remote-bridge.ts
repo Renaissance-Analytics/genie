@@ -5,7 +5,7 @@ import type { RepoListing } from '../core/github.js';
 import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
-import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
+import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, TYPING_EVENT, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type CloneOffersReply, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
 import { isFeaturesRevision } from '../core/remote-frame.js';
@@ -25,6 +25,7 @@ import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
 import { localArtboardClient } from './local-artboard-client.js';
 import type { SavePreview, SaveResult } from '../core/workspace-save.js';
+import { readTypingEvent } from '../core/typing-mirror.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -520,6 +521,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             toolOutput: (agentId, toolCallId) => answer('agents.toolOutput', agentId, toolCallId),
             // Inline when it fits a frame; this machine's own window takes a larger image as a blob (below, Tynn #642).
             attachment: (agentId, attachmentId) => answer('agents.attachment', agentId, attachmentId),
+            // What this window's composer holds (Tynn #730), and what another window on an agent is typing.
+            typing: (agentId, text, source) => answer('agents.typing', agentId, text, source),
+            onTyping: (listener) => on(local ? LOCAL_EVENTS.typing : TYPING_EVENT, (p) => { const event = readTypingEvent(p); if (event) listener(event); }),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: phone ? {

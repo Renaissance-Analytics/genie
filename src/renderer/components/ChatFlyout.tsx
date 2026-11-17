@@ -31,6 +31,7 @@ import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core
 import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
 import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
+import { draftChange, typingTail } from '../../core/typing-mirror.js';
 import { applyChatInsert, type ChatInsert, type DraftHandle } from '../../core/plan-pill.js';
 import { TurnStop } from './TurnStop.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
@@ -381,7 +382,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 function ChatFlyoutBody({
     onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -821,8 +822,19 @@ function ChatFlyoutBody({
             <div
                 {...(color ? { 'data-composer-edge': color } : {})}
                 style={wsStyle(color)}
-                className={`shrink-0 border-t border-[var(--border-1)] p-2${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
+                className={`relative shrink-0 border-t border-[var(--border-1)] p-2${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
             >
+                {/*
+                 * WHAT THE OTHER PERSON IS TYPING (Tynn #730): floating just above the composer, so it takes no space and
+                 * nothing moves when it comes and goes; never in the box, so nobody's own words or caret are touched.
+                 */}
+                {peerTyping ? (
+                    <div data-peer-typing="" role="status" aria-live="polite" className="pointer-events-none absolute inset-x-2 bottom-full mb-1 flex items-center gap-1.5 rounded-md border border-[var(--border-1)] bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--fg-2)] shadow-sm">
+                        <Icon name="monitor" size="xs" className="shrink-0 text-[var(--fg-3)]" />
+                        <span className="shrink-0 font-medium">{peerTyping.label} is typing</span>
+                        <span className="min-w-0 truncate text-[var(--fg-3)]">{typingTail(peerTyping.text)}</span>
+                    </div>
+                ) : null}
                 {/*
                  * `PromptInput` — *"the chat composer every AI app rebuilds"*: auto-growing,
                  * slash commands, @-mentions, drop-to-attach, keyboard submit, live token
@@ -890,10 +902,13 @@ function ChatFlyoutBody({
                          */
                         {...(keeper && chat !== '' ? {
                             ...(keeper.initial(chat) ? { defaultDraft: keeper.initial(chat)! } : {}),
-                            onDraftChange: (draft: ChatDraft) => keeper.change(chat, draft),
                             persistAttachment: (file: File) => keeper.persistFile(file),
                             restoreAttachment: (entry: ChatDraftFile) => keeper.restoreFile(entry),
                         } : {})}
+                        /* Each change: to the kept draft, and to the other people on this agent (Tynn #730). A window that keeps no
+                           drafts (a window driving another machine) still reports what is typed. Only the chat on screen is
+                           typed in: a hidden composer, holding its kept draft, never reports it as typing. */
+                        {...((keeper || onTyping) && chat !== '' ? { onDraftChange: draftChange(keeper, chat, chat === activeChat ? onTyping : undefined) } : {})}
                         /*
                          * THE SEND IS ACKNOWLEDGED (react-fancy 5.70.0, core/chat-send.ts): the send is returned, so the draft
                          * stays until the host has answered — a second send is refused meanwhile, and text typed meanwhile is

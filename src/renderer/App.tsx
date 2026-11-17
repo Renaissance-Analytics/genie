@@ -15,6 +15,7 @@ import type { AlertToast } from './components/AlertToasts.js';
 import { TERMINAL_NEEDS_YOU, showTerminalRoute } from '../core/terminal-surface.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
+import { TypingBoard, TypingSender } from '../core/typing-mirror.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
 /** A toast with a button (Show terminal) waits longer: a person fetching a 2FA code is not at the screen for 8 seconds. */
@@ -222,6 +223,37 @@ function useChatDrafts(bridge: GenieBridge | undefined): ChatDraftKeeper | 'load
     }, [keeper]);
     if (!keeper) return undefined;
     return loaded === keeper ? keeper : 'loading';
+}
+
+/**
+ * WHAT THE OTHER PERSON IS TYPING (Tynn #730, core/typing-mirror.ts): this window's composer text goes to the host as
+ * `agents.typing`, throttled; what another window on the chat's agent is typing comes back and is shown over the
+ * composer until it is cleared or goes quiet. Each window is its own source, so its own typing never comes back to it.
+ */
+function useTypingMirror(bridge: GenieBridge | undefined, agentId: string | null): {
+    onTyping: ((agentId: string, text: string) => void) | undefined;
+    peer: { label: string | null; text: string } | null;
+} {
+    const agents = bridge?.agents;
+    const source = useMemo(() => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `w${Math.random().toString(36).slice(2)}`), []);
+    const sender = useMemo(() => (agents?.typing
+        ? new TypingSender((id, text) => { void agents.typing!(id, text, source).catch(() => {}); }, { setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) })
+        : null), [agents, source]);
+    const board = useMemo(() => new TypingBoard(source), [agents, source]);
+    const [, redraw] = useState(0);
+    useEffect(() => {
+        if (!agents?.onTyping) return undefined;
+        return agents.onTyping((event) => { if (board.apply(event, Date.now())) redraw((n) => n + 1); });
+    }, [agents, board]);
+    // A line fades on its own: the window draws again when it does.
+    const fade = board.nextFade();
+    useEffect(() => {
+        if (fade === null) return undefined;
+        const timer = setTimeout(() => redraw((n) => n + 1), Math.max(0, fade - Date.now()) + 10);
+        return () => clearTimeout(timer);
+    }, [fade]);
+    const onTyping = useMemo(() => (sender ? (id: string, text: string) => sender.change(id, text) : undefined), [sender]);
+    return { onTyping, peer: agentId ? board.line(agentId, Date.now()) : null };
 }
 
 /** Every agent's last detail, for the first frame of a switch (agent-detail.ts). One per window. */
@@ -1903,6 +1935,7 @@ function DesktopApp({ bridge }: AppProps) {
         const problem = draftProblems[m.id];
         return problem ? { ...m, draftProblem: problem } : m;
     }) }), [chatDrafts, draftProblems]);
+    const typing = useTypingMirror(resolvedBridge, chatThread?.agentId ?? null);
     const discardDraft = (draftId: string): void => {
         const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
         if (queued && chatThread && resolvedBridge) draftAction(draftId, resolvedBridge.resolvePrompt(chatThread.agentId, queued.promptId!, 'discard'));
@@ -2099,6 +2132,8 @@ function DesktopApp({ bridge }: AppProps) {
                 }, (error: unknown) => showAlert({ title: 'Could not redock workspace', body: error instanceof Error ? error.message : String(error) }));
             }}
             chatDrafts={keptDrafts}
+            onTyping={typing.onTyping}
+            peerTyping={typing.peer}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
             servable={SERVABLE}
