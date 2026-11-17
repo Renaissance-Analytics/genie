@@ -36,7 +36,7 @@ import {
 } from '../../core/workspace-view.js';
 import { closeCancelled, closeRequested, codeClosed, codeOpened, OUTPUT_CAP, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
 import { outputBatch } from '../terminal-output-batch.js';
-import { Badge, Button, Icon, Popover, Select, Switch } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon, Select, Switch } from '@particle-academy/react-fancy';
 import { agentFilesLine, agentFilesWhen, type AgentFilesReport } from '../../core/agent-files-health.js';
 import type { SyncResult } from '../../core/integrations.js';
 import type { GenieBridge } from '../bridge.js';
@@ -55,8 +55,8 @@ import type { AgentRow } from '../../core/dashboard-view.js';
 import type { WorkspaceView } from '../../core/route.js';
 import { workspaceDashboard } from '../../core/workspace-dashboard.js';
 import type { DeckItem } from '../../core/deck.js';
-import { FidelityDot } from './Dashboard.js';
-import { headerRepos, repoChip } from '../../core/repo-status.js';
+import { lockedRepos, repoChip } from '../../core/repo-status.js';
+import { ViewHeader } from './ViewHeader.js';
 import { WorkspaceDashboard } from './WorkspaceDashboard.js';
 import { AgentRosterView, type AgentRosterViewProps } from './ImportedAgents.js';
 import { WorkspaceColorPicker } from './WorkspaceColorPicker.js';
@@ -653,72 +653,40 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
             {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
             {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
-            {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
             {/*
-              * THE HEADER FITS ITS COLUMN (beta.33 item 23; the owner: "why the fuck is any content at all behind the fucking
-              * chat panel?"). It WRAPS rather than ever running wider than the page column — `<main>` clips at the chat's edge —
-              * the path gives way first, and the repo chips beyond HEADER_REPOS_INLINE are behind "+N more".
+              * ONE HEADER (ViewHeader.tsx; the owner, 2026-11-16: "the different headers based on the view"): the agent view's,
+              * with the workspace as its one crumb. No repo list and no agent pills ("I don't need all of the repos listed in the
+              * workspace header either, or the agents in pill. they have tabs and a dashboard"): only a LOCKED repo, a problem
+              * with a fix, keeps its chip. The header fits its column by clipping, never by wrapping (beta.33 item 23).
               */}
-            <header data-view-header="" className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[var(--border-1)] px-5 py-2">
-                <h1 title={workspace.name ?? workspace.id} className="min-w-0 truncate text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
-                <span title={workspace.path} className="min-w-0 max-w-full truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
-                {/* REPO CHIPS (the board): `api · main` per repo; a locked repo in red, with "Remove stale lock" once the lock is stale. */}
-                {ops?.repos?.list ? (() => {
-                    const { inline, more } = headerRepos(ops.repos.list);
-                    const chipOf = (r: RepoEntry) => {
-                        const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
-                        return (
-                            <span key={r.slug} className="flex min-w-0 items-center gap-1.5">
-                                <span data-repo-chip={r.slug} data-tone={chip.tone} className={`flex h-6 min-w-0 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] ${chip.tone === 'bad' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`}>
-                                    <Icon name={chip.tone === 'bad' ? 'circle-alert' : 'git-branch'} className="h-3 w-3 shrink-0" />
-                                    <span className="truncate">{chip.label}</span>
-                                </span>
-                                {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="shrink-0 rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
-                            </span>
-                        );
-                    };
+            <ViewHeader
+                crumbs={[{ label: workspace.name ?? workspace.id, attrs: { 'data-workspace-name': '' } }]}
+                path={workspace.path}
+                status={ops?.repos?.list ? lockedRepos(ops.repos.list).map((r) => {
+                    const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
                     return (
-                        <div data-repo-chips="" className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
-                            {inline.map(chipOf)}
-                            {more.length > 0 ? (
-                                <Popover placement="bottom-start">
-                                    <Popover.Trigger data-action="more-repos" aria-label={`${more.length} more repos`} className="flex h-6 min-w-0 cursor-pointer items-center overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">
-                                        {`+${more.length} more`}
-                                    </Popover.Trigger>
-                                    <Popover.Content data-repo-more="" className="flex max-h-80 max-w-[min(28rem,90vw)] flex-col gap-1.5 overflow-y-auto p-2">
-                                        {more.map(chipOf)}
-                                    </Popover.Content>
-                                </Popover>
-                            ) : null}
-                        </div>
+                        <span key={r.slug} className="flex shrink-0 items-center gap-1.5">
+                            <span data-repo-chip={r.slug} data-tone={chip.tone} className="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] px-2 font-mono text-[11px] text-[var(--danger)]">
+                                <Icon name="circle-alert" className="h-3 w-3 shrink-0" />
+                                <span className="truncate">{chip.label}</span>
+                            </span>
+                            {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="shrink-0 whitespace-nowrap rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
+                        </span>
                     );
-                })() : null}
-                {/* The agents strip (the board's header): a pill per agent — state dot, name — each opening the agent. */}
-                {dashboard.strip.length > 0 ? (
-                    <div data-agents-strip="" className="ml-2 flex min-w-0 max-w-full items-center gap-1 overflow-x-auto">
-                        {dashboard.strip.map((a) => (
-                            <button key={a.id} type="button" data-agent-pill={a.id} title={`${a.name} · ${a.word.toLowerCase()}`} onClick={() => onOpenAgent?.(a.id)} className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
-                                <FidelityDot fidelity={a.fidelity} state={a.state} />
-                                <span>{a.name}</span>
-                            </button>
-                        ))}
-                    </div>
-                ) : null}
-                {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
-                {files ? (
-                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`${onOpenScratchTerminal ? '' : 'ml-auto '}flex items-center gap-1.5 min-w-0 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="truncate">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
-                ) : null}
-                {ops ? (
-                    <div className={`${files || onOpenScratchTerminal ? '' : 'ml-auto '}flex min-w-0 max-w-full flex-wrap items-center gap-1`}>
-                        {ops.asleep ? (
-                            <button type="button" data-action="wake" onClick={ops.onWake} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Wake</button>
-                        ) : (
-                            <button type="button" data-action="hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Hibernate</button>
-                        )}
-                        <button type="button" data-action="remove-workspace" onClick={ops.onPreviewRemove} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Remove from Genie…</button>
-                    </div>
-                ) : null}
-            </header>
+                }) : null}
+                actions={<>
+                    {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
+                    {files ? (
+                        <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} aria-label="Files" title="The workspace's files: one panel, who is touching what (⌘B)" className={`flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘B</kbd></button>
+                    ) : null}
+                    {ops ? (ops.asleep ? (
+                        <button type="button" data-action="wake" aria-label="Wake" title="Wake: agents and services start again" onClick={ops.onWake} className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="play" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Wake</span></button>
+                    ) : (
+                        <button type="button" data-action="hibernate" aria-label="Hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="moon" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Hibernate</span></button>
+                    )) : null}
+                    {ops ? <button type="button" data-action="remove-workspace" aria-label="Remove from Genie" title="Remove from Genie…" onClick={ops.onPreviewRemove} className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="trash-2" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Remove from Genie…</span></button> : null}
+                </>}
+            />
             {/*
               * THE STRIP (Tynn #282): Agents, the tabs you designed, a small +, Settings — + always just before Settings,
               * Settings always last. Labelled tabs, never a shortcut-only door (§4.0). The + needs somewhere to keep a tab:

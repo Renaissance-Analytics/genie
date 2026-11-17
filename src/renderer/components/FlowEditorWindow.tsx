@@ -1,4 +1,5 @@
 import { Button } from '@particle-academy/react-fancy';
+import { Flash } from './Flash.js';
 import { FlowEditor, FlowViewer, getNodeKind, type FlowEditorApi, type FlowGraph } from '@particle-academy/fancy-flow';
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
@@ -74,6 +75,8 @@ export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data
     const [name, setName] = useState(flow?.name ?? '');
     const [serverProblems, setServerProblems] = useState<readonly FlowProblem[]>([]);
     const [note, setNote] = useState<string | null>(null);
+    // "Saved" is a Flash on the Save button, never a bar (the owner, 2026-11-16); a warning stays a note.
+    const [savedFlash, setSavedFlash] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [viewing, setViewing] = useState<number | null>(null);
     const [opened, setOpened] = useState<FlowPaneName | null>(null);
@@ -125,6 +128,7 @@ export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data
         if (!ws || !document_) return;
         setBusy(true);
         setNote(null);
+        setSavedFlash(null);
         try {
             const answer = await act({ kind: 'flows.saveGraph', ...(flowId !== null ? { flowId } : {}), workspaceId: ws, name, document: document_ });
             const saved = answer.flows?.saved;
@@ -132,7 +136,7 @@ export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data
             else if (!saved.ok) { setServerProblems(saved.problems); setNote('Not saved: fix what is marked on the canvas.'); }
             else {
                 setServerProblems([]);
-                setNote(saved.disarmed ? 'Saved, and DISARMED: you changed what it does. Arm it again from Flows when it is right.' : 'Saved.');
+                if (saved.disarmed) setNote('Saved, and DISARMED: you changed what it does. Arm it again from Flows when it is right.'); else setSavedFlash('Saved');
                 if (flowId === null) onSaved?.(saved.flowId);
             }
         } catch (error) {
@@ -172,7 +176,7 @@ export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data
                         ))}
                     </select>
                 ) : null}
-                <Button size="xs" type="button" disabled={busy || run !== null} onClick={() => void save()} className="rounded-lg bg-[var(--primary)] px-3 py-1 text-sm text-white disabled:opacity-50">Save</Button>
+                <Flash note={savedFlash}><Button size="xs" type="button" disabled={busy || run !== null} onClick={() => void save()} className="rounded-lg bg-[var(--primary)] px-3 py-1 text-sm text-white disabled:opacity-50">Save</Button></Flash>
             </div>
             {note ? <p data-flow-note className="shrink-0 border-b border-[var(--border-1)] px-4 py-1 text-xs text-[var(--fg-2)]">{note}</p> : null}
             {problems.length > 0 && run === null ? (

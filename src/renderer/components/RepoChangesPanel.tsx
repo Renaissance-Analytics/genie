@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Input, Select } from '@particle-academy/react-fancy';
+import { Flash } from './Flash.js';
 import { CommitComposer, DiffViewer, WorkingTree } from '@particle-academy/fancy-git-ui';
 import type { ChangeKind, WorkingTreeStatus } from '@particle-academy/fancy-git';
 import type { RepoChangeLabel, RepoStatus } from '../../main/repo-model.js';
@@ -76,7 +77,8 @@ export function RepoChangesView({ repos, repoRel, status, selected, diff, busy, 
                 <Button size="sm" variant="ghost" data-action="repo-branch" disabled={busy || !newBranch.trim()} onClick={() => { on.branch?.(newBranch.trim()); setNewBranch(''); }}>Create branch</Button>
             </div>
             {error ? <p role="alert" data-repo-error="" className="m-2 rounded-md border border-[var(--danger)] p-2 font-mono text-xs">{error}</p> : null}
-            {notice && !error ? <p data-repo-notice="" className="mx-3 mt-2 text-xs text-[var(--success)]">{notice}</p> : null}
+            {/* What an action did is a Flash, never a line that pushes the panel (the owner, 2026-11-16). */}
+            <Flash note={notice && !error ? notice : null} />
             <div className="flex min-h-0 flex-1">
                 <div className="flex w-[320px] shrink-0 flex-col gap-2 overflow-auto border-r border-[var(--border-1)] p-2">
                     {wt ? <WorkingTree value={wt} selectedPaths={selected} onSelectedPathsChange={(p) => on.select?.(p)} onStage={(p) => on.stage?.(p)} onUnstage={(p) => on.unstage?.(p)} pending={busy} /> : <p className="text-xs text-[var(--fg-3)]">{error ? '' : 'Reading the repository…'}</p>}

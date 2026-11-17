@@ -1,5 +1,6 @@
 import { Button, ContentRenderer, Icon } from '@particle-academy/react-fancy';
 import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { Flash } from './Flash.js';
 import { BoardFollower, type LiveState } from '../../core/tynn-board.js';
 import {
     applyIssueChanges,
@@ -116,7 +117,8 @@ function PrimaryButton({ icon, label, busyLabel, busy, disabled, data, type = 'b
 function OpLine({ op, onRetry }: { op: IssueOp; onRetry?: (() => void) | undefined }) {
     const words = OP_WORDS[op.action] ?? { running: 'Working…', done: 'Done' };
     if (op.phase === 'running') return <p data-issue-op="running" aria-live="polite" className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)]"><Icon name="loader" size="xs" className="animate-spin" /> {words.running}</p>;
-    if (op.phase === 'done') return <p data-issue-op="done" aria-live="polite" className="flex items-center gap-1.5 text-[12px] text-[var(--success,var(--fg-2))]"><Icon name="circle-check" size="xs" /> {words.done}</p>;
+    // Done is a Flash that comes and goes, never a line (the owner, 2026-11-16).
+    if (op.phase === 'done') return <Flash note={words.done} attrs={{ 'data-issue-op': 'done' }} />;
     return (
         <p data-issue-op="failed" role="alert" className="flex items-center gap-1.5 rounded bg-[var(--warning)]/10 px-2 py-1 text-[12px] text-[var(--warning)]">
             <Icon name="circle-alert" size="xs" />

@@ -1,5 +1,6 @@
 import { Icon, Kanban, useKanban } from '@particle-academy/react-fancy';
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Flash } from './Flash.js';
 import {
     applyBoardChanges,
     BoardFollower,
@@ -251,9 +252,8 @@ export function OpLine({ op, onRetry }: { op: BoardOp; onRetry?: (() => void) | 
     if (op.phase === 'running') {
         return <p data-tynn-op="running" aria-live="polite" className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)]"><Icon name="loader" size="xs" className="animate-spin" /> {words.running}</p>;
     }
-    if (op.phase === 'done') {
-        return <p data-tynn-op="done" aria-live="polite" className="flex items-center gap-1.5 text-[12px] text-[var(--success,var(--fg-2))]"><Icon name="circle-check" size="xs" /> {words.done}</p>;
-    }
+    // Done is a Flash that comes and goes, never a line that pushes the board (the owner, 2026-11-16).
+    if (op.phase === 'done') return <Flash note={words.done} attrs={{ 'data-tynn-op': 'done' }} />;
     return (
         <p data-tynn-op="failed" role="alert" className="flex items-center gap-1.5 rounded bg-[var(--warning)]/10 px-2 py-1 text-[12px] text-[var(--warning)]">
             <Icon name="circle-alert" size="xs" />
