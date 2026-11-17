@@ -2715,7 +2715,7 @@ function HostUpgradeRow({ host, upgrade, onUpgradeHost }: { host: string; upgrad
  * own window, the row moves on without a relaunch. While Genie's Install is under way it is the same button, busy and
  * disabled: nothing moves, and a second click opens no second installer (Tynn #748).
  */
-function TailscaleRow({ tailscale, outcome, host, browse, onAction, button }: { tailscale: RemoteSection['tailscale'] | null; outcome: string | null; host: string; browse: boolean; onAction: SurfaceProps['onAction']; button: string }) {
+function TailscaleRow({ tailscale, outcome, host, browse, onAction, button }: { tailscale: NonNullable<RemoteSection['tailscale']>; outcome: string | null; host: string; browse: boolean; onAction: SurfaceProps['onAction']; button: string }) {
     const askRead = useRef(onAction);
     askRead.current = onAction;
     useEffect(() => {
@@ -2724,7 +2724,6 @@ function TailscaleRow({ tailscale, outcome, host, browse, onAction, button }: { 
         window.addEventListener('focus', read);
         return () => window.removeEventListener('focus', read);
     }, []);
-    if (!tailscale) return null;
     const installing = tailscale.installing === true;
     return (
         <div data-tailscale={tailscale.state} className="flex flex-wrap items-center gap-3 text-sm">
@@ -2858,7 +2857,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                     {remote.firewall ? <FirewallRow rule={remote.firewallRule ?? null} enabled={remote.enabled} outcome={remote.firewallOutcome ?? null} onAction={onAction} button={button} /> : null}
                     {/* TAILSCALE (Tynn #821; Genie 1's tailscale.status / install / up): remote access runs over the tailnet, so
                         where Tailscale stands, and the one action that moves it on. */}
-                    <TailscaleRow tailscale={remote.tailscale ?? null} outcome={remote.tailscaleOutcome ?? null} host={remote.host} browse={browse} onAction={onAction} button={button} />
+                    {remote.tailscale ? <TailscaleRow tailscale={remote.tailscale} outcome={remote.tailscaleOutcome ?? null} host={remote.host} browse={browse} onAction={onAction} button={button} /> : null}
                     {/* THE TYNN NETWORK (Tynn #836): this machine registered with Tynn as a workstation — what a share, the
                         relay and the Tynn workstations list stand on — or why it is not. */}
                     {remote.tynnWorkstation ? (
