@@ -32,6 +32,7 @@ import { chatPickAfter, chatSubjectFor, resolveChatAgent } from '../core/chat-sc
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
 import { rewrittenAddress, routeFor, windowBridge, windowChromeOf } from './window-address.js';
+import { answerOutcome, remoteQuestionFeed } from './remote-questions-feed.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -1036,6 +1037,17 @@ function DesktopApp({ bridge }: AppProps) {
     const restartOne = (agentId: string): Promise<{ ok: true } | { ok: false; reason: string }> =>
         resolvedBridge ? resolvedBridge.agents.restart(agentId, 'graceful') : Promise.resolve({ ok: false, reason: 'Genie is not connected.' });
     const snapshot = useSnapshot(resolvedBridge);
+    // THE CONNECTED MACHINE'S QUESTIONS (Tynn #726): driving another machine, its live questions reach THIS machine's
+    // question window; an answer from there is put to the host's own features.act, through this window, while connected.
+    const questionFeed = remoteQuestionFeed({ connected: remote.state?.connected === true, host: remote.state?.host ?? null, items: snapshot.deckItems });
+    useEffect(() => { window.genie?.remoteQuestions?.report(questionFeed.host, questionFeed.items); }, [questionFeed.host, questionFeed.items]);
+    const questionAct = useRef<((action: FeatureAction) => Promise<unknown>) | null>(null);
+    questionAct.current = remote.state?.connected === true && resolvedBridge ? (action) => resolvedBridge.features.act(action) : null;
+    useEffect(() => window.genie?.remoteQuestions?.onAct?.((action) => answerOutcome(() => {
+        const act = questionAct.current;
+        if (!act) throw new Error('this window is no longer connected to that machine');
+        return act(action);
+    })), []);
     // A workspace's designed tabs, once its settings are read (its tab addresses resolve from them).
     const [tabsByWorkspace, setTabsByWorkspace] = useState<ReadonlyMap<string, ReadonlyArray<{ id: string; name: string }>>>(() => new Map());
     const addressContext: AddressContext | null = snapshot.workstation && snapshot.workspaces
