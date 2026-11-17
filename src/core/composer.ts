@@ -1,4 +1,23 @@
+import { MAX_OPEN_UPLOADS } from './mobile-wire.js';
 import type { LiveSession } from './roster.js';
+
+/** The most files one message carries. STUB (RED): the rule is not written yet. */
+export const MESSAGE_FILE_LIMIT = MAX_OPEN_UPLOADS;
+
+/** The files a draft already holds. STUB. */
+export function draftFileCount(_draft: { pills: readonly { kind: string }[]; attachments: readonly unknown[] } | null | undefined): number {
+    return 0;
+}
+
+/** The files a paste, drop or pick would add. STUB. */
+export function incomingFileCount(_kind: 'paste' | 'drop' | 'pick', _data: { files: ArrayLike<{ type: string }> | null | undefined; text?: string | undefined }): number {
+    return 0;
+}
+
+/** Why the incoming files are not added, or `null`. STUB. */
+export function fileLimitRefusal(_current: number, _incoming: number, _limit: number = MESSAGE_FILE_LIMIT): string | null {
+    return null;
+}
 
 /**
  * THE COMPOSER'S TWO DECISIONS THAT ARE NOT LAYOUT (react-fancy 5.39.0's `PromptInput`, react-fancy#32).

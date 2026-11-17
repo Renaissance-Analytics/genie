@@ -21,8 +21,12 @@ export const MOBILE_TAIL = 200;
 export const UPLOAD_CHUNK_BYTES = 256 * 1024;
 /** The most one upload may be (Genie 1's MAX_UPLOAD_BYTES; the inbox's per-file cap). */
 export const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
-/** How many uploads one connection may hold open at once. */
-const MAX_OPEN_PER_OWNER = 3;
+/**
+ * How many uploads one connection may hold open at once: a bound on what one connection makes the host keep in memory
+ * (each up to `UPLOAD_MAX_BYTES`). A message's attachments are all staged before its one `prompt` call takes them, so
+ * this is also the most files one message carries (`core/composer.ts` MESSAGE_FILE_LIMIT).
+ */
+export const MAX_OPEN_UPLOADS = 3;
 /** An upload not finished and taken within this is dropped. */
 const STAGE_TTL_MS = 10 * 60_000;
 
@@ -185,7 +189,7 @@ export class UploadStaging {
         const refusal = uploadSizeRefusal(named.name, size);
         if (refusal) return { ok: false, reason: refusal };
         const open = [...this.#staged.values()].filter((s) => s.owner === owner).length;
-        if (open >= MAX_OPEN_PER_OWNER) return { ok: false, reason: `only ${MAX_OPEN_PER_OWNER} uploads at a time; finish or drop one first` };
+        if (open >= MAX_OPEN_UPLOADS) return { ok: false, reason: `only ${MAX_OPEN_UPLOADS} uploads at a time; finish or drop one first` };
         const id = `up_${++this.#next}_${this.#now().toString(36)}`;
         this.#staged.set(id, { owner, name: named.name, size, chunks: [], received: 0, next: 0, startedAt: this.#now() });
         return { ok: true, id };
