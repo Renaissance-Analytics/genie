@@ -28,6 +28,8 @@ import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
+import { SendGrace, draftWithUndone, holdsSend, type HeldSend } from '../../core/send-grace.js';
+import { ChatHeldSends } from './ChatHeldSend.js';
 import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
 import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
@@ -159,6 +161,12 @@ export function ChatQueuedNote({ id, agentName, silentSince, now, onSendNow }: {
             ) : null}
         </span>
     );
+}
+
+/** `ChatHeldSends` with its countdown kept current, only while something is held. */
+function ChatHeldSendsLive(props: Omit<Parameters<typeof ChatHeldSends>[0], 'now'>) {
+    const now = useNow(props.held.length > 0, undefined, 250);
+    return <ChatHeldSends {...props} now={now} />;
 }
 
 function ChatQueuedNoteLive(props: Omit<Parameters<typeof ChatQueuedNote>[0], 'now'>) {
@@ -375,7 +383,7 @@ const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatM
 export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
 function ChatFlyoutBody({
-    onChooseProviderProgram,
+    busy = false, onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
     onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
@@ -537,6 +545,39 @@ function ChatFlyoutBody({
     const composerRefs = useRef(new Map<string, DraftHandle>());
     // Why each chat's last send was not sent (react-fancy's `onSubmitError`), until its next send.
     const [sendErrors, setSendErrors] = useState<Readonly<Record<string, string>>>({});
+    /*
+     * UNDO SEND (Tynn #745, core/send-grace.ts): a message typed to a busy agent waits out the window here, drawn at the end
+     * of its thread with Undo and Send now; then it goes as any send does. Nothing typed is lost when the chat goes away.
+     */
+    const onSendRef = useRef(onSend);
+    onSendRef.current = onSend;
+    const putBack = (chat: string, text: string): void => {
+        const handle = composerRefs.current.get(chat);
+        const next = draftWithUndone(handle?.getDraft() ?? (keeper && chat !== '' ? keeper.initial(chat) ?? null : null), text);
+        handle?.setDraft(next, { focus: true });
+        if (keeper && chat !== '') keeper.change(chat, next);
+    };
+    const putBackRef = useRef(putBack);
+    putBackRef.current = putBack;
+    const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
+        // Refused after the window: the words go back to the composer, with why — never lost.
+        if (out && out.kind === 'failed') {
+            putBackRef.current(h.chat, h.text);
+            setSendErrors((e) => withSendError(e, h.chat, out.reason));
+        }
+    }, (error: unknown) => {
+        putBackRef.current(h.chat, h.text);
+        setSendErrors((e) => withSendError(e, h.chat, errorWords(error)));
+    })));
+    const [, setHeldSeq] = useState(0);
+    useEffect(() => {
+        const off = grace.subscribe(() => setHeldSeq((n) => n + 1));
+        return () => { off(); grace.flush(); };
+    }, [grace]);
+    const undoSend = (id: string): void => {
+        const h = grace.undo(id);
+        if (h) putBack(h.chat, h.text);
+    };
     const applied = useRef<number | null>(null);
     useEffect(() => {
         if (!insert || drafts === 'loading' || applied.current === insert.seq) return;
@@ -745,6 +786,8 @@ function ChatFlyoutBody({
                     onDiscardDraft={onDiscardDraft}
                     loadAttachment={threadAttachment}
                 />
+                {/* Held for the undo window (Tynn #745): where the message will be, so nothing moves when it goes. */}
+                <ChatHeldSendsLive held={grace.held(activeChat ?? '')} onUndo={undoSend} onSendNow={(id) => grace.sendNow(id)} />
                 {/* ONE QUEUE, ONE ACTION (Tynn #702): what waits and what was not delivered, counted, with one Send all now. */}
                 <ChatQueueBar
                     agentName={thread?.name ?? 'the agent'}
@@ -898,6 +941,11 @@ function ChatFlyoutBody({
                          */
                         onSubmit={(text, picked) => {
                             setSendErrors((e) => withSendError(e, chat, null));
+                            // To a busy agent, text only: held for the undo window; the composer empties now (Tynn #745).
+                            if (holdsSend({ busy, files: picked.length }) && text.trim() !== '') {
+                                grace.hold(chat, text);
+                                return Promise.resolve(undefined);
+                            }
                             return submitFromComposer({
                                 read: () => readAttachments(namePastedImages(text, picked), keeper ? (ref) => keeper.readRef(ref) : undefined),
                                 send: (files) => onSend(text, files, chat),

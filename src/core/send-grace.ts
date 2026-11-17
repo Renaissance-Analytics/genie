@@ -25,8 +25,8 @@ export interface HeldSend {
 }
 
 /** Whether this send is held for the grace window: a busy agent, and text only. */
-export function holdsSend(_o: { busy: boolean; files: number }): boolean {
-    return false;
+export function holdsSend(o: { busy: boolean; files: number }): boolean {
+    return o.busy && o.files === 0;
 }
 
 export interface SendGraceOptions {
@@ -38,40 +38,98 @@ export interface SendGraceOptions {
 
 export class SendGrace {
     readonly #send: (h: HeldSend) => void | Promise<unknown>;
+    readonly #ms: number;
+    readonly #now: () => number;
+    readonly #setTimer: (fn: () => void, ms: number) => unknown;
+    readonly #clearTimer: (t: unknown) => void;
+    #items: HeldSend[] = [];
+    readonly #timers = new Map<string, unknown>();
+    readonly #listeners = new Set<() => void>();
+    #seq = 0;
 
-    constructor(send: (h: HeldSend) => void | Promise<unknown>, _options: SendGraceOptions = {}) {
+    constructor(send: (h: HeldSend) => void | Promise<unknown>, options: SendGraceOptions = {}) {
         this.#send = send;
+        this.#ms = options.ms ?? UNDO_SEND_MS;
+        this.#now = options.now ?? Date.now;
+        this.#setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+        this.#clearTimer = options.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
     }
 
     hold(chat: string, text: string): HeldSend {
-        const h: HeldSend = { id: 'held', chat, text, until: 0, sending: true };
-        void this.#send(h);
+        const h: HeldSend = { id: `held-${++this.#seq}`, chat, text, until: this.#now() + this.#ms, sending: false };
+        this.#items = [...this.#items, h];
+        this.#timers.set(h.id, this.#setTimer(() => this.#go(h.id), this.#ms));
+        this.#changed();
         return h;
     }
 
     /** Take it back before it went: answers what was held, or `null` when it has already gone. */
-    undo(_id: string): HeldSend | null {
-        return null;
+    undo(id: string): HeldSend | null {
+        const h = this.#items.find((x) => x.id === id && !x.sending);
+        if (!h) return null;
+        this.#stopTimer(id);
+        this.#items = this.#items.filter((x) => x.id !== id);
+        this.#changed();
+        return h;
     }
 
     /** Send it now, without waiting out the window. `false` when it is not held. */
-    sendNow(_id: string): boolean {
-        return false;
+    sendNow(id: string): boolean {
+        if (!this.#items.some((x) => x.id === id && !x.sending)) return false;
+        this.#go(id);
+        return true;
     }
 
     /** Send everything still held, in order (the chat is going away: nothing typed is lost). */
-    flush(): void {}
-
-    held(_chat?: string): readonly HeldSend[] {
-        return [];
+    flush(): void {
+        for (const h of this.#items.filter((x) => !x.sending)) this.#go(h.id);
     }
 
-    subscribe(_fn: () => void): () => void {
-        return () => {};
+    held(chat?: string): readonly HeldSend[] {
+        return chat === undefined ? this.#items : this.#items.filter((x) => x.chat === chat);
+    }
+
+    subscribe(fn: () => void): () => void {
+        this.#listeners.add(fn);
+        return () => { this.#listeners.delete(fn); };
+    }
+
+    #go(id: string): void {
+        const h = this.#items.find((x) => x.id === id && !x.sending);
+        if (!h) return;
+        this.#stopTimer(id);
+        const going: HeldSend = { ...h, sending: true };
+        this.#items = this.#items.map((x) => (x.id === id ? going : x));
+        this.#changed();
+        // Drawn as Sending until the host answers, so the thread's own copy of the message replaces it, with no gap.
+        const done = (): void => {
+            this.#items = this.#items.filter((x) => x.id !== id);
+            this.#changed();
+        };
+        let result: void | Promise<unknown>;
+        try {
+            result = this.#send(going);
+        } catch {
+            done();
+            return;
+        }
+        if (result && typeof (result as Promise<unknown>).then === 'function') (result as Promise<unknown>).then(done, done);
+        else done();
+    }
+
+    #stopTimer(id: string): void {
+        const t = this.#timers.get(id);
+        if (t !== undefined) this.#clearTimer(t);
+        this.#timers.delete(id);
+    }
+
+    #changed(): void {
+        for (const fn of this.#listeners) fn();
     }
 }
 
 /** The composer's draft with the undone words back in it, ahead of anything typed since. */
-export function draftWithUndone(current: ChatDraft | null, _text: string): ChatDraft {
-    return current ?? { v: 1, text: '', pills: [], attachments: [] };
+export function draftWithUndone(current: ChatDraft | null, text: string): ChatDraft {
+    const base = current ?? { v: 1 as const, text: '', pills: [], attachments: [] };
+    return { ...base, text: base.text.trim() === '' ? text : `${text}\n${base.text}` };
 }
