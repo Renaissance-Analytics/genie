@@ -47,9 +47,10 @@ export function offlineSentence(name: string | null): string {
     return `${shown(name)} is offline: it needs Genie running, signed in, and Remote access on.`;
 }
 
-/** The connect view while the host's person is asked to let this guest in (Tynn #731). RED STUB: inert. */
-export function withAsking(connect: RelayConnect, _pairing: { readonly guest?: true } | null | undefined): RelayConnect {
-    return connect;
+/** The connect view while the host's person is asked to let this guest in (Tynn #731): only at the host step. */
+export function withAsking(connect: RelayConnect, pairing: { readonly guest?: true } | null | undefined): RelayConnect {
+    if (connect.kind !== 'working' || connect.step !== 'host' || pairing?.guest !== true) return connect;
+    return { ...connect, asking: true };
 }
 
 export function relayConnectView(name: string | null, state: RelayConnect): RelayConnectView {
@@ -76,6 +77,6 @@ export function relayConnectView(name: string | null, state: RelayConnect): Rela
             status: i < at ? 'done' : i > at ? 'waiting' : state.kind === 'failed' ? 'failed' : 'working',
         })),
         problem: state.kind !== 'failed' ? null : state.skew ? skewSentence(name, state.skew) : state.offline ? offlineSentence(name) : state.reason,
-        notice: null,
+        notice: state.kind === 'working' && state.asking === true ? `Waiting for ${who} to let you in…` : null,
     };
 }

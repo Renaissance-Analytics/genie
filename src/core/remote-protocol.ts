@@ -510,7 +510,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
         case 'pairing':
             if (typeof raw.host !== 'string' || typeof raw.expiresAt !== 'number') return { ok: false, reason: 'a pairing frame needs host and expiresAt' };
-            return { ok: true, message: { kind: 'pairing', host: raw.host, expiresAt: raw.expiresAt } };
+            return { ok: true, message: { kind: 'pairing', host: raw.host, expiresAt: raw.expiresAt, ...(raw.guest === true ? { guest: true as const } : {}) } };
         default:
             return { ok: false, reason: `unknown message kind "${String(kind)}"` };
     }

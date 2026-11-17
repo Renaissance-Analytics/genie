@@ -16,19 +16,34 @@ import { useNow } from '../use-now.js';
  * - an answer that did not land says why and offers Retry.
  */
 
-type Outcome = { kind: 'allowed' | 'denied' | 'expired' | 'gone'; label: string; host: string };
+type Outcome = { kind: 'allowed' | 'denied' | 'expired' | 'gone'; label: string; host: string; guest: boolean };
 
 const OUTCOME_MS = 8000;
 // Above every modal (react-fancy's backdrop is `fixed inset-0 z-50`): an open dialog must never hide Allow and Deny behind
 // its backdrop for the two minutes the prompt lives (found live on omarchy-test, 2026-10-31, with What's new open).
 
 function outcomeWords(o: Outcome): string {
+    // A share-link guest (Tynn #731) is let in or not; a device is paired or not.
+    if (o.guest) {
+        switch (o.kind) {
+            case 'allowed': return `${o.label} is connected.`;
+            case 'denied': return `Denied: ${o.label} was not let in.`;
+            case 'expired': return `Nobody answered in time: ${o.label} was not let in.`;
+            case 'gone': return `${o.label} left before you answered.`;
+        }
+    }
     switch (o.kind) {
         case 'allowed': return `${o.label} is paired with ${o.host}.`;
         case 'denied': return `Denied: ${o.label} was not paired.`;
         case 'expired': return `Nobody answered in time: ${o.label} was not paired.`;
         case 'gone': return `${o.label} went away before it was allowed; nothing was paired.`;
     }
+}
+
+/** What a share-link guest could reach once let in (Tynn #731). */
+function guestReachWords(guest: NonNullable<PairRequest['guest']>): string {
+    const what = guest.workspace === null ? 'this whole machine' : `the ${guest.workspace} workspace`;
+    return `They could ${guest.readonly ? 'see' : 'see and use'} ${what}.`;
 }
 
 /** Electron wraps a handler's throw as "Error invoking remote method '<channel>': Error: <reason>". */
@@ -64,7 +79,7 @@ export function PairPrompt({ requests, onAnswer, now: fixedNow }: PairPromptProp
             // deadline, the request lapsed rather than its device leaving.
             const clock = fixedNow ?? Date.now();
             const kind: Outcome['kind'] = allow === true ? 'allowed' : allow === false ? 'denied' : clock >= r.expiresAt - 1500 ? 'expired' : 'gone';
-            setOutcome({ kind, label: r.label, host: r.host });
+            setOutcome({ kind, label: r.label, host: r.host, guest: r.guest !== undefined });
             setBusy((b) => (b?.id === id ? null : b));
             setFailed((f) => (f?.id === id ? null : f));
         }
@@ -109,17 +124,26 @@ export function PairPrompt({ requests, onAnswer, now: fixedNow }: PairPromptProp
         <div className="pointer-events-none fixed bottom-4 right-4 z-[60]">
             <div data-pair-prompt={request.id} role="alertdialog" aria-modal="false" aria-labelledby={`pair-title-${request.id}`} className={`${card} flex flex-col gap-2 border-[var(--warning)]`}>
                 <div className="flex items-baseline gap-2">
-                    <h2 id={`pair-title-${request.id}`} className="text-[15px] font-semibold">Pair this device?</h2>
+                    <h2 id={`pair-title-${request.id}`} className="text-[15px] font-semibold">{request.guest ? `Let ${request.label} in?` : 'Pair this device?'}</h2>
                     <span data-pair-countdown="" className="ml-auto font-mono text-xs text-[var(--fg-3)]">{timeLeftWords(request.expiresAt - now)}</span>
                 </div>
-                <p>
-                    <span className="font-semibold">{request.label}</span>
-                    {` wants to pair with ${request.host}, from `}
-                    <span className="font-mono text-xs">{request.from}</span>
-                    {'. It typed the PIN shown here.'}
-                </p>
-                {request.replaces ? <p className="text-[var(--fg-2)]">{`It replaces ${request.replaces.label}, whose pairing ends when you allow this one.`}</p> : null}
-                <p className="text-xs text-[var(--fg-3)]">{`Once paired it can chat with agents and read and upload files on ${request.host}. Allow only if this is your device.`}</p>
+                {request.guest ? (
+                    <>
+                        <p>{`${request.label} opened a share link to ${request.host}.`}</p>
+                        <p className="text-xs text-[var(--fg-3)]">{guestReachWords(request.guest)}</p>
+                    </>
+                ) : (
+                    <>
+                        <p>
+                            <span className="font-semibold">{request.label}</span>
+                            {` wants to pair with ${request.host}, from `}
+                            <span className="font-mono text-xs">{request.from}</span>
+                            {'. It typed the PIN shown here.'}
+                        </p>
+                        {request.replaces ? <p className="text-[var(--fg-2)]">{`It replaces ${request.replaces.label}, whose pairing ends when you allow this one.`}</p> : null}
+                        <p className="text-xs text-[var(--fg-3)]">{`Once paired it can chat with agents and read and upload files on ${request.host}. Allow only if this is your device.`}</p>
+                    </>
+                )}
                 {failure ? (
                     <p data-pair-failed="" role="alert" className="flex items-center gap-2 text-xs text-[var(--danger)]">
                         <span className="flex-1">{`Your answer did not reach Genie: ${failure.reason}`}</span>

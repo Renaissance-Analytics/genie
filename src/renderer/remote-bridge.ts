@@ -204,7 +204,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 return;
             }
             case 'pairing':
-                setState({ pairing: { expiresAt: m.expiresAt } });
+                setState({ pairing: { expiresAt: m.expiresAt, ...(m.guest === true ? { guest: true as const } : {}) } });
                 return;
             case 'refused': {
                 // A call the host does not know: an older host than this client needs, said as such (Tynn #651).
