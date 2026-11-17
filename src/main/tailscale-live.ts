@@ -78,6 +78,18 @@ export function tailscaleLive(ports: TailscaleLivePorts): TailscaleLive {
         return under ? { ...last, installing: true } : last;
     };
 
+    /**
+     * Tell the windows only what is new: a wait reads Tailscale every few seconds, and a reading the same as the last one
+     * pushed is not worth a snapshot to every window.
+     */
+    let pushed = '';
+    const push = (): void => {
+        const now = JSON.stringify(view());
+        if (now === pushed) return;
+        pushed = now;
+        ports.changed();
+    };
+
     const read = async (): Promise<TailscaleStatus | null> => {
         const was = last?.state ?? null;
         try {
@@ -89,7 +101,7 @@ export function tailscaleLive(ports: TailscaleLivePorts): TailscaleLive {
         if (last?.state === 'running' && was !== 'running') {
             await ports.online().catch((error: unknown) => ports.say?.(`remote: ${error instanceof Error ? error.message : String(error)}`));
         }
-        ports.changed();
+        push();
         return view();
     };
 
@@ -102,7 +114,7 @@ export function tailscaleLive(ports: TailscaleLivePorts): TailscaleLive {
     const endWait = (): void => {
         if (timer !== null) timers.clear(timer);
         timer = null;
-        if (installerOpen) { installerOpen = false; ports.changed(); }
+        if (installerOpen) { installerOpen = false; push(); }
     };
 
     const tick = (): void => {
@@ -135,10 +147,10 @@ export function tailscaleLive(ports: TailscaleLivePorts): TailscaleLive {
                     return answer;
                 } finally {
                     installing = null;
-                    ports.changed();
+                    push();
                 }
             })();
-            ports.changed();
+            push();
             return installing;
         },
         up: async () => {
