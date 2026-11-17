@@ -14,7 +14,7 @@ import { HotkeyCapture } from './HotkeyCapture.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
-import { PairPin } from './PairPin.js';
+import { PairGuide } from './PairGuide.js';
 import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { patchWithinLine } from '../../core/toolchain-update.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
@@ -2866,12 +2866,8 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                     {!remote.enabled ? null : remote.url === null ? (
                         <p className="text-sm text-[var(--fg-3)]">Nothing is listening on {remote.host}, so devices cannot connect yet: {remote.unavailable ?? 'no reason reported'}. The in-app surfaces are unaffected.</p>
                     ) : (
-                        <div className="flex flex-wrap items-center gap-3 text-sm">
-                            <span className="font-mono text-xs text-[var(--fg-4)]">{remote.url}</span>
-                            <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'remote.issuePin' })}>Pair a device</Button>
-                            {/* The PIN, its time left, and New PIN in place when it lapses (Tynn #751). */}
-                            <PairPin pin={remote.pin} pinEnded={remote.pinEnded ?? null} pairUrl={pairUrl} now={now} onAction={onAction} />
-                        </div>
+                        // Pair a device: the phone's app first, then the PIN; the address the phone keeps (Tynn #750, #752, #751).
+                        <PairGuide remote={{ ...remote, url: remote.url }} pairUrl={pairUrl} now={now} onAction={onAction} button={button} />
                     )}
                     <div className="flex items-center gap-3 text-sm">
                         <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: remote.locked ? 'remote.unlock' : 'remote.lock' })}>{remote.locked ? 'Unlock' : 'Lock'}</Button>

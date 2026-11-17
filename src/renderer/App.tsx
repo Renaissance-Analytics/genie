@@ -100,7 +100,8 @@ const NO_PLUGIN_EDITORS: readonly ClaimingEditor[] = [];
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
-import { deviceLabelFromUserAgent, fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
+import { MOBILE_PATH, deviceLabelFromUserAgent, fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
+import { offerKeep, phonePlatform } from '../core/pairing-guide.js';
 import { answerDeckForm } from './deck-answer.js';
 import { MobileAgent, MobileConnecting, MobileFileView, MobileFiles, MobilePair, MobileShell, type MobilePreview } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
@@ -681,6 +682,8 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
     const [state, setState] = useState<RemoteState | null>(null);
     const [refusal, setRefusal] = useState<string | null>(null);
     const [everConnected, setEverConnected] = useState(false);
+    /** This phone just paired with a PIN (not a token redial): it is shown how to keep Genie (Tynn #752). */
+    const [pairedWithPin, setPairedWithPin] = useState(false);
     const current = useRef<RemoteClient | null>(null);
     const attempt = useRef(0);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -714,6 +717,7 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
                 setEverConnected(true);
                 const t = next.state().token;
                 if (t) tokens?.remember(entry.socketUrl, t);
+                if (auth.kind === 'pin') setPairedWithPin(true);
                 void next.takeBaton();
                 return;
             }
@@ -761,6 +765,7 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
         client,
         state,
         phase,
+        pairedWithPin,
         refusal: refusal ?? state?.lastRefusal ?? null,
         connecting: client !== null && !connected && refusal === null,
         pair: (pin: string, label: string) => { setRefusal(null); dial({ kind: 'pin', code: pin.trim(), label: label || 'phone' }); },
@@ -794,6 +799,9 @@ async function photoForChat(file: File): Promise<Attachment> {
  * stream and the photos/files you attach, and a workspace's files to browse, preview and upload into. Every screen rides
  * the hash, so the phone's back button works. Answers take the Deck's own routing.
  */
+/** The phone was shown how to keep Genie (Tynn #752). */
+const KEPT_KEY = 'genie.mobile.kept';
+
 function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> }) {
     const remote = useMobileRemote(entry);
     // THE INSTALLABLE APP (genie#1346): the app-shell worker, where the page is a secure context (HTTPS on the tailnet name).
@@ -825,6 +833,12 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const attachment = useMemo(() => (bridge && agentId !== null ? (attachmentId: string) => bridge.agents.attachment(agentId, attachmentId) : undefined), [bridge, agentId]);
     const [sending, setSending] = useState(false);
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
+    // KEEP IT (Tynn #752): once, after a PIN pairing, unless the page already runs from the home screen.
+    const [kept, setKept] = useState(() => { try { return window.localStorage.getItem(KEPT_KEY) === '1'; } catch { return false; } });
+    const standalone = typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)').matches === true || (navigator as { standalone?: boolean }).standalone === true);
+    const keep = offerKeep({ pairedWithPin: remote.pairedWithPin, standalone, dismissed: kept })
+        ? { address: `${window.location.origin}${MOBILE_PATH}`, platform: phonePlatform(navigator.userAgent), onDone: () => { setKept(true); try { window.localStorage.setItem(KEPT_KEY, '1'); } catch { /* storage unavailable: it shows again next pairing */ } } }
+        : null;
 
     if (remote.phase === 'pair') {
         return <MobilePair host={window.location.host} refusal={remote.refusal} connecting={remote.connecting} waiting={remote.state?.pairing ?? null} onConnect={({ pin, label }) => remote.pair(pin, label)} />;
@@ -906,6 +920,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             locked={remote.state?.locked ?? false}
             refusal={note ?? remote.refusal}
             reconnecting={reconnecting}
+            keep={keep}
             items={snapshot.deckItems}
             answering={inFlight}
             onAnswer={answer}

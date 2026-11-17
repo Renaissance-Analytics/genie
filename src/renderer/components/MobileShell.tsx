@@ -21,6 +21,7 @@ import { MOBILE_PANELS, deviceLabelFromUserAgent, panelAfter, swipeStep, type Mo
 import { timeLeftWords } from '../../core/pair-confirm.js';
 import { useNow } from '../use-now.js';
 import { ApprovalCard } from './ApprovalCard.js';
+import { MobileKeep, type MobileKeepProps } from './MobileKeep.js';
 import { ChatMessages } from './ChatFlyout.js';
 import { ChatProse } from './ChatProse.js';
 import { ProviderLogo } from './ProviderLogo.js';
@@ -79,6 +80,8 @@ export interface MobileShellProps {
     onOpenFiles?: ((workspaceId: string) => void) | undefined;
     /** The socket dropped and the phone is dialing again: said over this screen. */
     reconnecting?: boolean | undefined;
+    /** Just paired with a PIN: how to keep Genie on this phone, once (Tynn #752); absent/`null` = not now. */
+    keep?: MobileKeepProps | null | undefined;
 }
 
 const TONE: Record<'ok' | 'warn' | 'bad' | 'muted' | 'cool', string> = {
@@ -124,7 +127,7 @@ function Reconnecting() {
     );
 }
 
-export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onAnswerForm, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onAnswerForm, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false, keep = null }: MobileShellProps) {
     const hibernated = new Set((registeredWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const workspaces = registeredWorkspaces?.filter((workspace) => !hibernated.has(workspace.id)) ?? registeredWorkspaces;
     const selectedWorkspace = requestedWorkspace !== null && hibernated.has(requestedWorkspace) ? null : requestedWorkspace;
@@ -155,6 +158,7 @@ export function MobileShell({ host, locked, refusal, items: reportedItems, answe
             ) : null}
 
             <main data-mobile-scroll className={`${SCROLL} flex flex-col gap-3 px-4 pt-3 ${SAFE_BOTTOM}`}>
+                {keep ? <MobileKeep {...keep} /> : null}
                 {selectedWorkspace !== null && onOpenFiles ? (
                     <Button size="xs" labelClassName="contents" type="button" data-action="open-files" onClick={() => onOpenFiles(selectedWorkspace)} className={`${BUTTON} flex items-center gap-2 self-start`}>
                         <Icon name="folder-open" size="sm" />
