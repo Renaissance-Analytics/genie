@@ -65,6 +65,9 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-popout', 'window-port'],
     ['genie:terminals-popout', 'window-port'],
     ['genie:remote-open-window', 'window-port'],
+    // The connected machine's questions into THIS machine's question window, and how an answer went (Tynn #726).
+    ['genie:remote-questions', 'window-port'],
+    ['genie:remote-question-acted', 'window-port'],
     ['genie:connect-link', 'window-port'],
     ['genie:relay-open', 'later:P5 relay client moves into genie-host'],
     ['genie:relay-send', 'later:P5 relay client moves into genie-host'],

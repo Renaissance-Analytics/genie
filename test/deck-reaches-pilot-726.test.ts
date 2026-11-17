@@ -44,8 +44,8 @@ beforeEach(async () => {
     windowOpen = true;
     const remoteWindowEvents = new Set<Listener>();
     const alone: HostApi = {
-        invoke: async (method) => { if (method === 'snapshot') return EMPTY; throw new Error(`no ${method}`); },
-        onEvent: (listener) => aloneApi.on(listener),
+        invoke: async (method: string) => { if (method === 'snapshot') return EMPTY; throw new Error(`no ${method}`); },
+        onEvent: (listener: Listener) => aloneApi.on(listener),
         workspaceOfAgent: () => 'ws_shop',
     } as unknown as HostApi;
     const api = hostRemoteApi({
