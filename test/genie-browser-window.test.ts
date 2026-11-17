@@ -52,18 +52,20 @@ describe('opening a site', () => {
         expect(last().tabs.map((t) => t.url)).toEqual(['https://tynn.gen/']);
     });
 
-    it('anything that is not a Genie site is refused in words, and no view is made', () => {
+    it('a .gen name nobody serves is refused in words; with no way to the person’s browser, so is the open web (Tynn #741); no view is made', () => {
         const { browser, views } = harness();
-        expect(browser.open('https://example.com/')).toEqual({ ok: false, error: 'example.com is not an enabled tunnel on this host.' });
+        expect(browser.open('other.gen')).toEqual({ ok: false, error: 'other.gen is not an enabled tunnel on this host.' });
+        expect(browser.open('https://example.com/')).toEqual({ ok: false, error: "example.com is not a dev site; Genie's browser opens dev sites only." });
         expect(views).toHaveLength(0);
     });
 
-    it('+ opens the first Genie site in a new tab (Genie 1); with none served it says so and makes nothing', () => {
+    it('+ shows the welcome page (Tynn #740), sites served or none, and opens no site on its own', () => {
         const { browser, views } = harness();
         expect(browser.newTab()).toEqual({ ok: true });
-        expect(views[0]!.loads).toEqual(['https://tynn.gen/']);
+        expect(views).toHaveLength(0);
+        expect(browser.snapshot().active).toBeNull();
         const empty = harness([]);
-        expect(empty.browser.newTab()).toEqual({ ok: false, error: 'No Genie sites are being served.' });
+        expect(empty.browser.newTab()).toEqual({ ok: true });
         expect(empty.views).toHaveLength(0);
     });
 
@@ -81,7 +83,7 @@ describe('the address bar navigates the active tab', () => {
         const { browser, views } = harness();
         browser.open('tynn');
         expect(browser.navigate('moic.gen/deals')).toEqual({ ok: true });
-        expect(browser.navigate('https://example.com')).toEqual({ ok: false, error: 'example.com is not an enabled tunnel on this host.' });
+        expect(browser.navigate('https://example.com')).toEqual({ ok: false, error: "example.com is not a dev site; Genie's browser opens dev sites only." });
         expect(views).toHaveLength(1);
         expect(views[0]!.loads).toEqual(['https://tynn.gen/', 'https://moic.gen/deals']);
     });

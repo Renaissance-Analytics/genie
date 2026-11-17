@@ -49,6 +49,74 @@ export function normalizeNavUrl(input: string, enabledHosts: ReadonlySet<string>
     return { url: `https://${host}${u.pathname}${u.search}${u.hash}` };
 }
 
+/**
+ * DEV SITES ONLY (Tynn #741; the owner, 2026-11-17): Genie's browser opens the workspace's `.gen` sites and this machine's
+ * own dev servers (`localhost`, `127.0.0.1`). Any other web address opens in the person's normal browser instead.
+ */
+export const DEV_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1']);
+
+/** Where an address goes: a page here, the person's own browser, or nowhere (in words). */
+export type BrowserTarget = { readonly url: string } | { readonly external: string } | { readonly error: string };
+
+/** A scheme written without `//` that is never a web page (`javascript:`, `data:`…): refused, not guessed into a host. */
+const NOT_WEB = /^(javascript|data|file|about|blob|mailto|chrome|devtools|genie|vbscript|view-source):/i;
+
+/**
+ * THE ADDRESS RULE OF GENIE'S BROWSER (Tynn #741). A bare `shop` is `shop.gen`; bare loopback text (`localhost:5173`) is
+ * http, as dev servers serve; any other bare text is https. Then:
+ *
+ * - a `.gen` name this workstation serves opens here at https (what `normalizeNavUrl` always did); one it does not serve
+ *   is refused in the old words;
+ * - `localhost` / `127.0.0.1` open here as written (scheme and port kept), unless `loopback` is false: a window onto
+ *   another workstation, where this machine's loopback is not that workstation's dev server;
+ * - any other http(s) address is `external`: the person's own browser;
+ * - anything that is not a web address is refused, and never handed to the system browser.
+ */
+export function browserTarget(input: string, enabledHosts: ReadonlySet<string>, options: { readonly loopback?: boolean } = {}): BrowserTarget {
+    const raw = (input ?? '').trim();
+    if (!raw) return { error: 'Type a site address.' };
+    if (NOT_WEB.test(raw)) return { error: 'Only web addresses open here.' };
+    const text = /^[a-z0-9-]+$/i.test(raw) && raw.toLowerCase() !== 'localhost' ? `${raw.toLowerCase()}.gen` : raw;
+    let u: URL;
+    try {
+        if (/^[a-z][a-z0-9+.-]*:[/][/]/i.test(text)) u = new URL(text);
+        else {
+            const probe = new URL(`http://${text}`);
+            u = DEV_LOOPBACK_HOSTS.has(probe.hostname.toLowerCase()) ? probe : new URL(`https://${text}`);
+        }
+    } catch {
+        return { error: 'That is not a valid address.' };
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'Only web addresses open here.' };
+    const host = u.hostname.toLowerCase();
+    if (host.endsWith('.gen')) return enabledHosts.has(host) ? { url: `https://${host}${u.pathname}${u.search}${u.hash}` } : { error: `${host} is not an enabled tunnel on this host.` };
+    if (DEV_LOOPBACK_HOSTS.has(host)) return options.loopback === false ? { error: `${host} is this computer, not the workstation this window shows.` } : { url: u.toString() };
+    return { external: u.toString() };
+}
+
+/** The host an address handed to the person's browser is named by, in the notice. */
+export function handedOffHost(url: string): string {
+    try {
+        return new URL(url).hostname.toLowerCase();
+    } catch {
+        return url;
+    }
+}
+
+/**
+ * What a page in Genie's browser may request: secure traffic (below), and a dev server's own plain http and ws on this
+ * machine's loopback (Tynn #741): a Vite page's scripts and its HMR socket. Nothing else travels in the clear.
+ */
+export function isAllowedBrowserRequest(url: string): boolean {
+    if (isSecureBrowserUrl(url)) return true;
+    try {
+        const u = new URL(url);
+        return (u.protocol === 'http:' || u.protocol === 'ws:') && DEV_LOOPBACK_HOSTS.has(u.hostname.toLowerCase());
+    } catch {
+        return false;
+    }
+}
+
 /** The first page: the first site served, else `null` (the window shows its empty state, the sites as chips). */
 export function initialGenUrl(enabledGenHosts: readonly string[]): string | null {
     const first = enabledGenHosts[0];
@@ -95,6 +163,8 @@ export type BrowserAction =
     | { readonly kind: 'open'; readonly id: string; readonly url: string; readonly background?: boolean }
     | { readonly kind: 'activate'; readonly id: string }
     | { readonly kind: 'close'; readonly id: string }
+    /** The welcome page: no tab in front, every tab kept (Tynn #740). */
+    | { readonly kind: 'welcome' }
     | { readonly kind: 'loading'; readonly id: string }
     | { readonly kind: 'loaded'; readonly id: string }
     | { readonly kind: 'navigated'; readonly id: string; readonly url: string; readonly title: string | null; readonly canGoBack: boolean; readonly canGoForward: boolean }
@@ -109,6 +179,7 @@ export function browserReduce(state: BrowserState, action: BrowserAction): Brows
         // A background open leaves the person's tab in front; with no tab at all, the new one is the only thing to show.
         return { tabs, active: action.background === true && state.active !== null ? state.active : tab.id };
     }
+    if (action.kind === 'welcome') return state.active === null ? state : { ...state, active: null };
     const at = state.tabs.findIndex((t) => t.id === action.id);
     if (at < 0) return state;
     if (action.kind === 'activate') return state.active === action.id ? state : { ...state, active: action.id };

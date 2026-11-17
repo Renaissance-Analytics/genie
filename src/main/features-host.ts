@@ -254,6 +254,7 @@ export class HostFeatures {
                 || await applyFeatureControlAction({ ...(this.#machine ? { pairing: this.#machine.pairing } : {}), routes: () => this.#hosting?.routes() ?? [] }, action, next,
                     { ...effects, ...this.ports.system, ...(ui?.rendererNotice ? { rendererNotice: ui.rendererNotice } : {}),
                         ...(ui?.browser ? { browser: ui.browser } : {}),
+                        ...(ui?.openExternal ? { openExternal: url => ui.openExternal!(url) } : {}),
                         githubOpen: async target => { if (!ui?.githubOpen) throw new Error(OWN_WINDOW); await ui.githubOpen(target); },
                         ...(action.kind === 'tailscale.install' ? { tailscale: {
                             install: async () => { if (!ui?.tailscaleInstall) throw new Error(OWN_WINDOW); return ui.tailscaleInstall(); },

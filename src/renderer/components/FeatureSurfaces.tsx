@@ -2942,7 +2942,7 @@ function BrowserBox({ url, onBounds }: { url: string | null; onBounds: (b: { x: 
 const chromeButton = 'shrink-0 rounded-md p-1.5 text-[var(--fg-2)] hover:bg-[var(--bg-1)] disabled:opacity-40 disabled:hover:bg-transparent';
 
 export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps) {
-    const { url, routes, canGoBack, canGoForward } = data.browser;
+    const { url, routes, canGoBack, canGoForward, handedOff } = data.browser;
     const nav = url ? classifyNavigation(url, routes) : null;
     return (
         <div data-surface="browser" className="flex h-full min-h-0 flex-col">
@@ -2962,11 +2962,13 @@ export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps
                     className="ml-1.5 flex-1"
                     onSubmit={(e) => { e.preventDefault(); onAction({ kind: 'browser.navigate', url: (new FormData(e.currentTarget).get('url') as string) ?? '' }); }}
                 >
-                    <Input name="url" type="url" data-browser-address defaultValue={url ?? ''} placeholder="tynn.gen or https://…" leading={nav?.kind === 'site' ? <Icon name="lock" size="xs" /> : <Icon name="globe" size="xs" />} />
+                    <Input name="url" type="url" data-browser-address defaultValue={url ?? ''} placeholder="site.gen or localhost:3000" leading={nav?.kind === 'site' ? <Icon name="lock" size="xs" /> : <Icon name="globe" size="xs" />} />
                 </form>
                 {nav?.kind === 'site' ? <Badge variant="soft" size="sm" color="emerald">{nav.host}</Badge> : null}
                 {nav?.kind === 'no-site' ? <Badge variant="soft" size="sm" color="amber">no site at {nav.host}</Badge> : null}
                 {nav?.kind === 'refused' ? <Badge variant="soft" size="sm" color="red">{nav.reason}</Badge> : null}
+                {/* Dev sites only (Tynn #741): an address off them opened in the person's browser; the pane stayed put. */}
+                {handedOff ? <span data-browser-handed-off="" role="status"><Badge variant="soft" size="sm">{handedOff} opened in your browser</Badge></span> : null}
             </div>
             {/* This machine's sites, each opened at its own https origin. */}
             {routes.length > 0 ? (
