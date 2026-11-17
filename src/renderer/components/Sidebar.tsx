@@ -212,6 +212,32 @@ function BrowserDoor({ onOpen, compact = false }: { onOpen: () => void; compact?
     );
 }
 
+/**
+ * THE PERSON'S INBOX ROW (Tynn #742): opens the mail addressed to the person, over the page (never a navigation away from
+ * it). Its unread count beside the label, and as Sidebar's dot with its words when collapsed. Not a route the rail
+ * highlights: the page under it is still the current one.
+ */
+function InboxRow({ inbox, compact = false }: { inbox: NonNullable<SidebarProps['personInbox']>; compact?: boolean }) {
+    const count = inbox.unread !== null && inbox.unread > 0 ? inbox.unread : null;
+    const words = count === null ? 'Inbox' : `Inbox · ${count} unread`;
+    return (
+        <FancySidebar.Item
+            data-person-inbox-row={inbox.open ? 'open' : 'closed'}
+            onClick={inbox.onToggle}
+            icon={<Icon name="inbox" size="sm" className="shrink-0 text-[var(--fg-4)]" />}
+            badge={!compact && count !== null ? (
+                <span data-person-inbox-badge={count} aria-hidden="true" className="ml-auto rounded-sm bg-[var(--warning)]/15 px-1.5 font-mono text-[11px] tabular-nums text-[var(--warning)]">
+                    {count > 99 ? '99+' : count}
+                </span>
+            ) : undefined}
+            {...(count !== null ? { dot: 'amber' as const, dotLabel: `${count} unread`, dotTooltip: compact } : compact ? { 'aria-label': words } : {})}
+            className={`${compact ? RAIL_ITEM_COMPACT : RAIL_ITEM}${inbox.open ? ' bg-[var(--bg-2)] text-[var(--fg-1)]' : ''}`}
+        >
+            Inbox
+        </FancySidebar.Item>
+    );
+}
+
 const ICON_BUTTON = 'flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]';
 
 /** Where the rail remembers whether it is collapsed — this device's preference (Tynn #799). */
@@ -329,7 +355,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null, agents, onChatAgent, onOpenAgentTerminal, onOpenWorkspaceFiles }: SidebarProps) {
+export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null, agents, onChatAgent, onOpenAgentTerminal, onOpenWorkspaceFiles, personInbox }: SidebarProps) {
     countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
@@ -425,6 +451,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                 {has('dashboard') ? (
                     <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
                 ) : null}
+                {personInbox ? <InboxRow inbox={personInbox} compact /> : null}
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
@@ -529,6 +556,8 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                 ) : null}
                 </NavRow>
             ) : null}
+            {/* The person's inbox (Tynn #742): right under the Dashboard, where the owner lives. */}
+            {personInbox ? <InboxRow inbox={personInbox} /> : null}
 
             {/*
              * The OS agent — the one agent that is not in a workspace, and present on every
