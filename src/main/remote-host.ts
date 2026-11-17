@@ -229,6 +229,7 @@ function withoutPairRequests(value: unknown): unknown {
     return { ...value, remote: { ...remote, pairRequests: [] } };
 }
 
+const isSetMode = (args: unknown[]): boolean => typeof args[0] === 'object' && args[0] !== null && (args[0] as { kind?: unknown }).kind === 'remote.setMode';
 const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' && args[0] !== null && (args[0] as { kind?: unknown }).kind === 'remote.answerPair';
 
 export class RemoteHost {
@@ -262,6 +263,11 @@ export class RemoteHost {
     #next = 0;
     #tynnWatchSeq = 0;
     #locked = false;
+    /**
+     * WHO MAY ONLY WATCH (Tynn #732), by person (label), as the person at THIS machine set it. Kept for this run, not per
+     * connection: leaving and coming back does not undo it.
+     */
+    readonly #viewOnly = new Set<string>();
     /**
      * The host API's events, listened to ONLY while an authenticated connection exists (genie#1200). Listening builds an
      * agent's whole detail on every update of every agent (host-api.ts), and with no one connected #broadcast sent it to
@@ -458,13 +464,28 @@ export class RemoteHost {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
             .filter((c) => c.auth !== null && !c.local)
-            // RED STUB (Tynn #732): everyone is in full control.
-            .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver, mode: 'control' as const }));
+            .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver, mode: this.#viewOnly.has(c.auth!.label) ? 'view' as const : 'control' as const }));
     }
 
-    /** Watch only, or full control, for one person (Tynn #732), set by the person at THIS machine. RED STUB: inert. */
-    setMode(_label: string, _mode: DriveMode): void {
-        return;
+    /**
+     * Watch only, or full control, for one person (Tynn #732), set by the person at THIS machine (the banner's switch; a
+     * remote connection is refused upstream). To view only: their baton comes back at once, which also stops their Take
+     * Over windows (#batonChanged), and every change they send is refused from then on. Their windows are told either way.
+     */
+    setMode(label: string, mode: DriveMode): void {
+        if (mode === 'view') this.#viewOnly.add(label);
+        else this.#viewOnly.delete(label);
+        if (mode === 'view') {
+            for (const c of this.#connections.values()) if (c.auth !== null && !c.local && c.auth.label === label) this.#baton.release(c.id);
+        }
+        this.#batonChanged(null, null);
+    }
+
+    /** Why this connection may change nothing, when the person here set it to view only (Tynn #732); null otherwise. */
+    #viewOnlyRefusal(connection: Connection): string | null {
+        const auth = connection.auth;
+        if (connection.local || auth === null || auth.readonly || !this.#viewOnly.has(auth.label)) return null;
+        return `${this.#hostName} set ${auth.label} to view only`;
     }
 
     /** The owner's kill-switch: every write refused for everyone until unlocked; reads still answer. */
@@ -540,7 +561,7 @@ export class RemoteHost {
         }
         for (const c of this.#connections.values()) {
             if (c.auth === null || c.local || !c.batonWatch || c.id === except) continue;
-            const payload: BatonEvent = { driver: holder?.label ?? null, mine: holder?.connectionId === c.id, locked: this.#locked, by };
+            const payload: BatonEvent = { driver: holder?.label ?? null, mine: holder?.connectionId === c.id, locked: this.#locked, by, ...(this.#viewOnly.has(c.auth.label) ? { viewOnly: true as const } : {}) };
             this.#send(c, { kind: 'event', channel: BATON_EVENT, payload });
         }
     }
@@ -709,6 +730,8 @@ export class RemoteHost {
             workspaceId: connection.auth.workspaceId,
             // What the window may offer (Tynn #688): read-only is the host's word, from the grant, never the client's.
             readonly: connection.auth.readonly,
+            // The mode the person here set (Tynn #732): a window that comes back on view only takes no baton.
+            ...(!connection.local && this.#viewOnly.has(connection.auth.label) ? { viewOnly: true as const } : {}),
             ...(token ? { token } : {}),
             // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
             protocol: REMOTE_PROTOCOL,
@@ -735,6 +758,8 @@ export class RemoteHost {
                 if (String(args[0] ?? '') !== companion.terminalId) return refuse(COMPANION_ONLY);
                 if (companion.revoked !== null) return refuse(companion.revoked);
                 if (this.#locked) return refuse('this Genie is locked');
+                const view = this.#viewOnlyRefusal(connection);
+                if (view) return refuse(view);
                 try { return ok(await this.#api.invoke(method as RemoteMethod, args, this.#callContext(connection))); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
             }
             const read = method === 'baton.status' || method === 'agent.watch' || method === 'agent.unwatch'
@@ -822,6 +847,8 @@ export class RemoteHost {
             case 'baton.take': {
                 // Holding the baton would keep everyone who CAN change things from doing so.
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+                const view = this.#viewOnlyRefusal(connection);
+                if (view) return refuse(view);
                 // `{ force: true }` is Take control (Tynn #529): the owner from anyone; anyone else from anyone but the owner.
                 const force = (args[0] as { force?: unknown } | undefined)?.force === true;
                 const before = this.#baton.holder()?.connectionId ?? null;
@@ -871,6 +898,8 @@ export class RemoteHost {
             }
             case 'upload.begin': {
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+                const view = this.#viewOnlyRefusal(connection);
+                if (view) return refuse(view);
                 const input = (args[0] ?? {}) as { name?: unknown; size?: unknown };
                 const r = this.#staging.begin(connection.id, { name: input.name, size: input.size });
                 return r.ok ? ok({ id: r.id }) : refuse(r.reason);
@@ -888,12 +917,19 @@ export class RemoteHost {
 
         // Allow is pressed on THIS machine's screen, never sent from another device — not even the owner's (q_8c07b142).
         if (method === 'features.act' && isAnswerPair(args) && this.#callContext(connection).origin !== 'local-window') return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
+        // A person's mode is the person here's to set (Tynn #732): never from another connection, the person's own included.
+        if (method === 'features.act' && isSetMode(args) && this.#callContext(connection).origin !== 'local-window') return refuse(`who may change things on ${this.#hostName} is set on its own screen, never from another device`);
 
         // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
         if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
 
         // A read-only grant (Tynn #838): reads, nothing else.
         if (auth.readonly && capability !== 'read') return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+        // View only, as the person here set it (Tynn #732): the same, in its own words.
+        if (capability !== 'read') {
+            const view = this.#viewOnlyRefusal(connection);
+            if (view) return refuse(view);
+        }
         // Only the owner changes the host itself — a guest of the whole host included.
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);

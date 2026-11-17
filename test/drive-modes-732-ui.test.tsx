@@ -34,7 +34,8 @@ const section = (connections: Conn[]): RemoteSection => ({
 const radios = (html: string, label: string) => {
     const at = html.indexOf(`data-connected-mode="${label}"`);
     expect(at).toBeGreaterThan(-1);
-    const group = html.slice(at, html.indexOf('</div>', at));
+    const after = html.indexOf('data-connected-mode="', at + 1);
+    const group = html.slice(at, after === -1 ? html.length : after);
     expect(group).toMatch(/role="radiogroup"/);
     return [...group.matchAll(/role="radio"[^>]*aria-checked="(true|false)"[^>]*>([\s\S]*?)<\//g)].map((m) => [m[2]!.replace(/<[^>]+>/g, ''), m[1]]);
 };

@@ -223,6 +223,9 @@ export class HostFeatures {
         if (action.kind === 'remote.answerPair' && context.origin !== 'local-window') {
             throw new Error('a device is allowed on this machine’s own screen, never from another device');
         }
+        if (action.kind === 'remote.setMode' && context.origin !== 'local-window') {
+            throw new Error('who may change things here is set on this machine’s own screen, never from another device');
+        }
         const machine = this.ports.machine?.effectsFor?.(context) ?? this.ports.machine?.effects;
         const tc = machine?.toolchain;
         const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,

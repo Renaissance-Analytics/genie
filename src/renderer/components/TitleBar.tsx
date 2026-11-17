@@ -370,8 +370,8 @@ export function TitleBar(props: TitleBarProps) {
                     className="flex shrink-0 items-center gap-2 rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-[11px] text-[var(--warning)]"
                 >
                     <span className="font-semibold">{remoteBadge(remote.host)}</span>
-                    <span className="text-[var(--fg-3)]">{remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.lostTo && remote.lostTo === remote.driver ? `${remote.lostTo} took control` : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
-                    {remote.onTakeControl && !remote.driving && !remote.locked ? (
+                    <span className="text-[var(--fg-3)]">{remote.viewOnly ? 'view only' : remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.lostTo && remote.lostTo === remote.driver ? `${remote.lostTo} took control` : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
+                    {remote.onTakeControl && !remote.driving && !remote.locked && !remote.viewOnly ? (
                         <Button size="xs" type="button" data-action="take-control" onClick={remote.onTakeControl}
                             // no-drag: in the bar's drag region a click is the OS's.
                             className="[-webkit-app-region:no-drag] rounded border border-[var(--warning)]/40 px-1.5 py-0 font-sans text-[11px] font-medium text-[var(--warning)] hover:bg-[var(--warning)]/20">

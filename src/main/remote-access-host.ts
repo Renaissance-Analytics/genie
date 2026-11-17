@@ -165,9 +165,9 @@ export class RemoteAccessHost {
         this.remote.unlock();
     }
 
-    /** Tynn #732. RED STUB: inert. */
-    setMode(_label: string, _mode: DriveMode): void {
-        return;
+    /** Watch only, or full control, for one connected person (Tynn #732). */
+    setMode(label: string, mode: DriveMode): void {
+        this.remote.setMode(label, mode);
     }
 
     answerPair(id: string, allow: boolean): { ok: true } | { ok: false; reason: string } {
@@ -205,7 +205,7 @@ export interface RemoteAccessServicePorts {
  * (session-engine-server.ts). Settings → Workstation's remote section reads the status and drives the PIN, the devices,
  * the lock and the pair answers; the newest window forwards its events.
  */
-const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'answerPair', 'apply', 'restart', 'start', 'stop']);
+const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'setMode', 'answerPair', 'apply', 'restart', 'start', 'stop']);
 
 export class RemoteAccessService {
     readonly #access: RemoteAccessHost;
@@ -236,6 +236,12 @@ export class RemoteAccessService {
             case 'revokeDevice': return a.revokeDevice(String(args[0]));
             case 'lock': a.lock(); return true;
             case 'unlock': a.unlock(); return true;
+            case 'setMode': {
+                const [label, mode] = args;
+                if (typeof label !== 'string' || (mode !== 'view' && mode !== 'control')) throw new Error('setMode names a person and view or control');
+                a.setMode(label, mode);
+                return true;
+            }
             case 'answerPair': return a.answerPair(String(args[0]), args[1] === true);
             case 'apply': await this.#ports.switch.apply(); return a.status();
             // The handlers genie.remote-access's catalog payload names (genie-catalog.ts): start follows the setting.

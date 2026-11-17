@@ -123,7 +123,9 @@ export async function applyMachineFeatureAction(services: MachineFeatureServices
             await services.remote.unlock();
             break;
         case 'remote.setMode':
-            // RED STUB (Tynn #732): inert.
+            // The banner's switch (Tynn #732), from this machine's own window (a remote connection is refused upstream).
+            if (action.mode !== 'view' && action.mode !== 'control') throw new Error('a mode is view or control');
+            await services.remote.setMode(action.label, action.mode);
             break;
         case 'remote.restart':
             // Tailscale read again first: Restart after Tailscale connected must not restart against the old reading (Tynn #749).

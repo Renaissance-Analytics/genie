@@ -369,6 +369,8 @@ function providerStatuses(features: FeatureData, agents: readonly { id: string; 
  */
 export type ShellRemote = {
     host: string; driver: string | null; driving: boolean; locked: boolean;
+    /** The person at the host set this window to watch only (Tynn #732). */
+    viewOnly?: boolean;
     lostTo?: string | null; onTakeControl?: () => void;
     refusal?: string | null; needsBaton?: boolean; onDismissRefusal?: () => void;
     /** The host badge's Disconnect (Tynn #640). */
@@ -516,7 +518,8 @@ export function Shell({
     const toastIds = useMemo(() => new Set(toasts.view.ids), [toasts.view.ids]);
     const inToast = (agentId: string): boolean => !scoped && toastIds.has(`approval:${agentId}`);
     const route = routeInScope(askedRoute, windowScope, snapshot.agents);
-    const remoteShown = remote && readOnly ? { ...remote, onTakeControl: undefined } : remote;
+    // Read-only (a share) or view only (the host's person chose it, Tynn #732): nothing offers Take control.
+    const remoteShown = remote && (readOnly || remote.viewOnly === true) ? { ...remote, onTakeControl: undefined } : remote;
     // A read-only share's terminals send nothing that acts (Tynn #691), wherever one is drawn. One object per bridge.
     const shownTerminals = useMemo(() => (readOnly ? readOnlyTerminals(terminals) : terminals), [readOnly, terminals]);
     const parsed = parseRoute(route);

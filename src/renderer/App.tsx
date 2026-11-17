@@ -2156,6 +2156,7 @@ function DesktopApp({ bridge }: AppProps) {
             onShareWorkstation={shares ? () => { setShare({ workspaceId: null, name: remote.state?.host ?? snapshot.workstation?.name ?? 'this workstation', links: null, minted: null, problem: null, busy: false }); readShares(null); } : undefined}
             remote={remote.state?.connected && remote.state.host ? {
                 host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked,
+                viewOnly: remote.state.viewOnly === true,
                 lostTo: remote.state.batonLostTo ?? null, onTakeControl: () => { void remote.takeControl(); },
                 // Disconnect is the host badge's (Tynn #640), no longer Settings → Remote access.
                 onDisconnect: remote.disconnect,
