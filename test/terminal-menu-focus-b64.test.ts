@@ -13,9 +13,9 @@ const ctx: Ctx = { hasSelection: true, selection: 'ls', readOnly: false };
 
 function defaults(log: string[]) {
     return [
-        { id: 'copy', label: 'Copy', disabled: false, onSelect: () => { log.push('copy'); } },
-        { id: 'paste', label: 'Paste', onSelect: () => { log.push('paste'); } },
-        { id: 'select-all', label: 'Select all', onSelect: () => { log.push('select-all'); } },
+        { id: 'copy', label: 'Copy', disabled: false, onSelect: (_c: Ctx) => { log.push('copy'); } },
+        { id: 'paste', label: 'Paste', onSelect: (_c: Ctx) => { log.push('paste'); } },
+        { id: 'select-all', label: 'Select all', onSelect: (_c: Ctx) => { log.push('select-all'); } },
         { id: 'note', label: 'Read-only' },
     ];
 }
