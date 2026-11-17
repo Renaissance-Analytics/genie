@@ -56,6 +56,15 @@ export interface BrowserAnchor {
     readonly height: number;
 }
 
+/** An anchor as it came over the link: kept only when it is a rectangle in numbers, else dropped (never a refusal). */
+export function browserAnchor(raw: unknown): BrowserAnchor | undefined {
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const r = raw as Partial<Record<keyof BrowserAnchor, unknown>>;
+    const n = [r.x, r.y, r.width, r.height];
+    if (!n.every((v) => typeof v === 'number' && Number.isFinite(v)) || (r.width as number) <= 0 || (r.height as number) <= 0) return undefined;
+    return { x: Math.round(r.x as number), y: Math.round(r.y as number), width: Math.round(r.width as number), height: Math.round(r.height as number) };
+}
+
 export type BrowserEvent =
     | { readonly kind: 'facts'; readonly facts: BrowserFacts }
     /** Whether a window holds the front door. With none, `.gen` pages cannot load until P5 moves the door to the host. */
@@ -149,7 +158,9 @@ export class BrowserService {
                 if (typeof args[0] !== 'string' && args[0] !== null && args[0] !== undefined) throw new Error('an address to open has to be text');
                 // `null` too: an absent remote before an anchor travels the link as null.
                 const remote = args[2] === undefined || args[2] === null ? undefined : browserRemote(args[2]);
-                const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const, ...(remote ? { remote } : {}) };
+                // The Genie window that asked: where the browser window opens (Tynn #739).
+                const anchor = browserAnchor(args[3]);
+                const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const, ...(remote ? { remote } : {}), ...(anchor ? { anchor } : {}) };
                 if (this.#browser === null) {
                     this.#held.push(event);
                     if (this.#held.length > HELD_LIMIT) this.#held.shift();

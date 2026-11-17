@@ -113,11 +113,12 @@ export async function runBrowserProcess(): Promise<void> {
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         facts: onFacts,
         door: (up) => { if (!locked) windows?.setNotice(up ? null : DOOR_DOWN); },
-        open: (url, activation, remote) => {
+        open: (url, activation, remote, anchor) => {
             opened = true;
             if (remote) remoteDoors.set(remote.key, { port: remote.port, ca: remote.ca });
             // Its door is read live: a reconnect moves it, and the host's CA is known only after its first site is asked for.
-            const answer = windows?.open(url ?? undefined, activation, remote ? { key: remote.key, title: remote.title, hosts: remote.hosts, port: () => remoteDoors.get(remote.key)?.port ?? remote.port, ca: () => remoteDoors.get(remote.key)?.ca ?? null } : undefined);
+            // `anchor`: the Genie window that asked, which the browser window opens over (Tynn #739).
+            const answer = windows?.open(url ?? undefined, activation, remote ? { key: remote.key, title: remote.title, hosts: remote.hosts, port: () => remoteDoors.get(remote.key)?.port ?? remote.port, ca: () => remoteDoors.get(remote.key)?.ca ?? null } : undefined, anchor);
             if (answer && !answer.ok) log(`open refused: ${answer.error}`);
         },
         remoteVia: (key, port, ca) => { if (remoteDoors.has(key)) remoteDoors.set(key, { port, ca }); },

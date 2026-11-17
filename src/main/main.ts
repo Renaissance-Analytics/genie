@@ -1354,7 +1354,8 @@ function askBrowser(args: readonly unknown[]): Promise<{ ok: true } | { ok: fals
     if (agentEngineLink?.live !== true) return Promise.resolve({ ok: false as const, error: 'Genie’s host is not connected' });
     return agentEngineLink.client.browserCall('open', args).then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
 }
-const openLocalBrowser = (url: string | undefined, activation: Activation) => askBrowser([url ?? null, activation]);
+/** `anchor`: the Genie window that asked, which the browser window opens over (Tynn #739). */
+const openLocalBrowser = (url: string | undefined, activation: Activation, anchor: { x: number; y: number; width: number; height: number } | null = null) => askBrowser(anchor ? [url ?? null, activation, null, anchor] : [url ?? null, activation]);
 /** The Genie browser process's pages, for the `pages` tool. */
 const browserPages = new BrowserPagesReplica((pageId, method, args) => agentEngineLink?.client.browserCall('pageCall', [pageId, method, args]) ?? Promise.reject(new Error('no host')));
 /** This window's side of each workspace's cookie sync. Set once the services are composed. */
@@ -2053,13 +2054,15 @@ async function boot(): Promise<void> {
         const relays = link ? [...linkedRelays].filter(([, c]) => c.sender === event.sender).map(([channel, c]) => ({ workstationId: c.workstationId, transport: channel })) : [];
         const conn = browserConnectionFor({ remoteUrl, relays });
         if (conn.kind === 'refused') return { ok: false, error: conn.reason };
-        if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture');
+        // The window that asked: the browser opens over it, on its display, never on whichever is primary (Tynn #739).
+        const anchor = BrowserWindow.fromWebContents(event.sender)?.getBounds() ?? null;
+        if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture', anchor);
         // A channel genie-host holds (Tynn #552): its door to that workstation's sites is the host's too.
         const via = link ? await link.browserVia(conn.transport) : null;
         if (!via) return { ok: false, error: 'This window is not connected to its workstation right now. Reconnect, then open the browser again.' };
         const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
-        return askBrowser([at ?? null, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port(), ca: via.ca(), hosts }]);
+        return askBrowser([at ?? null, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port(), ca: via.ca(), hosts }, anchor]);
     });
     // THE DASHBOARD'S WINDOWS COLUMN (Tynn #706): a workspace's terminals view in a window of its own; a second ask brings it up.
     ipcMain.handle('genie:terminals-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string' && workspaceId !== '') openTerminalsWindow(terminalsWindowRoute(workspaceId), 'user-gesture'); });
@@ -2704,7 +2707,9 @@ async function boot(): Promise<void> {
     // WHO ASKED decides whether it may take the keyboard (genie#1235): the Hosting row's Open is the person's click and
     // brings the window up; an agent's `sites open` opens it behind whatever the person is doing.
     const openInBrowserFor = (activation: Activation): OpenInBrowser => async (url) => {
-        const opened = await openLocalBrowser(url, activation);
+        // The person's click (a site row's Open): over the Genie window they clicked in (Tynn #739); an agent's: no anchor.
+        const anchor = activation === 'user-gesture' ? BrowserWindow.getFocusedWindow()?.getBounds() ?? null : null;
+        const opened = await openLocalBrowser(url, activation, anchor);
         return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
     // AN AGENT'S `sites open` (genie#1265): in the background, and the workspace the site belongs to pulses for the person.

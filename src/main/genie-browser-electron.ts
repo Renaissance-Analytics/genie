@@ -1,4 +1,5 @@
-import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, screen, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { browserWindowBounds, browserWindowMove, type Rect } from '../core/browser-placement.js';
 import { loadWindowPage } from './window-pages.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,8 +20,9 @@ import { bringUp, onceShowable, showWhenReady, type Activation, type ActivationL
  * load-bearing lines are source-checked (test/genie-browser-electron-wiring.test.ts):
  *
  * - ONE window per workstation: this one's, and one for each Tynn workstation a window here is driving (step 4) —
- *   1200 x 820, its title bar hidden; the chrome (browser.html, its own preload) owns the top, the native buttons drawn
- *   over it on Windows and Linux;
+ *   1200 x 820 (cut to the display's work area), its title bar hidden, placed over the Genie window that asked, on its
+ *   display, else on the display under the cursor (Tynn #739: Electron's default is the PRIMARY display's centre); the
+ *   chrome (browser.html, its own preload) owns the top, the native buttons drawn over it on Windows and Linux;
  * - its OWN session: `.gen` routed to Genie's front door (the PAC from core), a `.gen` certificate trusted only when
  *   Genie's CA signed it for that name, and every request a page makes cancelled unless it travels secure (Genie 1), or
  *   is a dev server's own http/ws on this machine's loopback (Tynn #741);
@@ -160,7 +162,7 @@ export interface GenieBrowserWindows {
      * brings the window up and focuses it; anything else (an agent's `sites open`, a page's window.open) opens it
      * inactive, or flashes an open one — never takes the keyboard.
      */
-    open(address: string | undefined, activation: Activation, remote?: RemoteBrowsing): { ok: true } | { ok: false; error: string };
+    open(address: string | undefined, activation: Activation, remote?: RemoteBrowsing, anchor?: Rect): { ok: true } | { ok: false; error: string };
     /** A panel's site alone in its own window (the owner: "a single site ux"), with the browser's store. */
     openSingle(panelKey: string, url: string): void;
     closeSingle(panelKey: string): void;
@@ -310,9 +312,25 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         };
     };
 
-    const make = (key: string, title: string, activation: Activation): { window: BrowserWindow; brain: GenieBrowser } => {
+    /** The browser window's own size, cut to fit where it opens. */
+    const ownSize = (): { width: number; height: number } => { const o = browserWindowOptions(process.platform); return { width: o.width, height: o.height }; };
+    /** A fresh window's bounds (Tynn #739): over the window that asked, on its display; else the display under the cursor. */
+    const placeFresh = (anchor: Rect | undefined): Rect => {
+        const display = anchor ? screen.getDisplayMatching(anchor) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+        return browserWindowBounds({ anchor: anchor ?? null, workArea: display.workArea, size: ownSize() });
+    };
+    /** An open window and the person's click from a Genie window on another display: brought to that display. */
+    const placeOpen = (win: BrowserWindow, activation: Activation, anchor: Rect | undefined): void => {
+        if (!anchor) return;
+        const there = screen.getDisplayMatching(anchor);
+        const move = browserWindowMove({ activation, anchor, workArea: there.workArea, size: ownSize(), onAnchorDisplay: screen.getDisplayMatching(win.getBounds()).id === there.id });
+        if (move) win.setBounds(move);
+    };
+
+    const make = (key: string, title: string, activation: Activation, anchor?: Rect): { window: BrowserWindow; brain: GenieBrowser } => {
         const window = new BrowserWindow({
             ...browserWindowOptions(process.platform),
+            ...placeFresh(anchor),
             ...genieWindowIcon(options.here),
             title,
             backgroundColor: '#0a0a0c',
@@ -372,17 +390,18 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             const entry = windows.get(`${SINGLE}${panelKey}`);
             if (entry && !entry.win.isDestroyed()) entry.win.close();
         },
-        open: (address, activation, remote) => {
+        open: (address, activation, remote, anchor) => {
             const key = remote?.key ?? LOCAL;
             if (remote) remotes.set(key, remote);
             let entry = windows.get(key);
             const fresh = !entry || entry.win.isDestroyed();
             if (fresh) {
-                const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser', activation);
+                const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser', activation, anchor);
                 if (key === LOCAL) m.brain.setNotice(notice, noticeRestart);
                 entry = { win: m.window, browser: m.brain };
                 windows.set(key, entry);
             } else {
+                placeOpen(entry!.win, activation, anchor);
                 bringUp(entry!.win, { activation, reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) });
             }
             // No address: the welcome page (Tynn #740), a fresh window's first view, never the first site served.

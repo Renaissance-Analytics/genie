@@ -14,7 +14,8 @@ describe('main wires the site row', () => {
     it('ONE opener: defined once, it brings the Genie browser WINDOW up on the URL (beta.35 item 36) — not the old pane', () => {
         expect(main.match(/const openInBrowserFor = \(activation: Activation\): OpenInBrowser => async \(url\) =>/g) ?? []).toHaveLength(1);
         const body = main.slice(main.indexOf('const openInBrowserFor = '), main.indexOf('const openInBrowserFor = ') + 600);
-        expect(body).toMatch(/await openLocalBrowser\(url, activation\)/);
+        // With the window the person clicked in as its anchor, where the browser opens (Tynn #739).
+        expect(body).toMatch(/await openLocalBrowser\(url, activation, anchor\)/);
         expect(body).not.toMatch(/browserPane\.show|genie:navigate/);
     });
 

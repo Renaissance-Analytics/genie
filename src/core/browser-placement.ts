@@ -20,9 +20,21 @@ export interface PlacementInput {
     readonly size: { readonly width: number; readonly height: number };
 }
 
-/** STUB (Tynn #739 RED): the work area's corner, at the browser's own size. */
+/**
+ * A fresh browser window's bounds: its own size, cut to the work area (a 1366 x 768 laptop's is ~728 tall, and a window
+ * taller than it opened with its bottom off the screen); centred over the window that asked (else over the work area);
+ * then kept inside the work area. `workArea.x`/`y` are not zero on a second display, and may be negative.
+ */
 export function browserWindowBounds(input: PlacementInput): Rect {
-    return { x: input.workArea.x, y: input.workArea.y, width: input.size.width, height: input.size.height };
+    const { workArea: wa, anchor } = input;
+    const width = Math.min(input.size.width, wa.width);
+    const height = Math.min(input.size.height, wa.height);
+    const around = anchor ?? wa;
+    const cx = around.x + around.width / 2;
+    const cy = around.y + around.height / 2;
+    const x = Math.max(wa.x, Math.min(Math.round(cx - width / 2), wa.x + wa.width - width));
+    const y = Math.max(wa.y, Math.min(Math.round(cy - height / 2), wa.y + wa.height - height));
+    return { x, y, width, height };
 }
 
 export interface MoveInput extends PlacementInput {
@@ -31,7 +43,12 @@ export interface MoveInput extends PlacementInput {
     readonly onAnchorDisplay: boolean;
 }
 
-/** STUB (Tynn #739 RED): never moved. */
-export function browserWindowMove(_input: MoveInput): Rect | null {
-    return null;
+/**
+ * An OPEN browser window and a new ask: the person's click from a Genie window on ANOTHER display brings the browser to
+ * that display, placed as a fresh one. On the same display it stays where the person put it, and an agent's open
+ * (background) never moves it.
+ */
+export function browserWindowMove(input: MoveInput): Rect | null {
+    if (input.activation !== 'user-gesture' || input.anchor === null || input.onAnchorDisplay) return null;
+    return browserWindowBounds(input);
 }

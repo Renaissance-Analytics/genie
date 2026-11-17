@@ -60,7 +60,11 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
         else if (event.kind === 'pageCall') { if (client) ports.pageCall?.(event, client); }
         else if (event.kind === 'remoteVia') ports.remoteVia?.(event.key, event.port, event.ca);
         else {
-            const open = (): void => { if (event.remote) ports.open(event.url, event.activation, event.remote); else ports.open(event.url, event.activation); };
+            const open = (): void => {
+                if (event.anchor) ports.open(event.url, event.activation, event.remote, event.anchor);
+                else if (event.remote) ports.open(event.url, event.activation, event.remote);
+                else ports.open(event.url, event.activation);
+            };
             if (known) open(); else held.push(open);
         }
     };
