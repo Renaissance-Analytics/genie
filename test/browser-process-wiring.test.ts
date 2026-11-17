@@ -81,7 +81,8 @@ describe('the window', () => {
     it('opens this machine’s sites through the host, and publishes what a browser needs', () => {
         const src = main();
         expect(src).toMatch(/browserCall\('open', args\)/);
-        expect(src).toMatch(/askBrowser\(\[url \?\? null, activation\]\)/);
+        // With the asking window's bounds when there is one (Tynn #739): the browser opens over it.
+        expect(src).toMatch(/askBrowser\(anchor \? \[url \?\? null, activation, null, anchor\] : \[url \?\? null, activation\]\)/);
         expect(src).toMatch(/browserCall\('publish', \[/);
         expect(src).toMatch(/args: \[\.\.\.\(app\.isPackaged \? \[\] : \[app\.getAppPath\(\)\]\), '--genie-browser'/);
     });
