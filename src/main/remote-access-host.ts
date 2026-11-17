@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
-import { Baton, PairingPins } from '../core/remote.js';
+import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
@@ -92,6 +92,8 @@ export interface RemoteAccessStatus {
     readonly unavailable: string | null;
     readonly locked: boolean;
     readonly pin: { code: string; expiresAt: number } | null;
+    /** Why the last PIN went without pairing (Tynn #751); absent from an older host = not said. */
+    readonly pinEnded?: PinEnded | null;
     readonly devices: Device[];
     readonly connections: ReturnType<RemoteHost['connections']>;
     readonly pairRequests: ReturnType<PairApprovals['requests']>;
@@ -143,7 +145,7 @@ export class RemoteAccessHost {
 
     status(): RemoteAccessStatus {
         const r = this.remote;
-        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests(), wants: r.wanted() };
+        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), pinEnded: r.pinEnded(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests(), wants: r.wanted() };
     }
 
     issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {

@@ -74,6 +74,17 @@ export class Baton {
 }
 
 export const PIN_TTL_MS = 120_000;
+
+/**
+ * WHY THE PIN ON SCREEN WENT AWAY WITHOUT PAIRING (Tynn #751): it ran out, or five wrong tries cancelled it. The desktop
+ * says so and offers a new one in place, instead of the device finding out with "no PIN is active". `replaces`: the PIN
+ * was a Re-pair's, so its New PIN is one too.
+ */
+export interface PinEnded {
+    readonly reason: 'expired' | 'cancelled';
+    readonly at: number;
+    readonly replaces?: string | undefined;
+}
 const PIN_ATTEMPTS = 5;
 
 /**

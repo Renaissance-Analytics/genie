@@ -7,13 +7,14 @@ import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { McpServerPanel } from './McpServerPanel.js';
-import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, QrCode, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
 import { HotkeyCapture } from './HotkeyCapture.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
+import { PairPin } from './PairPin.js';
 import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { patchWithinLine } from '../../core/toolchain-update.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
@@ -2868,20 +2869,8 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                         <div className="flex flex-wrap items-center gap-3 text-sm">
                             <span className="font-mono text-xs text-[var(--fg-4)]">{remote.url}</span>
                             <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'remote.issuePin' })}>Pair a device</Button>
-                            {remote.pin ? (
-                                <span className="flex items-center gap-2">
-                                    <span data-pin={remote.pin.code} className="font-mono text-lg tracking-[0.3em]">{remote.pin.code}</span>
-                                    <span className="text-xs text-[var(--fg-3)]">type this on the device within two minutes</span>
-                                </span>
-                            ) : null}
-                            {remote.pin ? (
-                                // A phone scans the page URL and the PIN together; both stay beside it as text (a code is an image of a value).
-                                <div data-pairing-qr data-qr-value={`${pairUrl}#pin=${remote.pin.code}`} className="basis-full">
-                                    <div className="w-fit rounded-xl bg-white p-2">
-                                        <QrCode value={`${pairUrl}#pin=${remote.pin.code}`} label="Pair this device" size={128} errorCorrection="M" quietZone={4} foreground="#0b0b0c" background="#ffffff" />
-                                    </div>
-                                </div>
-                            ) : null}
+                            {/* The PIN, its time left, and New PIN in place when it lapses (Tynn #751). */}
+                            <PairPin pin={remote.pin} pinEnded={remote.pinEnded ?? null} pairUrl={pairUrl} now={now} onAction={onAction} />
                         </div>
                     )}
                     <div className="flex items-center gap-3 text-sm">

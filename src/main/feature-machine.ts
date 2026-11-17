@@ -66,6 +66,7 @@ export function machineFeatureSnapshot(services: MachineFeatureServices, state: 
             unavailable: services.remote.unavailable(),
             locked: services.remote.locked(),
             pin: services.remote.activePin(),
+            pinEnded: services.remote.pinEnded?.() ?? null,
             devices: services.remote.devices(),
             pairRequests: services.pairing.requests(),
             connections: services.remote.connections(),

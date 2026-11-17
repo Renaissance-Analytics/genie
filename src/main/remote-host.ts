@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
 import { AgentPush } from './agent-push.js';
-import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
+import { BATON_REFUSAL, type Baton, type PairingPins, type PinEnded } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
@@ -253,6 +253,10 @@ export class RemoteHost {
     /** Bytes a connection sent ahead of the call that uses them (genie#1346). */
     readonly #staging: UploadStaging;
     #pin: { code: string; expiresAt: number } | null = null;
+    /** Why the last PIN went without pairing, for Settings (Tynn #751). */
+    #pinEnded: PinEnded | null = null;
+    /** Ends the PIN on screen at its expiry (Tynn #751): a lapse is told, never found out from the device. */
+    #cancelPinClock: (() => void) | null = null;
     #next = 0;
     #tynnWatchSeq = 0;
     #locked = false;
@@ -360,9 +364,34 @@ export class RemoteHost {
      * (and is allowed) takes the place of that one.
      */
     issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {
-        this.#pin = this.#pins.issue();
+        const pin = this.#pins.issue();
+        this.#pin = pin;
         this.#pinReplaces = options.replaces ?? null;
-        return this.#pin;
+        this.#pinEnded = null;
+        this.#cancelPinClock?.();
+        this.#cancelPinClock = this.#schedule(Math.max(0, pin.expiresAt - this.#now()) + 1, () => {
+            this.#cancelPinClock = null;
+            if (this.#pin === pin) this.#endPin('expired');
+        });
+        this.#changed();
+        return pin;
+    }
+
+    /**
+     * The PIN on screen goes (Tynn #751): `used` by a device that paired (nothing went wrong, so nothing is said), or
+     * `expired` / `cancelled` (said, with New PIN, carrying a Re-pair's device). `tell` = redraw Settings now.
+     */
+    #endPin(reason: 'used' | PinEnded['reason'], tell = true): void {
+        if (!this.#pin) return;
+        this.#cancelPinClock?.();
+        this.#cancelPinClock = null;
+        this.#pin = null;
+        const replaces = this.#pinReplaces;
+        if (reason !== 'used') {
+            this.#pinReplaces = null;
+            this.#pinEnded = { reason, at: this.#now(), ...(replaces ? { replaces } : {}) };
+        }
+        if (tell) this.#changed();
     }
 
     /** Connections, devices or a pairing changed: Settings and the prompt redraw. */
@@ -379,9 +408,16 @@ export class RemoteHost {
         return this.#hostName;
     }
 
+    /** Why the last PIN went without pairing (Tynn #751); null while one is good, after a pairing, or before any. */
+    pinEnded(): PinEnded | null {
+        this.activePin();
+        return this.#pinEnded;
+    }
+
     /** The PIN on this screen, while it is still good. */
     activePin(): { code: string; expiresAt: number } | null {
-        if (this.#pin && this.#now() > this.#pin.expiresAt) this.#pin = null;
+        // Read after its time, before its clock ran (a busy event loop): the same ending, said on this read.
+        if (this.#pin && this.#now() > this.#pin.expiresAt) this.#endPin('expired', false);
         return this.#pin;
     }
 
@@ -597,10 +633,16 @@ export class RemoteHost {
             connection.auth = { label: pre!.label, isOwner: true, workspaceId: null, readonly: false };
         } else if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
-            if (!r.ok) return this.#refuse(connection, r.reason, true);
+            if (!r.ok) {
+                // No tries left: the PIN on screen is dead, ran out or cancelled by wrong tries (Tynn #751).
+                if (r.attemptsLeft === 0 && this.#pin) this.#endPin(this.#now() > this.#pin.expiresAt ? 'expired' : 'cancelled');
+                return this.#refuse(connection, r.reason, true);
+            }
             // THE CONFIRM (q_8c07b142; Genie 1's confirmPair): the right PIN only raises "Pair this device?" on this screen.
             const replacing = this.#pinReplaces === null ? undefined : this.#devices.list().find((d) => d.id === this.#pinReplaces);
             this.#pinReplaces = null;
+            // Spent: the code is not left on screen as if it still worked (Tynn #751).
+            this.#endPin('used');
             const asked = this.#confirm.ask({ label, from: connection.socket.remoteAddress, replaces: replacing ? { id: replacing.id, label: replacing.label } : null });
             connection.pendingPair = asked.id;
             this.#send(connection, { kind: 'pairing', host: this.#hostName, expiresAt: asked.expiresAt });

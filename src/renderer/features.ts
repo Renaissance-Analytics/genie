@@ -26,6 +26,7 @@ import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { PairRequest } from '../core/pair-confirm.js';
+import type { PinEnded } from '../core/remote.js';
 import type { AnnotatedRow, SyncResult } from '../core/integrations.js';
 import type { GithubView } from '../core/github.js';
 import type { PluginEntry } from '../main/plugin-host.js';
@@ -195,6 +196,8 @@ export interface RemoteSection {
     readonly unavailable: string | null;
     readonly locked: boolean;
     readonly pin: { code: string; expiresAt: number } | null;
+    /** Why the last PIN went without pairing (Tynn #751): the desktop says so and offers a new one. */
+    readonly pinEnded?: PinEnded | null | undefined;
     readonly devices: readonly Device[];
     /** "Pair this device?" waiting for Allow on this screen (q_8c07b142); always empty for a remote window. */
     readonly pairRequests?: readonly PairRequest[] | undefined;

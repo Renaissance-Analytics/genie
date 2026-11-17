@@ -52,7 +52,7 @@ describe('a share hello is not part of the protocol', () => {
 
 describe('Settings → Workstation has no local Sharing section', () => {
     const remote = {
-        host: 'alphar', url: 'wss://alphar.tailnet.invalid:7421', unavailable: null, locked: false, pin: { code: '482913', expiresAt: 10 },
+        host: 'alphar', url: 'wss://alphar.tailnet.invalid:7421', unavailable: null, locked: false, pin: { code: '482913', expiresAt: Date.now() + 120_000 },
         devices: [], connections: [], enabled: true, firewall: false,
     } as NonNullable<FeatureData['remote']>;
     const html = renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote }} onAction={() => {}} onNavigate={() => {}} section="remote" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
