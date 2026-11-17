@@ -447,6 +447,40 @@ function ChatFlyoutBody({
      */
     const scrollRef = useRef<HTMLDivElement>(null);
     const followRef = useRef(true);
+    /*
+     * UNDO SEND (Tynn #745, core/send-grace.ts): a message typed to a busy agent waits out the window here, drawn at the end
+     * of its thread with Undo and Send now; then it goes as any send does. Nothing typed is lost when the chat goes away.
+     */
+    const onSendRef = useRef(onSend);
+    onSendRef.current = onSend;
+    const putBack = (chat: string, text: string): void => {
+        const handle = composerRefs.current.get(chat);
+        const next = draftWithUndone(handle?.getDraft() ?? (keeper && chat !== '' ? keeper.initial(chat) ?? null : null), text);
+        handle?.setDraft(next, { focus: true });
+        if (keeper && chat !== '') keeper.change(chat, next);
+    };
+    const putBackRef = useRef(putBack);
+    putBackRef.current = putBack;
+    const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
+        // Refused after the window: the words go back to the composer, with why — never lost.
+        if (out && out.kind === 'failed') {
+            putBackRef.current(h.chat, h.text);
+            setSendErrors((e) => withSendError(e, h.chat, out.reason));
+        }
+    }, (error: unknown) => {
+        putBackRef.current(h.chat, h.text);
+        setSendErrors((e) => withSendError(e, h.chat, errorWords(error)));
+    })));
+    const [, setHeldSeq] = useState(0);
+    useEffect(() => {
+        const off = grace.subscribe(() => setHeldSeq((n) => n + 1));
+        return () => { off(); grace.flush(); };
+    }, [grace]);
+    const undoSend = (id: string): void => {
+        const h = grace.undo(id);
+        if (h) putBack(h.chat, h.text);
+    };
+    const heldHere = grace.held(thread?.agentId ?? '').length;
     // What the end of the thread IS: its agent, how many messages, and how long the last one is — a reply is one row that
     // GROWS as the agent writes (beta.33 item 6), and keyed on the count alone its words were written below a chat that
     // did not move until the next message arrived.
@@ -504,7 +538,7 @@ function ChatFlyoutBody({
             el.scrollTop = el.scrollHeight - anchorRef.current;
             anchorRef.current = null;
         } else if (followRef.current) el.scrollTop = el.scrollHeight;
-    }, [followKey, lines]);
+    }, [followKey, lines, heldHere]);
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
      *
@@ -545,39 +579,6 @@ function ChatFlyoutBody({
     const composerRefs = useRef(new Map<string, DraftHandle>());
     // Why each chat's last send was not sent (react-fancy's `onSubmitError`), until its next send.
     const [sendErrors, setSendErrors] = useState<Readonly<Record<string, string>>>({});
-    /*
-     * UNDO SEND (Tynn #745, core/send-grace.ts): a message typed to a busy agent waits out the window here, drawn at the end
-     * of its thread with Undo and Send now; then it goes as any send does. Nothing typed is lost when the chat goes away.
-     */
-    const onSendRef = useRef(onSend);
-    onSendRef.current = onSend;
-    const putBack = (chat: string, text: string): void => {
-        const handle = composerRefs.current.get(chat);
-        const next = draftWithUndone(handle?.getDraft() ?? (keeper && chat !== '' ? keeper.initial(chat) ?? null : null), text);
-        handle?.setDraft(next, { focus: true });
-        if (keeper && chat !== '') keeper.change(chat, next);
-    };
-    const putBackRef = useRef(putBack);
-    putBackRef.current = putBack;
-    const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
-        // Refused after the window: the words go back to the composer, with why — never lost.
-        if (out && out.kind === 'failed') {
-            putBackRef.current(h.chat, h.text);
-            setSendErrors((e) => withSendError(e, h.chat, out.reason));
-        }
-    }, (error: unknown) => {
-        putBackRef.current(h.chat, h.text);
-        setSendErrors((e) => withSendError(e, h.chat, errorWords(error)));
-    })));
-    const [, setHeldSeq] = useState(0);
-    useEffect(() => {
-        const off = grace.subscribe(() => setHeldSeq((n) => n + 1));
-        return () => { off(); grace.flush(); };
-    }, [grace]);
-    const undoSend = (id: string): void => {
-        const h = grace.undo(id);
-        if (h) putBack(h.chat, h.text);
-    };
     const applied = useRef<number | null>(null);
     useEffect(() => {
         if (!insert || drafts === 'loading' || applied.current === insert.seq) return;
