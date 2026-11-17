@@ -8,7 +8,7 @@ import { GENIE_SKILLS } from '../src/main/agent-skills.js';
 import { writeGenieInstructions } from '../src/main/genie-instructions.js';
 
 /**
- * A FRESH AGENT'S FIRST RUN (Tynn #736, #737; LiftPoint onboarding, 2026-11-16). The client's first agent in a new
+ * A FRESH AGENT'S FIRST RUN (Tynn #736, #737; client onboarding call, 2026-11-16). The client's first agent in a new
  * workspace was asked "show me what you can do": it had generic files only, and went to a generic ToolSearch. The owner:
  * "I wonder why it didn't use the help or use the docs first". Genie's guide for agents is its `genie` skill (and the
  * `genie-*` ones): skills are listed with their descriptions in every Claude Code session, while Genie's MCP tools are

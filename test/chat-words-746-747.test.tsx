@@ -10,7 +10,7 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
 import { Stream } from '../src/renderer/components/Stream.js';
 
 /**
- * WORDS IN THE CHAT THAT READ AS SOMETHING WRONG (LiftPoint onboarding, 2026-11-16).
+ * WORDS IN THE CHAT THAT READ AS SOMETHING WRONG (client onboarding call, 2026-11-16).
  *
  * Tynn #746: a thought the provider sent no text for read "Reasoning not sent by the provider". The client read it out
  * as a fault. It is an ordinary thought with nothing to show, so it says Thinking.

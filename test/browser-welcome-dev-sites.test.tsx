@@ -11,7 +11,7 @@ import { GenieBrowserChrome } from '../src/renderer/components/GenieBrowserChrom
 import { BrowserSurface } from '../src/renderer/components/FeatureSurfaces.js';
 
 /**
- * THE GENIE BROWSER OPENS ON A WELCOME PAGE, AND GOES TO DEV SITES ONLY (Tynn #740, #741; LiftPoint onboarding,
+ * THE GENIE BROWSER OPENS ON A WELCOME PAGE, AND GOES TO DEV SITES ONLY (Tynn #740, #741; client onboarding call,
  * 2026-11-16, transcript 00:30-00:31). The owner: "It defaults to Tynn … This needs to be a welcome screen", and (decided
  * 2026-11-17) Genie's browser opens the workspace's .gen sites, localhost and 127.0.0.1 only; any other address, typed or
  * followed from a link, opens in the person's normal browser, and a short line says so.

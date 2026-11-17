@@ -1,5 +1,5 @@
 /**
- * WHAT A COST FIGURE MEANS (Tynn #747, LiftPoint onboarding 2026-11-16). A client on a Claude subscription read "$3.25"
+ * WHAT A COST FIGURE MEANS (Tynn #747, client onboarding call 2026-11-16). A client on a Claude subscription read "$3.25"
  * as a charge. The figure the provider reports (Claude's `total_cost_usd`) is what the tokens cost at API prices: billed
  * with an API key, included on a subscription plan.
  *

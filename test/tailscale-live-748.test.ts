@@ -3,7 +3,7 @@ import type { TailscaleState, TailscaleStatus, TailscaleUpResult } from '../src/
 import { tailscaleLive, type InstallAnswer, type TailscaleLivePorts } from '../src/main/tailscale-live.js';
 
 /**
- * TAILSCALE, LIVE (Tynn #748, #749; the LiftPoint onboarding, 2026-11-16). On the client's Windows laptop:
+ * TAILSCALE, LIVE (Tynn #748, #749; a client onboarding call, 2026-11-16). On the client's Windows laptop:
  *  - #748: Settings → Remote access → Install Tailscale started the installer TWICE. After the first installer opened, Genie
  *    read Tailscale once (still absent) and kept offering the same Install button, unchanged, with nothing to say a click
  *    had been taken, so the next click downloaded and opened a second installer.

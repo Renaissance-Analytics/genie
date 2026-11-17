@@ -1,7 +1,7 @@
 import { HUMAN, pairKey, type ThreadMail } from './inbox-threads.js';
 
 /**
- * THE PERSON'S INBOX (Tynn #742; the owner, LiftPoint onboarding 2026-11-16: "There's going to be a user inbox that's
+ * THE PERSON'S INBOX (Tynn #742; the owner, client onboarding call 2026-11-16: "There's going to be a user inbox that's
  * coming, on the left-hand side, so things that are specific to you [are separate], because right now it kind of gets
  * lost in with the other agent stuff … when you've got eight agents working all talking to each other").
  *

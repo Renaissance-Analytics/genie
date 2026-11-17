@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * UNDO SEND (Tynn #745; LiftPoint onboarding 00:31: "Once it's sent, it's sent. I don't have a way to back out").
+ * UNDO SEND (Tynn #745; client onboarding call 00:31: "Once it's sent, it's sent. I don't have a way to back out").
  *
  * A Claude run takes a message mid-turn at once, so the host has nothing left to take back: the chat window holds a
  * message typed to a BUSY agent for UNDO_SEND_MS, with Undo (its words back in the composer) and Send now. An idle

@@ -6,7 +6,7 @@ import { hostsApprovalDeckItem } from './hosts-approval.js';
  * OPEN <NAME> IN YOUR BROWSER (Tynn #743). Making a site reachable from the person's normal browser used to be two Genie
  * rows for one goal — "Trust Genie's certificate…" and (since #753) "Genie needs administrator permission to add … to
  * your hosts file…" — each its own OS prompt, neither saying "open your site", the why never drawn, and nothing opened
- * the site once it was approved. A client on the LiftPoint onboarding (2026-11-16) needed nine steps and the owner's
+ * the site once it was approved. A client on an onboarding call (2026-11-16) needed nine steps and the owner's
  * help to get there.
  *
  * Now it is ONE row, in the person's words: "Open shop.gen in your browser". Its why says in place that the computer

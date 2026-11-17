@@ -8,7 +8,7 @@ import { FilesPanel, type FilesPanelProps } from '../src/renderer/components/Fil
 import { HostPathPickerForm } from '../src/renderer/components/HostPathPicker.js';
 
 /**
- * FOLDERS OPEN THE WAY A PERSON EXPECTS (LiftPoint onboarding, 2026-11-16; Tynn #733, #734).
+ * FOLDERS OPEN THE WAY A PERSON EXPECTS (client onboarding call, 2026-11-16; Tynn #733, #734).
  *
  * #733, the folder picker: Choose was disabled until a CHILD was clicked, so the folder being shown (the user folder the
  * picker opened in) could not be chosen; and New folder left the person in the parent, where they had to scroll to the
@@ -87,15 +87,15 @@ describe('#733 the folder picker chooses the folder you are in', () => {
         act(() => node.querySelector<HTMLButtonElement>('[data-react-fancy-file-browser-new-folder]')!.click());
         const input = node.querySelector<HTMLInputElement>('[data-react-fancy-file-browser-new-folder-input]')!;
         act(() => {
-            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'liftpoint');
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'client-app');
             input.dispatchEvent(new Event('input', { bubbles: true }));
         });
         await act(async () => { node.querySelector<HTMLButtonElement>('[data-react-fancy-file-browser-new-folder-submit]')!.click(); });
         await settle();
-        expect(made).toEqual(['C:/Users/me/liftpoint']);
-        expect(node.querySelector('[data-picker-path]')!.getAttribute('data-picker-path')).toBe('C:/Users/me/liftpoint');
+        expect(made).toEqual(['C:/Users/me/client-app']);
+        expect(node.querySelector('[data-picker-path]')!.getAttribute('data-picker-path')).toBe('C:/Users/me/client-app');
         act(() => choose(node).click());
-        expect(picks).toEqual(['C:/Users/me/liftpoint']);
+        expect(picks).toEqual(['C:/Users/me/client-app']);
     });
 });
 
