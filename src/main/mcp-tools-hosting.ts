@@ -53,7 +53,7 @@ import type { SiteInfo } from './site-manager.js';
  * administrator, and Genie never raises that prompt because an agent changed a site: it asks the person in the Deck.
  */
 export const HOSTS_ADMIN_NOTE = 'Genie then asks you in the Deck for administrator permission to update the hosts file, so your normal browser can open the site; nothing is asked of your computer until you approve there';
-const HOSTS_AGENT_NOTE = 'served in Genie’s browser now. For the person’s normal browser the hosts file needs an administrator: Genie asks them in its Deck (never a prompt of its own); do not ask them to edit the hosts file or run anything elevated.';
+const HOSTS_AGENT_NOTE = 'served in Genie’s browser now. If the person’s normal browser needs the hosts file changed and that needs an administrator, Genie asks them in its Deck (never a prompt of its own); do not ask them to edit the hosts file or run anything elevated.';
 const UNTRUSTED = (workspace: string) => `this workspace (${workspace}) is not trusted, so its agents cannot change its services or sites; the person trusts it from Genie’s Trust step first. Nothing was done`;
 
 export type HostingApproval = 'services.add' | 'services.createDatabase' | 'services.remove' | 'services.use' | 'services.exec' | 'services.update' | 'sites.update' | 'sites.remove';

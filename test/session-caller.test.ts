@@ -22,7 +22,7 @@ function deps(asked: string[]): AllToolsDeps {
         genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller, userActive: () => true, glow: () => false, thumbsUp: () => {} },
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller },
         attention: { resolveCaller, openFile: async () => ({ ok: false, reason: 'x' }) },
-        hosting: { resolveCaller, approve: async () => 'denied', services: null },
+        hosting: { resolveCaller, approve: async () => 'denied', services: null, trusted: () => false },
         processes: { resolveCaller, approve: async () => 'denied', processes: null },
         flows: { resolveCaller, flows: null },
         plugins: { plugins: { tools: () => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }], guard: () => null }, run: never as never, approve: async () => 'denied', resolveCaller },

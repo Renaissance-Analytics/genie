@@ -521,7 +521,7 @@ describe('sites', () => {
 
         const denied = call('sites', 't-example', { action: 'remove', site: 'site_example' });
         const item = await asked();
-        expect(item.title).toMatch(/^atlas wants to remove a site: example\.gen \(.+\) — stopped and removed from this workspace’s project\.json; the folder and its files are not touched$/);
+        expect(item.title).toMatch(/^atlas wants to remove a site: example\.gen \(.+\) — stopped and removed from this workspace’s project\.json; the folder and its files are not touched\. Genie then asks you in the Deck for administrator permission to update the hosts file, so your normal browser can open the site; nothing is asked of your computer until you approve there$/);
         services.approvals.resolve(item.id, 'deny');
         expect((await denied).isError).toBe(true);
         expect(services.sites.list()).toHaveLength(1);
@@ -620,7 +620,7 @@ describe('sites: status, restart, logs, open, detect, update (S6)', () => {
         const fileBefore = await readFile(join(dir, 'example', 'project.json'), 'utf8');
         const pending = call('sites', 't-example', { action: 'update', site: 'example', name: 'app.example', devCommand: 'npm start -- --port {port}' });
         const item = await asked();
-        expect(item.title).toBe('atlas wants to change a site: example.gen — name example.gen → app.example.gen; command npm run dev -- --port {port} → npm start -- --port {port} — written to this workspace’s project.json and served as changed');
+        expect(item.title).toBe('atlas wants to change a site: example.gen — name example.gen → app.example.gen; command npm run dev -- --port {port} → npm start -- --port {port} — written to this workspace’s project.json and served as changed. Genie then asks you in the Deck for administrator permission to update the hosts file, so your normal browser can open the site; nothing is asked of your computer until you approve there');
         services.approvals.resolve(item.id, 'deny');
         const r = await pending;
         expect(r.isError).toBe(true);
