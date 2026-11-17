@@ -1,6 +1,7 @@
 import type { DeckItem } from '../core/deck.js';
 import { hostsFileBlock, hostsNames, mergeHostsFile } from '../core/gen-router.js';
 import { hostsApprovalDeckItem, hostsApprovalTitle } from '../core/hosts-approval.js';
+import type { HostsAsk } from '../core/site-reach.js';
 import { stepOutcome, type ElevationOutcome, type Elevator, type PrivilegedStep, type Step } from './elevate.js';
 
 /**
@@ -160,11 +161,17 @@ export class HostsSync {
         if (this.#result !== null) this.#deps.onResult(this.#result);
     }
 
-    /** The Deck's ask, while a write waits for the person and they have not said Not now to these names. */
-    deckItems(): DeckItem[] {
+    /** The write waiting for the person, while they have not said Not now to these names; null = none. */
+    ask(): HostsAsk | null {
         const ask = this.#ask;
-        if (ask === null || ask.key === this.#deferred) return [];
-        return [hostsApprovalDeckItem({ added: ask.added, removed: ask.removed, manualBlock: ask.manualBlock, at: ask.at })];
+        if (ask === null || ask.key === this.#deferred) return null;
+        return { added: ask.added, removed: ask.removed, manualBlock: ask.manualBlock, at: ask.at };
+    }
+
+    /** The Deck's ask, alone. The front door folds it into "Open <name> in your browser" (core/site-reach.ts, Tynn #743). */
+    deckItems(): DeckItem[] {
+        const ask = this.ask();
+        return ask ? [hostsApprovalDeckItem(ask)] : [];
     }
 
     close(): void {

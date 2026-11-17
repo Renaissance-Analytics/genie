@@ -25,6 +25,8 @@ export interface DeckAnswerPorts {
     readonly syncHosts?: () => Promise<HostsSyncResult>;
     /** The hosts-file ask's Not now (Tynn #753). */
     readonly deferHosts?: () => void;
+    /** The person's normal browser, in the window that answered: "Open <name> in your browser" ends there (Tynn #743). */
+    readonly openExternal?: (url: string) => Promise<void>;
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
     /** A rate-limit alert's kept notice (Tynn #748): Dismiss forgets it. */
     readonly limitNotices?: { dismiss(id: string): boolean };
@@ -92,6 +94,26 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
         }
         case 'defer-hosts':
             if (!ports.deferHosts) throw new Error(NEEDS_WINDOW('putting the hosts file off'));
+            ports.deferHosts();
+            break;
+        case 'open-site': {
+            // OPEN <NAME> IN YOUR BROWSER (Tynn #743). The Trust first: when the certificate is untrusted it is the ONE
+            // prompt, and a due hosts write rides in it (HostsSync.joinElevation); when trusted it answers at once with no
+            // prompt. Then the hosts sync: a write the Trust carried has landed and asks nothing; otherwise it is the one
+            // prompt. A decline stops here with its reason and nothing opens.
+            if (!ports.trustCertificate || !ports.syncHosts) throw new Error(NEEDS_WINDOW('opening a site in your browser'));
+            const trusted = await ports.trustCertificate();
+            if (!trusted.ok) throw new Error(trusted.reason);
+            const hosts = await ports.syncHosts();
+            if ('error' in hosts) throw new Error(hosts.error);
+            // The person's own browser, from the window they clicked in. A Genie with no window to open it from has still
+            // done the work: the site is reachable, and the row is gone.
+            await ports.openExternal?.(command.url);
+            break;
+        }
+        case 'defer-open-site':
+            if (!ports.deferTrustCertificate || !ports.deferHosts) throw new Error(NEEDS_WINDOW('putting this off'));
+            ports.deferTrustCertificate();
             ports.deferHosts();
             break;
         case 'dismiss-limit-alert':

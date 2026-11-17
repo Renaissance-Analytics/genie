@@ -3,6 +3,7 @@ import { TRUST_DECK_ID } from './gen-ca.js';
 import { ELEVATION_WAITING_DECK_ID } from './elevation-waiting.js';
 import { HOSTS_APPROVAL_DECK_ID, HOSTS_APPROVE_OPTION, HOSTS_LATER_OPTION } from './hosts-approval.js';
 import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
+import { SITE_REACH_DECK_PREFIX, SITE_REACH_LATER_OPTION, SITE_REACH_OPEN_OPTION, siteReachUrl } from './site-reach.js';
 import { LIMIT_NOTICE_DECK_PREFIX } from './limit-alerts.js';
 
 /**
@@ -30,6 +31,10 @@ export type DeckCommand =
     | { kind: 'sync-hosts' }
     /** The hosts-file ask's Not now (core/hosts-approval.ts): put away until the names change. */
     | { kind: 'defer-hosts' }
+    /** "Open <name> in your browser" (core/site-reach.ts, Tynn #743): everything due in one prompt, then the normal browser opens `url`. */
+    | { kind: 'open-site'; url: string }
+    /** Its Not now: the certificate and the hosts write are both put away. */
+    | { kind: 'defer-open-site' }
     /** Genie's own record of an error the main process caught and survived (core/main-errors.ts): the person has read it. */
     | { kind: 'dismiss-main-error'; id: string }
     /** A rate-limit alert's kept notice (core/limit-alerts.ts): the person has read it. */
@@ -171,6 +176,14 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
             if (item.id === HOSTS_APPROVAL_DECK_ID) {
                 if (optionId === HOSTS_APPROVE_OPTION) return { kind: 'sync-hosts' };
                 if (optionId === HOSTS_LATER_OPTION) return { kind: 'defer-hosts' };
+                if (optionId === COPY_DETAIL_OPTION) return refuse('the block is copied in the window that shows it; nothing was answered');
+            }
+            // OPEN <NAME> IN YOUR BROWSER (Tynn #743): one answer for the certificate and the hosts file, then the site opens.
+            if (item.id.startsWith(SITE_REACH_DECK_PREFIX)) {
+                const url = siteReachUrl(item.id);
+                if (url === null) return refuse(`${item.id} names no site Genie can open`);
+                if (optionId === SITE_REACH_OPEN_OPTION) return { kind: 'open-site', url };
+                if (optionId === SITE_REACH_LATER_OPTION) return { kind: 'defer-open-site' };
                 if (optionId === COPY_DETAIL_OPTION) return refuse('the block is copied in the window that shows it; nothing was answered');
             }
             if (item.id.startsWith(LIMIT_NOTICE_DECK_PREFIX)) return { kind: 'dismiss-limit-alert', id: item.id };

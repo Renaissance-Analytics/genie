@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hostsFilePath } from '../src/core/front-door-caddy.js';
-import { GEN_CA_SUBJECT, TRUST_DECK_ID, trustInstallStep } from '../src/core/gen-ca.js';
+import { GEN_CA_SUBJECT, trustInstallStep } from '../src/core/gen-ca.js';
+import { SITE_REACH_DECK_PREFIX } from '../src/core/site-reach.js';
 import { hostsFileBlock } from '../src/core/gen-router.js';
 import type { ComposedServices, FrontDoorStatus } from '../src/main/compose.js';
 import type { ElevationOutcome, PrivilegedStep, Step } from '../src/main/elevate.js';
@@ -129,8 +130,8 @@ async function compose(caddyBin: string | null = CADDY): Promise<ComposedService
 
 const running = (s: ComposedServices) => s.externalFrontDoor as Extract<FrontDoorStatus, { running: true }>;
 const genieItems = (s: ComposedServices) => s.deckItems().filter((i) => i.source === 'genie');
-/** The hosts-file asks on the Deck (Tynn #753), by title. */
-const hostsAsks = (s: ComposedServices) => s.deckItems().filter((i) => i.id === 'genie:hosts-approval').map((i) => i.title);
+/** The Deck's asks that carry a hosts write (Tynn #753; since #743 inside "Open <name> in your browser"), by title. */
+const hostsAsks = (s: ComposedServices) => s.deckItems().filter((i) => i.id === 'genie:hosts-approval' || (i.id.startsWith(SITE_REACH_DECK_PREFIX) && i.detail !== undefined)).map((i) => i.title);
 const site = (s: ComposedServices, name = 'docs') => s.sites.create({ name, workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
 
 beforeEach(async () => {
@@ -183,7 +184,7 @@ describe('the hosts file', () => {
         await settle();
         expect(batches).toEqual([]);
         expect(services.externalFrontDoor).toMatchObject({ hosts: { changed: false, elevated: false, awaitingApproval: true, manualBlock: hostsFileBlock(['tynn.gen']) } });
-        expect(hostsAsks(services)).toEqual(['Genie needs administrator permission to add tynn.gen to your hosts file so your normal browser can open it']);
+        expect(hostsAsks(services)).toEqual(['Open tynn.gen in your browser']);
         // The person's Approve (the Deck routes it to syncHosts): exactly one prompt, and the ask is gone.
         expect(await services.syncHosts()).toEqual({ changed: true, elevated: true });
         expect(batches).toEqual([['hosts']]);
@@ -260,7 +261,7 @@ describe('no admin prompt on a site’s start or stop (S4)', () => {
         site(services, 'tynn');
         await settle();
         expect(batches).toEqual([['hosts']]);
-        expect(hostsAsks(services)).toEqual(['Genie needs administrator permission to add tynn.gen to your hosts file so your normal browser can open it']);
+        expect(hostsAsks(services)).toEqual(['Open tynn.gen in your browser']);
     });
 
     it('a burst of N site changes is ONE ask, and the person’s Approve is ONE write — never a prompt per site', async () => {
@@ -271,7 +272,7 @@ describe('no admin prompt on a site’s start or stop (S4)', () => {
         await settle();
         expect(hosts.writes()).toBe(0);
         expect(batches).toEqual([]);
-        expect(hostsAsks(services)).toEqual(['Genie needs administrator permission to add a.gen, b.gen, c.gen, d.gen and e.gen to your hosts file so your normal browser can open them']);
+        expect(hostsAsks(services)).toEqual(['Open a.gen, b.gen, c.gen, d.gen and e.gen in your browser']);
         await services.syncHosts();
         expect(hosts.writes()).toBe(1);
         expect(batches).toEqual([['hosts']]);
@@ -481,7 +482,7 @@ describe('trust is READ from the OS store by the CA’s thumbprint', () => {
         answer(false);
         await settle();
         expect(running(services).trusted).toBe(false);
-        expect(genieItems(services).map((i) => i.id)).toEqual([TRUST_DECK_ID]);
+        expect(genieItems(services).map((i) => i.id)).toEqual([`${SITE_REACH_DECK_PREFIX}docs.gen`]);
     });
 
     it('a store that cannot be read is untrusted WITH the reason, so the Trust door stays', async () => {
@@ -575,7 +576,7 @@ describe('Genie asks once, on the Deck', () => {
         await settle();
         const items = genieItems(services);
         expect(items).toHaveLength(1);
-        expect(items[0]).toMatchObject({ id: TRUST_DECK_ID, title: 'Trust Genie’s certificate so https://docs.gen works in your browser', agentId: null });
+        expect(items[0]).toMatchObject({ id: `${SITE_REACH_DECK_PREFIX}docs.gen`, title: 'Open docs.gen in your browser', agentId: null });
         expect(await services.trustCertificate()).toEqual({ ok: true });
         expect(genieItems(services)).toEqual([]);
     });

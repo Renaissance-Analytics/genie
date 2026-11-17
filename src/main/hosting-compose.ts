@@ -15,7 +15,8 @@ import { mailpitRoutes } from '../core/mailpit-name.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, type FrontDoorTls } from '../core/front-door-caddy.js';
-import { trustDeckItem, trustInstallStep } from '../core/gen-ca.js';
+import { trustInstallStep } from '../core/gen-ca.js';
+import { reachDeckItems } from '../core/site-reach.js';
 import { GenCa, osTrustStore, type CaSource, type CertIssuer, type TrustStorePort } from './gen-ca.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import type { AppEnvSource } from './app-inbox-service.js';
@@ -497,13 +498,14 @@ function startExternalFrontDoor(input: {
         },
         deferHosts: () => hosts.defer(),
         deckItems: () => {
-            // The hosts-file ask (Tynn #753): a site change waits here for the person's Approve, never a prompt of its own.
-            const asks = hosts.deckItems();
+            // ONE row for the normal browser (Tynn #743): "Open <name> in your browser", carrying the certificate and the
+            // hosts write a site change left waiting (Tynn #753: never a prompt of its own); #753's own ask for a removal.
             const all = sites.list();
-            if (trusted !== false || all.length === 0) return asks;
-            askedAt ??= input.now();
-            const item = trustDeckItem({ trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt });
-            return item ? [item, ...asks] : asks;
+            if (trusted === false && all.length > 0) askedAt ??= input.now();
+            return reachDeckItems({
+                trust: { trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt ?? 0 },
+                hosts: hosts.ask(),
+            });
         },
         close: () => {
             closed = true;

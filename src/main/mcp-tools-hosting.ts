@@ -53,7 +53,9 @@ import type { SiteInfo } from './site-manager.js';
  * administrator, and Genie never raises that prompt because an agent changed a site: it asks the person in the Deck.
  */
 export const HOSTS_ADMIN_NOTE = 'Genie then asks you in the Deck for administrator permission to update the hosts file, so your normal browser can open the site; nothing is asked of your computer until you approve there';
-const HOSTS_AGENT_NOTE = 'served in Genie’s browser now. If the person’s normal browser needs the hosts file changed and that needs an administrator, Genie asks them in its Deck (never a prompt of its own); do not ask them to edit the hosts file or run anything elevated.';
+// Tynn #743: an agent that did not know this wrote the person its own step list (and a Tynn release to accept) for
+// what is one row of Genie's.
+const hostsAgentNote = (host: string): string => `served in Genie’s browser now. For the person’s normal browser, Genie shows them one “Open ${host} in your browser” in its Deck, which asks their computer once (the hosts file, Genie’s certificate) and opens the site. Do not ask them to edit the hosts file, trust a certificate or run anything elevated, and do not put steps for it on their list.`;
 const UNTRUSTED = (workspace: string) => `this workspace (${workspace}) is not trusted, so its agents cannot change its services or sites; the person trusts it from Genie’s Trust step first. Nothing was done`;
 
 export type HostingApproval = 'services.add' | 'services.createDatabase' | 'services.remove' | 'services.use' | 'services.exec' | 'services.update' | 'sites.update' | 'sites.remove';
@@ -551,7 +553,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const form = formOf(d, args);
                     const r = await createSite(s, { workspaceId: caller.workspaceId, repoPath, form });
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems, form });
-                    return ok({ ok: true, site: siteView(r.site), hostsFile: HOSTS_AGENT_NOTE });
+                    return ok({ ok: true, site: siteView(r.site), hostsFile: hostsAgentNote(r.site.host) });
                 }
                 case 'start': {
                     const site = own(str(args.site));

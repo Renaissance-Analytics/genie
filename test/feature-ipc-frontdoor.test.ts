@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { composeServices } from './helpers/compose-alone.js';
 import { type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
-import { TRUST_DECK_ID } from '../src/core/gen-ca.js';
+import { SITE_REACH_DECK_PREFIX } from '../src/core/site-reach.js';
 import type { TrustStorePort } from '../src/main/gen-ca.js';
 import type { ElevationOutcome, PrivilegedStep } from '../src/main/elevate.js';
 import type { HostsIo } from '../src/main/hosts-file.js';
@@ -97,25 +97,25 @@ describe('hosting.frontDoor', () => {
         expect((await featureSnapshot(services, state())).hosting!.frontDoor).toMatchObject({ trusted: false, trustError: 'Genie could not install its certificate into the trust store: the user declined' });
     });
 
-    it('the Deck’s Trust item: Trust trusts through the same one prompt; Not now removes it', async () => {
+    it('the Deck’s “Open docs.gen in your browser” (Tynn #743): Open in browser trusts through the same one prompt', async () => {
         services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
         await settle();
-        const item = services.deckItems().find((i) => i.id === TRUST_DECK_ID)!;
+        const item = services.deckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX))!;
         expect(item).toBeDefined();
-        const snap = await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'trust' }, state());
+        const snap = await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'open' }, state());
         expect(snap.hosting!.frontDoor).toMatchObject({ trusted: true });
-        expect(services.deckItems().find((i) => i.id === TRUST_DECK_ID)).toBeUndefined();
+        expect(services.deckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX))).toBeUndefined();
     });
 
-    it('the Deck’s Not now: the item is gone; a declined Trust from the Deck is a thrown refusal with the reason', async () => {
+    it('its Not now: the item is gone; a declined prompt from the Deck is a thrown refusal with the reason', async () => {
         services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
         await settle();
-        const item = services.deckItems().find((i) => i.id === TRUST_DECK_ID)!;
+        const item = services.deckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX))!;
         declineTrust = true;
-        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'trust' }, state())).rejects.toThrow('the user declined');
-        expect(services.deckItems().find((i) => i.id === TRUST_DECK_ID)).toBeDefined();
-        await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'not-now' }, state());
-        expect(services.deckItems().find((i) => i.id === TRUST_DECK_ID)).toBeUndefined();
+        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'open' }, state())).rejects.toThrow('the user declined');
+        expect(services.deckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX))).toBeDefined();
+        await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'later' }, state());
+        expect(services.deckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX))).toBeUndefined();
     });
 
     it('hosting.syncHosts: a new site waits for the person (Tynn #753); their declined prompt is said, and Try again asks again', async () => {

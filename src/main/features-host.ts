@@ -250,7 +250,8 @@ export class HostFeatures {
                     { ...this.#hostingPorts, ...(ui?.openInBrowser ? { openInBrowser: url => ui.openInBrowser!(url) } : {}) }) : false)
                 || (this.#machine ? await applyMachineFeatureAction(this.#machine, action, state, next, effects) : false)
                 || (this.#hosting ? await applyToolchainCoreFeatureAction(this.#hosting, action, state, next, effects, this.#repairingCli, this.#checkControl) : false)
-                || (deck ? await applyDeckFeatureAction({ ...deck, ...(ui?.mainErrors ? { mainErrors: ui.mainErrors } : {}) }, action) : false)
+                // "Open <name> in your browser" ends in the person's normal browser, from the window they clicked in (Tynn #743).
+                || (deck ? await applyDeckFeatureAction({ ...deck, ...(ui?.mainErrors ? { mainErrors: ui.mainErrors } : {}), ...(ui?.openExternal ? { openExternal: ui.openExternal } : {}) }, action) : false)
                 || await applyFeatureControlAction({ ...(this.#machine ? { pairing: this.#machine.pairing } : {}), routes: () => this.#hosting?.routes() ?? [] }, action, next,
                     { ...effects, ...this.ports.system, ...(ui?.rendererNotice ? { rendererNotice: ui.rendererNotice } : {}),
                         ...(ui?.browser ? { browser: ui.browser } : {}),
