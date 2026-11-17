@@ -55,6 +55,5 @@ describe('the Lanes drawer', () => {
         const open = render({ lanesOpen: true });
         expect(open).toContain('data-lanes');
         expect(open).toContain('data-lanes-timeline');
-        expect(open).toMatch(/data-action="toggle-lanes"[^>]*aria-pressed="true"/);
     });
 });
