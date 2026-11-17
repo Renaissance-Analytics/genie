@@ -3,6 +3,7 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parseCommandLine } from '@particle-academy/fancy-term-host';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hostsFilePath } from '../src/core/front-door-caddy.js';
 import { GEN_CA_SUBJECT, trustInstallStep } from '../src/core/gen-ca.js';
@@ -755,5 +756,40 @@ describe('completion after rejected front-door work', () => {
         expect(services.externalFrontDoor).toMatchObject({ running: true });
         expect(services.externalFrontDoor).not.toHaveProperty('reason');
         expect(pty.caddy()).toHaveLength(2);
+    });
+});
+
+/**
+ * THE FRONT DOOR'S CADDY COMMAND with a space in Genie's folders (Tynn #729): the binary and the Caddyfile are each ONE
+ * word for the pty's parser, as a site's Caddy is (caddy-space-729.test.ts). Genie's runtime and userData live under the
+ * person's profile, and a profile with a space split them into two arguments.
+ */
+describe('the front door’s Caddy command (Tynn #729)', () => {
+    const argv = (command: string) => parseCommandLine(command);
+
+    it('CONTROL: with no space, the parser reads the binary and a Caddyfile under Genie’s folder', async () => {
+        services = await compose();
+        await settle();
+        const [caddy] = pty.caddy();
+        const { command, args } = argv(caddy!.command!);
+        expect(command).toBe(CADDY);
+        expect(args[2]!.startsWith(dir) && args[2]!.endsWith('Caddyfile')).toBe(true);
+    });
+
+    it('a binary and a Genie folder with a space: the parser still reads each whole', async () => {
+        const parent = dir;
+        dir = join(parent, 'Genie Data');
+        mkdirSync(dir, { recursive: true });
+        try {
+            services = await compose('/opt/Genie App/caddy');
+            await settle();
+            const [caddy] = pty.caddy();
+            const { command, args } = argv(caddy!.command!);
+            expect(command).toBe('/opt/Genie App/caddy');
+            expect(args.slice(0, 2)).toEqual(['run', '--config']);
+            expect(args[2]!.startsWith(dir) && args[2]!.endsWith('Caddyfile')).toBe(true);
+        } finally {
+            dir = parent;
+        }
     });
 });
