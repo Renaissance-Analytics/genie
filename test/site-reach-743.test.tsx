@@ -116,18 +116,17 @@ describe('the why is drawn in place, not behind Show all', () => {
 
 /** A rig whose hosts file and trust store change only when a prompt the window approved carried their step. */
 async function reachRig(options: { trusted?: boolean } = {}): Promise<HostingRig> {
-    const approved: Array<readonly PrivilegedStep[]> = [];
+    // What the rig's window approved (its elevationsAsked), read when the fakes are read.
+    let made: HostingRig | null = null;
     let staged = '';
-    const carried = (id: string) => approved.some((b) => b.some((s) => s.id === id));
+    const carried = (id: string) => (made?.elevationsAsked ?? []).some((b) => b.some((s) => s.id === id));
     const hostsIo: HostsIo = {
         read: async () => (carried(HOSTS_STEP_ID) ? staged : ''),
         write: async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); },
         stage: async (next) => { staged = next; return { command: 'cp', args: [] }; },
     };
     const r = await hostingRig({ hosting: { hostsIo, trustStore: { has: async () => options.trusted === true || carried('trust') } } });
-    // The rig's default window records into elevationsAsked; what it approved is what the fakes read.
-    const push = r.elevationsAsked.push.bind(r.elevationsAsked);
-    r.elevationsAsked.push = (...b) => { approved.push(...b); return push(...b); };
+    made = r;
     return r;
 }
 

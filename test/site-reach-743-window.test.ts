@@ -11,7 +11,12 @@ import { CALLER_A, CALLER_B, item, presentationFixture, type PresentationFixture
  */
 
 let f: PresentationFixture;
-beforeEach(async () => { f = await presentationFixture(); });
+beforeEach(async () => {
+    f = await presentationFixture();
+    // The fixture host has no front door (no bundled Caddy), so its own hosts sync refuses; this test is about the window
+    // the answer opens in, so the host's hosts sync is a recorder that answers "already right".
+    Object.assign(f.deck, { syncHosts: async () => { f.record('host', 'sync-hosts'); return { changed: false, elevated: false }; } });
+});
 afterEach(async () => { await f?.close(); });
 
 const reach = item({
@@ -25,6 +30,7 @@ describe('Open in browser opens the person’s normal browser in the window that
         await f.answer({ kind: 'deck.answer', item: reach, optionId: 'open' });
         expect(f.calls).toEqual([
             { owner: 'host', effect: 'trust-certificate' },
+            { owner: 'host', effect: 'sync-hosts' },
             { owner: CALLER_A.connectionId, effect: 'external', value: 'https://shop.gen' },
         ]);
     });
