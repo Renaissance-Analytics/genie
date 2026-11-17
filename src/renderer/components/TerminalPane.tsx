@@ -60,7 +60,7 @@ export function TerminalPane({ paneId, output, outputEnd, outputEpoch, readOnly,
     useEffect(() => () => { shown.current = null; }, []);
     useEffect(() => { if (!apply()) void term.current?.ready.then(() => apply()); }, [output, outputEnd, outputEpoch, apply]);
     // THE MENU GIVES THE KEYBOARD BACK (beta.64, core/terminal-menu.ts): fancy-term's own items; after each, this terminal is focused.
-    // Through xterm's own textarea, without scrolling (genie#1290): fancy-term's handle.focus() takes no options.
+    // Through xterm's own textarea, without scrolling (genie#1290): fancy-term's own handle focus takes no options.
     const menu = useMemo(() => refocusingMenu(() => term.current?.xterm?.textarea?.focus({ preventScroll: true })), []);
     return (
         <Terminal
