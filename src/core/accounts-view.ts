@@ -1,5 +1,5 @@
 import type { AccountHeadroom } from './headroom-board.js';
-import { STANDARD_WINDOWS, type WindowReading } from './headroom.js';
+import { STANDARD_WINDOWS, type Headroom, type WindowReading } from './headroom.js';
 import type { SwitchOffer } from './switch-offer.js';
 import type { DesignAuthView } from './design-auth.js';
 
@@ -67,6 +67,11 @@ export function accountsView(known: readonly KnownAccountRecord[], readings: rea
 /** The words a switch's steps use for an account: its email when known (what the provider's login shows), else its label. */
 export function chooseWords(account: Pick<AccountView, 'email' | 'label'>): string {
     return account.email ?? account.label;
+}
+
+/** STUB (RED): the header's limits as the feed sent them. */
+export function headerLimits(limits: Readonly<Record<string, Headroom>>, _accounts: AccountsSnapshot | undefined): Readonly<Record<string, Headroom>> {
+    return limits;
 }
 
 /** The account the chip names: the provider's active one, or its first when the book names none. */

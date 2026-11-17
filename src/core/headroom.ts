@@ -46,6 +46,8 @@ export interface LimitWindow {
 export interface ReadingStamp {
     readonly accountId: string;
     readonly runId: string;
+    /** The first reading after the account may have changed (a sign-in, or another active account): it keeps no earlier window. */
+    readonly fresh?: boolean;
 }
 
 /** A window as it reads at a moment: a window past its reset time is `Refreshed`, and carries no figure at all. */

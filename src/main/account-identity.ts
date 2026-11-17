@@ -41,6 +41,12 @@ interface IdentityBook {
     activeFor(provider: AcpProvider): Pick<AccountRecord, 'provider'>;
 }
 
+/** Told when a read of who is signed in starts and when it has ended: the account a reading belongs to may change in between. */
+export interface IdentityReadHooks {
+    readStart(provider: AcpProvider): void;
+    readEnd(provider: AcpProvider): void;
+}
+
 /**
  * Reads WHO IS SIGNED IN to each provider's one home (Tynn #753): at host start, after a sign-in or a switch, and whenever the
  * provider's health is measured again. The signed-in account becomes the provider's active one, and usage is attributed to it
@@ -52,7 +58,7 @@ export class AccountIdentityReader {
     readonly #log: (line: string) => void;
     readonly #inFlight = new Map<AcpProvider, Promise<void>>();
 
-    constructor(book: IdentityBook, ports: () => ProviderHealthPorts, log: (line: string) => void = () => {}) {
+    constructor(book: IdentityBook, ports: () => ProviderHealthPorts, log: (line: string) => void = () => {}, _hooks?: IdentityReadHooks) {
         this.#book = book; this.#ports = ports; this.#log = log;
     }
 
