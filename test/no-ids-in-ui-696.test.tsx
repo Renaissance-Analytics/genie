@@ -9,6 +9,7 @@ import { AlertToasts } from '../src/renderer/components/AlertToasts.js';
 import { ChatMailRow } from '../src/renderer/components/ChatFlyout.js';
 import { ChatProse } from '../src/renderer/components/ChatProse.js';
 import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
+import { markupRoot, nodeText } from './helpers/markup-text.js';
 import { InboxFlyoutView, type InboxFlyoutViewProps } from '../src/renderer/components/InboxFlyout.js';
 import { MobileShell } from '../src/renderer/components/MobileShell.js';
 
@@ -33,19 +34,21 @@ const WS = '01JD3X5ZQ8K2M4N6P8R0T2V4W6';
 const UUID = '5f0c1e2d-3b4a-4c5d-9e6f-7a8b9c0d1e2f';
 const T = Date.UTC(2026, 10, 13, 12, 0, 0);
 
-const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#x27;': "'", '&#39;': "'", '&nbsp;': ' ' };
-/** What a person reads of some markup: its text, and the attributes a screen, a tooltip or a screen reader shows. */
+const SHOWN_ATTRS = new Set(['title', 'aria-label', 'alt', 'placeholder']);
+/** What a person reads of some markup: its text, and the attributes a screen, a tooltip or a screen reader shows. Parsed, entities decoded. */
 function personFacing(html: string): string {
-    // Code is exempt (above): shown and copied verbatim.
-    const prose = html.replace(/<pre\b[\s\S]*?<\/pre>|<code\b[\s\S]*?<\/code>/g, ' ');
-    const attrs = [...prose.matchAll(/\s(?:title|aria-label|alt|placeholder)="([^"]*)"/g)].map((m) => m[1]!);
-    const text = prose.replace(/<[^>]*>/g, ' ');
-    return [text, ...attrs].join('\n').replace(/&(?:amp|lt|gt|quot|#x27|#39|nbsp);/g, (e) => ENTITIES[e] ?? e);
+    const root = markupRoot(html);
+    // Code is exempt (above): shown and copied verbatim. Each outermost <pre>/<code> stands as one space.
+    for (const code of Array.from(root.querySelectorAll('pre, code'))) {
+        if (!code.parentElement?.closest('pre, code')) code.replaceWith(' ');
+    }
+    const attrs = Array.from(root.querySelectorAll('*')).flatMap((e) => Array.from(e.attributes).filter((a) => SHOWN_ATTRS.has(a.name)).map((a) => a.value));
+    // Every tag stands as a space, so words in neighbouring elements stay apart.
+    return [nodeText(root, ' '), ...attrs].join('\n');
 }
 const idsShown = (html: string): string[] => idsIn(personFacing(html));
-const decode = (s: string): string => s.replace(/&(?:amp|lt|gt|quot|#x27|#39|nbsp);/g, (e) => ENTITIES[e] ?? e);
 /** The text of every `<code>` in some markup, as drawn (tags inside it, a highlighter's spans, dropped). */
-const codeTexts = (html: string): string[] => [...html.matchAll(/<code\b[^>]*>([\s\S]*?)<\/code>/g)].map((m) => decode(m[1]!.replace(/<[^>]*>/g, '')));
+const codeTexts = (html: string): string[] => Array.from(markupRoot(html).querySelectorAll('code')).map((c) => nodeText(c));
 
 describe('the gauge (positive and negative controls)', () => {
     it('recognises every id shape the app mints or relays — and not a name, a commit, a version or a sentence', () => {

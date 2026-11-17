@@ -9,6 +9,7 @@ import { terminalsWindowRoute } from '../src/core/workspace-window.js';
 import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/bridge.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
 import { Shell } from '../src/renderer/Shell.js';
+import { markupRoot, nodeText } from './helpers/markup-text.js';
 
 /**
  * THE DASHBOARD'S WINDOWS COLUMN (Tynn #706): an icon-only header with a tooltip; each agent row has an icon Button that
@@ -55,13 +56,15 @@ describe('the Terminal window is the workspace’s terminals view', () => {
 describe('the column header', () => {
     it('is an icon with a tooltip and no words', () => {
         const html = renderToStaticMarkup(<Dashboard rows={AGENTS} workspaces={WORKSPACES} onOpenAgent={() => {}} onAddAgent={() => {}} />);
-        const cell = /<div[^>]*data-column-header="windows"[^>]*>([\s\S]*?)<\/div>/.exec(html);
+        const cell = markupRoot(html).querySelector('div[data-column-header="windows"]');
         expect(cell, 'a windows header cell').not.toBeNull();
-        expect(cell![0]).toMatch(/title="[^"]+"/);
-        expect(cell![0]).toMatch(/aria-label="[^"]+"/);
-        // No text anywhere inside it: tags stripped, nothing left.
-        expect(cell![1]!.replace(/<[^>]*>/g, '').trim()).toBe('');
-        expect(cell![0]).toMatch(/<(span|svg)\b/);
+        // The cell, or something in it, carries a non-empty tooltip and accessible name.
+        const carries = (name: string) => [cell!, ...Array.from(cell!.querySelectorAll('*'))].some((e) => (e.getAttribute(name) ?? '') !== '');
+        expect(carries('title'), 'a title').toBe(true);
+        expect(carries('aria-label'), 'an aria-label').toBe(true);
+        // No text anywhere inside it.
+        expect(nodeText(cell!).trim()).toBe('');
+        expect(cell!.querySelector('span, svg'), 'an icon').not.toBeNull();
     });
 });
 

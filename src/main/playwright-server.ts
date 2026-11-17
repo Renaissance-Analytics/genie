@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import type { SupervisorApi } from './process-supervisor.js';
 import { SERVER_HOST, decideIdle, serverCommand } from '../core/playwright-managed.js';
 
@@ -9,6 +10,11 @@ import { SERVER_HOST, decideIdle, serverCommand } from '../core/playwright-manag
 
 export const PLAYWRIGHT_SERVER_PROCESS_ID = 'genie-playwright-server';
 const POLL_MS = 200;
+
+/** A port for the server: uniform over 20000..39999 (crypto.randomInt; a modulo of random bytes favoured the low ports, CodeQL #113). */
+export function playwrightServerPort(): number {
+    return randomInt(20_000, 40_000);
+}
 
 export interface PlaywrightServerPorts {
     readonly supervisor: Pick<SupervisorApi, 'start' | 'stop' | 'status'>;

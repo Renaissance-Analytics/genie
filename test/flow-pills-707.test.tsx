@@ -4,6 +4,7 @@ import { flowPills, PILL_LINGER_MS, type EndedFlow, type LiveFlow } from '../src
 import { FlowPills } from '../src/renderer/components/FlowPills.js';
 import { TitleBar } from '../src/renderer/components/TitleBar.js';
 import { WorkspaceColorsContext } from '../src/renderer/workspace-colors.js';
+import { markupText } from './helpers/markup-text.js';
 
 /**
  * RUNNING FLOWS AS PILLS IN THE HEADER (Tynn #707): a pill per running flow (its name, a running light, its workspace's
@@ -64,7 +65,7 @@ describe('FlowPills', () => {
 
     it('no id of ours is drawn as text', () => {
         const html = render([live('01HZZZZZZZZZZZZZZZZZZZZZZZ')]);
-        expect(html.replace(/<[^>]*>/g, '')).not.toContain('01HZZZ');
+        expect(markupText(html)).not.toContain('01HZZZ');
     });
 
     it('four runs draw two pills and a +2 that opens a list', () => {

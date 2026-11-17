@@ -2,7 +2,7 @@
 // install, through the managed browsers path and through a `playwright run-server` endpoint? Records versions and timings.
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, symlinkSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createServer, connect } from 'node:net';
 import { networkInterfaces } from 'node:os';
 
@@ -14,10 +14,18 @@ const win = process.platform === 'win32';
 const results = { platform: process.platform, node: process.version, steps: [] };
 const rec = (name, data) => { results.steps.push({ name, ...data }); console.log('STEP', name, JSON.stringify(data)); };
 const now = () => Date.now();
+// npm and npx run as node on their own CLI scripts, beside this node: on Windows they are .cmd shims, which only a shell
+// (cmd.exe) can start, and a command line built for a shell is what CodeQL #120 flags. Everything runs with an argument
+// array and no shell, on every platform.
+const npmCli = (name) => [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', `${name}-cli.js`), join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', `${name}-cli.js`)].find((p) => existsSync(p)) ?? null;
+const NODE_CLIS = { npm: npmCli('npm'), npx: npmCli('npx') };
 const sh = (cmd, args, opts = {}) => {
     const s = now();
-    const r = spawnSync(win ? 'cmd.exe' : cmd, win ? ['/d', '/s', '/c', cmd, ...args] : args, { encoding: 'utf8', ...opts, env: { ...process.env, ...(opts.env ?? {}) } });
-    return { code: r.status, ms: now() - s, out: ((r.stdout ?? '') + (r.stderr ?? '')).slice(-1500) };
+    const cli = Object.hasOwn(NODE_CLIS, cmd) ? NODE_CLIS[cmd] : undefined;
+    if (cli === null) throw new Error(`${cmd}-cli.js is not beside ${process.execPath}`);
+    const [file, argv] = cli ? [process.execPath, [cli, ...args]] : [cmd, args];
+    const r = spawnSync(file, argv, { encoding: 'utf8', ...opts, shell: false, env: { ...process.env, ...(opts.env ?? {}) } });
+    return { code: r.status, ms: now() - s, out: ((r.stdout ?? '') + (r.stderr ?? '') + (r.error ? String(r.error) : '')).slice(-1500) };
 };
 const dirSize = (d) => { let n = 0; for (const e of readdirSync(d, { withFileTypes: true })) { const p = join(d, e.name); n += e.isDirectory() ? dirSize(p) : statSync(p).size; } return n; };
 const freePort = () => new Promise((ok) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
