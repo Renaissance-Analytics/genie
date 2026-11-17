@@ -12,7 +12,8 @@ import { whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
 import { signedOutGithubView } from '../core/github.js';
 import type { MachineFeaturePorts } from './feature-machine.js';
-import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
+import { getTailscaleStatus, installTailscale, tailscaleCommand, tailscaleUp } from './tailscale-cli.js';
+import { tailscaleLive } from './tailscale-live.js';
 import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -130,7 +131,6 @@ import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:f
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { transportHub } from '../core/remote-protocol.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
-import { resolveProgram } from '../core/program-lookup.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
@@ -932,7 +932,8 @@ async function main(): Promise<void> {
      */
     const remoteWindowEvents = new Set<(channel: string, payload: unknown) => void>();
     const remoteListen = remoteListener({
-        tailscale: () => execFileText(resolveProgram('tailscale'), ['status', '--json'], { timeoutMs: 15_000 }),
+        // Found at each start, never by PATH: a Tailscale installed while Genie runs is not on this process's PATH (Tynn #749).
+        tailscale: () => tailscaleCommand(['status', '--json'], 15_000),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
         // The phone's page (§6.8): the built renderer, beside this host's own bundle, as the window serves it.
@@ -944,7 +945,7 @@ async function main(): Promise<void> {
             const keyFile = join(dir, 'key.pem');
             try {
                 await mkdir(dir, { recursive: true });
-                await execFileText(resolveProgram('tailscale'), ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { timeoutMs: 60_000 });
+                await tailscaleCommand(['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], 60_000);
                 await chmod(keyFile, 0o600).catch(() => {});
                 return { cert: await readFileText(certFile, 'utf8'), key: await readFileText(keyFile, 'utf8') };
             } catch (error) {
@@ -1548,12 +1549,14 @@ async function main(): Promise<void> {
     const featureIssueWatch = new IssueWatchReplica((method, args) => issueWatch.call(method, args));
     featureIssueWatch.apply({ kind: 'dump', dump: issueWatch.dump() });
     issueWatch.onEvent(event => { featureIssueWatch.apply(event); featureChanged(); });
-    let featureTailscale: TailscaleStatus | null = null;
-    const refreshFeatureTailscale = async () => { featureTailscale = await getTailscaleStatus().catch(() => featureTailscale); featureChanged(); };
-    void refreshFeatureTailscale();
     const featureFirewallReader = firewallReader(() => readFirewallRule(REMOTE_PORT), { minIntervalMs: 5000 });
     const proxyMemoryNow = await proxyMemory;
     const downloadFeature = featureDownload({ proxyRoutes: url => (proxyMemoryNow?.routesFor(url) ?? [{ kind: 'direct' }]) });
+    // TAILSCALE, LIVE (Tynn #748, #749): one installer per Install, read again on its own while Genie waits for it to be
+    // installed or signed in, and remote access applied the moment it is connected: never a relaunch to notice it.
+    const tailscaleNow = tailscaleLive({ probe: () => getTailscaleStatus(), install: () => installTailscale({ download: url => downloadFeature(url) }),
+        up: () => tailscaleUp(), online: () => remoteSwitch.apply(), changed: () => featureChanged(), say });
+    void tailscaleNow.refresh();
     const featureNative = nativeFeatureToolchain({ home, providerHealth, download: downloadFeature, busy: step => hostFeatures?.busy(step),
         activity: async () => ({
             sessions: hostRegistry.listAgents().filter(a => host.probe(a.id)?.running === true).map(a => ({ label: a.name, provider: a.provider })),
@@ -1635,11 +1638,7 @@ async function main(): Promise<void> {
         issueWatch: () => featureIssueWatch.panels(hostRegistry.listWorkspaces(), workspaceTynnProject, Date.now()),
         issueWatchRefresh: id => issueWatch.call('refresh', [id]), issueWatchSetRepo: (id, owner, repo, change) => issueWatch.call('setRepo', [id, owner, repo, change]),
         toolchain: featureNative,
-        tailscale: { status: () => featureTailscale, up: async () => { const result = await tailscaleUp(); await refreshFeatureTailscale();
-            if (result.ok) await remoteSwitch.apply();
-            void result.online?.then(async online => { await refreshFeatureTailscale(); if (online) await remoteSwitch.apply(); }).catch(error => say(String(error)));
-            return result;
-        }, install: async () => { const result = await installTailscale({ download: url => downloadFeature(url) }); await refreshFeatureTailscale(); return result; } },
+        tailscale: { status: () => tailscaleNow.status(), up: () => tailscaleNow.up(), install: () => tailscaleNow.install(), refresh: () => tailscaleNow.look() },
         ...(process.platform === 'win32' ? { firewall: { rule: () => featureFirewallReader.rule(), refresh: () => featureFirewallReader.refresh(),
             reread: () => featureFirewallReader.reread(), allow: () => ensureFirewallRule(REMOTE_PORT), remove: () => removeFirewallRule() } } : {}),
         remoteAccess: { apply: () => remoteSwitch.apply(), restart: () => remoteSwitch.restart() },

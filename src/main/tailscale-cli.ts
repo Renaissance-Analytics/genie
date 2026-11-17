@@ -397,11 +397,15 @@ function runCli(
 }
 
 /**
- * RUN THE TAILSCALE CLI, FOUND AT THIS CALL (Tynn #749). RED STUB: inert, refuses every call.
+ * RUN THE TAILSCALE CLI, FOUND AT THIS CALL (Tynn #749): its stdout. The host's tailnet listener used a PATH lookup, and
+ * Windows' Tailscale installer adds its folder to the machine's PATH, which a process already running never sees: a
+ * Tailscale installed while Genie ran was looked for in System32 until Genie was shut down and relaunched. The CLI is
+ * looked up where Tailscale installs it ({@link tailscaleCliPath}), at every call.
  */
 export async function tailscaleCommand(args: string[], timeoutMs: number, deps: Pick<TailscaleCliDeps, 'cliPath' | 'run'> = {}): Promise<string> {
-    void args; void timeoutMs; void deps;
-    throw new Error('Tailscale is not installed on this machine.');
+    const cli = (deps.cliPath ?? tailscaleCliPath)();
+    if (!cli) throw new Error('Tailscale is not installed on this machine.');
+    return (await (deps.run ?? runCli)(cli, args, timeoutMs)).stdout;
 }
 
 const EMPTY = { self: null, peers: [] as TailnetPeer[] };
