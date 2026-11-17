@@ -19,7 +19,7 @@ registerAppIcons();
 const report: StorageReport = {
     measuredAt: 1_763_000_000_000,
     truncated: false,
-    totals: { repos: 5_000_000, worktrees: 2_000_000, 'ci-artifacts': 1500, 'chat-files': 300, trash: 3_145_728 },
+    totals: { repos: 5_000_000, worktrees: 2_000_000, 'ci-artifacts': 1500, 'chat-files': 300, dirty: 2048, trash: 3_145_728 },
     reclaimableBytes: 1_001_500,
     items: [
         { id: 'repos:repos/app', category: 'repos', label: 'repos/app', rel: 'repos/app', bytes: 5_000_000, files: 10, truncated: false, reclaimable: false, refusal: null },
@@ -28,6 +28,8 @@ const report: StorageReport = {
         { id: 'worktrees:/elsewhere/wt-agent', category: 'worktrees', label: '/elsewhere/wt-agent (wt-agent)', rel: '/elsewhere/wt-agent', bytes: 2_000_000, files: 3, truncated: false, reclaimable: true, refusal: null, state: 'unmerged', external: true, newest: 1_762_000_000_000 },
         { id: 'ci-artifacts:repos/app/ci-out', category: 'ci-artifacts', label: 'repos/app/ci-out', rel: 'repos/app/ci-out', bytes: 1500, files: 1, truncated: false, reclaimable: true, refusal: null, newest: 1_762_000_000_000 },
         { id: 'ci-artifacts:repos/app/coverage', category: 'ci-artifacts', label: 'repos/app/coverage', rel: 'repos/app/coverage', bytes: 500, files: 1, truncated: false, reclaimable: true, refusal: null, newest: 1_762_172_740_000 },
+        // Tynn #819: a file dropped into .ai/_dirty, old, and still never suggested by the one-click clean-up.
+        { id: 'dirty:upload.png', category: 'dirty', label: '.ai/_dirty/upload.png', rel: '.ai/_dirty/upload.png', bytes: 2048, files: 1, truncated: false, reclaimable: true, refusal: null, newest: 1_700_000_000_000 },
     ],
     trash: [
         { id: 'genie-1-abc', origin: { kind: 'path', category: 'ci-artifacts', rel: 'repos/app/coverage' }, movedAt: 1_762_000_000_000, bytes: 2_097_152 },
@@ -190,6 +192,18 @@ describe('the Storage tab', () => {
         expect(button?.querySelector('[data-react-fancy-icon]')).not.toBeNull();
         click(button);
         expect(actions.at(-1)).toEqual({ kind: 'storage.trash', workspaceId: 'ws1', itemId: 'worktrees:wt/clean' });
+    });
+
+    it('.ai/_dirty (Tynn #819): its total, its own section, and Move to .trash on each entry', () => {
+        draw(view());
+        expect(q('[data-storage-total="dirty"]')?.textContent).toContain('.ai/_dirty');
+        expect(q('[data-storage-total="dirty"]')?.textContent).toContain('2.0 KB');
+        const section = q('[data-storage-category="dirty"]');
+        expect(section?.textContent).toContain('.ai/_dirty/upload.png');
+        const button = section?.querySelector('[data-action="storage-trash"][data-item="dirty:upload.png"]') as HTMLElement | null;
+        expect(button?.querySelector('[data-react-fancy-icon]')).not.toBeNull();
+        click(button);
+        expect(actions.at(-1)).toEqual({ kind: 'storage.trash', workspaceId: 'ws1', itemId: 'dirty:upload.png' });
     });
 
     it('a refused item: the reason, and no button; a repo: no button', () => {
