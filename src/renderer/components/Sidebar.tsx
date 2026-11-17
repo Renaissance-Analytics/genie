@@ -104,6 +104,11 @@ export interface SidebarProps {
     onOpenAgentTerminal?: ((agentId: string) => void) | undefined;
     /** An agent row's folder button (Tynn #733): that workspace's Files in a NEW window, never a navigation. Absent = the button is disabled. */
     onOpenWorkspaceFiles?: ((workspaceId: string) => void) | undefined;
+    /**
+     * THE PERSON'S INBOX (Tynn #742): a row under the Dashboard that opens only the mail addressed to the person, with its
+     * unread count (`null` = not read yet: no count, never a 0). Absent = this window has no inbox to open.
+     */
+    personInbox?: { unread: number | null; open: boolean; onToggle: () => void } | undefined;
 }
 
 
