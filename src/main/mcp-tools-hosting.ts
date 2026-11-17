@@ -680,6 +680,7 @@ export const SERVICES_TOOL: BuiltinTool = declareBuiltinTool(
 export const SITES_TOOL: BuiltinTool = declareBuiltinTool(
     'sites',
     'Your workspace’s sites, served by Genie at https://<name>.gen — `<name>` one or more labels: `web`, or `web.acme` (Genie’s default is `<folder>.<workspace>`). GENIE runs them — the dev server (or the static / PHP server) and the front door — and gives every process the workspace’s service variables; never start a server with `docker`, or keep one running in a terminal, for this. '
+        + 'Sites are never served from sandbox/ (it holds throwaway work): build a site in repos/<name> and serve it from there. '
         + 'Actions: `list`. '
         + '`status` {site} — the site and each of its processes as Genie sees them now. '
         + '`detect` {repoPath?} — what Genie WOULD serve for a folder (mode, dev server, built directory, default name); nothing is started or written. '
