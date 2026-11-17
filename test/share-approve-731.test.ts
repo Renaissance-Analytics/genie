@@ -241,7 +241,7 @@ describe('the words and the wiring (Tynn #731)', () => {
 
     it('each guest request is notified once; a PIN pairing never is; what was answered is forgotten', () => {
         const seen = new Set<string>();
-        const pin: PairRequest = { ...guestRequest({ id: 'pair_pin' }), guest: undefined };
+        const { guest: _guest, ...pin } = guestRequest({ id: 'pair_pin' });
         expect(newGuestAsks(seen, [pin, guestRequest()]).map((r) => r.id)).toEqual(['pair_1']);
         expect(newGuestAsks(seen, [pin, guestRequest()])).toEqual([]);
         expect(newGuestAsks(seen, [])).toEqual([]);

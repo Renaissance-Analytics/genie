@@ -62,7 +62,8 @@ describe('PairPrompt for a share-link guest (Tynn #731)', () => {
     });
 
     it('CONTROL: a PIN request still reads "Pair this device?"', () => {
-        act(() => root.render(<PairPrompt requests={[request({ label: 'Pixel 7', from: '100.101.7.9', guest: undefined })]} onAnswer={async () => {}} now={NOW} />));
+        const { guest: _guest, ...pin } = request({ label: 'Pixel 7', from: '100.101.7.9' });
+        act(() => root.render(<PairPrompt requests={[pin]} onAnswer={async () => {}} now={NOW} />));
         expect(el.querySelector('h2')?.textContent).toBe('Pair this device?');
         expect(text()).toContain('It typed the PIN shown here.');
     });
