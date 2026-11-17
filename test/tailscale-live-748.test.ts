@@ -182,6 +182,21 @@ describe('Tailscale is noticed live, never only after a relaunch (Tynn #749)', (
         expect(r.onlines()).toBe(1);
     });
 
+    it('reads that find nothing new push nothing: a wait on an unchanged Tailscale costs the windows no snapshot every 3 s', async () => {
+        const r = rig({ states: ['needs-login'] });
+        await r.live.look();
+        await r.clock.advance(30_000);
+        expect(r.probes.count()).toBeGreaterThan(5);
+        expect(r.changes()).toBe(1);
+    });
+
+    it('CONTROL: a read that finds Tailscale changed pushes it', async () => {
+        const r = rig({ states: ['needs-login', 'running'] });
+        await r.live.refresh();
+        await r.live.refresh();
+        expect(r.changes()).toBe(2);
+    });
+
     it('CONTROL: Connect’s answer reaches the window unchanged', async () => {
         const answer: TailscaleUpResult = { ok: false, state: 'needs-login', authUrl: 'https://login.tailscale.com/a/y', message: 'Tailscale needs you to log in.' };
         const r = rig({ states: ['needs-login'], up: async () => answer });
