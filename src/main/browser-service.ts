@@ -48,12 +48,29 @@ function browserRemote(raw: unknown): BrowserRemote {
     return { key: r.key as string, title: r.title as string, port: r.port as number, ca: r.ca as string | null, hosts: r.hosts as string[] };
 }
 
+/** The Genie window that asked for the browser, in screen coordinates: where the browser window opens (Tynn #739). */
+export interface BrowserAnchor {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+}
+
+/** An anchor as it came over the link: kept only when it is a rectangle in numbers, else dropped (never a refusal). */
+export function browserAnchor(raw: unknown): BrowserAnchor | undefined {
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const r = raw as Partial<Record<keyof BrowserAnchor, unknown>>;
+    const n = [r.x, r.y, r.width, r.height];
+    if (!n.every((v) => typeof v === 'number' && Number.isFinite(v)) || (r.width as number) <= 0 || (r.height as number) <= 0) return undefined;
+    return { x: Math.round(r.x as number), y: Math.round(r.y as number), width: Math.round(r.width as number), height: Math.round(r.height as number) };
+}
+
 export type BrowserEvent =
     | { readonly kind: 'facts'; readonly facts: BrowserFacts }
     /** Whether a window holds the front door. With none, `.gen` pages cannot load until P5 moves the door to the host. */
     | { readonly kind: 'door'; readonly up: boolean }
     /** `url` null: the browser with its first site. */
-    | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation; readonly remote?: BrowserRemote }
+    | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation; readonly remote?: BrowserRemote; readonly anchor?: BrowserAnchor }
     /** Another workstation's door moved, or learned that host's CA: its window's session reads it live. */
     | { readonly kind: 'remoteVia'; readonly key: string; readonly port: number; readonly ca: string | null }
     | { readonly kind: 'pages'; readonly pages: readonly BrowserPage[] }
@@ -139,8 +156,11 @@ export class BrowserService {
             case 'open': {
                 if (this.#ports.unavailable !== undefined) throw new Error(this.#ports.unavailable);
                 if (typeof args[0] !== 'string' && args[0] !== null && args[0] !== undefined) throw new Error('an address to open has to be text');
-                const remote = args[2] === undefined ? undefined : browserRemote(args[2]);
-                const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const, ...(remote ? { remote } : {}) };
+                // `null` too: an absent remote before an anchor travels the link as null.
+                const remote = args[2] === undefined || args[2] === null ? undefined : browserRemote(args[2]);
+                // The Genie window that asked: where the browser window opens (Tynn #739).
+                const anchor = browserAnchor(args[3]);
+                const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const, ...(remote ? { remote } : {}), ...(anchor ? { anchor } : {}) };
                 if (this.#browser === null) {
                     this.#held.push(event);
                     if (this.#held.length > HELD_LIMIT) this.#held.shift();

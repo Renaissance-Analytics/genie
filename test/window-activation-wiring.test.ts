@@ -76,7 +76,7 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
         expect(browser).toMatch(/onceShowable\(window, process\.platform, \(\) => showWhenReady\(window, \{ activation, /);
         expect(browser).toMatch(/bringUp\(entry!\.win, \{ activation, /);
         // The caller says which: `open(address, activation, remote)` has no default to fall back on.
-        expect(browser).toMatch(/open\(address: string \| undefined, activation: Activation, remote\?: RemoteBrowsing\)/);
+        expect(browser).toMatch(/open\(address: string \| undefined, activation: Activation, remote\?: RemoteBrowsing, anchor\?: Rect\)/);
     });
 });
 
