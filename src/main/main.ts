@@ -1,6 +1,7 @@
 import { browserSiteLabels } from '../core/browser-sites.js';
 import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
+import { ConnectWatch, connectNotice } from '../core/connected-here.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
@@ -2575,6 +2576,22 @@ async function boot(): Promise<void> {
         pushFeatures();
         if (composed.pairing.requests().length === 0) return;
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
+    });
+    // SOMEONE CONNECTED TO THIS MACHINE (Tynn #726, consent): a desktop notice for each arrival, whether or not a window
+    // is open (the windows carry the banner while anyone stays). A Pilot over the relay is never asked to pair, so
+    // without this the person at this machine was never told.
+    const arrivals = new ConnectWatch();
+    composed.remote.onChange(() => {
+        const arrived = arrivals.next(composed.remote.connections());
+        if (arrived.length === 0) return;
+        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
+        if (!Notification.isSupported()) return;
+        for (const label of arrived) {
+            const notice = connectNotice(label, composed.remote.hostName);
+            const n = new Notification({ title: notice.title, body: notice.body });
+            n.on('click', () => { revealMainWindow('notification click: connected'); });
+            n.show();
+        }
     });
     // The Services and Hosting tabs redraw when an AGENT acts through its `services` / `sites` tools, not only when the
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
