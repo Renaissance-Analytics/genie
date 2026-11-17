@@ -60,13 +60,13 @@ describe('opening a site', () => {
     });
 
     it('+ shows the welcome page (Tynn #740), sites served or none, and opens no site on its own', () => {
-        const { browser, views, last } = harness();
+        const { browser, views } = harness();
         expect(browser.newTab()).toEqual({ ok: true });
         expect(views).toHaveLength(0);
+        expect(browser.snapshot().active).toBeNull();
         const empty = harness([]);
         expect(empty.browser.newTab()).toEqual({ ok: true });
         expect(empty.views).toHaveLength(0);
-        expect(last().active ?? null).toBeNull();
     });
 
     it('the sites are read at each open: a site served after the window opened can be visited', () => {

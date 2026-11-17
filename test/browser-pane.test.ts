@@ -32,13 +32,15 @@ function fakeView() {
 const routes = () => [{ host: 'tynn.gen', target: '127.0.0.1:4101' }, { host: 'site-b.gen', target: '127.0.0.1:4102' }];
 
 describe('navigating', () => {
-    it('a web URL loads as written and the view is shown', async () => {
+    it('a dev server on loopback loads as written and the view is shown; the open web never loads here (Tynn #741)', async () => {
         const f = fakeView();
         const pane = new BrowserPane(f.view, routes);
-        const r = await pane.show('https://example.com/docs');
-        expect(r).toEqual({ ok: true, url: 'https://example.com/docs' });
-        expect(f.loaded).toEqual(['https://example.com/docs']);
+        const r = await pane.show('http://localhost:5173/docs');
+        expect(r).toEqual({ ok: true, url: 'http://localhost:5173/docs' });
+        expect(f.loaded).toEqual(['http://localhost:5173/docs']);
         expect(f.visible()).toBe(true);
+        expect((await pane.show('https://example.com/docs')).ok).toBe(false);
+        expect(f.loaded).toEqual(['http://localhost:5173/docs']);
     });
 
     it('a .gen site loads at ITS OWN https origin — the URL loaded IS the address; its loopback target is never loaded', async () => {
