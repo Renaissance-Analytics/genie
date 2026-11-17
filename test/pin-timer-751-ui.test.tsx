@@ -59,7 +59,7 @@ describe('the time left', () => {
         vi.setSystemTime(T0 + 18_000);
         const el = mount(base, T0 + 18_000);
         expect(el.querySelector('[data-pin-left]')?.textContent).toContain('1:42');
-        act(() => { vi.setSystemTime(T0 + 19_000); vi.advanceTimersByTime(1_000); });
+        act(() => { vi.advanceTimersByTime(1_000); });
         expect(el.querySelector('[data-pin-left]')?.textContent).toContain('1:41');
     });
 });

@@ -138,7 +138,7 @@ describe('the PIN ends at its expiry, and says why', () => {
 
 describe('the ending reaches Settings', () => {
     it('genie-host’s status carries it, and the window’s replica reads it back', async () => {
-        const access = await RemoteAccessHost.open({ api, hostName: 'alphar', home: dir, transport: { onConnection: () => () => {} }, now: () => now, confirm: allowEveryPairing as never });
+        const access = await RemoteAccessHost.open({ api, hostName: 'alphar', home: dir, transport: { onConnection: () => () => {} }, now: () => now });
         access.issuePin();
         now += PIN_TTL_MS + 1;
         const status = access.status();
