@@ -72,14 +72,16 @@ export function PersonInboxView(p: PersonInboxViewProps) {
     const unread = p.items.filter((i) => i.unread).length;
     return (
         <div data-person-inbox="" className="flex h-full min-h-0 flex-col">
-            <Drawer.Header>
-                <div className="flex items-center gap-2">
-                    <Icon name="inbox" size="sm" />
-                    <span className="text-[14px] font-semibold">Inbox</span>
-                    <span className="ml-auto" />
-                    {unread > 0 ? <Button type="button" size="sm" variant="ghost" data-person-mark-all="" onClick={p.onMarkAllRead}>Mark all read</Button> : null}
-                </div>
-            </Drawer.Header>
+            {/* A plain header, not Drawer.Header: the list draws the same wherever it is put (its own tests, a drawer). */}
+            <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-4">
+                <Icon name="inbox" size="sm" />
+                <span className="text-[14px] font-semibold">Inbox</span>
+                <span className="ml-auto" />
+                {unread > 0 ? <Button type="button" size="sm" variant="ghost" data-person-mark-all="" onClick={p.onMarkAllRead}>Mark all read</Button> : null}
+                <Button type="button" size="xs" variant="ghost" labelClassName="contents" aria-label="Close" title="Close" data-person-close="" onClick={p.onClose} className="size-7 p-0">
+                    <Icon name="x" size="sm" />
+                </Button>
+            </div>
             {p.items.length === 0 ? (
                 <p data-person-empty="" className="px-4 py-6 text-center text-[13px] text-[var(--fg-4)]">Nothing for you yet.</p>
             ) : (
