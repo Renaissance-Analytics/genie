@@ -744,3 +744,36 @@ describe('sites — the folder, after links (genie#1354)', () => {
         expect(r.isError).toBe(false);
     });
 });
+
+describe('sites — never from sandbox/ (Tynn #738)', () => {
+    const game = async (under: string) => {
+        await mkdir(join(dir, 'example', under, 'game'), { recursive: true });
+        await writeFile(join(dir, 'example', under, 'game', 'index.html'), '<!doctype html><p>game</p>');
+    };
+
+    it('detect of sandbox/game: refused with the rule and where the site goes; nothing started, written or asked', async () => {
+        await game('sandbox');
+        const before = await readFile(join(dir, 'example', 'project.json'), 'utf8');
+        const r = await call('sites', 't-example', { action: 'detect', repoPath: 'sandbox/game' });
+        expect(r.isError).toBe(true);
+        expect(r.json.error).toMatch(/never served from sandbox\/[^]*repos\/game/);
+        expect(opened).toEqual([]);
+        expect(await readFile(join(dir, 'example', 'project.json'), 'utf8')).toBe(before);
+        expect(services.approvals.deckItems()).toEqual([]);
+    });
+
+    it('add of sandbox/game: the same plain refusal, never "add it as a repo"; nothing is created', async () => {
+        await game('sandbox');
+        const r = await call('sites', 't-example', { action: 'add', repoPath: 'sandbox/game', mode: 'static', root: '.' });
+        expect(r.isError).toBe(true);
+        expect(r.json.error).toMatch(/never served from sandbox\/[^]*repos\/game/);
+        expect(r.json.error).not.toMatch(/add it as a repo/);
+        expect(services.sites.list()).toEqual([]);
+    });
+
+    it('CONTROL: detect of repos/game reads it', async () => {
+        await game('repos');
+        const r = await call('sites', 't-example', { action: 'detect', repoPath: 'repos/game' });
+        expect(r.isError).toBe(false);
+    });
+});

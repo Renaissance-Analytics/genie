@@ -1,6 +1,7 @@
 import { OS_WORKSPACE } from '../core/os-agent.js';
 import { randomUUID } from 'node:crypto';
-import { resolve as resolvePath } from 'node:path';
+import { relative as relativePath, resolve as resolvePath } from 'node:path';
+import { sandboxRefusal } from '../core/envelope-sites.js';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
@@ -469,7 +470,10 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links — a link into another workspace
         // is refused — and the workspace itself is a folder a site may serve.
         try {
-            return confinePathSync(caller.workspacePath, given || fallback, 'nothing was read or done', { allowRoot: true });
+            const folder = confinePathSync(caller.workspacePath, given || fallback, 'nothing was read or done', { allowRoot: true });
+            // Never from sandbox/ (Tynn #738), said before anything is read there, for detect as for add and update.
+            const sandbox = sandboxRefusal(relativePath(caller.workspacePath, folder));
+            return sandbox === null ? folder : { refused: `${sandbox} Nothing was read or done.` };
         } catch (error) {
             if (error instanceof OutsideWorkspaceError) return { refused: `${given || fallback} is outside this workspace; a site serves a folder inside it, and nothing was read or done` };
             throw error;
@@ -676,6 +680,7 @@ export const SERVICES_TOOL: BuiltinTool = declareBuiltinTool(
 export const SITES_TOOL: BuiltinTool = declareBuiltinTool(
     'sites',
     'Your workspace’s sites, served by Genie at https://<name>.gen — `<name>` one or more labels: `web`, or `web.acme` (Genie’s default is `<folder>.<workspace>`). GENIE runs them — the dev server (or the static / PHP server) and the front door — and gives every process the workspace’s service variables; never start a server with `docker`, or keep one running in a terminal, for this. '
+        + 'Sites are never served from sandbox/ (it holds throwaway work): build a site in repos/<name> and serve it from there. '
         + 'Actions: `list`. '
         + '`status` {site} — the site and each of its processes as Genie sees them now. '
         + '`detect` {repoPath?} — what Genie WOULD serve for a folder (mode, dev server, built directory, default name); nothing is started or written. '
