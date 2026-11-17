@@ -82,7 +82,7 @@ describe('the remote section', () => {
 
         const snap = await featureSnapshot(services, state());
         expect(snap.remote!.devices.map((d) => d.label)).toEqual(['glenn’s phone']);
-        expect(snap.remote!.connections).toEqual([{ id: expect.any(String), label: 'glenn’s phone', isOwner: true, workspaceId: null, driving: false }]);
+        expect(snap.remote!.connections).toEqual([{ id: expect.any(String), label: 'glenn’s phone', isOwner: true, workspaceId: null, driving: false, mode: 'control' }]);
         const after = await handleFeatureAction(services, { kind: 'remote.revokeDevice', deviceId: snap.remote!.devices[0]!.id }, state());
         expect(after.remote!.devices).toEqual([]);
     });
