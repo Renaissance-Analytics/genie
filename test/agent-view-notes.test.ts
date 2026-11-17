@@ -15,9 +15,10 @@ const edit = (id: string, at: number, rawInput: unknown): TimedEvent => t(id, { 
 const NOW = 1_760_000_100_000;
 
 describe('tabNote', () => {
-    it('Files and Changes: where they open, naming the agent', () => {
-        expect(tabNote([], 'files', 'atlas', NOW)).toEqual({ kind: 'files', text: 'Files and Changes open the workspace file panel, filtered to atlas' });
-        expect(tabNote([], 'changes', 'atlas', NOW)).toEqual({ kind: 'files', text: 'Files and Changes open the workspace file panel, filtered to atlas' });
+    // REWRITTEN 2026-11-16: no agent Files tab (the owner), so only Changes says where it opens.
+    it('Changes: where it opens, naming the agent; no Files tab to note', () => {
+        expect(tabNote([], 'changes', 'atlas', NOW)).toEqual({ kind: 'files', text: 'Changes open the workspace file panel, filtered to atlas' });
+        expect(tabNote([], 'files', 'atlas', NOW)).not.toMatchObject({ kind: 'files' });
     });
 
     it('Stream, rows arriving: the count in the last two minutes and the span they cover', () => {

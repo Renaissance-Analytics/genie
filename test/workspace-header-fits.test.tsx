@@ -7,8 +7,9 @@ import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Wo
 /**
  * THE WORKSPACE HEADER FITS ITS COLUMN (beta.33 item 23: "why is any content at all behind the chat panel?").
  * REWRITTEN 2026-11-16 (the owner: "I don't need all of the repos listed in the workspace header"): no repo list at all,
- * only a LOCKED repo (a problem with a fix). The header is the agent view's: one line, the title cluster clips, the path
- * gives way first, the actions never wrap.
+ * only a LOCKED repo (a problem with a fix). The header is the agent view's: the title cluster clips on one line, the
+ * path gives way first; in a column too narrow for the actions (800px with the chat pinned: 72px) they move to a second
+ * line and wrap there, rather than spill (the layout sweep measures it on a real window).
  */
 const repo = (slug: string, lock: { heldSince: number; stale: boolean } | null = null) => ({ name: slug, slug, path: `repos/${slug}`, host: false, branch: 'main', lock });
 const twelve = ['app', 'web', 'api', 'docs', 'cli', 'infra', 'design', 'site', 'mobile', 'sdk', 'ops', 'data'].map((s) => repo(s));
@@ -35,10 +36,12 @@ describe('which repos the header shows', () => {
 });
 
 describe('the header, drawn', () => {
-    it('one line whose title cluster clips, so it never spills past its column', () => {
+    it('the title cluster clips; the header and its actions wrap rather than spill past the column', () => {
         const h = header(render(twelve));
-        expect(h).toMatch(/^<header data-view-header="" class="[^"]*\bh-11\b/);
-        expect(h).not.toMatch(/^<header data-view-header="" class="[^"]*\bflex-wrap\b/);
+        expect(h).toMatch(/^<header data-view-header="" class="[^"]*\bmin-h-11\b/);
+        expect(h).toMatch(/^<header data-view-header="" class="[^"]*\bflex-wrap\b/);
+        const acts = h.match(/<div data-header-actions=""[^>]*class="([^"]*)"/)?.[1]?.split(' ') ?? [];
+        for (const c of ['flex-wrap', 'max-w-full', 'min-w-0']) expect(acts).toContain(c);
         const cluster = h.match(/<div data-header-title=""[^>]*class="([^"]*)"/)?.[1]?.split(' ') ?? [];
         for (const c of ['min-w-0', 'flex-1', 'overflow-hidden']) expect(cluster).toContain(c);
     });

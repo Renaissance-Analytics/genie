@@ -397,19 +397,18 @@ if (typeof agentRow === 'string') {
     const h = JSON.parse(header || '{}');
     check(h.crumb && (h.chip ?? '').trim() === 'ACP' && Boolean(h.logo) &&/^(Turn \d+ · |Idle$|No turns yet$|Not started$|Broken · )/.test(h.pill ?? '') && h.chords && h.columns <= 1, '54. the Agent view header is the board\'s: breadcrumb, provider chip, pill in turns, chords, one right column', header);
 
-    // 51. EVERY TAB HAS A BODY (board audit, 2026-10-12: only Stream had one). Files mounts the workspace's one file
-    // panel for the agent's workspace; Changes lists this agent's changed files or says there are none. Then back to
-    // Stream, so the checks that follow see the view they expect.
-    await cdp.evaluate(`document.querySelector('[data-tab="files"]').click(); true`);
-    const filesTab = await waitFor(cdp, `Boolean(document.querySelector('[data-files-panel]'))`, 'the Files tab body');
+    // 51. EVERY TAB HAS A BODY (board audit, 2026-10-12: only Stream had one). Changes lists this agent's changed files or
+    // says there are none. No Files tab (the owner, 2026-11-16): files are the workspace's Files tab. Then back to Stream,
+    // so the checks that follow see the view they expect.
+    const noFilesTab = await cdp.evaluate(`document.querySelector('[data-tab="files"]') === null && document.querySelector('[data-tab="changes"]') !== null`);
     await cdp.evaluate(`document.querySelector('[data-tab="changes"]').click(); true`);
     const changesTab = await waitFor(cdp, `Boolean(document.querySelector('[data-agent-changes]'))`, 'the Changes tab body');
     const changesText = await cdp.evaluate(`(document.querySelector('[data-agent-changes]')?.textContent ?? '').slice(0, 60)`);
-    check(filesTab && changesTab, '51. the Files and Changes tabs have bodies (the file panel; this agent\'s changes or a sentence)', changesText);
-    // Each tab click is a NAVIGATION (the tab lives in the route), so the two clicks above are two history entries.
-    // Undo exactly those two, or check 24's "Back again returns to the Dashboard" lands on a tab instead — the first
-    // CI run of this check did precisely that. `go(-2)`, not a click on Stream, which would be a third entry.
-    await cdp.evaluate('history.go(-2); true');
+    check(noFilesTab && changesTab, '51. the Changes tab has a body (this agent\'s changes or a sentence); no Files tab of its own', changesText);
+    // Each tab click is a NAVIGATION (the tab lives in the route), so the click above is one history entry. Undo exactly
+    // that one, or check 24's "Back again returns to the Dashboard" lands on a tab instead — the first CI run of this
+    // check did precisely that. `go(-1)`, not a click on Stream, which would be another entry.
+    await cdp.evaluate('history.go(-1); true');
     await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('aria-selected') === 'true'`, 'the Stream tab again, by history');
 
     /*
@@ -1003,17 +1002,18 @@ if (!approvalEnabled) {
 
     // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings";
     // and 2026-10-19: the first tab is the WORKSPACE DASHBOARD, not an agent list (q_09d1f4a0). The route opens on it —
-    // the seeded agent in the header's strip, the dashboard's "Working in" section — and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +
+    // the seeded agent a tab (never a header pill since 2026-11-16), the dashboard's "Working in" section — and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +
     // makes a tab, the tab offers every panel kind, and a Terminals panel is ONE terminal (beta.33 item 9: the owner, "a
     // terminal panel is 1 panel for that terminal") — placing it starts the terminal; no manager, no + terminal inside.
     const home = await cdp.evaluate(`(() => ({
         dashboard: Boolean(document.querySelector('[data-workspace-dashboard]')),
         pills: document.querySelectorAll('[data-agent-pill]').length,
+        agentTabs: document.querySelectorAll('[data-workspace-tab^="agent:"]').length,
         tab: document.querySelector('[data-workspace-tab="home"]')?.textContent ?? null,
         settings: Boolean(document.querySelector('[data-workspace-settings]')),
         terminals: Boolean(document.querySelector('[data-terminal-tabs]')),
     }))()`);
-    check(home.dashboard && home.pills >= 1 && home.tab === 'Dashboard' && !home.settings && !home.terminals, '48. the workspace opens on its dashboard — the seeded agent in the strip, the Dashboard tab, no settings, no terminals', JSON.stringify(home));
+    check(home.dashboard && home.pills === 0 && home.agentTabs >= 1 && home.tab === 'Dashboard' && !home.settings && !home.terminals, '48. the workspace opens on its dashboard — the seeded agent a tab (no pills in the header, the owner 2026-11-16), the Dashboard tab, no settings, no terminals', JSON.stringify(home));
     await cdp.evaluate(`document.querySelector('[data-workspace-tab="add"]').click(); true`);
     const designer = await waitFor(cdp, `Boolean(document.querySelector('[data-designed-tab] [data-add-panel="terminal"]')) && !document.querySelector('[data-workspace-dashboard]')`, 'the new tab to open on its designer');
     check(designer, '49a. + makes a tab that opens on its panel designer (and puts the dashboard away)');

@@ -42,13 +42,14 @@ describe('the Workspace surface, before any terminal exists', () => {
         expect(html).toContain('data-workspace="tynn"');
     });
 
-    it('shows the workspace name and path in a 56px header, like the Dashboard group header', () => {
+    // REWRITTEN 2026-11-16 (the owner: "the different headers based on the view"): the one ViewHeader, the agent view's.
+    it('shows the workspace name and path in the one view header', () => {
         const { terminals } = fakeTerminals();
         const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
 
         expect(html).toContain('>tynn<');
         expect(html).toContain('C:\\_Projects\\tynn.ai');
-        expect(html).toContain('h-14');
+        expect(html).toMatch(/<header data-view-header=""[^>]*\bmin-h-11\b/);
     });
 
     it('offers a way to open a terminal — TWICE, in the strip and in the empty state', () => {
