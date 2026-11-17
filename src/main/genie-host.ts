@@ -45,6 +45,8 @@ import { providerBinary, realListModels, SessionHost } from './session-host.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
+import type { Headroom, ReadingStamp } from '../core/headroom.js';
+import { ReadingAttribution } from '../core/reading-attribution.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
 import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
 import { accountsView } from '../core/accounts-view.js';
@@ -1075,7 +1077,20 @@ async function main(): Promise<void> {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
     };
-    const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say);
+    // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
+    // readings are held, then shown under the account found; the first after a sign-in or a new active account keeps no earlier
+    // window. A new active account tells the window, which re-reads its account chips.
+    const readingAttribution = new ReadingAttribution();
+    let offerReadingNow: ((provider: string, room: Headroom, stamp: ReadingStamp) => void) | null = null;
+    let accountsChangedNow: (() => void) | null = null;
+    const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say, {
+        readStart: (provider) => { readingAttribution.readStart(provider, accounts.activeFor(provider).id); },
+        readEnd: (provider) => {
+            const ended = readingAttribution.readEnd(provider, accounts.activeFor(provider).id);
+            if (ended.held) offerReadingNow?.(provider, ended.held.room, ended.held.stamp);
+            if (ended.changed) accountsChangedNow?.();
+        },
+    });
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
         if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
@@ -1248,6 +1263,9 @@ async function main(): Promise<void> {
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     headroomFeedNow = headroomFeed;
+    // A reading as shown: to this board and to the window's (main's), stamped with whose it is (readingAttribution above).
+    const offerReading = (provider: string, room: Headroom, stamp?: ReadingStamp): void => { headroomFeed.offer(provider, room, stamp); engineHostOptions.onHeadroom(provider, room, stamp); };
+    offerReadingNow = offerReading;
     // CLAUDE DESIGN'S AUTHORIZATION, ONE FOR THE MACHINE (Tynn #480, core/design-auth.ts): Authorized only after the call
     // that needed it succeeds. Kept on disk; a change tells the windows to read the accounts again.
     const designAuthFile = join(home, 'claude-design-state.json');
@@ -1257,6 +1275,7 @@ async function main(): Promise<void> {
     );
     designAuthNow = designAuth;
     designAuth.onChange(() => { engine.callback({ name: 'toolSignal', signal: { kind: 'accounts-changed' } }); });
+    accountsChangedNow = () => { engine.callback({ name: 'toolSignal', signal: { kind: 'accounts-changed' } }); };
     // EACH ACCOUNT'S LAST READINGS SURVIVE A RESTART (Tynn #485): how an idle account's room is known. Read here, written as they change.
     const headroomBoardFile = join(home, 'headroom-board.json');
     headroomFeed.restore(((): unknown => { try { return JSON.parse(readFileSync(headroomBoardFile, 'utf8')); } catch { return []; } })());
@@ -1338,7 +1357,11 @@ async function main(): Promise<void> {
             },
         },
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
-        onHeadroom: (provider, room, stamp) => { headroomFeed.offer(provider, room, stamp); engineHostOptions.onHeadroom(provider, room, stamp); },
+        onHeadroom: (provider, room, stamp) => {
+            if (!stamp) { offerReading(provider, room, stamp); return; }
+            const shown = readingAttribution.stamp(provider, room, stamp);
+            if (shown) offerReading(provider, room, shown);
+        },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);
@@ -1430,6 +1453,7 @@ async function main(): Promise<void> {
             // ONE HOME PER PROVIDER (Tynn #753): who is signed in is READ (S4) and recorded first: the book's active account is the
             // one now signed in, usage counts against it, and a hold lifts if that account has headroom. No agent is stopped or
             // started again; only the agents the provider had signed out are brought back.
+            readingAttribution.signedIn(provider);
             void providerHealth.refresh(provider);
             void (isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve()).then(() => {
                 afterSignedIn(provider, {
@@ -1448,7 +1472,7 @@ async function main(): Promise<void> {
     switchFlow = new AccountSwitchFlow({
         login: switchLogin,
         active: (provider) => { const a = isAcpProvider(provider) ? accounts.activeFor(provider) : null; return a ? { id: a.id, label: a.label } : { id: '', label: provider }; },
-        readIdentity: (provider) => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
+        readIdentity: (provider) => { if (!isAcpProvider(provider)) return Promise.resolve(); readingAttribution.signedIn(provider); return accountIdentity.refreshProvider(provider); },
         emit: (outcome) => { engine.callback({ name: 'toolSignal', signal: accountSwitchSignal(outcome) }); },
     });
     const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));

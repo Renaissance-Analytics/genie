@@ -208,7 +208,11 @@ describe('the wiring', () => {
 
     it('genie-host keeps every reading itself, and still tells a connected window', () => {
         const host = src('src/main/genie-host.ts');
-        expect(host).toMatch(/onHeadroom: \(provider, room, stamp\) => \{ headroomFeed\.offer\(provider, room, stamp\); engineHostOptions\.onHeadroom\(provider, room, stamp\); \}/);
+        // Both, through one function: its own board and the window's, each with the stamp of whose reading it is (Tynn #753).
+        expect(host).toMatch(/const offerReading = \(provider: string, room: Headroom, stamp\?: ReadingStamp\): void => \{ headroomFeed\.offer\(provider, room, stamp\); engineHostOptions\.onHeadroom\(provider, room, stamp\); \};/);
+        // Every reading goes there: unstamped as it came, stamped once the attribution says whose it is (held meanwhile).
+        expect(host).toMatch(/onHeadroom: \(provider, room, stamp\) => \{\s*if \(!stamp\) \{ offerReading\(provider, room, stamp\); return; \}\s*const shown = readingAttribution\.stamp\(provider, room, stamp\);\s*if \(shown\) offerReading\(provider, room, shown\);\s*\}/);
+        expect(host).toMatch(/if \(ended\.held\) offerReadingNow\?\.\(provider, ended\.held\.room, ended\.held\.stamp\);/);
         expect(host).toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null/);
         expect(host).toMatch(/headroom: headroomFeed/);
     });

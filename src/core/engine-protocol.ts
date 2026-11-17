@@ -299,7 +299,7 @@ export type EngineCallback =
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
     | { readonly name: 'turnNumbered'; readonly agentId: string; readonly n: number }
     | { readonly name: 'action'; readonly agentId: string; readonly kind: string }
-    | { readonly name: 'headroom'; readonly provider: string; readonly headroom: unknown; readonly stamp?: { readonly accountId: string; readonly runId: string } }
+    | { readonly name: 'headroom'; readonly provider: string; readonly headroom: unknown; readonly stamp?: { readonly accountId: string; readonly runId: string; readonly fresh?: boolean } }
     | { readonly name: 'mcpServers'; readonly agentId: string; readonly reports: readonly unknown[] }
     | { readonly name: 'stopUnverified'; readonly agentId: string; readonly reason: string }
     // openFileForUser while no window was there (P3.1): shown when the next one connects.

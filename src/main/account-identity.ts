@@ -41,6 +41,12 @@ interface IdentityBook {
     activeFor(provider: AcpProvider): Pick<AccountRecord, 'provider'>;
 }
 
+/** Told when a read of who is signed in starts and when it has ended: the account a reading belongs to may change in between. */
+export interface IdentityReadHooks {
+    readStart(provider: AcpProvider): void;
+    readEnd(provider: AcpProvider): void;
+}
+
 /**
  * Reads WHO IS SIGNED IN to each provider's one home (Tynn #753): at host start, after a sign-in or a switch, and whenever the
  * provider's health is measured again. The signed-in account becomes the provider's active one, and usage is attributed to it
@@ -52,20 +58,28 @@ export class AccountIdentityReader {
     readonly #log: (line: string) => void;
     readonly #inFlight = new Map<AcpProvider, Promise<void>>();
 
-    constructor(book: IdentityBook, ports: () => ProviderHealthPorts, log: (line: string) => void = () => {}) {
-        this.#book = book; this.#ports = ports; this.#log = log;
+    readonly #hooks: IdentityReadHooks | undefined;
+
+    constructor(book: IdentityBook, ports: () => ProviderHealthPorts, log: (line: string) => void = () => {}, hooks?: IdentityReadHooks) {
+        this.#book = book; this.#ports = ports; this.#log = log; this.#hooks = hooks;
     }
 
     refreshProvider(provider: AcpProvider): Promise<void> {
         const running = this.#inFlight.get(provider);
         if (running) return running;
-        const run = this.#read(provider).finally(() => this.#inFlight.delete(provider));
+        // The hooks hear the start before anything is read and the end after the account found is recorded, failed or not.
+        this.#hook('readStart', provider);
+        const run = this.#read(provider).finally(() => { this.#inFlight.delete(provider); this.#hook('readEnd', provider); });
         this.#inFlight.set(provider, run);
         return run;
     }
 
     refreshAll(): Promise<void> {
         return Promise.all(ACP_PROVIDERS.map(provider => this.refreshProvider(provider))).then(() => undefined);
+    }
+
+    #hook(which: keyof IdentityReadHooks, provider: AcpProvider): void {
+        try { this.#hooks?.[which](provider); } catch (error) { this.#log(`[account-identity] ${provider}: ${which}: ${error instanceof Error ? error.message : String(error)}`); }
     }
 
     async #read(provider: AcpProvider): Promise<void> {

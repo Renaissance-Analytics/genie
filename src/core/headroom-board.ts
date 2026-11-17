@@ -51,7 +51,9 @@ export class HeadroomBoard {
      */
     offer(source: HeadroomSource, room: Headroom, nowMs: number, bufferMs: number, stamp?: ReadingStamp): boolean {
         const key = `${source.provider}:${source.accountId}`;
-        const last = this.#shown.get(key);
+        // A FRESH reading (the first after a sign-in or a new active account, core/reading-attribution.ts) keeps no earlier
+        // window and waits out no buffer: what was shown before may be another account's (Tynn #753).
+        const last = stamp?.fresh ? undefined : this.#shown.get(key);
         if (last && nowMs < last.at + bufferMs) return false;
         const named = new Set(room.windows.map((w) => w.window));
         const kept = last ? last.room.windows.filter((w) => !named.has(w.window)) : [];
