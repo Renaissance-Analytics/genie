@@ -157,7 +157,7 @@ describe('the picker — react-fancy FileBrowser over the host listing', () => {
         expect(() => fileEntriesOf({ ok: false, reason: '/w/fancy is outside what this link shares' })).toThrow('/w/fancy is outside what this link shares');
     });
 
-    it('Choose is offered once something is picked, naming it (CONTROL: nothing picked, nothing to choose)', () => {
+    it('Choose is offered once something is picked, naming it (CONTROL: nothing picked at `/` before the roots are read: it may be the drive list, so nothing to choose; Tynn #733)', () => {
         const base = { mode: 'directory' as const, listDir: async () => ({ ok: true as const, path: '/', entries: [] }), onPick: () => {}, onCancel: () => {} };
         const none = renderToStaticMarkup(<HostPathPickerForm {...base} />);
         expect(control(none, 'data-action="pick-path"')!.open).toMatch(/\sdisabled=""/);
