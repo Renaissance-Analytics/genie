@@ -5,7 +5,7 @@ import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnTabHost } from '../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../core/tynn-issues.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
-import type { AccountsSnapshot } from '../core/accounts-view.js';
+import { headerLimits, type AccountsSnapshot } from '../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { deviceExpiryAlert } from '../core/device-expiry.js';
 import { PairPrompt } from './components/PairPrompt.js';
@@ -779,8 +779,9 @@ export function Shell({
                     // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
                     onAddWorkspace={onAddWorkspace}
                     onOpenBrowser={onOpenBrowser}
-                    // A provider limit running low lights the Dashboard row, from any page (genie#1268).
-                    rateLimitAlert={rateLimitAlert(rateLimits ?? {}, limitsNow)}
+                    // A provider limit running low lights the Dashboard row, from any page (genie#1268): the ACTIVE account's
+                    // figures, never another account's (Tynn #753).
+                    rateLimitAlert={rateLimitAlert(headerLimits(rateLimits ?? {}, accounts), limitsNow)}
                     // A paired device close to expiring: a yellow ! on Settings, naming it and the date (q_8c07b142).
                     settingsAlert={deviceExpiryAlert(features.remote?.devices ?? [], Date.now())}
                     // THE AGENT LIST (Tynn #687): every agent of an awake workspace — a hibernated one's are ghosts — and a

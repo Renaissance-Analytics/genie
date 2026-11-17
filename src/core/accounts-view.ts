@@ -69,9 +69,25 @@ export function chooseWords(account: Pick<AccountView, 'email' | 'label'>): stri
     return account.email ?? account.label;
 }
 
-/** STUB (RED): the header's limits as the feed sent them. */
-export function headerLimits(limits: Readonly<Record<string, Headroom>>, _accounts: AccountsSnapshot | undefined): Readonly<Record<string, Headroom>> {
-    return limits;
+/**
+ * WHAT THE HEADER WARNS ABOUT, ONE PER PROVIDER (Tynn #753): a provider with accounts reads its ACTIVE account's figures only —
+ * never the provider's latest reading, which after a sign-in can be the previous account's. A window the active account has not
+ * reported, or one past its reset, carries no figure; an active account with none leaves the provider out (unknown). A
+ * provider without accounts keeps the feed's reading.
+ */
+export function headerLimits(limits: Readonly<Record<string, Headroom>>, accounts: AccountsSnapshot | undefined): Readonly<Record<string, Headroom>> {
+    const out: Record<string, Headroom> = {};
+    const providers = new Set([...Object.keys(limits), ...(accounts?.providers.map((v) => v.provider) ?? [])]);
+    for (const provider of providers) {
+        const view = accounts?.providers.find((v) => v.provider === provider);
+        if (!view) { if (limits[provider]) out[provider] = limits[provider]!; continue; }
+        const active = activeAccountOf(view);
+        const windows = (active?.windows ?? []).flatMap((w) => ('unknown' in w || w.refreshed ? [] : [{ window: w.window, usedPct: 100 - w.leftPct, leftPct: w.leftPct, resetsAtMs: w.resetsAtMs, over: w.over }]));
+        if (windows.length === 0) continue;
+        const first = windows[0]!;
+        out[provider] = { plan: active?.plan ?? null, window: first.window, leftPct: first.leftPct, resetsAtMs: first.resetsAtMs, over: first.over, windows };
+    }
+    return out;
 }
 
 /** The account the chip names: the provider's active one, or its first when the book names none. */

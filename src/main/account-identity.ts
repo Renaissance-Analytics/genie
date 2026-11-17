@@ -58,20 +58,28 @@ export class AccountIdentityReader {
     readonly #log: (line: string) => void;
     readonly #inFlight = new Map<AcpProvider, Promise<void>>();
 
-    constructor(book: IdentityBook, ports: () => ProviderHealthPorts, log: (line: string) => void = () => {}, _hooks?: IdentityReadHooks) {
-        this.#book = book; this.#ports = ports; this.#log = log;
+    readonly #hooks: IdentityReadHooks | undefined;
+
+    constructor(book: IdentityBook, ports: () => ProviderHealthPorts, log: (line: string) => void = () => {}, hooks?: IdentityReadHooks) {
+        this.#book = book; this.#ports = ports; this.#log = log; this.#hooks = hooks;
     }
 
     refreshProvider(provider: AcpProvider): Promise<void> {
         const running = this.#inFlight.get(provider);
         if (running) return running;
-        const run = this.#read(provider).finally(() => this.#inFlight.delete(provider));
+        // The hooks hear the start before anything is read and the end after the account found is recorded, failed or not.
+        this.#hook('readStart', provider);
+        const run = this.#read(provider).finally(() => { this.#inFlight.delete(provider); this.#hook('readEnd', provider); });
         this.#inFlight.set(provider, run);
         return run;
     }
 
     refreshAll(): Promise<void> {
         return Promise.all(ACP_PROVIDERS.map(provider => this.refreshProvider(provider))).then(() => undefined);
+    }
+
+    #hook(which: keyof IdentityReadHooks, provider: AcpProvider): void {
+        try { this.#hooks?.[which](provider); } catch (error) { this.#log(`[account-identity] ${provider}: ${which}: ${error instanceof Error ? error.message : String(error)}`); }
     }
 
     async #read(provider: AcpProvider): Promise<void> {
