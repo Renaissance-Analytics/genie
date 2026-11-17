@@ -130,7 +130,7 @@ export function budgetDecision(input: { dailyLimitUsd: number | null; spentToday
     if (input.spentTodayUsd < input.dailyLimitUsd) {
         return { kind: 'proceed', remainingUsd: Math.round((input.dailyLimitUsd - input.spentTodayUsd) * 100) / 100 };
     }
-    const reason = `${name} has spent $${input.spentTodayUsd.toFixed(2)} of today’s $${input.dailyLimitUsd.toFixed(2)} budget; the next turn is parked until you raise the budget or say go`;
+    const reason = `${name} has used $${input.spentTodayUsd.toFixed(2)} at API prices of today’s $${input.dailyLimitUsd.toFixed(2)} budget; the next turn is parked until you raise the budget or say go`;
     return input.turnInFlight
         ? { kind: 'finish-then-park', reason, spentUsd: input.spentTodayUsd, limitUsd: input.dailyLimitUsd }
         : { kind: 'park', reason, spentUsd: input.spentTodayUsd, limitUsd: input.dailyLimitUsd };

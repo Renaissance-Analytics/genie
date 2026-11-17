@@ -81,7 +81,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, onPlan = false, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput }: StreamProps) {
     countRender('Stream');
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
@@ -137,11 +137,13 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                       }
                     : row.event.kind === 'divider'
                       ? { summarisedTurns: summarised.get(row.id), agentName }
-                      : { agentName };
+                      : row.event.kind === 'usage'
+                        ? { agentName, onPlan }
+                        : { agentName };
             return rowCache.current!.row(row, context);
         });
         return { rows: mapped, behind: start };
-    }, [rows, lanes, diffs, agentName, at, following, extra]);
+    }, [rows, lanes, diffs, agentName, onPlan, at, following, extra]);
     const prepared = view.rows;
 
     // The live thought: the LAST row of the whole stream (not of the filtered view) while the turn runs.

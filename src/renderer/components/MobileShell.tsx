@@ -27,6 +27,7 @@ import { ProviderLogo } from './ProviderLogo.js';
 import { QuestionForm } from './QuestionForm.js';
 import { Stream } from './Stream.js';
 import { personLine } from '../../core/person-text.js';
+import { headroomOf } from '../../core/headroom.js';
 
 /**
  * THE PHONE'S SHELL — the owner, 2026-10-30: "The mobile ui only need the workspace selector, workstation dashboard, agent
@@ -406,6 +407,8 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     const agentsKey = chatAgentsKey(agentRows ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const thread = useMemo(() => (detail ? chatThreadFrom(detail, detail.agent.id, agentRows ?? [], Date.now) : null), [detail, agentsKey]);
+    // A plan's limit reading in the ledger: its costs read as API prices, in the plan (Tynn #747).
+    const detailOnPlan = useMemo(() => (detail ? headroomOf(detail.rows) !== null : false), [detail]);
     const followKey = chatFollowKey(thread?.agentId ?? null, thread?.messages ?? []);
     // Following the end of the chat, as the desktop's does: new words come into view unless you scrolled up to read.
     useLayoutEffect(() => {
@@ -520,6 +523,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                             selectedId={selectedRow}
                             onSelect={setSelectedRow}
                             agentName={detail.agent.name}
+                            onPlan={detailOnPlan}
                             live={detail.session?.running === true && detail.session.turnState === 'working'}
                             loadToolOutput={loadToolOutput}
                         />
