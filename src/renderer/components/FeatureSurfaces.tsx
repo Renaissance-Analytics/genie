@@ -2246,7 +2246,6 @@ function SavedPrompts({ raw, bindings, onAction }: { raw: boolean | string | und
                             aria-label={`Text of ${prompt.label}`}
                             defaultValue={prompt.text}
                             rows={2}
-                            spellCheck={false}
                             onBlur={(e) => { const text = e.target.value; if (text.trim() && text !== prompt.text) save(upsertPrompt(prompts, { ...prompt, text })); }}
                         />
                         {refused?.id === prompt.id ? <div data-prompt-refused={prompt.id} className="text-xs text-[var(--danger,#dc2626)]">{refused.reason}</div> : null}
@@ -2255,7 +2254,7 @@ function SavedPrompts({ raw, bindings, onAction }: { raw: boolean | string | und
                 {draft !== null ? (
                     <li data-prompt-draft className="flex flex-col gap-1.5 rounded-lg border border-dashed border-[var(--border-1)] p-3">
                         <Input aria-label="New prompt name" autoFocus placeholder="Name — what you search for" value={draft.label} onValueChange={(label) => setDraft({ ...draft, label })} />
-                        <Textarea aria-label="New prompt text" placeholder="What the agent is sent" rows={2} spellCheck={false} value={draft.text} onValueChange={(text) => setDraft({ ...draft, text })} />
+                        <Textarea aria-label="New prompt text" placeholder="What the agent is sent" rows={2} value={draft.text} onValueChange={(text) => setDraft({ ...draft, text })} />
                         <div className="flex gap-2">
                             <Button
                                 data-action="prompt-save"

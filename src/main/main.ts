@@ -249,6 +249,7 @@ import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nodeSaveGit, WORKSPACE_SAVE_UNAVAILABLE, workspaceSaveOps, type WorkspaceSaveOps } from './workspace-save-host.js';
 import { elementSourcesFor } from './workspace-save-sources.js';
+import { installContextMenu, type MenuWebContents } from './context-menu.js';
 import { nestGoverned } from '../core/rail-view.js';
 import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
 
@@ -3474,6 +3475,16 @@ applyLinuxPasswordStore({
     probe: () => probeOwnedBusNames(passwordStoreBusNames(), undefined, { activateSecretService: true }),
     remembered: () => readRememberedPasswordStore(genieRoot()),
     appendSwitch: (key, value) => app.commandLine.appendSwitch(key, value),
+});
+
+// THE RIGHT-CLICK MENU AND THE SPELL CHECKER (beta.64, context-menu.ts): every webContents Genie creates — each window,
+// the question window, the browser's pages — gets the menu (spelling suggestions, Cut / Copy / Paste / Select all), and
+// its session the spell checker in the person's languages. Before any window exists, so none is missed.
+app.on('web-contents-created', (_event, contents) => {
+    installContextMenu(contents as unknown as MenuWebContents, {
+        show: (template) => { const window = BrowserWindow.fromWebContents(contents); Menu.buildFromTemplate(template).popup(window ? { window } : {}); },
+        preferredLanguages: () => app.getPreferredSystemLanguages(),
+    });
 });
 
 // Only a `boot` launch boots — and only `boot()` creates the main window (core/quit-flag.ts `launchDecision`).
