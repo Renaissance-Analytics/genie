@@ -773,6 +773,9 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
     };
 }
 
+/** The phone was shown how to keep Genie (Tynn #752). */
+const KEPT_KEY = 'genie.mobile.kept';
+
 /** A photo for the chat: drawn at most 2048 px on its longest side as a JPEG — what a provider takes, a fraction of the bytes. */
 async function photoForChat(file: File): Promise<Attachment> {
     const raw = async (): Promise<Attachment> => ({ name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) });
@@ -799,9 +802,6 @@ async function photoForChat(file: File): Promise<Attachment> {
  * stream and the photos/files you attach, and a workspace's files to browse, preview and upload into. Every screen rides
  * the hash, so the phone's back button works. Answers take the Deck's own routing.
  */
-/** The phone was shown how to keep Genie (Tynn #752). */
-const KEPT_KEY = 'genie.mobile.kept';
-
 function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> }) {
     const remote = useMobileRemote(entry);
     // THE INSTALLABLE APP (genie#1346): the app-shell worker, where the page is a secure context (HTTPS on the tailnet name).
