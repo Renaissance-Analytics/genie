@@ -8,7 +8,7 @@ import { APP_KIND_ICON } from './InboxFlyout.js';
 import { readAppSender } from '../../core/app-inbox.js';
 
 /**
- * THE PERSON'S INBOX (Tynn #742; LiftPoint onboarding 2026-11-16 — mail for the client was lost among the agents' mail to
+ * THE PERSON'S INBOX (Tynn #742; client onboarding call 2026-11-16 — mail for the client was lost among the agents' mail to
  * each other). Only what is addressed to the person (core/person-inbox.ts), one click from the rail, newest first.
  *
  *  - an item opens IN PLACE: its whole text under its own row, which does not move (the row's header is the same open or

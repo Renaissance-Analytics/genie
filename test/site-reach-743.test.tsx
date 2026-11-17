@@ -20,7 +20,7 @@ import { hostingRig, tick, type HostingRig } from './helpers/hosting-rig.js';
 /**
  * TYNN #743: MAKING A SITE REACHABLE FROM THE PERSON'S NORMAL BROWSER TOOK NINE UNEXPLAINED STEPS.
  *
- * What the client met (LiftPoint onboarding, 2026-11-16): an agent's own to-do with steps in it (Open → Show all → Done),
+ * What the client met (client onboarding call, 2026-11-16): an agent's own to-do with steps in it (Open → Show all → Done),
  * then Genie's "Trust Genie's certificate…" row (Trust), then the OS prompt — and since #753 a second Genie row for the
  * hosts file, with its own prompt. Two rows for one goal, neither saying "open your site", the why never drawn, and
  * nothing opened the site in the normal browser once it was approved.

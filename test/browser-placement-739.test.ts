@@ -5,7 +5,7 @@ import { BrowserService, type BrowserEvent, type BrowserFacts } from '../src/mai
 import { runBrowserLink, type BrowserLinkClient } from '../src/main/browser-process-link.js';
 
 /**
- * THE GENIE BROWSER WINDOW OPENS IN VIEW (Tynn #739; LiftPoint onboarding, 2026-11-16, transcript 00:30:49). The owner,
+ * THE GENIE BROWSER WINDOW OPENS IN VIEW (Tynn #739; client onboarding call, 2026-11-16, transcript 00:30:49). The owner,
  * driving remotely, had to go looking for the browser; on the client's two-monitor laptop it "popped open on another
  * screen". It was made with no position (Electron centres a window on the PRIMARY display, whichever the person was
  * looking at) at a fixed 1200 x 820 (taller than a 1366 x 768 laptop's work area, so its bottom ran off the screen).

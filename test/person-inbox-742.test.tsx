@@ -13,7 +13,7 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 import { Shell } from '../src/renderer/Shell.js';
 
 /**
- * THE PERSON'S INBOX (Tynn #742). LiftPoint onboarding, 2026-11-16: the client was sent to the AgentInbox to read an item
+ * THE PERSON'S INBOX (Tynn #742). A client onboarding call, 2026-11-16: the client was sent to the AgentInbox to read an item
  * an agent had left for them, and it was lost among the agents' mail to each other. The owner: "There's going to be a user
  * inbox that's coming, on the left-hand side, so things that are specific to you [are separate]".
  *

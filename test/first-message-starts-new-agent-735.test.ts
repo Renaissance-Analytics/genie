@@ -12,7 +12,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { startForWork, startForYourMessage } from '../src/main/start-on-demand.js';
 
 /**
- * Tynn #735 (LiftPoint onboarding, beta.63): "a newly created agent seemed to need Start before its first work ran".
+ * Tynn #735 (client onboarding call, beta.63): "a newly created agent seemed to need Start before its first work ran".
  * The rule (q_04ce323c): opening an agent does not start it; its FIRST REAL WORK does. This is the whole road a
  * brand-new agent's first message takes, composed from the real parts as main.ts composes them — the composer's
  * `deliverChat`, the host API's `prompt`, the person's start-on-demand rule, the SessionHost, and Genie's deferred

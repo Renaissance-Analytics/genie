@@ -2,7 +2,7 @@ import type { ChatDraft } from './chat-drafts.js';
 import type { DraftHandle } from './plan-pill.js';
 
 /**
- * UNDO SEND (Tynn #745, LiftPoint onboarding 00:31: "Once it's sent, it's sent. I don't have a way to back out").
+ * UNDO SEND (Tynn #745, client onboarding call 00:31: "Once it's sent, it's sent. I don't have a way to back out").
  *
  * A Claude run takes a message mid-turn at once (`AgentSession.deliver` hands it to the provider, which reads it at its
  * next step), so once the host has it there is nothing left to take back. The window therefore holds a message typed to

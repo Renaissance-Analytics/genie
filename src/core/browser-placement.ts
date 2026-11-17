@@ -1,5 +1,5 @@
 /**
- * WHERE THE GENIE BROWSER WINDOW OPENS (Tynn #739; LiftPoint onboarding, 2026-11-16, transcript 00:30:49): the owner,
+ * WHERE THE GENIE BROWSER WINDOW OPENS (Tynn #739; client onboarding call, 2026-11-16, transcript 00:30:49): the owner,
  * driving remotely, had to go looking for it ("It doesn't like pop open automatically"), and on the client's laptop it
  * "popped open on another screen". Pure: Electron's displays are read by the caller (genie-browser-electron.ts).
  */

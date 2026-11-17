@@ -384,7 +384,7 @@ describe('a window connection that drops without a clean goodbye is LOST', () =>
  * seen and what that leaves (its exit handlers never ran: ended from outside, a native crash, or out of memory).
  */
 describe('a lost record names the window and its exit (Tynn issue #711)', () => {
-    const beat = { pid: 4242, rss: 700 * MB, route: 'genie://AlphaR/liftpoint/lift', heapUsed: 3_100 * MB, heapLimit: 4_096 * MB };
+    const beat = { pid: 4242, rss: 700 * MB, route: 'genie://AlphaR/client-app/lift', heapUsed: 3_100 * MB, heapLimit: 4_096 * MB };
 
     it('the window: its first beat, the route it showed, its heap against its limit, and its silence before the drop', () => {
         const r = rig({ alive: () => false });
@@ -400,7 +400,7 @@ describe('a lost record names the window and its exit (Tynn issue #711)', () => 
         expect(r.records[0]).toMatchObject({
             kind: 'lost',
             windowPid: 4242,
-            window: { pid: 4242, firstBeatAt: new Date(first).toISOString(), route: 'genie://AlphaR/liftpoint/lift', heapMb: 3100, heapLimitMb: 4096, silentMsBeforeDrop: droppedAt - lastBeat },
+            window: { pid: 4242, firstBeatAt: new Date(first).toISOString(), route: 'genie://AlphaR/client-app/lift', heapMb: 3100, heapLimitMb: 4096, silentMsBeforeDrop: droppedAt - lastBeat },
         });
     });
 
