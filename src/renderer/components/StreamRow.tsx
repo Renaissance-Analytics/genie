@@ -134,6 +134,7 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
                 </div>
             ) : (
             <span
+                title={row.title}
                 className={[
                     'min-w-0 flex-1',
                     row.mono ? 'font-mono text-xs' : '',

@@ -92,7 +92,7 @@ describe('switch provider — what the view says afterwards (Tynn story #380)', 
 describe('daily budgets — park the next turn and ask; never kill mid-turn', () => {
     it('under budget → proceed; at or over → PARK the next turn and ask, with the numbers', () => {
         expect(budgetDecision({ dailyLimitUsd: 5, spentTodayUsd: 3.2, turnInFlight: false, costReported: true })).toEqual({ kind: 'proceed', remainingUsd: 1.8 });
-        expect(budgetDecision({ dailyLimitUsd: 5, spentTodayUsd: 5, turnInFlight: false, costReported: true })).toEqual({ kind: 'park', reason: 'atlas has spent $5.00 of today’s $5.00 budget; the next turn is parked until you raise the budget or say go', spentUsd: 5, limitUsd: 5 });
+        expect(budgetDecision({ dailyLimitUsd: 5, spentTodayUsd: 5, turnInFlight: false, costReported: true })).toEqual({ kind: 'park', reason: 'atlas has used $5.00 at API prices of today’s $5.00 budget; the next turn is parked until you raise the budget or say go', spentUsd: 5, limitUsd: 5 });
     });
 
     it('a turn in flight is never killed: over budget mid-turn → `finish-then-park`', () => {

@@ -65,6 +65,7 @@ import { TurnCards } from './TurnCards.js';
 import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 import { turnCards } from '../../core/turn-cards.js';
 import type { StreamLayout } from '../../core/route.js';
+import { costWords } from '../../core/cost-words.js';
 
 /**
  * THE AGENT VIEW — the most important screen.
@@ -476,6 +477,9 @@ function AgentViewBody({
     const budget = budgetFor(session, cost, turns);
     // The provider's headroom (the board's rail row): the latest rate-limit reading in the ledger; none, no row.
     const headroom = useMemo(() => headroomOf(rows), [rows]);
+    // A plan's limit reading means a subscription plan: a cost figure is the API-price equivalent, in the plan (Tynn #747).
+    const onPlan = headroom !== null;
+    const sessionCost = budget && budget.cost !== null ? costWords(budget.cost, 'this session', onPlan) : null;
     // Whether this provider can ask at all (the driver's claim): said once in the rail when it cannot.
     const policy = approvalPolicySentence(agent.name, agent.provider, agent.raisesApprovals);
     // The persona path and the context note — both facts, both absent when unknown (§5).
@@ -1008,7 +1012,7 @@ function AgentViewBody({
 
                             <div className="min-h-0 flex-1">
                                 {cards ? (
-                                    <TurnCards cards={cards} rows={shownRows} agentName={agent.name} selectedId={selectedId} onSelect={onSelect} />
+                                    <TurnCards cards={cards} rows={shownRows} agentName={agent.name} onPlan={onPlan} selectedId={selectedId} onSelect={onSelect} />
                                 ) : (
                                 <Stream
                                     rows={shownRows}
@@ -1019,6 +1023,7 @@ function AgentViewBody({
                                     cursorId={cursorId}
                                     onSelect={onSelect}
                                     agentName={agent.name}
+                                    onPlan={onPlan}
                                     live={session?.running === true && session.turnState === 'working'}
                                     parked={parkedDivider(session, now ?? (() => Date.now()))}
                                     persona={persona}
@@ -1137,8 +1142,8 @@ function AgentViewBody({
                                             </span>
                                         ) : null}
                                         {/* No Cost at all when the provider reports none (codex): not `$0.00`, which claims the work was free. */}
-                                        {budget && budget.cost !== null ? (
-                                            <span data-rail-cost className="font-mono">{`$${budget.cost.toFixed(2)} this session · ${budget.turns} turns`}</span>
+                                        {budget && sessionCost ? (
+                                            <span data-rail-cost title={sessionCost.title} className="font-mono">{`${sessionCost.text} · ${budget.turns} turns`}</span>
                                         ) : budget ? (
                                             <span className="font-mono">{budget.turns} turns</span>
                                         ) : null}
