@@ -42,7 +42,7 @@ function pilot(preAuth: PreAuth) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let n = 0;
     return {
-        hello: async (auth: object = { kind: 'relay' }) => { pair.client.send(JSON.stringify({ kind: 'hello', auth, label: 'pilot' })); return next(); },
+        hello: async (auth: object = { kind: 'relay' }) => { pair.client.send(JSON.stringify({ kind: 'hello', auth, label: 'pilot' })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
         call: async (method: string, ...args: unknown[]) => { pair.client.send(JSON.stringify({ kind: 'call', id: ++n, method, args })); return next(); },
     };
 }
