@@ -224,7 +224,13 @@ function visitor(preAuth: PreAuth) {
     const pair = inMemoryPair();
     for (const cb of connections) cb({ ...pair.server, remoteAddress: `relay:${preAuth.label}`, preAuth });
     const heard: WireMessage[] = [];
-    pair.client.onMessage((text) => { const r = parseMessage(text); if (r.ok) heard.push(r.message); });
+    // A guest waits for Allow on this machine (Tynn #731): the person here allows it, as these cases are about what comes after.
+    pair.client.onMessage((text) => {
+        const r = parseMessage(text);
+        if (!r.ok) return;
+        heard.push(r.message);
+        if (r.message.kind === 'pairing') { const asked = access.status().pairRequests.at(-1); if (asked) access.answerPair(asked.id, true); }
+    });
     let n = 0;
     return {
         heard,

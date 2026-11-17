@@ -29,7 +29,7 @@ import {
     type WireMessage,
 } from '../core/remote-protocol.js';
 import type { Device, DeviceStore } from './remote-devices.js';
-import { pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
+import { guestRefusal, pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
 import { DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
 import type { BlobOpener } from '../core/local-blobs.js';
@@ -671,6 +671,22 @@ export class RemoteHost {
             // The transport proved who this is (a Tynn grant and its key); without that proof there is nothing to take.
             const pre = connection.socket.preAuth;
             if (!pre) return this.#refuse(connection, 'this connection did not come through the Tynn relay', true);
+            /*
+             * A GUEST WAITS AT THE DOOR (Tynn #731; the owner, 2026-11-17): anyone a share admitted — not the owner's own
+             * machine — gets in only when the person at THIS machine presses Allow. Until then `auth` stays null, so every
+             * call is refused ("say hello first"), no event is sent, and the connection is not listed. Deny, no answer
+             * within the prompt's life, or the guest hanging up ends it. The answer is given on this machine's own screen
+             * only: the request is stripped from what any remote connection sees, and answering it from one is refused.
+             */
+            if (!pre.isOwner) {
+                const asked = this.#confirm.ask({ label: pre.label, from: connection.socket.remoteAddress, guest: { workspace: this.#workspaceName(pre.workspaceId), readonly: pre.readonly } });
+                connection.pendingPair = asked.id;
+                this.#send(connection, { kind: 'pairing', host: this.#hostName, expiresAt: asked.expiresAt, guest: true });
+                const answer = await asked.answer.catch(() => 'deny' as const);
+                connection.pendingPair = null;
+                if (answer === 'gone' || !this.#connections.has(connection.id)) return;
+                if (answer !== 'allow') return this.#refuse(connection, guestRefusal(answer, this.#hostName), true);
+            }
             connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
         }
         if (!connection.local && message.profile === 'mobile') connection.profile = 'mobile';
@@ -1055,6 +1071,14 @@ export class RemoteHost {
         const next = nextWindow(state, rows);
         connection.watching.set(agentId, next.state);
         return { seq: next.state.seq, detail: rest, rows: next.rows };
+    }
+
+    /** What a guest's "Let it in?" names: its workspace's folder name (the id when the folder is not known), or null = the whole host. */
+    #workspaceName(workspaceId: string | null): string | null {
+        if (workspaceId === null) return null;
+        const folder = this.#api.workspacePaths?.()[workspaceId];
+        const name = folder ? folder.replace(/[/\\]+$/, '').split(/[/\\]/).pop() : undefined;
+        return name || workspaceId;
     }
 
     /** A guest holds a link to ONE workspace; anything outside it is refused by name. */

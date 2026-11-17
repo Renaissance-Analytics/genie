@@ -2,6 +2,7 @@ import { browserSiteLabels } from '../core/browser-sites.js';
 import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
+import { guestAskNotice, newGuestAsks } from '../core/pair-confirm.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
@@ -2577,10 +2578,22 @@ async function boot(): Promise<void> {
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
     // window not in front asks for attention (taskbar flash / urgency) WITHOUT taking focus (q_8c07b142).
 
+    // A share-link guest waiting to be let in (Tynn #731) also gets a desktop notification, once: the window may be hidden
+    // in the tray, and the ask lapses in two minutes.
+    const guestAsksSeen = new Set<string>();
     composed.pairing.onChange(() => {
         pushFeatures();
-        if (composed.pairing.requests().length === 0) return;
+        const requests = composed.pairing.requests();
+        const fresh = newGuestAsks(guestAsksSeen, requests);
+        if (requests.length === 0) return;
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
+        if (!Notification.isSupported()) return;
+        for (const request of fresh) {
+            const notice = guestAskNotice(request);
+            const n = new Notification({ title: notice.title, body: notice.body });
+            n.on('click', () => { revealMainWindow('notification click: guest asks'); });
+            n.show();
+        }
     });
     // SOMEONE CONNECTED TO THIS MACHINE (Tynn #726, consent): a desktop notice for each arrival, whether or not a window
     // is open (the windows carry the banner while anyone stays). A Pilot over the relay is never asked to pair, so

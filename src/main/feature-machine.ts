@@ -123,7 +123,13 @@ export async function applyMachineFeatureAction(services: MachineFeatureServices
             await services.remote.unlock();
             break;
         case 'remote.restart':
+            // Tailscale read again first: Restart after Tailscale connected must not restart against the old reading (Tynn #749).
+            await ports.tailscale?.refresh?.();
             await ports.remoteAccess?.restart();
+            break;
+        // Remote access opened, or its window focused: read Tailscale again, and keep reading while it is not connected (Tynn #749).
+        case 'tailscale.refresh':
+            await ports.tailscale?.refresh?.();
             break;
         case 'tailscale.up': {
             if (!ports.tailscale) throw new Error('Tailscale is not available here');

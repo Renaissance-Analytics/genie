@@ -31,11 +31,22 @@ export interface PairRequest {
     readonly replaces: { readonly id: string; readonly label: string } | null;
     readonly raisedAt: number;
     readonly expiresAt: number;
+    /**
+     * A SHARE-LINK GUEST asking to come in (Tynn #731), not a device pairing: what its grant would reach. Absent on a
+     * pairing. Nothing of the connection gets through until Allow.
+     */
+    readonly guest?: GuestReach;
+}
+
+/** What a guest's grant reaches: one workspace (its folder's name) or the whole machine (`null`), and whether read-only. */
+export interface GuestReach {
+    readonly workspace: string | null;
+    readonly readonly: boolean;
 }
 
 /** What the RemoteHost needs of the confirm: ask, and withdraw the question if the device leaves. */
 export interface PairConfirm {
-    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null }): { id: string; expiresAt: number; answer: Promise<PairAnswer> };
+    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null; guest?: GuestReach }): { id: string; expiresAt: number; answer: Promise<PairAnswer> };
     cancel(id: string): void;
 }
 
@@ -70,10 +81,10 @@ export class PairApprovals implements PairConfirm {
         this.#ttlMs = deps.ttlMs ?? PAIR_CONFIRM_MS;
     }
 
-    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null }): { id: string; expiresAt: number; answer: Promise<PairAnswer> } {
+    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null; guest?: GuestReach }): { id: string; expiresAt: number; answer: Promise<PairAnswer> } {
         const id = `pair_${++this.#next}_${this.#now().toString(36)}`;
         const raisedAt = this.#now();
-        const request: PairRequest = { id, label: input.label, from: input.from, host: this.#host, replaces: input.replaces ?? null, raisedAt, expiresAt: raisedAt + this.#ttlMs };
+        const request: PairRequest = { id, label: input.label, from: input.from, host: this.#host, replaces: input.replaces ?? null, raisedAt, expiresAt: raisedAt + this.#ttlMs, ...(input.guest ? { guest: input.guest } : {}) };
         let settle: (answer: PairAnswer) => void = () => {};
         const answer = new Promise<PairAnswer>((resolve) => { settle = resolve; });
         const stopTimer = this.#schedule(this.#ttlMs, () => this.#end(id, 'timeout'));
@@ -119,6 +130,27 @@ export class PairApprovals implements PairConfirm {
     #changed(): void {
         for (const l of this.#listeners) l();
     }
+}
+
+/** What the guest is told when it was not let in (Tynn #731). */
+export function guestRefusal(answer: Exclude<PairAnswer, 'allow'>, host: string): string {
+    if (answer === 'timeout') return `Nobody on ${host} answered within ${Math.round(PAIR_CONFIRM_MS / 60_000)} minutes. Try again.`;
+    return `${host} did not let you in.`;
+}
+
+/** The desktop notification for a guest asking to come in (Tynn #731): the window may be hidden, and the ask lapses. */
+export function guestAskNotice(request: PairRequest): { title: string; body: string } {
+    return { title: `${request.label} wants to connect to ${request.host}`, body: `Allow or Deny in Genie within ${Math.round((request.expiresAt - request.raisedAt) / 60_000)} minutes.` };
+}
+
+/** The guest requests not seen before, each once; `seen` keeps only what is still waiting (Tynn #731). */
+export function newGuestAsks(seen: Set<string>, requests: readonly PairRequest[]): PairRequest[] {
+    const guests = requests.filter((r) => r.guest !== undefined);
+    const live = new Set(guests.map((r) => r.id));
+    for (const id of [...seen]) if (!live.has(id)) seen.delete(id);
+    const fresh = guests.filter((r) => !seen.has(r.id));
+    for (const r of fresh) seen.add(r.id);
+    return fresh;
 }
 
 /** "1:42 left" — a prompt's countdown, never below zero. */
