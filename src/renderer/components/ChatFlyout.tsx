@@ -312,6 +312,12 @@ export interface ChatFlyoutProps {
      */
     drafts?: ChatDraftKeeper | 'loading' | undefined;
     /**
+     * WHAT THE OTHER PERSON IS TYPING (Tynn #730, core/typing-mirror.ts): this window's composer text goes out through
+     * `onTyping`; another window's on this chat's agent comes in as `peerTyping`, shown over the composer, never in it.
+     */
+    onTyping?: ((agentId: string, text: string) => void) | undefined;
+    peerTyping?: { label: string; text: string } | null | undefined;
+    /**
      * A pill to put into a chat's draft (genie#1280: a plan step's chat icon, core/plan-pill.ts). Applied once that chat's
      * composer is mounted, then reported through `onInserted`. Focuses the composer only when the insert says so (the
      * person's click); nothing else here moves focus (genie#1235).

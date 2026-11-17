@@ -473,6 +473,10 @@ export interface GenieBridge {
          * asks — never with the thread. Named by the message row's `attachmentRefs`.
          */
         attachment(agentId: string, attachmentId: string): Promise<AttachmentReply>;
+        /** What this window's composer on an agent holds now (Tynn #730): relayed to the other windows on it. Optional: an older host has none. */
+        typing?(agentId: string, text: string, source: string): Promise<unknown>;
+        /** What another window on an agent is typing (Tynn #730, core/typing-mirror.ts). */
+        onTyping?(listener: (event: import('../core/typing-mirror.js').TypingEvent) => void): () => void;
         /** Mode is wording for the agent (§6.2), not a permission boundary. */
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */

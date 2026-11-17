@@ -508,6 +508,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.attachment':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'attachment names an agent and an image' };
                 return deps.agentOps.attachment ? deps.agentOps.attachment(args[0], args[1]) : { ok: false, reason: 'this host keeps no images' };
+            // RED (Tynn #730): the relay is not built yet.
+            case 'agents.typing':
+                return { ok: false, reason: 'not implemented' };
             case 'workspaces.previewAdd':
                 // Preserve the retired native wizard's early refusals before any coercion or disk operation.
                 if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
