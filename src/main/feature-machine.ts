@@ -122,6 +122,9 @@ export async function applyMachineFeatureAction(services: MachineFeatureServices
         case 'remote.unlock':
             await services.remote.unlock();
             break;
+        case 'remote.setMode':
+            // RED STUB (Tynn #732): inert.
+            break;
         case 'remote.restart':
             // Tailscale read again first: Restart after Tailscale connected must not restart against the old reading (Tynn #749).
             await ports.tailscale?.refresh?.();

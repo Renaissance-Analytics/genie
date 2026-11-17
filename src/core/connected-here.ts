@@ -7,10 +7,15 @@
  * A person is a LABEL: a Pilot's Take Over window is a second connection under the same label, and is one person.
  */
 
+/** How a connected person may use this machine (Tynn #732): watch only, or full control. The person HERE picks it. */
+export type DriveMode = 'view' | 'control';
+
 export interface HereConnection {
     readonly id: string;
     readonly label: string;
     readonly driving: boolean;
+    /** Absent from an older host = full control. */
+    readonly mode?: DriveMode;
 }
 
 export interface ConnectedHere {
@@ -18,6 +23,8 @@ export interface ConnectedHere {
     readonly labels: readonly string[];
     /** Who holds the baton; `null` = nobody drives. */
     readonly driver: string | null;
+    /** Who may only watch (Tynn #732), in the order they appear. */
+    readonly viewOnly: readonly string[];
 }
 
 /** Who is connected now; `null` = nobody. */
@@ -25,7 +32,8 @@ export function connectedHere(connections: readonly HereConnection[]): Connected
     if (connections.length === 0) return null;
     const labels: string[] = [];
     for (const c of connections) if (!labels.includes(c.label)) labels.push(c.label);
-    return { labels, driver: connections.find((c) => c.driving)?.label ?? null };
+    // RED STUB (Tynn #732): nobody is view-only yet.
+    return { labels, driver: connections.find((c) => c.driving)?.label ?? null, viewOnly: [] };
 }
 
 function names(labels: readonly string[]): string {

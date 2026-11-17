@@ -30,6 +30,7 @@ import {
 } from '../core/remote-protocol.js';
 import type { Device, DeviceStore } from './remote-devices.js';
 import { guestRefusal, pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
+import type { DriveMode } from '../core/connected-here.js';
 import { DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
 import type { BlobOpener } from '../core/local-blobs.js';
@@ -453,11 +454,17 @@ export class RemoteHost {
         return true;
     }
 
-    connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }> {
+    connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean; mode: DriveMode }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
             .filter((c) => c.auth !== null && !c.local)
-            .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver }));
+            // RED STUB (Tynn #732): everyone is in full control.
+            .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver, mode: 'control' as const }));
+    }
+
+    /** Watch only, or full control, for one person (Tynn #732), set by the person at THIS machine. RED STUB: inert. */
+    setMode(_label: string, _mode: DriveMode): void {
+        return;
     }
 
     /** The owner's kill-switch: every write refused for everyone until unlocked; reads still answer. */

@@ -132,6 +132,8 @@ export interface RemoteBadge {
     readonly driving: boolean;
     readonly locked: boolean;
     readonly lostTo?: string | null | undefined;
+    /** The person at the host set this window to watch only (Tynn #732): said, and Take control is not offered. */
+    readonly viewOnly?: boolean | undefined;
     readonly onTakeControl?: (() => void) | undefined;
     /** End this window's link to the host (Tynn #640: it used to be on Settings → Remote access). Absent = no button. */
     readonly onDisconnect?: (() => void) | undefined;

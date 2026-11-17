@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
+import type { DriveMode } from '../core/connected-here.js';
 import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
@@ -162,6 +163,11 @@ export class RemoteAccessHost {
 
     unlock(): void {
         this.remote.unlock();
+    }
+
+    /** Tynn #732. RED STUB: inert. */
+    setMode(_label: string, _mode: DriveMode): void {
+        return;
     }
 
     answerPair(id: string, allow: boolean): { ok: true } | { ok: false; reason: string } {
