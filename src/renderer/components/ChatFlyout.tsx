@@ -215,6 +215,8 @@ export function ChatDeliveryRow(_props: { m: ChatThreadMessage; onOpenMail?: ((m
 }
 
 export interface ChatFlyoutProps {
+    /** The chat's agent is mid-turn (Tynn #745): a message typed now waits out the undo window (core/send-grace.ts). */
+    busy?: boolean | undefined;
     /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). */
     onChooseProviderProgram?: ((provider: string) => Promise<ProviderProgramChosen>) | undefined;
     thread: ChatThread | null;
