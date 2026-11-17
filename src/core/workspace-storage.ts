@@ -8,11 +8,18 @@
  * walks the disk and moves things, is main/workspace-storage-host.ts.
  */
 
-export type StorageCategory = 'repos' | 'worktrees' | 'ci-artifacts' | 'chat-files' | 'trash';
-export const STORAGE_CATEGORIES: readonly StorageCategory[] = ['repos', 'worktrees', 'ci-artifacts', 'chat-files', 'trash'];
+export type StorageCategory = 'repos' | 'worktrees' | 'ci-artifacts' | 'chat-files' | 'dirty' | 'trash';
+export const STORAGE_CATEGORIES: readonly StorageCategory[] = ['repos', 'worktrees', 'ci-artifacts', 'chat-files', 'dirty', 'trash'];
 export const CATEGORY_LABEL: Readonly<Record<StorageCategory, string>> = {
-    repos: 'Repositories', worktrees: 'Worktrees', 'ci-artifacts': 'CI and test artifacts', 'chat-files': 'Files shared in chat', trash: '.trash',
+    repos: 'Repositories', worktrees: 'Worktrees', 'ci-artifacts': 'CI and test artifacts', 'chat-files': 'Files shared in chat', dirty: '.ai/_dirty', trash: '.trash',
 };
+
+/**
+ * Where files dropped into a workspace land (Tynn #819; every envelope has one, #818). Each entry directly in it is a
+ * `dirty` item, `dirty:<name>`: the person's own files, offered for .trash, never preselected by the one-click clean-up,
+ * and never also counted as a CI artifact.
+ */
+export const DIRTY_REL = '.ai/_dirty';
 
 /**
  * CI and test output folders, by name: what Genie's own jobs and the common runners leave behind (`ci-out` and `smoke-out`
@@ -96,7 +103,7 @@ export function worktreeState(w: { locked: boolean; dirty: boolean; unpushed: nu
 /**
  * THE ONE-CLICK CLEAN-UP: which items to preselect. Only what is safe and what regenerates: a worktree that is clean AND
  * merged into the line and quiet for an hour (an agent may be working in it), and CI/test artifacts untouched for a day. Never an unmerged worktree, never a chat file,
- * never a repository, never anything that has a refusal.
+ * never a file in .ai/_dirty (the person's, however old), never a repository, never anything that has a refusal.
  */
 export function suggestedCleanup(items: readonly StorageItem[], now: number): string[] {
     return items.filter((i) => i.reclaimable && i.refusal === null && (

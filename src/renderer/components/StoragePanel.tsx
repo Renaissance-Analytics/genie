@@ -11,7 +11,7 @@ import type { FeatureAction } from '../features.js';
  * reclaimed, the reason in words on what may not; what is in .trash, where each thing came from, and Restore; and Empty
  * trash, which deletes for good, only after a confirmation that names every entry and the total.
  */
-const ICON: Readonly<Record<StorageCategory, string>> = { repos: 'git-branch', worktrees: 'folder', 'ci-artifacts': 'package', 'chat-files': 'image', trash: 'trash-2' };
+const ICON: Readonly<Record<StorageCategory, string>> = { repos: 'git-branch', worktrees: 'folder', 'ci-artifacts': 'package', 'chat-files': 'image', dirty: 'inbox', trash: 'trash-2' };
 
 export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: string; view: StorageView | null; onAction: (action: FeatureAction) => void }) {
     const [confirming, setConfirming] = useState(false);

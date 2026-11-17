@@ -3,7 +3,7 @@ import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm, unlink
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveProgram } from '../core/program-lookup.js';
 import {
-    ARTIFACT_WALK_SKIP, STORAGE_CATEGORIES, approvalMatches, isArtifactPath, suggestedCleanup, mergedIntoLine, parseWorktreeList, worktreeRefusal, worktreeState,
+    ARTIFACT_WALK_SKIP, DIRTY_REL, STORAGE_CATEGORIES, approvalMatches, isArtifactPath, suggestedCleanup, mergedIntoLine, parseWorktreeList, worktreeRefusal, worktreeState,
     type StorageCategory, type StorageItem, type StorageReport, type TrashApproval, type TrashEntry, type TrashOrigin, type WorktreeState,
 } from '../core/workspace-storage.js';
 import { sizeOf as defaultSizeOf, type DirSize } from './dir-size.js';
@@ -20,6 +20,9 @@ import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
  *    some of which agents made elsewhere (C:/_Projects/_wt/...), and those are shown and may be moved into .trash by git.
  *    Every other path is resolved under the workspace's real path; an id with `..`, a `.trash` that is a link, a worktree
  *    that is itself a link, are refused. Measuring never follows a link (main/dir-size.ts).
+ *  - `.ai/_dirty` (Tynn #819) is used only when `.ai` and `.ai/_dirty` are real folders of the workspace; an entry in it
+ *    that is a link is not listed. A Restore never goes through a link on its way back: its folder must still be the
+ *    workspace's own.
  *  - The window sends ids, never paths, and every id is re-validated against a fresh reading before anything moves.
  *  - A worktree goes to .trash only when git says it is safe: not the main checkout, not locked, no uncommitted changes,
  *    no commit that no remote has. It is moved BY GIT (`git worktree move`) and locked there, so git still knows it and
@@ -195,6 +198,8 @@ export class WorkspaceStorage {
                 if (e.isSymbolicLink() || !e.isDirectory() || ARTIFACT_WALK_SKIP.includes(e.name)) continue;
                 const full = join(dir, e.name);
                 const rel = inside(rootReal, full);
+                // .ai/_dirty's entries are the person's, measured as `dirty`: never counted twice.
+                if (rel === DIRTY_REL) continue;
                 if (rel !== null && isArtifactPath(rel)) { found.push(rel); continue; }
                 if (depth + 1 < ARTIFACT_DEPTH) queue.push({ dir: full, depth: depth + 1 });
             }
@@ -217,6 +222,34 @@ export class WorkspaceStorage {
         }
     }
 
+    /**
+     * `.ai/_dirty` as the workspace's own folder, or `null`: absent, or `.ai` or `.ai/_dirty` a link or not a folder, or its
+     * real path not where it should be. Never created here.
+     */
+    async #dirtyDir(rootReal: string): Promise<string | null> {
+        const segments = DIRTY_REL.split('/');
+        for (let i = 1; i <= segments.length; i += 1) {
+            try {
+                const s = await lstat(join(rootReal, ...segments.slice(0, i)));
+                if (s.isSymbolicLink() || !s.isDirectory()) return null;
+            } catch { return null; }
+        }
+        const dir = join(rootReal, ...segments);
+        try { return inside(rootReal, await realpath(dir)) === DIRTY_REL ? dir : null; } catch { return null; }
+    }
+
+    /** The entries directly in `.ai/_dirty`: files and folders, never a link, never its `.gitkeep`; by name. */
+    async #dirtyEntries(rootReal: string): Promise<Array<{ name: string; abs: string }>> {
+        const dir = await this.#dirtyDir(rootReal);
+        if (dir === null) return [];
+        let list;
+        try { list = await readdir(dir, { withFileTypes: true }); } catch { return []; }
+        return list
+            .filter((e) => e.name !== '.gitkeep' && !e.isSymbolicLink() && (e.isFile() || e.isDirectory()))
+            .map((e) => ({ name: e.name, abs: join(dir, e.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     /** What .trash holds: Genie's entries with their origin, and anything else by its name. */
     async listTrash(root: string): Promise<TrashEntry[]> {
         const rootReal = await realpath(root);
@@ -235,7 +268,7 @@ export class WorkspaceStorage {
     /** The workspace's disk, by category, with what may be reclaimed and why not. */
     async measure(root: string, input: { chatFiles: readonly ChatFile[] }): Promise<StorageReport> {
         const rootReal = await realpath(root);
-        const [repos, worktrees, artifacts, trash] = await Promise.all([this.#repos(rootReal), this.#worktrees(rootReal), this.#artifacts(rootReal), this.listTrash(rootReal)]);
+        const [repos, worktrees, artifacts, dirty, trash] = await Promise.all([this.#repos(rootReal), this.#worktrees(rootReal), this.#artifacts(rootReal), this.#dirtyEntries(rootReal), this.listTrash(rootReal)]);
         let truncated = false;
         const sized = async (abs: string) => { const s = await this.#sizeOf(abs); if (s.truncated) truncated = true; return s; };
         const items: StorageItem[] = [];
@@ -256,6 +289,11 @@ export class WorkspaceStorage {
             const file = basename(c.path);
             items.push({ id: `chat-files:${c.agentId}/${c.attachmentId}`, category: 'chat-files', label: `${c.agentName}: ${c.attachmentId} (${file})`, rel: `${c.agentId}/${file}`, bytes: c.bytes, files: 1, truncated: false, reclaimable: true, refusal: null });
         }
+        items.push(...await pooled(dirty, WALKS_AT_ONCE, async (d) => {
+            const s = await sized(d.abs);
+            const rel = `${DIRTY_REL}/${d.name}`;
+            return { id: `dirty:${d.name}`, category: 'dirty' as const, label: rel, rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: true, refusal: null };
+        }));
         const totals = Object.fromEntries(STORAGE_CATEGORIES.map((k) => [k, 0])) as Record<StorageCategory, number>;
         for (const i of items) totals[i.category] += i.bytes;
         totals.trash = trash.reduce((n, t) => n + t.bytes, 0);
@@ -276,6 +314,7 @@ export class WorkspaceStorage {
             const notArtifact = { ok: false as const, reason: 'That is not a CI or test artifact Genie found in this workspace.' };
             const segments = rest.split('/');
             if (rest === '' || isAbsolute(rest) || segments.some((s) => s === '' || s === '.' || s === '..' || ARTIFACT_WALK_SKIP.includes(s)) || !isArtifactPath(rest)) return notArtifact;
+            if (rest === DIRTY_REL || rest.startsWith(`${DIRTY_REL}/`)) return notArtifact;
             const abs = join(rootReal, ...segments);
             try {
                 const s = await lstat(abs);
@@ -297,6 +336,12 @@ export class WorkspaceStorage {
                     if (!locked.ok) throw new Error(`git moved the worktree but did not lock it: ${locked.error}`);
                 },
             };
+        } else if (category === 'dirty') {
+            // One name directly in .ai/_dirty, as a fresh listing has it now: never a path, a link, `..` or its .gitkeep.
+            const d = (await this.#dirtyEntries(rootReal)).find((e) => e.name === rest);
+            if (!d) return { ok: false, reason: 'That is not a file or folder in this workspace’s .ai/_dirty.' };
+            const rel = `${DIRTY_REL}/${d.name}`;
+            plan = { origin: { kind: 'path', category: 'dirty', rel }, label: rel, run: (payload) => rename(d.abs, payload) };
         } else if (category === 'chat-files') {
             const c = input.chatFiles.find((f) => `${f.agentId}/${f.attachmentId}` === rest);
             if (!c) return { ok: false, reason: 'That is not a file shared in this workspace’s chat.' };
@@ -354,8 +399,13 @@ export class WorkspaceStorage {
             if (o.kind === 'path') {
                 const target = join(rootReal, ...o.rel.split('/'));
                 if (inside(rootReal, target) !== o.rel) return cannot;
+                // Never back THROUGH a link (Tynn #819: a .ai/_dirty that became a link out of the workspace): each folder on
+                // the way that exists must be a real folder, and the one it lands in must be the workspace's own.
+                const parentRel = o.rel.split('/').slice(0, -1).join('/');
+                if (!(await realFoldersOnTheWay(rootReal, parentRel))) return cannot;
                 if (await exists(target)) return taken(o.rel);
                 await mkdir(dirname(target), { recursive: true });
+                if (parentRel !== '' && inside(rootReal, await realpath(dirname(target))) !== parentRel) return cannot;
                 await rename(payload, target);
             } else if (o.kind === 'worktree') {
                 // A worktree that was outside the workspace goes back to its absolute place; one inside, to its relative one.
@@ -416,6 +466,17 @@ export class WorkspaceStorage {
         for (const repo of repos) await git(repo, ['worktree', 'prune']);
         return { ok: true, deleted: trash.length, bytes: approval.bytes };
     }
+}
+
+/** Each folder of `rel` under the workspace that exists is a real folder, not a link or a file; the missing rest is made later. */
+async function realFoldersOnTheWay(rootReal: string, rel: string): Promise<boolean> {
+    const segments = rel === '' ? [] : rel.split('/');
+    for (let i = 1; i <= segments.length; i += 1) {
+        let s;
+        try { s = await lstat(join(rootReal, ...segments.slice(0, i))); } catch { return true; }
+        if (s.isSymbolicLink() || !s.isDirectory()) return false;
+    }
+    return true;
 }
 
 async function readRecord(entry: string): Promise<{ movedAt: number; origin: TrashOrigin } | null> {
