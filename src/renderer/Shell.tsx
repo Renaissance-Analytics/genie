@@ -70,6 +70,7 @@ import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { ConnectedHereBanner } from './components/ConnectedHereBanner.js';
 import { SafeModeBanner } from './components/SafeModeBanner.js';
 import { HangNoticeBar } from './components/HangNoticeBar.js';
 import { RendererNoticeBar } from './components/RendererNoticeBar.js';
@@ -716,6 +717,9 @@ export function Shell({
                     <button type="button" data-action="dismiss-dock-notice" aria-label="Dismiss" onClick={() => onDismissDockNotice?.()} className="text-[var(--fg-4)] hover:text-[var(--fg-2)]"><Icon name="x" size="xs" /></button>
                 </div>
             ) : null}
+
+            {/* SOMEONE IS CONNECTED TO THIS MACHINE (Tynn #726): on the machine being reached, never on a window driving another. */}
+            {remote ? null : <ConnectedHereBanner remote={features.remote} onAction={onFeature} onNavigate={onNavigate} />}
 
             {/* SAFE MODE (Tynn #386): after an unclean end nothing was started; each thing that ran has its own Start. */}
             {scoped ? null : <>
