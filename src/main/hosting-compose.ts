@@ -9,13 +9,15 @@ import { join } from 'node:path';
 import { asleepOnlyEngine, enginesToRelease, enginesToResume } from '../core/hibernate-engines.js';
 import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
 import { PortAllocator } from '../core/port-allocator.js';
+import { commandWord } from '../core/php-versions.js';
 import type { ServiceInstance } from '../core/services.js';
 import { websocketRoutes } from './websocket-front-door.js';
 import { mailpitRoutes } from '../core/mailpit-name.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, type FrontDoorTls } from '../core/front-door-caddy.js';
-import { trustDeckItem, trustInstallStep } from '../core/gen-ca.js';
+import { trustInstallStep } from '../core/gen-ca.js';
+import { reachDeckItems } from '../core/site-reach.js';
 import { GenCa, osTrustStore, type CaSource, type CertIssuer, type TrustStorePort } from './gen-ca.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import type { AppEnvSource } from './app-inbox-service.js';
@@ -223,7 +225,9 @@ interface FrontDoorController {
     retry(): Promise<FrontDoorStatus>;
     trust(): Promise<{ ok: true } | { ok: false; reason: string }>;
     deferTrust(): void;
-    /** Genie's own Deck items about the front door: the one Trust ask. */
+    /** The person's Not now on the hosts-file ask (Tynn #753). */
+    deferHosts(): void;
+    /** Genie's own Deck items about the front door: the Trust ask and the hosts-file ask. */
     deckItems(): DeckItem[];
     /** Shutdown: nothing more is started or synced. */
     close(): void;
@@ -285,6 +289,7 @@ function startExternalFrontDoor(input: {
         retry: async () => ({ running: false, reason }),
         trust: async () => ({ ok: false, reason }),
         deferTrust: () => {},
+        deferHosts: () => {},
         deckItems: () => [],
         close: () => {},
     });
@@ -370,6 +375,7 @@ function startExternalFrontDoor(input: {
         debounceMs: input.hostsDebounceMs,
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         onResult: notify,
+        now: input.now,
     });
     render();
     sites.onChange(() => { render(); hosts.changed(); });
@@ -384,7 +390,8 @@ function startExternalFrontDoor(input: {
         id: FRONT_DOOR_ID,
         workspaceId: '_genie',
         name: 'Genie front door (Caddy)',
-        command: `${caddyBin} run --config ${caddyfile} --adapter caddyfile --watch`,
+        // Each path ONE word for the pty's parser (Tynn #729): a profile with a space split the binary or the Caddyfile.
+        command: `${commandWord(caddyBin)} run --config ${commandWord(caddyfile)} --adapter caddyfile --watch`,
         cwd: caddyDir,
         env: { XDG_DATA_HOME: join(caddyDir, 'data'), XDG_CONFIG_HOME: join(caddyDir, 'config') },
         restart: 'always' as const,
@@ -491,12 +498,16 @@ function startExternalFrontDoor(input: {
             deferredFor = ca.thumbprint;
             notify();
         },
+        deferHosts: () => hosts.defer(),
         deckItems: () => {
+            // ONE row for the normal browser (Tynn #743): "Open <name> in your browser", carrying the certificate and the
+            // hosts write a site change left waiting (Tynn #753: never a prompt of its own); #753's own ask for a removal.
             const all = sites.list();
-            if (trusted !== false || all.length === 0) return [];
-            askedAt ??= input.now();
-            const item = trustDeckItem({ trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt });
-            return item ? [item] : [];
+            if (trusted === false && all.length > 0) askedAt ??= input.now();
+            return reachDeckItems({
+                trust: { trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt ?? 0 },
+                hosts: hosts.ask(),
+            });
         },
         close: () => {
             closed = true;
@@ -852,6 +863,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         retryFrontDoor: frontDoorCtl.retry,
         trustCertificate: frontDoorCtl.trust,
         deferTrustCertificate: frontDoorCtl.deferTrust,
+        deferHosts: frontDoorCtl.deferHosts,
         routes,
         configuredHosts,
         trustDeckItems: () => frontDoorCtl.deckItems(),

@@ -14,7 +14,8 @@ describe('main wires the site row', () => {
     it('ONE opener: defined once, it brings the Genie browser WINDOW up on the URL (beta.35 item 36) — not the old pane', () => {
         expect(main.match(/const openInBrowserFor = \(activation: Activation\): OpenInBrowser => async \(url\) =>/g) ?? []).toHaveLength(1);
         const body = main.slice(main.indexOf('const openInBrowserFor = '), main.indexOf('const openInBrowserFor = ') + 600);
-        expect(body).toMatch(/await openLocalBrowser\(url, activation\)/);
+        // With the window the person clicked in as its anchor, where the browser opens (Tynn #739).
+        expect(body).toMatch(/await openLocalBrowser\(url, activation, anchor\)/);
         expect(body).not.toMatch(/browserPane\.show|genie:navigate/);
     });
 
@@ -23,11 +24,16 @@ describe('main wires the site row', () => {
         expect(main.match(/openInBrowser: agentOpensSite,/g) ?? []).toHaveLength(1);
         expect(main.match(/openInBrowserFor\('background'\)\(url\)/g) ?? []).toHaveLength(1);
         expect(main.match(/openInBrowser: openInBrowserFor\('user-gesture'\),/g) ?? []).toHaveLength(1);
-        const ports = main.slice(main.indexOf('const featurePorts: FeaturePorts = {'), main.indexOf('const featurePorts: FeaturePorts = {') + 200);
+        const ports = main.slice(main.indexOf('const ownFeatureUi = featureWindow(localDoor, {'), main.indexOf('featureEffectNow = ownFeatureUi;'));
         expect(ports).toMatch(/openInBrowser: openInBrowserFor\('user-gesture'\),/);
     });
 
     it('the Edit form’s state is kept between actions, as the Add form’s is — once', () => {
-        expect(main.match(/siteEditing: data\.hosting\?\.editing \?\? null/g) ?? []).toHaveLength(1);
+        const host = readFileSync('src/main/features-host.ts', 'utf8');
+        expect(host.match(/if \(caller\.live\) caller\.state = retained;/g) ?? []).toHaveLength(1);
+        const rules = readFileSync('src/main/feature-hosting.ts', 'utf8');
+        expect(rules).toContain('next.siteEditing =');
+        expect(rules).toContain('next.siteAdding =');
+        expect(main).not.toContain('featureState');
     });
 });

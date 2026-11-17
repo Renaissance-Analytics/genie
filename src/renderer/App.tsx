@@ -11,11 +11,15 @@ import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { sendKeyFrom } from '../core/send-key.js';
 import { setSendKey } from './send-key-store.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
-import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import type { AlertToast } from './components/AlertToasts.js';
+import { TERMINAL_NEEDS_YOU, showTerminalRoute } from '../core/terminal-surface.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
+import { TypingBoard, TypingSender } from '../core/typing-mirror.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
+/** A toast with a button (Show terminal) waits longer: a person fetching a 2FA code is not at the screen for 8 seconds. */
+const ALERT_ACTION_TOAST_MS = 60_000;
 const noLocalState = () => null;
 const noLocalSubscription = () => () => {};
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
@@ -28,7 +32,8 @@ import { takeOverTerminalOf } from '../core/take-over-route.js';
 import { chatPickAfter, chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
-import { rewrittenAddress, routeFor, windowBridge } from './window-address.js';
+import { rewrittenAddress, routeFor, windowBridge, windowChromeOf } from './window-address.js';
+import { answerOutcome, remoteQuestionFeed } from './remote-questions-feed.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -44,6 +49,7 @@ import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, tynnIssuesHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { setDashboardFilter } from './dashboard-filter.js';
 import { useHostHome, withPickerStart } from './host-home.js';
 import { EMPTY_FEATURES, forgetHost, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
@@ -55,6 +61,10 @@ import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
+import { limitAlertSound } from '../core/limit-alerts.js';
+import { accountSwitchOutcomeOf, accountSwitchToast } from '../core/account-switch.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { redialer } from './remote-redial.js';
 import { droneReconnect, type DroneHold } from './drone-reconnect.js';
@@ -62,11 +72,12 @@ import { DRONE_MIN_BUILD } from '../core/drone-version.js';
 import { pushed, useSnapshot } from './use-snapshot.js';
 import type { AuthRequest } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
+import { copyText } from './components/CopyText.js';
 import type { TreeNode } from '../core/files-panel.js';
 import { fromBase64 } from '../core/mobile-wire.js';
 import { deviceAuth, knownHosts, moveRememberedTokens, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
-import type { RelayConnect } from '../core/relay-connect.js';
+import { withAsking, type RelayConnect } from '../core/relay-connect.js';
 import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { shareDoor } from './share-door.js';
@@ -78,6 +89,8 @@ import { GITHUB_ROUTE, type RepoListing } from '../core/github.js';
 import type { TynnLinkApi } from './components/TynnProjectLink.js';
 import { ImportedAgentsModal } from './components/ImportedAgents.js';
 import { NewAgentModal } from './components/NewAgentModal.js';
+import { OffersDialog } from './components/OffersDialog.js';
+import { SaveToRepoDialog } from './components/SaveToRepoDialog.js';
 import { importedAgentsOffer, type ImportedAgent } from '../core/agent-adoption.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
@@ -88,7 +101,8 @@ const NO_PLUGIN_EDITORS: readonly ClaimingEditor[] = [];
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
-import { deviceLabelFromUserAgent, fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
+import { MOBILE_PATH, deviceLabelFromUserAgent, fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
+import { offerKeep, phonePlatform } from '../core/pairing-guide.js';
 import { answerDeckForm } from './deck-answer.js';
 import { MobileAgent, MobileConnecting, MobileFileView, MobileFiles, MobilePair, MobileShell, type MobilePreview } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
@@ -210,6 +224,37 @@ function useChatDrafts(bridge: GenieBridge | undefined): ChatDraftKeeper | 'load
     }, [keeper]);
     if (!keeper) return undefined;
     return loaded === keeper ? keeper : 'loading';
+}
+
+/**
+ * WHAT THE OTHER PERSON IS TYPING (Tynn #730, core/typing-mirror.ts): this window's composer text goes to the host as
+ * `agents.typing`, throttled; what another window on the chat's agent is typing comes back and is shown over the
+ * composer until it is cleared or goes quiet. Each window is its own source, so its own typing never comes back to it.
+ */
+function useTypingMirror(bridge: GenieBridge | undefined, agentId: string | null): {
+    onTyping: ((agentId: string, text: string) => void) | undefined;
+    peer: { label: string | null; text: string } | null;
+} {
+    const agents = bridge?.agents;
+    const source = useMemo(() => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `w${Math.random().toString(36).slice(2)}`), []);
+    const sender = useMemo(() => (agents?.typing
+        ? new TypingSender((id, text) => { void agents.typing!(id, text, source).catch(() => {}); }, { setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) })
+        : null), [agents, source]);
+    const board = useMemo(() => new TypingBoard(source), [agents, source]);
+    const [, redraw] = useState(0);
+    useEffect(() => {
+        if (!agents?.onTyping) return undefined;
+        return agents.onTyping((event) => { if (board.apply(event, Date.now())) redraw((n) => n + 1); });
+    }, [agents, board]);
+    // A line fades on its own: the window draws again when it does.
+    const fade = board.nextFade();
+    useEffect(() => {
+        if (fade === null) return undefined;
+        const timer = setTimeout(() => redraw((n) => n + 1), Math.max(0, fade - Date.now()) + 10);
+        return () => clearTimeout(timer);
+    }, [fade]);
+    const onTyping = useMemo(() => (sender ? (id: string, text: string) => sender.change(id, text) : undefined), [sender]);
+    return { onTyping, peer: agentId ? board.line(agentId, Date.now()) : null };
 }
 
 /** Every agent's last detail, for the first frame of a switch (agent-detail.ts). One per window. */
@@ -558,7 +603,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         if (leaving.current || companionTicket.current !== null) return;
         reconnectDrone.dropped();
     }, [state?.connected]); // eslint-disable-line react-hooks/exhaustive-deps
-    const shownRelayConnect: RelayConnect = droneHold === 'restarting' ? { kind: 'reconnecting' } : droneHold === 'skew' && skewView ? skewView : relayConnect;
+    // A share-link guest waiting for the machine's person to let it in says so (Tynn #731).
+    const shownRelayConnect: RelayConnect = droneHold === 'restarting' ? { kind: 'reconnecting' } : droneHold === 'skew' && skewView ? skewView : withAsking(relayConnect, state?.pairing);
     return {
         client,
         state,
@@ -669,6 +715,8 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
     const [state, setState] = useState<RemoteState | null>(null);
     const [refusal, setRefusal] = useState<string | null>(null);
     const [everConnected, setEverConnected] = useState(false);
+    /** This phone just paired with a PIN (not a token redial): it is shown how to keep Genie (Tynn #752). */
+    const [pairedWithPin, setPairedWithPin] = useState(false);
     const current = useRef<RemoteClient | null>(null);
     const attempt = useRef(0);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -702,6 +750,7 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
                 setEverConnected(true);
                 const t = next.state().token;
                 if (t) tokens?.remember(entry.socketUrl, t);
+                if (auth.kind === 'pin') setPairedWithPin(true);
                 void next.takeBaton();
                 return;
             }
@@ -749,12 +798,16 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
         client,
         state,
         phase,
+        pairedWithPin,
         refusal: refusal ?? state?.lastRefusal ?? null,
         connecting: client !== null && !connected && refusal === null,
         pair: (pin: string, label: string) => { setRefusal(null); dial({ kind: 'pin', code: pin.trim(), label: label || 'phone' }); },
         disconnect: () => { userClosed.current = true; if (timer.current) clearTimeout(timer.current); timer.current = null; current.current?.close(); setEverConnected(false); setClient(null); setState(null); },
     };
 }
+
+/** The phone was shown how to keep Genie (Tynn #752). */
+const KEPT_KEY = 'genie.mobile.kept';
 
 /** A photo for the chat: drawn at most 2048 px on its longest side as a JPEG — what a provider takes, a fraction of the bytes. */
 async function photoForChat(file: File): Promise<Attachment> {
@@ -813,6 +866,12 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const attachment = useMemo(() => (bridge && agentId !== null ? (attachmentId: string) => bridge.agents.attachment(agentId, attachmentId) : undefined), [bridge, agentId]);
     const [sending, setSending] = useState(false);
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
+    // KEEP IT (Tynn #752): once, after a PIN pairing, unless the page already runs from the home screen.
+    const [kept, setKept] = useState(() => { try { return window.localStorage.getItem(KEPT_KEY) === '1'; } catch { return false; } });
+    const standalone = typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)').matches === true || (navigator as { standalone?: boolean }).standalone === true);
+    const keep = offerKeep({ pairedWithPin: remote.pairedWithPin, standalone, dismissed: kept })
+        ? { address: `${window.location.origin}${MOBILE_PATH}`, platform: phonePlatform(navigator.userAgent), onDone: () => { setKept(true); try { window.localStorage.setItem(KEPT_KEY, '1'); } catch { /* storage unavailable: it shows again next pairing */ } } }
+        : null;
 
     if (remote.phase === 'pair') {
         return <MobilePair host={window.location.host} refusal={remote.refusal} connecting={remote.connecting} waiting={remote.state?.pairing ?? null} onConnect={({ pin, label }) => remote.pair(pin, label)} />;
@@ -825,6 +884,9 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
         setNote(null);
         const route = deckAnswerRoute(item, optionId, answerNote ?? '');
         switch (route.kind) {
+            case 'copy':
+                void copyText(route.text).then((copied) => { if (!copied) setNote('Copy failed'); });
+                return;
             case 'refused':
                 setNote(route.reason);
                 return;
@@ -891,6 +953,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             locked={remote.state?.locked ?? false}
             refusal={note ?? remote.refusal}
             reconnecting={reconnecting}
+            keep={keep}
             items={snapshot.deckItems}
             answering={inFlight}
             onAnswer={answer}
@@ -1003,8 +1066,10 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     // A window BOUND to another host reads that host's Genie, and nothing of this machine's while it connects (window-address.ts).
+    // This window's own bridge (its preload): what is the WINDOW's, whichever machine it reads — its buttons (Tynn #726).
+    const ownBridge = bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie));
     const resolvedBridge = windowBridge({ bound: remote.bound, connected: remote.state?.connected === true, remote: remote.client?.bridge ?? null,
-        local: bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)) });
+        local: ownBridge });
     const local = resolvedBridge?.localProtocol;
     const localState = useSyncExternalStore(local?.onState ?? noLocalSubscription, local?.state ?? noLocalState, local?.state ?? noLocalState);
     const localRevision = localState?.revision ?? 0;
@@ -1024,6 +1089,17 @@ function DesktopApp({ bridge }: AppProps) {
     const restartOne = (agentId: string): Promise<{ ok: true } | { ok: false; reason: string }> =>
         resolvedBridge ? resolvedBridge.agents.restart(agentId, 'graceful') : Promise.resolve({ ok: false, reason: 'Genie is not connected.' });
     const snapshot = useSnapshot(resolvedBridge);
+    // THE CONNECTED MACHINE'S QUESTIONS (Tynn #726): driving another machine, its live questions reach THIS machine's
+    // question window; an answer from there is put to the host's own features.act, through this window, while connected.
+    const questionFeed = remoteQuestionFeed({ connected: remote.state?.connected === true, host: remote.state?.host ?? null, items: snapshot.deckItems });
+    useEffect(() => { window.genie?.remoteQuestions?.report(questionFeed.host, questionFeed.items); }, [questionFeed.host, questionFeed.items]);
+    const questionAct = useRef<((action: FeatureAction) => Promise<unknown>) | null>(null);
+    questionAct.current = remote.state?.connected === true && resolvedBridge ? (action) => resolvedBridge.features.act(action) : null;
+    useEffect(() => window.genie?.remoteQuestions?.onAct?.((action) => answerOutcome(() => {
+        const act = questionAct.current;
+        if (!act) throw new Error('this window is no longer connected to that machine');
+        return act(action);
+    })), []);
     // A workspace's designed tabs, once its settings are read (its tab addresses resolve from them).
     const [tabsByWorkspace, setTabsByWorkspace] = useState<ReadonlyMap<string, ReadonlyArray<{ id: string; name: string }>>>(() => new Map());
     const addressContext: AddressContext | null = snapshot.workstation && snapshot.workspaces
@@ -1092,16 +1168,23 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's toast (genie#1211): Genie in front → its own, bottom-left, clear of the chat; behind → the OS notification.
     const [alertToasts, setAlertToasts] = useState<readonly AlertToast[]>([]);
     const dismissAlert = useCallback((id: string) => setAlertToasts((prev) => prev.filter((t) => t.id !== id)), []);
-    const showAlert = useCallback((toast: { title: string; body: string; color?: string }) => {
+    const showAlert = useCallback((toast: { title: string; body: string; color?: string; action?: AlertToast['action'] }) => {
         if (alertDelivery(typeof document !== 'undefined' && document.hasFocus()) === 'in-app') {
             const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            setAlertToasts((prev) => [...prev.slice(-3), { id, ...toast }]);
-            setTimeout(() => dismissAlert(id), ALERT_TOAST_MS);
+            setAlertToasts((prev) => [...prev.slice(-7), { id, ...toast }]);
+            setTimeout(() => dismissAlert(id), toast.action ? ALERT_ACTION_TOAST_MS : ALERT_TOAST_MS);
         } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
             try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
         }
     }, [dismissAlert]);
     useAlerts(snapshot, features.settings.values, showAlert);
+    // A TERMINAL AN AGENT STARTED NEEDS THE PERSON (Tynn #722): main sends it to the window in use. A one-click Show terminal
+    // opens that workspace's Terminals tab; nothing moves on its own (core/view-requests.ts).
+    useEffect(() => resolvedBridge?.onAction?.((action) => {
+        if (action.kind !== TERMINAL_NEEDS_YOU || !action.workspaceId) return;
+        const route = showTerminalRoute(action.workspaceId);
+        showAlert({ title: `${action.agentName ?? 'An agent'} needs you in a terminal`, body: 'A terminal is waiting for you: a login, a code or a question.', action: { label: 'Show terminal', run: () => { window.location.hash = `#${route}`; } } });
+    }), [resolvedBridge, showAlert]);
     useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     // The send key, to every open composer, the moment the setting changes (Tynn issue #697).
@@ -1113,7 +1196,38 @@ function DesktopApp({ bridge }: AppProps) {
     // Each provider's rate limit for the Dashboard header (buffered in main; this only stores what arrives).
     const [rateLimits, setRateLimits] = useState<Readonly<Record<string, Headroom>>>({});
     useEffect(() => resolvedBridge?.onHeadroom?.(setRateLimits), [resolvedBridge]);
+    // EVERY KNOWN ACCOUNT AND THE STANDING OFFERS (Tynn #483): read from genie-host when the window opens, whenever a reading
+    // reaches it, and after a switch or a Not now. The header's account chips draw them.
+    const [accountsSnapshot, setAccountsSnapshot] = useState<AccountsSnapshot | undefined>(undefined);
+    const readAccounts = useCallback(() => { void resolvedBridge?.accounts?.().then((s) => { if (s) setAccountsSnapshot(s); }, () => {}); }, [resolvedBridge]);
+    useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
+    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed') readAccounts(); }), [resolvedBridge, readAccounts]);
+    // DESIGN SIGN-IN for the machine (Tynn #480): one click from the Claude popover or Settings.
+    const designSignIn = useCallback(() => {
+        void resolvedBridge?.designSignIn?.().then((r) => { if (!r.ok) showAlert({ title: 'Design sign-in could not start', body: r.reason }); }, () => {});
+    }, [resolvedBridge, showAlert]);
+    const switchAccount = useCallback((provider: string, choose?: string) => {
+        void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) showAlert({ title: 'The switch could not start', body: r.reason }); }, () => {});
+    }, [resolvedBridge, showAlert]);
+    const accountsAct = useCallback(async (action: AccountsAction): Promise<AccountsActResult> => {
+        const r = (await resolvedBridge?.accountsAct?.(action)) ?? { ok: false as const, reason: 'Genie’s host is not connected yet.' };
+        readAccounts();
+        return r;
+    }, [resolvedBridge, readAccounts]);
+    const dismissSwitchOffer = useCallback((id: string) => { void resolvedBridge?.dismissSwitchOffer?.(id).then(() => readAccounts(), () => {}); }, [resolvedBridge, readAccounts]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {
+        // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
+        if (action.kind === 'limit-alert' && action.title && action.body) {
+            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}));
+            showAlert({ title: action.title, body: action.body });
+            return;
+        }
+        // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
+        if (action.kind === 'account-switch') {
+            const outcome = accountSwitchOutcomeOf(action.outcome);
+            if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider); }));
+            return;
+        }
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
         const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
         if (emoji && action.agentId) {
@@ -1121,7 +1235,7 @@ function DesktopApp({ bridge }: AppProps) {
             setRowEmoji((prev) => ({ ...prev, [id]: emoji }));
             setTimeout(() => setRowEmoji((prev) => { if (prev[id] !== emoji) return prev; const next = { ...prev }; delete next[id]; return next; }), ROW_EMOJI_MS);
         }
-    }), [resolvedBridge]);
+    }), [resolvedBridge, showAlert]);
     // MAIL BETWEEN AGENTS ON THE BOARD (genie#1209): a send starts a signal, a read marks it, a tick lets it go.
     const [mailSignalList, setMailSignalList] = useState<readonly MailSignal[]>([]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {
@@ -1211,6 +1325,23 @@ function DesktopApp({ bridge }: AppProps) {
     const [cameWith, setCameWith] = useState<{ workspaceId: string; agents: readonly ImportedAgent[] } | null>(null);
     /** The workspace whose New agent form is open, or `null`. */
     const [newAgentFor, setNewAgentFor] = useState<string | null>(null);
+    /** Save to repo (Tynn #756): the workspace whose dialog is open. */
+    const [saveFor, setSaveFor] = useState<string | null>(null);
+    const loadSavePreview = useCallback(() => (saveFor !== null && resolvedBridge?.workspaces.savePreview ? resolvedBridge.workspaces.savePreview(saveFor) : Promise.resolve({ ok: false as const, reason: 'this host cannot save to the repo' })), [saveFor, resolvedBridge]);
+    /** What the routed workspace's repo brings (Tynn #756): its count for the dashboard's badge, and the dialog's workspace. */
+    const [cloneOfferCount, setCloneOfferCount] = useState<{ workspaceId: string; count: number } | null>(null);
+    const [offersFor, setOffersFor] = useState<string | null>(null);
+    const routedWorkspaceId = parsed.surface === 'workspace' ? parsed.workspaceId : null;
+    const cloneOffersOf = resolvedBridge?.workspaces.cloneOffers;
+    useEffect(() => {
+        if (routedWorkspaceId === null || !cloneOffersOf) { setCloneOfferCount(null); return undefined; }
+        let live = true;
+        const look = (): void => { void cloneOffersOf(routedWorkspaceId).then((r) => { if (live && r.ok) setCloneOfferCount({ workspaceId: routedWorkspaceId, count: r.offers.length }); }, () => {}); };
+        look();
+        const timer = setInterval(look, 30_000);
+        return () => { live = false; clearInterval(timer); };
+    }, [routedWorkspaceId, cloneOffersOf]);
+    const loadCloneOffers = useCallback(() => (offersFor !== null && resolvedBridge?.workspaces.cloneOffers ? resolvedBridge.workspaces.cloneOffers(offersFor) : Promise.resolve({ ok: false as const, reason: 'this host does not watch the repo' })), [offersFor, resolvedBridge]);
     const offerAgentsRef = useRef<(id: string) => void>(() => {});
     offerAgentsRef.current = (id) => {
         const read = resolvedBridge?.workspaces.importedAgents;
@@ -1820,6 +1951,7 @@ function DesktopApp({ bridge }: AppProps) {
         const problem = draftProblems[m.id];
         return problem ? { ...m, draftProblem: problem } : m;
     }) }), [chatDrafts, draftProblems]);
+    const typing = useTypingMirror(resolvedBridge, chatThread?.agentId ?? null);
     const discardDraft = (draftId: string): void => {
         const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
         if (queued && chatThread && resolvedBridge) draftAction(draftId, resolvedBridge.resolvePrompt(chatThread.agentId, queued.promptId!, 'discard'));
@@ -1903,12 +2035,12 @@ function DesktopApp({ bridge }: AppProps) {
                 <div className="flex h-full flex-col">
                     <RemoteRefusalBar refusal={remote.state.lastRefusal} needsBaton={false} driver={remote.state.driver} onTakeControl={() => {}} onDismiss={remote.clearRefusal} />
                     <div className="min-h-0 flex-1">
-                        <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />
+                        <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} switching={parsed.switching} choose={parsed.choose} />
                     </div>
                 </div>
             );
         }
-        return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />;
+        return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} switching={parsed.switching} choose={parsed.choose} />;
     }
     // THE FLOW EDITOR IN ITS OWN WINDOW (genie#1204, Genie 1's genie#505): fancy-flow's canvas and nothing else.
     if (parsed.surface === 'flow') {
@@ -1946,7 +2078,8 @@ function DesktopApp({ bridge }: AppProps) {
     // the verbs, every workspace, every agent (named with its workspace).
     const paletteActions: Array<{ id: string; label: string; run: () => void }> = [
         { id: 'go-dashboard', label: 'Open the Dashboard', run: () => navigate('genie://dashboard') },
-        { id: 'go-deck', label: 'Open the Deck', run: () => navigate('genie://deck') },
+        // The Deck merged into the Dashboard (Tynn #730): what needs the person is the Dashboard's "Needs you" view.
+        { id: 'go-needs-you', label: 'Show what needs me', run: () => { setDashboardFilter('needsYou', true); navigate('genie://dashboard'); } },
         { id: 'go-hosting', label: 'Open Hosting', run: () => navigate('genie://hosting') },
         { id: 'go-settings', label: 'Open Settings', run: () => navigate('genie://settings') },
         { id: 'add-workspace', label: 'Add a workspace…', run: () => previewAdd() },
@@ -1993,9 +2126,16 @@ function DesktopApp({ bridge }: AppProps) {
             </div>
         ) : null}
         <Shell
+            alertToasts={alertToasts}
+            onDismissAlert={dismissAlert}
             pulsingWorkspaces={pulsingIds(pulses)}
             rowEmoji={rowEmoji}
             rateLimits={rateLimits}
+            accounts={accountsSnapshot}
+            onSwitchAccount={switchAccount}
+            onDismissSwitchOffer={dismissSwitchOffer}
+            onAccountsAct={accountsAct}
+            onDesignSignIn={designSignIn}
             mailSignals={mailSignalList}
             route={route}
             address={shownAddress}
@@ -2008,12 +2148,15 @@ function DesktopApp({ bridge }: AppProps) {
                 }, (error: unknown) => showAlert({ title: 'Could not redock workspace', body: error instanceof Error ? error.message : String(error) }));
             }}
             chatDrafts={keptDrafts}
+            onTyping={typing.onTyping}
+            peerTyping={typing.peer}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
             servable={SERVABLE}
             onShareWorkstation={shares ? () => { setShare({ workspaceId: null, name: remote.state?.host ?? snapshot.workstation?.name ?? 'this workstation', links: null, minted: null, problem: null, busy: false }); readShares(null); } : undefined}
             remote={remote.state?.connected && remote.state.host ? {
                 host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked,
+                viewOnly: remote.state.viewOnly === true,
                 lostTo: remote.state.batonLostTo ?? null, onTakeControl: () => { void remote.takeControl(); },
                 // Disconnect is the host badge's (Tynn #640), no longer Settings → Remote access.
                 onDisconnect: remote.disconnect,
@@ -2100,6 +2243,10 @@ function DesktopApp({ bridge }: AppProps) {
                 // item rather than from the URL — and the item's id says which channel it takes.
                 const route = deckAnswerRoute(item, optionId, note ?? '');
                 switch (route.kind) {
+                    case 'copy':
+                        // Copy the block (Tynn #753): in this window, through main's clipboard; nothing is answered.
+                        void copyText(route.text).then((copied) => { if (!copied) setDeckFormRefusal({ itemId: item.id, reason: 'Copy failed' }); });
+                        return;
                     case 'refused':
                         console.error('[genie] deck answer refused:', route.reason);
                         return;
@@ -2133,6 +2280,8 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             // Every "+ Add agent" opens the New agent form (Genie 1's); nothing is created until it is filled in.
             onAddAgent={(workspaceId) => setNewAgentFor(workspaceId)}
+            {...(resolvedBridge?.workspaces.savePreview && resolvedBridge.workspaces.save ? { onSaveToRepo: (workspaceId: string) => setSaveFor(workspaceId) } : {})}
+            {...(cloneOfferCount && cloneOfferCount.count > 0 ? { cloneOffers: { workspaceId: cloneOfferCount.workspaceId, count: cloneOfferCount.count, onOpen: () => setOffersFor(cloneOfferCount.workspaceId) } } : {})}
             onAddWorkspace={previewAdd}
             // The Genie browser window: this machine's sites, or — in a window driving a Tynn workstation — that workstation's.
             onOpenBrowser={resolvedBridge?.browserWindow ? () => { void resolvedBridge.browserWindow?.open(); } : undefined}
@@ -2183,6 +2332,7 @@ function DesktopApp({ bridge }: AppProps) {
                 // The route says where the panel is: on this workspace, `?files=detached`.
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address) : undefined}
+            onPopOutTerminals={resolvedBridge?.popOutTerminals ? (id) => { void resolvedBridge.popOutTerminals!(id); } : undefined}
             onBringBackFiles={(id) => moveFilePanel(() => filesWindows?.bringBack(id), () => {
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address)}
@@ -2191,7 +2341,7 @@ function DesktopApp({ bridge }: AppProps) {
             // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
             pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files', initialPath: pickerStart({ workspacePath: workspaceRow?.path ?? null, primaryWorkspace, home: hostHome }) }).then(async (p) => { const paths = Array.isArray(p) ? p : typeof p === 'string' ? [p] : []; await resolvedBridge?.features?.picked?.(paths); return paths; }) : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
-            windowChrome={resolvedBridge?.windowChrome}
+            windowChrome={windowChromeOf({ local: ownBridge })}
             // A refused Take over is said, never a dead click (Tynn #529): a remote window's bridge keeps it under the title bar.
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => {
                 if (!r.ok) { if (!remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); return; }
@@ -2285,6 +2435,24 @@ function DesktopApp({ bridge }: AppProps) {
             onClose={() => setWizardRead(null)}
             tynn={tynnLinkApi}
         />
+        {saveFor !== null && resolvedBridge?.workspaces.save ? (
+            <SaveToRepoDialog
+                workspaceName={workspaceLabel(snapshot.workspaces, saveFor)}
+                load={loadSavePreview}
+                save={(choices) => resolvedBridge.workspaces.save!(saveFor, choices)}
+                onClose={() => setSaveFor(null)}
+            />
+        ) : null}
+        {offersFor !== null && resolvedBridge?.workspaces.applyOffer ? (
+            <OffersDialog
+                workspaceName={workspaceLabel(snapshot.workspaces, offersFor)}
+                load={loadCloneOffers}
+                apply={(offerId) => resolvedBridge.workspaces.applyOffer!(offersFor, offerId)}
+                trust={() => resolvedBridge.features.act({ kind: 'workspace.trust', workspaceId: offersFor, workspacePath: snapshot.workspaces?.find((w) => w.id === offersFor)?.path ?? '' })}
+                onChanged={(count) => setCloneOfferCount({ workspaceId: offersFor, count })}
+                onClose={() => setOffersFor(null)}
+            />
+        ) : null}
         {newAgentFor !== null && resolvedBridge ? (
             <NewAgentModal
                 workspaceName={workspaceLabel(snapshot.workspaces, newAgentFor)}
@@ -2352,7 +2520,6 @@ function DesktopApp({ bridge }: AppProps) {
                 onRefresh={remote.reloadTynnWorkstations}
             />
         ) : null}
-        <AlertToasts toasts={alertToasts} onDismiss={dismissAlert} />
         </PanelHostContext.Provider>
         </PluginEditorsContext.Provider>
         </HostPathPickerContext.Provider>

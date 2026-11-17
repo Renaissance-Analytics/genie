@@ -122,7 +122,7 @@ beforeEach(async () => {
     callers['t-example'] = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: WS, workspacePath: join(dir, WS) };
     callers['t-other'] = { agentId: mintAgentId(), agentName: 'vega', workspaceId: OTHER, workspacePath: join(dir, OTHER) };
     callers['t-stranger'] = { agentId: mintAgentId(), agentName: 'lyra', workspaceId: STRANGER, workspacePath: join(dir, STRANGER) };
-    tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
+    tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
 });
 
 afterEach(async () => {

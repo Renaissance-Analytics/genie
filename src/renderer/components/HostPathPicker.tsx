@@ -17,8 +17,8 @@ export type ListDir = (path: string) => Promise<HostListing>;
 export type MakeDir = (parent: string, name: string) => Promise<HostMade>;
 
 /**
- * New folder, as FileBrowser's form calls it: the HOST makes it inside the folder being viewed, then it is selected
- * (FileBrowser reloads the folder, so it shows). A refusal rejects — FileBrowser puts it on its form, in the host's words.
+ * New folder, as FileBrowser's form calls it: the HOST makes it inside the folder being viewed, then `select` is
+ * handed its path (the picker goes into it, Tynn #733). A refusal rejects — FileBrowser puts it on its form, in the host's words.
  */
 export function newFolderHandler(mkdir: MakeDir, select: (path: string) => void) {
     return async ({ parentPath, name }: { parentPath: string; name: string }): Promise<void> => {
@@ -62,6 +62,17 @@ export function fileEntriesOf(listing: HostListing, extensions?: readonly string
         : { path: e.path, name: e.name, kind: 'file' as const, hasChildren: false, ...(pickable(e.name) ? {} : { disabled: true }) }));
 }
 
+/**
+ * What Choose picks (Tynn #733): what is selected; with nothing selected in a folder picker, the folder being shown,
+ * since the person is in it. Never `/` while it might be the Windows drive list (roots unread, or roots that are drives).
+ */
+export function pickedOrShown({ mode, picked, path, roots }: { readonly mode: 'directory' | 'file' | 'files'; readonly picked: readonly string[]; readonly path: string; readonly roots: readonly string[] | null }): string[] {
+    if (picked.length > 0) return [...picked];
+    if (mode !== 'directory') return [];
+    if (path === '/' && !(roots ?? []).includes('/')) return [];
+    return [path];
+}
+
 /** Ask for a path on the HOST (Tynn #835): `null` when cancelled; `string[]` for `files`. */
 export type PickHostPath = (opts: { mode: 'directory' | 'file' | 'files'; title?: string; initialPath?: string; extensions?: readonly string[] }) => Promise<string | string[] | null>;
 
@@ -93,7 +104,8 @@ export function HostPathPickerForm({ mode, listDir, mkdir, initialPath = '/', in
     // The folder being viewed is the picker's, so Up and the roots can move it; every move — a breadcrumb, a typed path,
     // a double-clicked folder — passes through hostFolder (a breadcrumb's bare `C:` is the drive's root).
     const [path, setPath] = useState(() => hostFolder(initialPath));
-    const [roots, setRoots] = useState<readonly string[]>(['/']);
+    // `null` until read: until then `/` might be the Windows drive list, so Choose does not offer it (Tynn #733).
+    const [roots, setRoots] = useState<readonly string[] | null>(null);
     // The roots are read once, when the picker opens: App passes a fresh listDir on each render, and on Windows reading
     // `/` probes every drive letter — not something to repeat whenever the window re-renders.
     const firstListDir = useRef(listDir);
@@ -103,10 +115,13 @@ export function HostPathPickerForm({ mode, listDir, mkdir, initialPath = '/', in
         return () => { live = false; };
     }, []);
     const provider = useMemo(() => ({ loadChildren: async (p: string) => fileEntriesOf(await listDir(p), extensions) }), [listDir, extensions]);
-    const createFolder = useMemo(() => (mode === 'directory' && mkdir ? newFolderHandler(mkdir, (made) => setPicked([made])) : undefined), [mode, mkdir]);
+    // New folder goes INTO the folder it made (Tynn #733): it is the one shown, so Choose picks it, with no scrolling to
+    // find it in the parent and no double-click into it first.
+    const createFolder = useMemo(() => (mode === 'directory' && mkdir ? newFolderHandler(mkdir, (made) => { setPicked([]); setPath(hostFolder(made)); }) : undefined), [mode, mkdir]);
+    const chosen = pickedOrShown({ mode, picked, path, roots });
     return (
         <div data-host-path-picker={mode} className="flex flex-col gap-3 text-sm">
-            <PickerNav path={path} roots={roots} onNavigate={(p) => setPath(hostFolder(p))} />
+            <PickerNav path={path} roots={roots ?? ['/']} onNavigate={(p) => setPath(hostFolder(p))} />
             <div className="h-[360px] overflow-hidden rounded-lg border border-[var(--border-1)]">
                 <FileBrowser
                     provider={provider}
@@ -121,9 +136,9 @@ export function HostPathPickerForm({ mode, listDir, mkdir, initialPath = '/', in
                 />
             </div>
             <div className="flex items-center gap-2">
-                <span data-picked="" className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--fg-3)]">{picked.length === 0 ? (mode === 'directory' ? 'Pick a folder' : 'Pick a file') : picked.join(', ')}</span>
+                <span data-picked="" className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--fg-3)]">{chosen.length === 0 ? (mode === 'directory' ? 'Pick a folder' : 'Pick a file') : chosen.join(', ')}</span>
                 <Button size="xs" type="button" data-action="cancel-pick" onClick={onCancel} className={button}>Cancel</Button>
-                <Button size="xs" type="button" data-action="pick-path" disabled={picked.length === 0} onClick={() => onPick(multiple ? picked : picked[0]!)} className={button}>Choose</Button>
+                <Button size="xs" type="button" data-action="pick-path" disabled={chosen.length === 0} onClick={() => onPick(multiple ? chosen : chosen[0]!)} className={button}>Choose</Button>
             </div>
         </div>
     );

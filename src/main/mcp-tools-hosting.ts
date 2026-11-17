@@ -1,6 +1,7 @@
 import { OS_WORKSPACE } from '../core/os-agent.js';
 import { randomUUID } from 'node:crypto';
-import { resolve as resolvePath } from 'node:path';
+import { relative as relativePath, resolve as resolvePath } from 'node:path';
+import { sandboxRefusal } from '../core/envelope-sites.js';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
@@ -48,6 +49,16 @@ import type { SiteInfo } from './site-manager.js';
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
+/**
+ * THE HOSTS FILE (Tynn #753): what an agent and the person are told about it. A site's name in the hosts file needs an
+ * administrator, and Genie never raises that prompt because an agent changed a site: it asks the person in the Deck.
+ */
+export const HOSTS_ADMIN_NOTE = 'Genie then asks you in the Deck for administrator permission to update the hosts file, so your normal browser can open the site; nothing is asked of your computer until you approve there';
+// Tynn #743: an agent that did not know this wrote the person its own step list (and a Tynn release to accept) for
+// what is one row of Genie's.
+const hostsAgentNote = (host: string): string => `served in Genie’s browser now. For the person’s normal browser, Genie shows them one “Open ${host} in your browser” in its Deck, which asks their computer once (the hosts file, Genie’s certificate) and opens the site. Do not ask them to edit the hosts file, trust a certificate or run anything elevated, and do not put steps for it on their list.`;
+const UNTRUSTED = (workspace: string) => `this workspace (${workspace}) is not trusted, so its agents cannot change its services or sites; the person trusts it from Genie’s Trust step first. Nothing was done`;
+
 export type HostingApproval = 'services.add' | 'services.createDatabase' | 'services.remove' | 'services.use' | 'services.exec' | 'services.update' | 'sites.update' | 'sites.remove';
 
 /**
@@ -81,6 +92,11 @@ export interface HostingToolsDeps {
     readonly openInBrowser?: OpenInBrowser;
     /** Runs a `services exec` command (main/service-exec.ts). Absent = this Genie cannot (doctor mode), and it says so. */
     readonly exec?: ServiceExec;
+    /**
+     * The workspace's trust verdict as last read (Tynn #753): an untrusted workspace's agent changes no hosting at all.
+     * genieToolDeps passes `() => false` when nothing is wired (fail closed).
+     */
+    readonly trusted: (workspaceId: string) => boolean;
 }
 
 /** How much of each of a site's processes' output `sites logs` reads by default — as `processes logs` does. */
@@ -213,6 +229,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         const caller = callerFrom(args, context.headers, deps.resolveCaller);
         if (typeof caller === 'string') return err(caller);
         if (!deps.services) return err(NOT_HERE);
+        if (!deps.trusted(caller.workspaceId)) return err(UNTRUSTED(caller.workspaceId));
         try {
             return await body(deps.services, caller, args, context);
         } catch (error) {
@@ -453,7 +470,10 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links — a link into another workspace
         // is refused — and the workspace itself is a folder a site may serve.
         try {
-            return confinePathSync(caller.workspacePath, given || fallback, 'nothing was read or done', { allowRoot: true });
+            const folder = confinePathSync(caller.workspacePath, given || fallback, 'nothing was read or done', { allowRoot: true });
+            // Never from sandbox/ (Tynn #738), said before anything is read there, for detect as for add and update.
+            const sandbox = sandboxRefusal(relativePath(caller.workspacePath, folder));
+            return sandbox === null ? folder : { refused: `${sandbox} Nothing was read or done.` };
         } catch (error) {
             if (error instanceof OutsideWorkspaceError) return { refused: `${given || fallback} is outside this workspace; a site serves a folder inside it, and nothing was read or done` };
             throw error;
@@ -537,7 +557,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const form = formOf(d, args);
                     const r = await createSite(s, { workspaceId: caller.workspaceId, repoPath, form });
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems, form });
-                    return ok({ ok: true, site: siteView(r.site) });
+                    return ok({ ok: true, site: siteView(r.site), hostsFile: hostsAgentNote(r.site.host) });
                 }
                 case 'start': {
                     const site = own(str(args.site));
@@ -588,7 +608,8 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const changes = changesOf(target.form, form);
                     if (repoPath !== target.site.repoPath) changes.push(`folder ${target.site.repoPath} → ${repoPath}`);
                     if (changes.length === 0) return ok({ ok: true, site: siteView(site), note: 'nothing to change: the site is already served that way; the person was not asked' });
-                    const verdict = await deps.approve(caller, 'sites.update', `${site.host} — ${changes.join('; ')} — written to this workspace’s project.json and served as changed`, context);
+                    const renamed = form.name !== target.form.name;
+                    const verdict = await deps.approve(caller, 'sites.update', `${site.host} — ${changes.join('; ')} — written to this workspace’s project.json and served as changed${renamed ? `. ${HOSTS_ADMIN_NOTE}` : ''}`, context);
                     if (verdict !== 'allowed') return err(`changing ${site.host} was denied by the person; nothing was done`);
                     const r = await updateSite(s, { siteId: site.id, form, repoPath });
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems, form });
@@ -597,7 +618,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 case 'remove': {
                     const site = own(str(args.site));
                     if (typeof site === 'string') return err(site);
-                    const verdict = await deps.approve(caller, 'sites.remove', `${site.host} (${site.repoPath}) — stopped and removed from this workspace’s project.json; the folder and its files are not touched`, context);
+                    const verdict = await deps.approve(caller, 'sites.remove', `${site.host} (${site.repoPath}) — stopped and removed from this workspace’s project.json; the folder and its files are not touched. ${HOSTS_ADMIN_NOTE}`, context);
                     if (verdict !== 'allowed') return err(`removing ${site.host} was denied by the person; nothing was done`);
                     await removeSite(s, site.id);
                     return ok({ ok: true, removed: site.id });
@@ -659,6 +680,7 @@ export const SERVICES_TOOL: BuiltinTool = declareBuiltinTool(
 export const SITES_TOOL: BuiltinTool = declareBuiltinTool(
     'sites',
     'Your workspace’s sites, served by Genie at https://<name>.gen — `<name>` one or more labels: `web`, or `web.acme` (Genie’s default is `<folder>.<workspace>`). GENIE runs them — the dev server (or the static / PHP server) and the front door — and gives every process the workspace’s service variables; never start a server with `docker`, or keep one running in a terminal, for this. '
+        + 'Sites are never served from sandbox/ (it holds throwaway work): build a site in repos/<name> and serve it from there. '
         + 'Actions: `list`. '
         + '`status` {site} — the site and each of its processes as Genie sees them now. '
         + '`detect` {repoPath?} — what Genie WOULD serve for a folder (mode, dev server, built directory, default name); nothing is started or written. '
@@ -667,7 +689,9 @@ export const SITES_TOOL: BuiltinTool = declareBuiltinTool(
         + '`logs` {site, lines?} — the end of each of its processes’ output (default 200 lines), still there after a crash. '
         + '`open` {site} — opens it in Genie’s browser for the person, and answers its URL. '
         + '`update` {site, and any of name, repoPath, mode, devCommand, stack, hostPort, root, spa, phpVersion ("" = back to the PHP on PATH)} — the Hosting tab’s Edit: the person approves it, then it is written to project.json and served as changed. '
-        + '`remove` {site} — the person approves it; the folder and its files are never touched.',
+        + '`remove` {site} — the person approves it; the folder and its files are never touched. '
+        + 'Adding, renaming or removing a site may need the person’s administrator permission for the hosts file: Genie asks them in its Deck and never raises the prompt on its own; the site works in Genie’s browser meanwhile. '
+        + 'Only in a trusted workspace: an untrusted one’s agents cannot change its services or sites.',
     {
         type: 'object',
         properties: {

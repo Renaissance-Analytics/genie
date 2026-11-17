@@ -10,7 +10,8 @@ import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-o
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { cancelIntent, type CancelIntent, type CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
-import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, TYPING_EVENT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { TYPING_MAX_CHARS, type TypingEvent } from '../core/typing-mirror.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { HostApi } from './remote-host.js';
@@ -118,8 +119,8 @@ export interface HostApiDeps {
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;
-        /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
-        resumeLimit(provider: string): void;
+        /** `Resume now`: the login held for its rate limit opens (Tynn #794) — one account's when named (Tynn #478). */
+        resumeLimit(provider: string, accountId?: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
         promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): ({ ok: true } | { ok: false; reason: string | null }) | Promise<{ ok: true } | { ok: false; reason: string | null }>;
         subscribe(listener: (agentId: string) => void): () => void;
@@ -225,6 +226,12 @@ export interface HostApiDeps {
         setMcpServer(workspaceId: string, name: unknown, on: unknown): Promise<unknown>;
         /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
         setColor?(workspaceId: string, color: string): Promise<unknown>;
+        /** Save to repo (Tynn #756): the preview, then the save with the person's choices. Optional: a host without them refuses. */
+        savePreview?(workspaceId: unknown): Promise<unknown>;
+        save?(workspaceId: unknown, choices: unknown): Promise<unknown>;
+        /** The offers a clone's repo brings (Tynn #756): listed, and one applied. Optional: a host without them refuses. */
+        cloneOffers?(workspaceId: unknown): Promise<unknown>;
+        applyOffer?(workspaceId: unknown, offerId: unknown): Promise<unknown>;
     };
     agentOps: {
         /** THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. */
@@ -266,13 +273,17 @@ export interface HostApiDeps {
     };
     retryPausedAccount?(provider: string): void;
     features: {
-        snapshot(): Promise<FeatureData>;
+        /** The admitted caller, so view state can stay with the connection that requested it (Tynn #720). */
+        snapshot(context: CallContext): Promise<FeatureData>;
         act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
         /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
         soundData?(key: string): Promise<string | null>;
         /** What the host's own file picker picked, from this machine's window: the only host paths a send may attach (genie#1354). */
-        picked?(paths: unknown[]): void;
-        onChange(listener: (data: FeatureData) => void): () => void;
+        picked?(paths: unknown[], context: CallContext): void | Promise<void>;
+        /** Connection teardown, supplied internally by the protocol owner. */
+        releaseCaller?(context: CallContext): void;
+        onChange?(listener: (data: FeatureData) => void): () => void;
+        onInvalidated?(listener: () => void): () => void;
     };
     updates: {
         state(): UpdateState;
@@ -293,6 +304,8 @@ const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0
 
 export function buildHostApi(deps: HostApiDeps): HostApi {
     const agent = (id: unknown): AgentRecord | null => deps.find(str(id));
+    /** The typing relay's listeners: each event stream (onEvent) while it is open (Tynn #730). */
+    const typingListeners = new Set<(event: TypingEvent) => void>();
     const owner = (): LocalOwnerDeps => {
         if (!deps.localOwner) throw new Error('this host has no local owner operations');
         return deps.localOwner;
@@ -386,6 +399,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'resumeLimit': {
                 const r = agent(args[0]);
                 if (!r) return { ok: false, reason: 'unknown agent' };
+                // Every agent of a provider is on its active account (Tynn #751): Resume now opens that account's hold.
                 deps.host.resumeLimit(r.provider);
                 return { ok: true };
             }
@@ -497,6 +511,18 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.attachment':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'attachment names an agent and an image' };
                 return deps.agentOps.attachment ? deps.agentOps.attachment(args[0], args[1]) : { ok: false, reason: 'this host keeps no images' };
+            /*
+             * WHAT A COMPOSER HOLDS NOW (Tynn #730): relayed, never kept, to every window on this machine and every remote one
+             * (RemoteHost filters a guest to its workspace). Whoever typed is the CALLER, as RemoteHost admitted it: this
+             * machine's own window is `null`, anyone else by their connection's label. Nothing the caller says names them.
+             */
+            case 'agents.typing': {
+                const r = agent(args[0]);
+                if (!r || typeof args[1] !== 'string' || typeof args[2] !== 'string' || args[2] === '' || args[2].length > 64) return { ok: false, reason: 'typing names an agent, its text and the window' };
+                const event: TypingEvent = { agentId: r.id, text: args[1].slice(0, TYPING_MAX_CHARS), source: args[2], label: context.origin === 'local-window' ? null : context.label };
+                for (const listener of [...typingListeners]) listener(event);
+                return { ok: true };
+            }
             case 'workspaces.previewAdd':
                 // Preserve the retired native wizard's early refusals before any coercion or disk operation.
                 if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
@@ -623,6 +649,14 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.setDefaultAgent(str(args[0]), typeof args[1] === 'string' && args[1] !== '' ? args[1] : null);
             case 'workspaces.setMcpServer':
                 return deps.workspaceOps.setMcpServer(str(args[0]), args[1], args[2]);
+            case 'workspaces.savePreview':
+                return deps.workspaceOps.savePreview ? deps.workspaceOps.savePreview(args[0]) : { plan: { ok: false, reason: 'this host cannot save a workspace to its repo', violations: [] }, files: [], upstream: { fetched: false, ref: null }, decisions: [], conflicts: [] };
+            case 'workspaces.save':
+                return deps.workspaceOps.save ? deps.workspaceOps.save(args[0], args[1]) : { ok: false, reason: 'this host cannot save a workspace to its repo', written: [] };
+            case 'workspaces.cloneOffers':
+                return deps.workspaceOps.cloneOffers ? deps.workspaceOps.cloneOffers(args[0]) : { ok: false, reason: 'this host does not watch a workspace’s repo' };
+            case 'workspaces.applyOffer':
+                return deps.workspaceOps.applyOffer ? deps.workspaceOps.applyOffer(args[0], args[1]) : { ok: false, reason: 'this host does not watch a workspace’s repo' };
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
             case 'addWorkspace':
@@ -663,11 +697,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.terminals.list().filter((t) => t.workspaceId === workspaceId).map(({ id, pid, shell }) => ({ id, pid, shell }));
             }
             case 'features.snapshot':
-                return deps.features.snapshot();
+                if (!context.connectionId) throw new Error('features.snapshot needs an admitted caller before reading its state');
+                return deps.features.snapshot(context);
             case 'features.soundData':
                 return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
             case 'features.picked':
-                if (context.origin === 'local-window' && Array.isArray(args[0])) deps.features.picked?.(args[0] as unknown[]);
+                if (context.origin === 'local-window' && Array.isArray(args[0])) await deps.features.picked?.(args[0] as unknown[], context);
                 return null;
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction, context);
@@ -727,6 +762,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             },
         },
         invoke,
+        releaseCaller: context => deps.features.releaseCaller?.(context),
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
@@ -761,7 +797,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 // A remote window hears the snapshot; this machine's own hears that it changed, and re-reads (P4 family 11):
                 // no local event carries a whole snapshot, which has no bound and could end the door's connection.
-                deps.features.onChange((data) => { listener('features', data); listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }),
+                deps.features.onChange?.((data) => { listener('features', data); listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }) ?? (() => {}),
+                deps.features.onInvalidated?.(() => { listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }) ?? (() => {}),
                 deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
@@ -769,6 +806,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
                 deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
+                // What another window is typing (Tynn #730): this machine's windows on their own channel, remote ones on theirs.
+                (() => {
+                    const onTyping = (event: TypingEvent) => { listener(TYPING_EVENT, event); listener(LOCAL_EVENTS.typing, event); };
+                    typingListeners.add(onTyping);
+                    return () => { typingListeners.delete(onTyping); };
+                })(),
             ];
             return () => { for (const off of offs) off(); };
         },

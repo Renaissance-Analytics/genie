@@ -98,7 +98,7 @@ describe('the Flows dependency set', () => {
             // the editor window's route and window (genie#1302)
             'src/core/address.ts', 'src/core/route.ts', 'src/core/window-activation.ts', 'src/core/view-requests.ts', 'src/main/preload.ts',
             // wiring: the files that import a flow file
-            'src/main/compose.ts', 'src/main/feature-ipc.ts', 'src/main/main.ts', 'src/renderer/App.tsx', 'src/renderer/components/FeatureSurfaces.tsx',
+            'src/main/compose.ts', 'src/main/feature-personal.ts', 'src/main/genie-host.ts', 'src/main/main.ts', 'src/renderer/App.tsx', 'src/renderer/components/FeatureSurfaces.tsx',
         ]) expect(set, path).toContain(path);
         // …and not the rest of Genie: the hubs' own imports are not followed.
         for (const path of ['src/main/terminal-host.ts', 'src/main/process-supervisor.ts', 'src/core/toolchain.ts', 'src/renderer/components/TakeOverWindow.tsx', 'src/renderer/Shell.tsx']) {

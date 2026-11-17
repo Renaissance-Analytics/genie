@@ -67,7 +67,7 @@ export interface DashLane {
 }
 
 export interface WorkspaceDashboardView {
-    /** EVERY agent of the workspace, for the header's agents strip (a pill each, idle ones too), in the board's order. */
+    /** EVERY agent of the workspace, with the state each shows (idle ones too), in the board's order. */
     strip: ReadonlyArray<{ id: string; name: string; fidelity: Fidelity; state: AgentState; word: string }>;
     lanes: readonly DashLane[];
     /** What waits on you in this workspace that belongs to NO lane (a flow's question): it has no other way in here. */

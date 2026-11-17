@@ -306,11 +306,26 @@ function argvOf(command: string): string[] | null {
 }
 
 /**
+ * A SITE IS NEVER SERVED FROM sandbox/ (Tynn #738): sandbox/ (and the envelope's .ai/sandbox/) holds throwaway work. The
+ * refusal says so and where the site goes instead, for a folder under it, registered as a repo or not. `null` = not in
+ * a sandbox. `dir` is relative to the workspace, either slash.
+ */
+export function sandboxRefusal(dir: string): string | null {
+    const parts = dir.replace(/\\/g, '/').split('/').filter((p) => p !== '' && p !== '.');
+    const lower = parts.map((p) => p.toLowerCase());
+    const at = lower[0] === 'sandbox' ? 1 : lower[0] === '.ai' && lower[1] === 'sandbox' ? 2 : 0;
+    if (at === 0) return null;
+    return `Sites are never served from sandbox/: it holds throwaway work. Move the site to repos/${parts[at] ?? '<name>'} and serve it from there.`;
+}
+
+/**
  * The project.json entry for a site created in Genie 2, in Genie 1's shape. `repo` is the folder name
  * Genie 1 resolves (`repos/<repo>`), or `''` for the envelope itself; a site in a deeper folder is
  * named by the repos[] entry whose path it is.
  */
 export function siteEntryFor(manifest: Record<string, unknown>, site: NewSiteEntry): { ok: true; entry: Record<string, unknown> } | { ok: false; reason: string } {
+    const sandbox = sandboxRefusal(site.repoDir);
+    if (sandbox !== null) return { ok: false, reason: sandbox };
     let repo: string | null = null;
     if (site.repoDir === '.') repo = '';
     else {

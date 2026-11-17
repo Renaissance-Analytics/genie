@@ -128,9 +128,11 @@ describe('the workspace route opens on its dashboard', () => {
         expect(html).not.toContain('data-workspace-settings');
     });
 
-    it('the header carries the agents strip and the view tabs (Dashboard … Settings) with the current one marked', () => {
+    // REWRITTEN (the owner, 2026-11-16: "or the agents in pill. they have tabs and a dashboard"): no agents strip.
+    it('the header has no agents strip; the view tabs (Dashboard … Settings) with the current one marked', () => {
         const html = render({ view: 'home' });
-        expect(count(html, 'data-agent-pill')).toBe(3);
+        expect(count(html, 'data-agent-pill')).toBe(0);
+        expect(html).not.toContain('data-agents-strip');
         expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true });
         expect(control(html, 'data-workspace-tab="home"')!.text).toMatch(/^Dashboard(?![\w])/);
         expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-selected="true"');

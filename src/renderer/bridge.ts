@@ -6,6 +6,8 @@ import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } fro
 import type { TynnPage, TynnPageActionInput, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
 import type { IssueActionInput, IssueFilters, TynnIssuesHost } from '../core/tynn-issues.js';
 import type { Headroom } from '../core/headroom.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { AgentPermissions } from '../core/identity.js';
@@ -53,6 +55,10 @@ import type { RepoListing } from '../core/github.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
+import type { CloneOffer } from '../core/clone-offers.js';
+import type { SaveChoices, SavePreviewReply, SaveReply } from '../core/workspace-save.js';
+
+export type CloneOffersReply = { ok: true; offers: CloneOffer[]; trusted: boolean } | { ok: false; reason: string };
 
 /**
  * THE RENDERER'S ONLY WINDOW ONTO THE MAIN PROCESS.
@@ -179,6 +185,15 @@ export interface GenieBridge {
         takeOverTicket?(): Promise<string | null>;
     };
     /**
+     * THE CONNECTED MACHINE'S QUESTIONS IN THIS MACHINE'S QUESTION WINDOW (Tynn #726; main/remote-questions.ts). `report`:
+     * this window drives `host`, whose Deck is `items` (an empty list takes it back). `onAct`: answer or Dismiss one through
+     * the host's own features.act; the handler's outcome is what the question window says. Host-only: absent on a remote bridge.
+     */
+    remoteQuestions?: {
+        report(host: string, items: readonly import('../core/deck.js').DeckItem[]): void;
+        onAct?(handler: (action: FeatureAction) => Promise<{ ok: true } | { ok: false; reason: string }>): () => void;
+    };
+    /**
      * Every chat's unsent draft, kept by THIS machine's main so it survives a restart and a reload (genie#1261,
      * main/chat-draft-store.ts). Host-only: absent on a remote bridge — a remote host's agents are not this machine's.
      */
@@ -249,7 +264,7 @@ export interface GenieBridge {
      */
     onWorkspacePulse?(onPulse: (pulse: WorkspacePulse) => void): () => void;
     /** What an agent just did (Tynn #766 C), for its sound. Absent on a remote bridge for now: the host's own window plays it. */
-    onAction?(onAction: (action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }) => void): () => void;
+    onAction?(onAction: (action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string; sound?: string; title?: string; body?: string; outcome?: unknown }) => void): () => void;
     /** Each provider's rate limit for the Dashboard header, buffered in main; the current ones at once, then each change. */
     onHeadroom?(onHeadroom: (limits: Readonly<Record<string, Headroom>>) => void): () => void;
 
@@ -268,10 +283,24 @@ export interface GenieBridge {
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */
     providerLogin(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /**
+     * SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps. How it came out
+     * arrives as an `account-switch` action. Absent on an older host.
+     */
+    /** `choose`: the account the person pressed Switch on, named in the login's steps (Tynn #483). */
+    switchAccount?(provider: string, choose?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Every known account with its readings, and the standing switch offers (Tynn #483); `null` while the host cannot answer. */
+    accounts?(): Promise<AccountsSnapshot | null>;
+    /** Rename or forget a known account (Tynn #484); a refusal comes back as its reason. */
+    accountsAct?(action: AccountsAction): Promise<AccountsActResult>;
+    /** Not now on a switch offer (Tynn #481): it goes, and is not made again in that window. */
+    dismissSwitchOffer?(id: string): Promise<boolean>;
     /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
     accountRetry?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to Claude Design` (#1081): the interactive `claude` in the login window on this machine. Absent on an older host. */
     designLogin?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Design sign-in for the machine (Tynn #480), from the accounts popover or Settings: no agent needed. Absent on an older host. */
+    designSignIn?(): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.
@@ -321,6 +350,8 @@ export interface GenieBridge {
     /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). This machine's own window only. */
     chooseProviderProgram?(provider: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
     scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+    /** A workspace's terminals view in a NEW window (Tynn #706, the Dashboard's windows column). Absent = this window cannot open one (a remote window). */
+    popOutTerminals?(workspaceId: string): Promise<void>;
 
     /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
     workspaces: {
@@ -412,6 +443,13 @@ export interface GenieBridge {
         setMcpServer(workspaceId: string, name: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Its colour (genie#1300), written to its project.json as `appearance.color`. Optional: an older host has none. */
         setColor?(workspaceId: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** Save to repo (Tynn #756): fetch, then what a save would write, what teammates changed and what conflicts. Optional: an older host has none. */
+        savePreview?(workspaceId: string): Promise<SavePreviewReply>;
+        /** Write the preview's files, with each conflict settled by `choices`. Never commits. */
+        save?(workspaceId: string, choices: SaveChoices): Promise<SaveReply>;
+        /** What a clone's repo brings that this machine does not have yet (Tynn #756): listed, and one applied (a new one only). */
+        cloneOffers?(workspaceId: string): Promise<CloneOffersReply>;
+        applyOffer?(workspaceId: string, offerId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */
@@ -435,6 +473,10 @@ export interface GenieBridge {
          * asks — never with the thread. Named by the message row's `attachmentRefs`.
          */
         attachment(agentId: string, attachmentId: string): Promise<AttachmentReply>;
+        /** What this window's composer on an agent holds now (Tynn #730): relayed to the other windows on it. Optional: an older host has none. */
+        typing?(agentId: string, text: string, source: string): Promise<unknown>;
+        /** What another window on an agent is typing (Tynn #730, core/typing-mirror.ts). */
+        onTyping?(listener: (event: import('../core/typing-mirror.js').TypingEvent) => void): () => void;
         /** Mode is wording for the agent (§6.2), not a permission boundary. */
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */
@@ -585,7 +627,7 @@ export interface GenieBridge {
     } | undefined;
     artboard?: {
         read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
-        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
+        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
     } | undefined;
 
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */
@@ -636,7 +678,7 @@ export const NO_FEATURES: GenieBridge['features'] = {
     soundData: async () => null,
 };
 
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'files', 'flow', 'knowledge', 'flows', 'hosting', 'settings', 'browser'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'workspace', 'takeover', 'files', 'flow', 'knowledge', 'flows', 'hosting', 'settings', 'browser'];
 
 /**
  * The terminal bridge when there is NO bridge — a render test, or `App` before `window.genie`

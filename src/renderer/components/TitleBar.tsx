@@ -12,6 +12,7 @@ import type { ConnectProgress } from '../../core/connect-machine.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 import type { DndHeaderView } from '../../core/dnd-header.js';
+import { FlowPills, type FlowPillsProps } from './FlowPills.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -104,6 +105,11 @@ export interface TitleBarProps {
      * every window. `view` is core/dnd-header.ts's reading of the host's settings; absent = not known yet (no control).
      */
     dnd?: { view: DndHeaderView; onToggle: () => unknown } | undefined;
+    /**
+     * THE RUNNING FLOWS (Tynn #707): a pill each, after the feature icons. A workspace-share window sets `workspaceId`, and
+     * only that workspace's flows show. Absent = no pills.
+     */
+    flows?: FlowPillsProps | undefined;
     connect?: {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
@@ -126,6 +132,8 @@ export interface RemoteBadge {
     readonly driving: boolean;
     readonly locked: boolean;
     readonly lostTo?: string | null | undefined;
+    /** The person at the host set this window to watch only (Tynn #732): said, and Take control is not offered. */
+    readonly viewOnly?: boolean | undefined;
     readonly onTakeControl?: (() => void) | undefined;
     /** End this window's link to the host (Tynn #640: it used to be on Settings → Remote access). Absent = no button. */
     readonly onDisconnect?: (() => void) | undefined;
@@ -134,7 +142,7 @@ export interface RemoteBadge {
 export function TitleBar(props: TitleBarProps) {
     // A workspace window (Tynn #690) carries none of the workstation's controls, whatever it was handed.
     const scopedHome = props.scopedHome;
-    const { route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, onOpenUpdate, paletteKey, workspace } = props;
+    const { route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, onOpenUpdate, paletteKey, workspace, flows } = props;
     const { update, version, inbox, connect, gapps, share, dnd } = scopedHome ? { update: null, version: null, inbox: undefined, connect: undefined, gapps: undefined, share: undefined, dnd: undefined } : props;
     const [storeOpen, setStoreOpen] = useState(false);
     // The write is in flight until the host's next snapshot redraws the state: the button shows it is working meanwhile.
@@ -313,6 +321,7 @@ export function TitleBar(props: TitleBarProps) {
                     </Popover>
                 ) : null}
             </div>
+            {flows ? <FlowPills {...flows} /> : null}
 
             {workspace ? (
                 <span data-title-workspace={workspace.name} className="flex min-w-0 shrink-0 items-center gap-1.5 text-[12px] font-medium text-[var(--fg-2)]">
@@ -322,7 +331,7 @@ export function TitleBar(props: TitleBarProps) {
             ) : null}
             {workspace?.color ? <span aria-hidden="true" data-title-edge="" style={wsStyle(workspace.color)} className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[var(--ws)]" /> : null}
 
-            <span data-route className="truncate font-mono text-[11px] text-[var(--fg-4)]">
+            <span data-route className="min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">
                 {route}
             </span>
 
@@ -361,8 +370,8 @@ export function TitleBar(props: TitleBarProps) {
                     className="flex shrink-0 items-center gap-2 rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-[11px] text-[var(--warning)]"
                 >
                     <span className="font-semibold">{remoteBadge(remote.host)}</span>
-                    <span className="text-[var(--fg-3)]">{remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.lostTo && remote.lostTo === remote.driver ? `${remote.lostTo} took control` : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
-                    {remote.onTakeControl && !remote.driving && !remote.locked ? (
+                    <span className="text-[var(--fg-3)]">{remote.viewOnly ? 'view only' : remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.lostTo && remote.lostTo === remote.driver ? `${remote.lostTo} took control` : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
+                    {remote.onTakeControl && !remote.driving && !remote.locked && !remote.viewOnly ? (
                         <Button size="xs" type="button" data-action="take-control" onClick={remote.onTakeControl}
                             // no-drag: in the bar's drag region a click is the OS's.
                             className="[-webkit-app-region:no-drag] rounded border border-[var(--warning)]/40 px-1.5 py-0 font-sans text-[11px] font-medium text-[var(--warning)] hover:bg-[var(--warning)]/20">

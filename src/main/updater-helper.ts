@@ -129,6 +129,8 @@ export function runUpdaterHelper(ports: UpdaterHelperPorts): { readonly done: Pr
     let cancelIdle: (() => void) | null = null;
     let busy = 0;
     let installing = false;
+    /** The UPGRADE LEASE (Tynn #729): from `prepare` until the install or a `release`, the helper never idles out. */
+    let leased = false;
     let ended = false;
     /** What this process's library found and holds: a fresh helper has neither. */
     let checked: string | null = null;
@@ -144,7 +146,7 @@ export function runUpdaterHelper(ports: UpdaterHelperPorts): { readonly done: Pr
     };
     const armIdle = (): void => {
         cancelIdle?.();
-        cancelIdle = schedule(() => { if (busy === 0 && !installing) end(`nothing asked for ${Math.round(idleMs / 1000)} s; leaving`); }, idleMs);
+        cancelIdle = schedule(() => { if (busy === 0 && !installing && !leased) end(`nothing asked for ${Math.round(idleMs / 1000)} s; leaving`); }, idleMs);
     };
     const check = async (): Promise<{ version: string } | null> => {
         const found = await ports.port.check();
@@ -171,7 +173,8 @@ export function runUpdaterHelper(ports: UpdaterHelperPorts): { readonly done: Pr
             let value: unknown = null;
             if (event.op === 'check') value = await check();
             else if (event.op === 'download') await ensureDownloaded((percent) => { void client.call('progress', [event.id, percent]).catch(() => {}); });
-            else if (event.op === 'prepare') await ensureDownloaded();
+            else if (event.op === 'prepare') { await ensureDownloaded(); leased = true; }
+            else if (event.op === 'release') leased = false;
             else {
                 await ensureDownloaded();
                 installing = true;

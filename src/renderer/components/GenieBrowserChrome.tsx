@@ -1,13 +1,17 @@
 import { Button, Icon, Input, Select } from '@particle-academy/react-fancy';
+import { BrowserSitesRow } from './BrowserSitesRow.js';
 import type { CSSProperties, RefObject } from 'react';
 import type { BrowserSnapshot } from '../../main/genie-browser-window.js';
 
 /**
  * THE GENIE BROWSER WINDOW'S CHROME (beta.35 item 36, step 2 — Genie 1's renderer/pages/testing-browser.tsx). The title
  * row is the window's drag area (the title bar is hidden; the native buttons sit over its right end on Windows), then the
- * tabs, the toolbar — back / forward / reload, the lock and the address (a TEXT field: `tynn` is an address here), the
- * device presets — a row of the Genie sites, one line for what went wrong, and the page box main places the active
- * tab's view over. Everything shown is main's snapshot; every click is a call back to main.
+ * tabs, the toolbar — back / forward / reload, the lock and the address (a TEXT field: a bare site name is an address
+ * here), the device presets — a row of the Genie sites, one line for what went wrong, and the page box main places the
+ * active tab's view over. With no tab in front the page box is the WELCOME page (Tynn #740): the sites as buttons, and
+ * the rule in a few words. An address off the dev sites went to the person's browser: the title row says so in place of
+ * its subtitle, so nothing below it moves (Tynn #741). Everything shown is main's snapshot; every click is a call back
+ * to main.
  */
 export interface GenieBrowserChromeProps {
     readonly snapshot: BrowserSnapshot;
@@ -50,7 +54,9 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
             >
                 {p.isMac ? <span className="w-[64px] shrink-0" /> : null}
                 <span className="font-semibold text-[var(--fg-1)]">Genie browser</span>
-                <span className="truncate text-[var(--fg-3)]">this workstation’s Genie sites, served only inside this window</span>
+                {s.handedOff
+                    ? <span data-browser-handed-off="" role="status" className="truncate text-[var(--fg-2)]"><Icon name="external-link" size="xs" className="mr-1 inline" />{s.handedOff} opened in your browser</span>
+                    : <span className="truncate text-[var(--fg-3)]">dev sites only</span>}
             </div>
 
             <div data-browser-tabs="" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-1)] px-2 py-1">
@@ -94,7 +100,7 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
                         type="text"
                         data-browser-address=""
                         defaultValue={active?.url ?? ''}
-                        placeholder="tynn.gen"
+                        placeholder="site.gen or localhost:3000"
                         spellCheck={false}
                         autoComplete="off"
                         leading={<span data-browser-lock="" className="text-[var(--success)]"><Icon name="lock" size="xs" /></span>}
@@ -105,22 +111,7 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
                 </div>
             </div>
 
-            {s.sites.length > 0 ? (
-                <div data-browser-sites="" className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--border-1)] px-2 py-1">
-                    {s.sites.map((host) => (
-                        <Button variant="ghost" size="xs"
-                            key={host}
-                            type="button"
-                            data-browser-site={host}
-                            aria-current={onScreenHost === host ? 'page' : undefined}
-                            onClick={() => p.onOpen(`https://${host}/`)}
-                            className={`rounded-md px-2 py-0.5 font-mono text-[11px] hover:bg-[var(--bg-2)] ${onScreenHost === host ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}
-                        >
-                            {host}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
+            {s.sites.length > 0 ? <BrowserSitesRow sites={s.sites} labels={s.siteLabels ?? {}} current={onScreenHost} onOpen={p.onOpen} /> : null}
 
             {s.notice ? (
                 <div data-browser-notice="" className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-1 text-[11px] text-[var(--fg-2)]">{s.notice}{s.noticeRestart ? <Button size="xs" type="button" data-browser-restart="" className="ml-2" onClick={p.onRestart}>Restart</Button> : null}</div>
@@ -131,15 +122,29 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
 
             {/* The page box: main places the active tab's view over it. */}
             <div ref={p.pageRef} data-browser-page="" className="relative min-h-0 flex-1">
-                {active === null ? (
-                    <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-[var(--fg-3)]">
-                        <div>No site open.</div>
-                        {s.sites.length === 0
-                            ? <div className="max-w-sm text-xs">No Genie sites are being served. Add one in Hosting, and it appears here.</div>
-                            : <div className="text-xs">Pick a site above to open it.</div>}
-                    </div>
-                ) : null}
+                {active === null ? <Welcome sites={s.sites} labels={s.siteLabels ?? {}} onOpen={p.onOpen} /> : null}
             </div>
+        </div>
+    );
+}
+
+/** THE WELCOME PAGE (Tynn #740): what a fresh window, and +, show. The sites by their workspace's name; the rule. */
+function Welcome({ sites, labels, onOpen }: { sites: readonly string[]; labels: Readonly<Record<string, string>>; onOpen: (address: string) => void }) {
+    return (
+        <div data-browser-welcome="" className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center text-sm text-[var(--fg-3)]">
+            <Icon name="globe" size="lg" className="text-[var(--fg-4)]" />
+            {sites.length === 0 ? (
+                <div className="max-w-sm">No sites yet. Add one in Hosting, or ask an agent to.</div>
+            ) : (
+                <div className="flex max-w-xl flex-wrap justify-center gap-2">
+                    {sites.map((host) => (
+                        <Button key={host} type="button" size="sm" data-browser-welcome-site={host} title={host} onClick={() => onOpen(`https://${host}/`)}>
+                            {labels[host] ?? host}
+                        </Button>
+                    ))}
+                </div>
+            )}
+            <div className="max-w-sm text-xs">Dev sites only: .gen and localhost. Other addresses open in your browser.</div>
         </div>
     );
 }

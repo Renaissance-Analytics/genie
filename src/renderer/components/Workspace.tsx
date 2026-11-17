@@ -12,14 +12,16 @@ import { ErrorBoundary } from './ErrorBoundary.js';
 import type { TynnTabHost } from '../../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../../core/tynn-issues.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
-import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
 import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
 import { siteWebviewLayerFor, tabsChanged, type SeenTabs } from '../site-webview-layer.js';
 import { TerminalCell } from './TerminalCell.js';
 import { TrustStep } from './TrustStep.js';
-import type { TrustStepView } from '../features.js';
+import type { FeatureAction, TrustStepView } from '../features.js';
+import type { StorageView } from '../../core/workspace-storage.js';
+import { StoragePanel } from './StoragePanel.js';
 import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, sitePanelKeys, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
@@ -34,7 +36,7 @@ import {
 } from '../../core/workspace-view.js';
 import { closeCancelled, closeRequested, codeClosed, codeOpened, OUTPUT_CAP, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
 import { outputBatch } from '../terminal-output-batch.js';
-import { Badge, Button, Icon, Popover, Select, Switch } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon, Select, Switch } from '@particle-academy/react-fancy';
 import { agentFilesLine, agentFilesWhen, type AgentFilesReport } from '../../core/agent-files-health.js';
 import type { SyncResult } from '../../core/integrations.js';
 import type { GenieBridge } from '../bridge.js';
@@ -46,13 +48,15 @@ import { workspaceFileOf } from '../../core/terminal-links.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { reattachWithState, type ReattachState } from '../reattach.js';
 import { ReattachBanner } from './ReattachBanner.js';
-import { PluginPane, type PluginPanelView } from './PluginPane.js';
+import { PanelHostContext, PluginPane, type PluginPanelView } from './PluginPane.js';
+import { ArtBoardPanel } from './ArtBoardPanel.js';
+import { useArtboardWaiting } from '../artboard-waiting.js';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import type { WorkspaceView } from '../../core/route.js';
 import { workspaceDashboard } from '../../core/workspace-dashboard.js';
 import type { DeckItem } from '../../core/deck.js';
-import { FidelityDot } from './Dashboard.js';
-import { headerRepos, repoChip } from '../../core/repo-status.js';
+import { lockedRepos, repoChip } from '../../core/repo-status.js';
+import { ViewHeader } from './ViewHeader.js';
 import { WorkspaceDashboard } from './WorkspaceDashboard.js';
 import { AgentRosterView, type AgentRosterViewProps } from './ImportedAgents.js';
 import { WorkspaceColorPicker } from './WorkspaceColorPicker.js';
@@ -184,12 +188,17 @@ export interface WorkspaceProps {
     onStartAgent?: ((agentId: string) => void) | undefined;
     /** The panels ENABLED plugins contribute (§4.6 `+plugin`); absent or empty = no `+plugin`. */
     pluginPanels?: readonly PluginPanelView[] | undefined;
+    /** The ArtBoard item a link points at (the route's `item=`): the ArtBoard tab opens on it, decided or not (Tynn #739). */
+    artboardItem?: string | null | undefined;
     /** The plugins as the host lists them (Settings, Plugins): why an open pane's panel is gone (ADF A6). */
     pluginEntries?: readonly { readonly id: string; readonly name: string; readonly state: string }[] | undefined;
     /** IssueWatch's view of this workspace (Tynn #806); absent = none to show, and no GitHub tab. */
     issueWatch?: IssueWatchPanelView | null | undefined;
     /** The GitHub panel's Refresh (Tynn reads the repos now). Absent = no Refresh. */
     onRefreshIssueWatch?: (() => void) | undefined;
+    /** The Storage tab (Tynn #697): this workspace's view, as main holds it, and how it asks main. Absent `onStorageAction` = no tab. */
+    storage?: StorageView | null | undefined;
+    onStorageAction?: ((action: FeatureAction) => void) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
     tynnBoard?: TynnTabHost | undefined;
     /** The Tynn tab's Issues page (genie#1295 I1); absent = the tab has no Issues page. */
@@ -246,6 +255,10 @@ export interface WorkspaceProps {
     /** Open a file of this workspace in its file panel at a line (a path clicked in a terminal, Tynn #763). */
     onOpenFile?: ((path: string, line: number | null) => void) | undefined;
     onAddAgent?: (() => void) | undefined;
+    /** Save this workspace to its repo (Tynn #756): the dashboard's header button. Absent = the host cannot, so no button. */
+    onSaveToRepo?: (() => void) | undefined;
+    /** What the repo brings (Tynn #756): the dashboard's badge. Absent = no badge. */
+    offers?: { count: number; onOpen: () => void } | undefined;
     /** The tabs ask for a view; the shell writes it into the route. */
     onViewChange?: ((view: WorkspaceView) => void) | undefined;
 }
@@ -256,7 +269,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], artboardItem = null, pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, storage = null, onStorageAction, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onSaveToRepo, offers, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -287,6 +300,9 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
     // THE WORKSPACE DASHBOARD (beta.33 item 10): a lane per agent — heartbeat, plan, now, its own waiting-on-you, its live
     // feed. The minute tick slides the heartbeat while nothing is pushed.
     useMinuteTick();
+    // THE ARTBOARD TAB'S BADGE (Tynn #739): items waiting for a verdict, from the host the panels share.
+    const panelHost = useContext(PanelHostContext);
+    const artboardWaiting = useArtboardWaiting(workspace.id, panelHost.artboard, panelHost.files);
     const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, ...(feeds ? { feeds } : {}), now: Date.now() });
     const filesInline = panel === 'files' && files !== undefined && !filesPinned && !filesPopped;
     // What the body shows: the Files tab while the files are open here (beta.35 #41), else the route's view.
@@ -637,72 +653,40 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
             {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
             {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
-            {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
             {/*
-              * THE HEADER FITS ITS COLUMN (beta.33 item 23; the owner: "why the fuck is any content at all behind the fucking
-              * chat panel?"). It WRAPS rather than ever running wider than the page column — `<main>` clips at the chat's edge —
-              * the path gives way first, and the repo chips beyond HEADER_REPOS_INLINE are behind "+N more".
+              * ONE HEADER (ViewHeader.tsx; the owner, 2026-11-16: "the different headers based on the view"): the agent view's,
+              * with the workspace as its one crumb. No repo list and no agent pills ("I don't need all of the repos listed in the
+              * workspace header either, or the agents in pill. they have tabs and a dashboard"): only a LOCKED repo, a problem
+              * with a fix, keeps its chip. The header fits its column by clipping, never by wrapping (beta.33 item 23).
               */}
-            <header data-view-header="" className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[var(--border-1)] px-5 py-2">
-                <h1 title={workspace.name ?? workspace.id} className="min-w-0 truncate text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
-                <span title={workspace.path} className="min-w-0 max-w-full truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
-                {/* REPO CHIPS (the board): `api · main` per repo; a locked repo in red, with "Remove stale lock" once the lock is stale. */}
-                {ops?.repos?.list ? (() => {
-                    const { inline, more } = headerRepos(ops.repos.list);
-                    const chipOf = (r: RepoEntry) => {
-                        const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
-                        return (
-                            <span key={r.slug} className="flex min-w-0 items-center gap-1.5">
-                                <span data-repo-chip={r.slug} data-tone={chip.tone} className={`flex h-6 min-w-0 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] ${chip.tone === 'bad' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`}>
-                                    <Icon name={chip.tone === 'bad' ? 'circle-alert' : 'git-branch'} className="h-3 w-3 shrink-0" />
-                                    <span className="truncate">{chip.label}</span>
-                                </span>
-                                {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="shrink-0 rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
-                            </span>
-                        );
-                    };
+            <ViewHeader
+                crumbs={[{ label: workspace.name ?? workspace.id, attrs: { 'data-workspace-name': '' } }]}
+                path={workspace.path}
+                status={ops?.repos?.list ? lockedRepos(ops.repos.list).map((r) => {
+                    const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
                     return (
-                        <div data-repo-chips="" className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
-                            {inline.map(chipOf)}
-                            {more.length > 0 ? (
-                                <Popover placement="bottom-start">
-                                    <Popover.Trigger data-action="more-repos" aria-label={`${more.length} more repos`} className="flex h-6 min-w-0 cursor-pointer items-center overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">
-                                        {`+${more.length} more`}
-                                    </Popover.Trigger>
-                                    <Popover.Content data-repo-more="" className="flex max-h-80 max-w-[min(28rem,90vw)] flex-col gap-1.5 overflow-y-auto p-2">
-                                        {more.map(chipOf)}
-                                    </Popover.Content>
-                                </Popover>
-                            ) : null}
-                        </div>
+                        <span key={r.slug} className="flex shrink-0 items-center gap-1.5">
+                            <span data-repo-chip={r.slug} data-tone={chip.tone} className="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] px-2 font-mono text-[11px] text-[var(--danger)]">
+                                <Icon name="circle-alert" className="h-3 w-3 shrink-0" />
+                                <span className="truncate">{chip.label}</span>
+                            </span>
+                            {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="shrink-0 whitespace-nowrap rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
+                        </span>
                     );
-                })() : null}
-                {/* The agents strip (the board's header): a pill per agent — state dot, name — each opening the agent. */}
-                {dashboard.strip.length > 0 ? (
-                    <div data-agents-strip="" className="ml-2 flex min-w-0 max-w-full items-center gap-1 overflow-x-auto">
-                        {dashboard.strip.map((a) => (
-                            <button key={a.id} type="button" data-agent-pill={a.id} title={`${a.name} · ${a.word.toLowerCase()}`} onClick={() => onOpenAgent?.(a.id)} className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
-                                <FidelityDot fidelity={a.fidelity} state={a.state} />
-                                <span>{a.name}</span>
-                            </button>
-                        ))}
-                    </div>
-                ) : null}
-                {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
-                {files ? (
-                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`${onOpenScratchTerminal ? '' : 'ml-auto '}flex items-center gap-1.5 min-w-0 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="truncate">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
-                ) : null}
-                {ops ? (
-                    <div className={`${files || onOpenScratchTerminal ? '' : 'ml-auto '}flex min-w-0 max-w-full flex-wrap items-center gap-1`}>
-                        {ops.asleep ? (
-                            <button type="button" data-action="wake" onClick={ops.onWake} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Wake</button>
-                        ) : (
-                            <button type="button" data-action="hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Hibernate</button>
-                        )}
-                        <button type="button" data-action="remove-workspace" onClick={ops.onPreviewRemove} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Remove from Genie…</button>
-                    </div>
-                ) : null}
-            </header>
+                }) : null}
+                actions={<>
+                    {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
+                    {files ? (
+                        <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} aria-label="Files" title="The workspace's files: one panel, who is touching what (⌘B)" className={`flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘B</kbd></button>
+                    ) : null}
+                    {ops ? (ops.asleep ? (
+                        <button type="button" data-action="wake" aria-label="Wake" title="Wake: agents and services start again" onClick={ops.onWake} className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="play" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Wake</span></button>
+                    ) : (
+                        <button type="button" data-action="hibernate" aria-label="Hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="moon" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Hibernate</span></button>
+                    )) : null}
+                    {ops ? <button type="button" data-action="remove-workspace" aria-label="Remove from Genie" title="Remove from Genie…" onClick={ops.onPreviewRemove} className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="trash-2" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Remove from Genie…</span></button> : null}
+                </>}
+            />
             {/*
               * THE STRIP (Tynn #282): Agents, the tabs you designed, a small +, Settings — + always just before Settings,
               * Settings always last. Labelled tabs, never a shortcut-only door (§4.0). The + needs somewhere to keep a tab:
@@ -717,7 +701,9 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                 canDesign={canDesign}
                 hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
                 github={issueWatch?.linked === true}
+                storage={onStorageAction !== undefined}
                 tynn={issueWatch?.linked === true && tynnBoard !== undefined}
+                artboardWaiting={artboardWaiting}
                 // Files is the open files (`?files=`); any other tab is a view, and choosing it leaves the files (Shell).
                 onView={(v) => { if (v === 'files') { if (!filesInline) onTogglePanel?.(); } else onViewChange?.(v as WorkspaceView); }}
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
@@ -954,11 +940,22 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             {/* HOME — the workspace dashboard. */}
             {onScreen === 'home' ? (
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
-                    <ErrorBoundary surface="Workspace dashboard" resetKeys={[workspace.id]}><WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} /></ErrorBoundary>
+                    <ErrorBoundary surface="Workspace dashboard" resetKeys={[workspace.id]}><WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} {...(onSaveToRepo ? { onSaveToRepo } : {})} offers={offers} onStartAgent={onStartAgent} /></ErrorBoundary>
+                </div>
+            ) : null}
+            {/* THE ARTBOARD — ITS OWN TAB, BESIDE FILES (Tynn #739): what agents made, every version and verdict kept; a link opens it on one item. */}
+            {onScreen === 'artboard' ? (
+                <div data-workspace-body="artboard" className="flex min-h-0 flex-1 flex-col">
+                    <ErrorBoundary surface="ArtBoard" resetKeys={[workspace.id]}>
+                        {pluginPanels.some((pp) => pp.pluginId === 'ai.genie.artboard')
+                            ? <ArtBoardPanel workspaceId={workspace.id} artboard={panelHost.artboard} files={panelHost.files} focusId={artboardItem} />
+                            : <p className="p-4 text-[13px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace. Switch it on in Settings, Plugins, to see what agents post.</p>}
+                    </ErrorBoundary>
                 </div>
             ) : null}
             {onScreen === 'terminals' ? <ErrorBoundary surface="Terminals" resetKeys={[workspace.id]}>{terminalsBody}</ErrorBoundary> : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
+            {onScreen === 'storage' && onStorageAction ? <div data-workspace-body="storage" className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Storage" resetKeys={[workspace.id]}><StoragePanel workspaceId={workspace.id} view={storage} onAction={onStorageAction} /></ErrorBoundary></div> : null}
             {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="GitHub" resetKeys={[workspace.id]}><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></ErrorBoundary></div> : null}
             {/* THE TYNN TAB (genie#1295): the linked project's workspace (its pages, the board among them), natively — no user menu, no project picker. */}
             {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnTab workspaceId={workspace.id} host={tynnBoard} issues={tynnIssues} /></ErrorBoundary></div> : null}
@@ -1005,7 +1002,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                 );
                             }
                             if (p.kind === 'files') return files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => {}} onPause={onPauseAgent} onResume={onResumeAgent} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">This window has no file host.</p>;
-                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />;
+                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} {...(onSaveToRepo ? { onSaveToRepo } : {})} offers={offers} onStartAgent={onStartAgent} />;
                             if (p.kind === 'artboard') {
                                 const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
                                 return board ? <PluginPane panel={board} workspace={workspace} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;

@@ -1,3 +1,4 @@
+import type { AccountRecord } from '../core/accounts.js';
 import { decodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
@@ -37,7 +38,7 @@ import {
     type EngineWelcome,
     type WireAttachment,
 } from '../core/engine-protocol.js';
-import type { Headroom } from '../core/headroom.js';
+import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -46,6 +47,9 @@ import { forwardedCallContext, type CallContext, type ClientTransport } from '..
 import type { LiveSession } from '../core/roster.js';
 import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import type { SwitchOffer } from '../core/switch-offer.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
@@ -56,6 +60,7 @@ import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-h
 import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { PhpCgiResolution } from './site-manager.js';
+import type { CloneApplyReply, CloneOffersReply } from './clone-offers-service.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import { PluginsReplica } from './plugins-replica.js';
@@ -96,6 +101,7 @@ export type Awaitable<T> = T | Promise<T>;
 
 /** What main.ts handed its in-process SessionHost, minus what runs on the host. Same names, same meanings. */
 export interface EngineClientOptions {
+    readonly onFeatureEffect?: (connectionId: string, method: string, args: unknown[]) => Promise<unknown>;
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
     readonly onCarryOverSent?: (agentId: AgentId) => void;
     readonly onRedockSent?: (agentId: AgentId, at: string) => void;
@@ -104,7 +110,7 @@ export interface EngineClientOptions {
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
     readonly onTurnNumbered?: (agentId: AgentId, n: number) => void;
     readonly onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
-    readonly onHeadroom?: (provider: string, headroom: Headroom) => void;
+    readonly onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
     readonly onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
     readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
@@ -163,6 +169,8 @@ const EMPTY_GLOBAL: EngineGlobalView = { startedIds: [], heldLogins: [], signedO
 const NO_ROWS: readonly TimedEvent[] = [];
 
 export class SessionEngineClient {
+    readonly #featureInvalidations = new Set<() => void>();
+    onFeatureInvalidated(listener: () => void): () => void { this.#featureInvalidations.add(listener); return () => { this.#featureInvalidations.delete(listener); }; }
     readonly #options: EngineClientOptions;
     #transport: ClientTransport | null = null;
     #welcome: EngineWelcome | null = null;
@@ -191,6 +199,7 @@ export class SessionEngineClient {
     #hosting: HostingReplica | null = null;
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
+    #cloneOffers: { list(workspaceId: string): Promise<CloneOffersReply>; apply(workspaceId: string, offerId: string): Promise<CloneApplyReply> } | null = null;
     #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
     #gapps: GAppBookApi | null = null;
@@ -412,6 +421,9 @@ export class SessionEngineClient {
                 this.hosting().rebase(payload as HostingDump);
                 return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
+            case 'features.invalidated':
+                for (const listener of this.#featureInvalidations) listener();
+                break;
             case 'safeMode.event':
                 this.#setSafeMode(payload as SafeModeView);
                 return;
@@ -519,7 +531,7 @@ export class SessionEngineClient {
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
             case 'action': o.onAction?.(c.agentId as AgentId, c.kind as AgentActionKind); return;
-            case 'headroom': o.onHeadroom?.(c.provider, c.headroom as Headroom); return;
+            case 'headroom': o.onHeadroom?.(c.provider, c.headroom as Headroom, c.stamp); return;
             case 'mcpServers': o.onMcpServers?.(c.agentId as AgentId, c.reports as readonly McpServerReport[]); return;
             case 'stopUnverified': o.onStopUnverified?.(c.agentId as AgentId, c.reason); return;
             case 'openFileForUser': o.onOpenFileLater?.(c.call as ForwardedToolCall); return;
@@ -531,6 +543,12 @@ export class SessionEngineClient {
     async #answer(id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: Record<string, unknown>;
         try {
+            if (method === 'client.featureEffect') {
+                if (!this.#options.onFeatureEffect) throw new Error('this window answers no feature effects');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onFeatureEffect(String(args[0]), String(args[1]), Array.isArray(args[2]) ? args[2] : []) };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
             if (method === 'client.elevate') {
                 if (!this.#options.elevate) throw new Error('this window runs no elevation');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
@@ -920,6 +938,16 @@ export class SessionEngineClient {
         return this.#processBook;
     }
 
+    /** genie-host's watcher of a clone's repo, as this window lists and applies its offers (Tynn #756). A failed link is a refusal in words. */
+    cloneOffers(): { list(workspaceId: string): Promise<CloneOffersReply>; apply(workspaceId: string, offerId: string): Promise<CloneApplyReply> } {
+        const ask = async <T>(method: string, args: unknown[]): Promise<T> => {
+            const reply = await this.call('engine.cloneOffers', [method, args]);
+            return (reply.ok ? reply.value : { ok: false, reason: reply.reason }) as T;
+        };
+        this.#cloneOffers ??= { list: (id) => ask<CloneOffersReply>('list', [id]), apply: (id, offerId) => ask<CloneApplyReply>('apply', [id, offerId]) };
+        return this.#cloneOffers;
+    }
+
     #issueWatch: IssueWatchReplica | null = null;
 
     /** genie-host's IssueWatch (P5c), as this window reads it (local links only) and asks it. */
@@ -1053,7 +1081,7 @@ export class SessionEngineClient {
         return [...this.#global.startedIds] as AgentId[];
     }
 
-    heldLogins(): Array<{ provider: string; view: GateView }> {
+    heldLogins(): Array<{ provider: string; account: string; view: GateView }> {
         return [...this.#global.heldLogins];
     }
 
@@ -1081,8 +1109,8 @@ export class SessionEngineClient {
         void this.call('engine.clearDesignLogin', [agentId]);
     }
 
-    resumeLimit(provider: string): void {
-        void this.call('engine.resumeLimit', [provider]);
+    resumeLimit(provider: string, accountId?: string): void {
+        void this.call('engine.resumeLimit', accountId === undefined ? [provider] : [provider, accountId]);
     }
 
     #view(agentId: string): EngineAgentView {
@@ -1267,6 +1295,66 @@ export class SessionEngineClient {
 
     async drained(exitWithinMs: number): Promise<void> {
         await this.#value('engine.drained', [exitWithinMs], false);
+    }
+
+    /** Ask the host to read who the provider's account is now (after a login, Tynn #477). */
+    async refreshAccountIdentity(provider: string): Promise<void> {
+        await this.#value('engine.refreshAccountIdentity', [provider], false);
+    }
+
+    /**
+     * Sign one account of a provider in (Tynn #479). The host runs the sign-in and owns its terminal; the window only shows it.
+     * Two calls for one account join one sign-in. With no account named, the provider's default account.
+     */
+    async login(provider: string, accountId?: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.login', accountId === undefined ? [provider] : [provider, accountId]);
+        if (!reply.ok) return { ok: false, reason: reply.reason };
+        return reply.value as { ok: true; terminalId: string } | { ok: false; reason: string };
+    }
+
+    /** The person closed or cancelled the sign-in window: the host kills its terminal and signs nobody in. */
+    async cancelLogin(accountId: string): Promise<void> {
+        await this.#value('engine.cancelLogin', [accountId], false);
+    }
+
+    /**
+     * SWITCH ACCOUNT (Tynn #753): the host opens the provider's own login in its one home; the answer names the terminal and the
+     * steps to show. No agent is stopped or started again.
+     */
+    async switchAccount(provider: string): Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.switchAccount', [provider]);
+        if (!reply.ok) return { ok: false, reason: reply.reason };
+        return reply.value as { ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string };
+    }
+
+    /** Rename or forget a known account (Tynn #484); a refusal, or a host that cannot answer, is its reason. */
+    async accountsAct(action: AccountsAction): Promise<AccountsActResult> {
+        const reply = await this.call('engine.accountsAct', [action]);
+        if (!reply.ok) return { ok: false, reason: reply.reason };
+        const v = reply.value as AccountsActResult | null;
+        return v && typeof v === 'object' && 'ok' in v ? v : { ok: false, reason: 'The host gave no answer.' };
+    }
+
+    /** Every known account and the standing offers (Tynn #483); `null` while the host cannot answer. */
+    async accounts(): Promise<AccountsSnapshot | null> {
+        const value = await this.#value<unknown>('engine.accounts', [], null);
+        return value !== null && typeof value === 'object' && Array.isArray((value as AccountsSnapshot).providers) ? (value as AccountsSnapshot) : null;
+    }
+
+    /** The switch offers standing in the host (Tynn #481); none while the host cannot answer. */
+    async switchOffers(): Promise<SwitchOffer[]> {
+        const offers = await this.#value<unknown>('engine.switchOffers', [], []);
+        return Array.isArray(offers) ? (offers as SwitchOffer[]) : [];
+    }
+
+    /** Not now on an offer: it goes, and the host does not make it again in that window. */
+    async dismissSwitchOffer(id: string): Promise<boolean> {
+        return (await this.#value<unknown>('engine.dismissSwitchOffer', [id], false)) === true;
+    }
+
+    /** The persisted legacy account home, or unknown while the host/book cannot answer. */
+    async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null> {
+        return this.#value('engine.providerAccount', [provider], null);
     }
 
     /**

@@ -312,8 +312,11 @@ describe('knowledge summaries: what the Dashboard shows, without full bodies or 
     });
 
     it('the feature snapshot reads summaries, not the full list', () => {
-        const src = readFileSync('src/main/feature-ipc.ts', 'utf8');
-        expect(src).not.toMatch(/services\.knowledge\.list\(/);
-        expect(src).toMatch(/services\.knowledge\.summaries\(\{ scopes: 'all', limit: 200 \}\)/);
+        const window = readFileSync('src/main/feature-ipc.ts', 'utf8');
+        const shared = readFileSync('src/main/feature-personal.ts', 'utf8');
+        expect(window).toMatch(/import \{[^}]*personalFeatureSnapshot[^}]*\} from '\.\/feature-personal\.js'/);
+        expect(window).toMatch(/personalFeatureSnapshot\(services, state\)/);
+        expect(window + shared).not.toMatch(/services\.knowledge\.list\(/);
+        expect(shared).toMatch(/services\.knowledge\.summaries\(\{ scopes: 'all', limit: 200 \}\)/);
     });
 });

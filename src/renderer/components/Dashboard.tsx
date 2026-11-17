@@ -1,15 +1,26 @@
 import { trayOf } from '../../core/row-tray.js';
-import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
-import { ActivityLight, Button, Icon, Popover } from '@particle-academy/react-fancy';
-import { Fragment, useEffect, useState } from 'react';
-import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
+import { ageLabel, revealOf, type Reveal } from '../../core/reveal.js';
+import { ARC_WINDOW_SECONDS, arcsFor, type Point, type Rect } from '../../core/flight-arcs.js';
+import { FlightPaths } from './FlightPaths.js';
+import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academy/react-fancy';
+import { Fragment, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
+import { useNow } from '../use-now.js';
+import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
+import { AccountsChip } from './AccountsChip.js';
+import type { AccountsSnapshot } from '../../core/accounts-view.js';
+import type { SwitchOffer } from '../../core/switch-offer.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 import { agentStatusStyle } from '../agent-status-color.js';
+import { useDashboardFilter, useNeedsYouFilter } from '../dashboard-filter.js';
+import { DAY_MS, deckBand, dismissableOlderThan, dismissableStale, signalStrip, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
+import type { ApprovalAnswering } from '../../core/approval-answering.js';
+import { groupWaiting, needsYouChipCount, needsYouRows, waitingBadges, type WaitingBadge, type WaitingKind } from '../../core/waiting.js';
+import { DeckRow, type RowProps } from './DeckRow.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import {
     commsOf,
@@ -18,6 +29,8 @@ import {
     dashboardRows,
     shownState,
     statusOf,
+    windowEntriesFor,
+    WINDOW_ENTRIES,
     type FixRoute,
     summaryChips,
     targetOf,
@@ -31,11 +44,13 @@ import {
 /**
  * THE WORKFLOW DASHBOARD — the landing surface.
  *
- * *"What is being produced, and by whom?"* A board you READ. It carries **no resolving
- * control anywhere**: no approve, no deny, no answer, no composer, not even in a row tray. A
- * row click (a waiting one too) opens that agent's chat beside the board, which stays (the
- * owner, 2026-10-28); a question is answered on the Deck, its toast or that chat. `A`/`D` are
- * deliberately unbound on this surface.
+ * *"What is being produced, and by whom?"* A board you READ - and, since the Deck merged into it (Tynn #730, the owner's
+ * option B), *what is waiting on you*, on the row of the agent it is about. The board itself carries **no resolving control**:
+ * no approve, no deny, no composer, not even in a row tray. A row click (a waiting one too) opens that agent's chat beside the
+ * board, which stays (the owner, 2026-10-28). What waits on an agent is a BADGE on its row (an approval, a question, stale,
+ * mail); the badge opens the items under the row, where they are answered, dismissed or collected in place - except an
+ * approval a toast carries, which is answered on the toast (core/approval-toasts.ts). Items with no agent are the Genie
+ * row's. `A`/`D` are deliberately unbound on this surface.
  *
  * ## This file only renders
  *
@@ -67,9 +82,11 @@ import {
  * anywhere: a census that hides members is not a census.
  */
 
-/** One shared template: Agent · Workspace · Status · Target · Delivery · Comms · Context. */
+const NO_ITEMS: readonly DeckItem[] = [];
+
+/** One shared template: Agent · Workspace · Status · Target · Delivery · Comms · Context · Windows. */
 const GRID =
-    'grid grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px] gap-4 pl-7 pr-5';
+    'grid grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px_36px] gap-4 pl-7 pr-5';
 
 /** Dot colour carries STATE. Shape (below) carries what Genie can see. */
 /** One status colour for the whole row, fidelity dot and census chip. */
@@ -147,25 +164,50 @@ function DeliveryCell({ delivery }: { delivery: Delivery | null }) {
 }
 
 /** The 32px agent row. */
+/** The badges' colours: an approval blocks an agent (amber), a question is the person's to answer (violet), the rest are quiet. */
+const BADGE_TONE: Record<WaitingKind, string> = {
+    approval: 'border-[var(--warning)]/50 bg-[var(--warning)]/10 text-[var(--warning)]',
+    question: 'border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--accent)]',
+    mail: 'border-[var(--success)]/40 bg-[var(--success)]/10 text-[var(--success)]',
+    todo: 'border-[var(--border-2)] text-[var(--fg-2)]',
+    genie: 'border-[var(--border-2)] text-[var(--fg-2)]',
+    stale: 'border-[var(--border-2)] text-[var(--fg-3)]',
+};
+
 /**
- * The collaborator reveal's lanes in a line's left gutter (§4.1): one per peer, solid violet for a live link, dashed
- * `--fg-4` when quiet; a tick into the row at each end. Purely drawn — nothing here is a control.
+ * WHAT WAITS ON AN AGENT, as badges on its row (Tynn #730, option B): one per kind, each a real button that opens or folds
+ * the items under the row - one click to see them, one to answer, no page change. The row's own click opens the chat, so
+ * these stop it.
  */
-function Lanes({ segments }: { segments: readonly LaneSegment[] | undefined }) {
-    if (!segments || segments.length === 0) return null;
+function WaitingBadges({ owner, badges, open, onToggle }: { owner: string; badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void }) {
     return (
-        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-7">
-            {segments.map((s) => {
-                const x = 5 + s.lane * 5;
-                const stroke = s.live ? '2px solid var(--violet-400)' : '2px dashed var(--fg-4)';
-                return (
-                    <span key={s.lane} data-lane={s.lane} data-part={s.part} data-live={String(s.live)}>
-                        <span className="absolute" style={{ left: x, top: s.part === 'start' ? '50%' : 0, bottom: s.part === 'end' ? '50%' : 0, borderLeft: stroke }} />
-                        {s.part === 'mid' ? null : <span className="absolute" style={{ left: x, right: 2, top: '50%', borderTop: stroke }} />}
-                    </span>
-                );
-            })}
+        <span data-waiting-badges={owner} className="flex shrink-0 items-center gap-1">
+            {badges.map((badge) => (
+                <Button
+                    key={badge.kind}
+                    type="button"
+                    size="xs"
+                    data-waiting-badge={badge.kind}
+                    aria-expanded={open}
+                    title={open ? 'Hide what is waiting' : 'Show what is waiting'}
+                    onClick={(event) => { event.stopPropagation(); onToggle(); }}
+                    className={`rounded-full border px-2 py-0 text-[11px] ${BADGE_TONE[badge.kind]}`}
+                >
+                    {badge.label}
+                </Button>
+            ))}
         </span>
+    );
+}
+
+/** An agent's items (or the Genie row's), opened under its row: the Deck's own rows, with their own actions. */
+function WaitingItems({ owner, items, row }: { owner: string; items: readonly DeckItem[]; row: RowProps }) {
+    return (
+        <div data-waiting-items={owner} className="border-b border-[var(--border-1)] bg-[var(--bg-1)]">
+            <div className="ml-5 border-l-2 border-[var(--accent)]/50">
+                {items.map((item) => <DeckRow key={item.id} item={item} {...row} />)}
+            </div>
+        </div>
     );
 }
 
@@ -206,7 +248,7 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
     );
 }
 
-function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting, switchOffer }: {
     row: AgentRow;
     workspaceName: string;
     workspaceColor?: string | undefined;
@@ -220,9 +262,16 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     focused?: boolean | undefined;
     /** The board's collaborator reveal, when one is shown. */
     reveal?: Reveal | null | undefined;
-    lanes?: readonly LaneSegment[] | undefined;
     /** Hovering the comms cell reveals this row's collaborators; leaving it ends the reveal. */
     onReveal?: ((id: string | null) => void) | undefined;
+    /** The same hover draws the flight paths (Tynn #750): enter and move carry the pointer. */
+    onArc?: { enter: (id: string, event: ReactMouseEvent) => void; move: (event: ReactMouseEvent) => void; leave: () => void } | undefined;
+    /** What waits on this agent: its badges, and whether its items are open under the row. Absent = nothing waits (or no Deck). */
+    waiting?: { badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void } | undefined;
+    /** The windows column (Tynn #706): absent = this row has none (Genie's own, or a workspace this window may not open). */
+    windows?: { onTerminal?: (() => void) | undefined; onFiles?: (() => void) | undefined } | undefined;
+    /** Its provider's standing switch offer (Tynn #483): one click starts the switch. Absent = none. */
+    switchOffer?: { offer: SwitchOffer; onSwitch: (provider: string, choose?: string) => void } | undefined;
 }) {
     const role = reveal ? (reveal.focus === row.id ? 'focus' : reveal.peers[row.id] ? 'peer' : 'dim') : null;
     const peerLink = role === 'peer' ? reveal!.peers[row.id]! : null;
@@ -239,17 +288,24 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
             data-state={shownState(row)}
             {...(focused ? { 'data-focused': 'true' } : {})}
             {...(role ? { 'data-reveal': role } : {})}
-            onClick={() => onOpen(row.id)}
+            // The windows column's button and its menu (portalled, still React children of this row) open windows, not the agent.
+            onClick={(event) => { if (event.target instanceof Element && event.target.closest('[data-column="windows"],[data-react-fancy-dropdown]')) return; onOpen(row.id); }}
             className={`${GRID} relative h-8 cursor-pointer items-center border-b border-[var(--border-1)] text-[13px] transition-opacity border-l-2 border-l-[var(--agent-status)] bg-[color-mix(in_srgb,var(--agent-status)_9%,transparent)] hover:bg-[color-mix(in_srgb,var(--agent-status)_15%,transparent)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
             // The reveal: the rest dims to .32; the row and its peers carry a 2px violet left border (the board).
             style={{ ...stateStyle(shownState(row)), ...(shownState(row) === 'sleeping' ? { opacity: 0.5 } : {}), ...(role === 'dim' ? { opacity: 0.32 } : role ? { boxShadow: 'inset 2px 0 0 var(--violet-400)' } : {}) }}
         >
-            <Lanes segments={lanes} />
             <div className="flex min-w-0 items-center gap-2">
                 <FidelityDot fidelity={row.fidelity} state={shownState(row)} />
-                <span className="truncate font-medium">{row.name}</span>
+                <span data-agent-name="" className="truncate font-medium">{row.name}</span>
                 {emoji ? <span data-row-emoji={emoji} className="shrink-0 animate-pulse" aria-label="what it just did">{emoji}</span> : null}
                 <ProviderLogo provider={row.provider} />
+                {switchOffer ? (
+                    <Button type="button" size="xs" variant="ghost" icon="arrow-right-left" data-switch-offer-row={switchOffer.offer.id}
+                        aria-label={`${switchOffer.offer.label} is near its ${windowWords(switchOffer.offer.window)} limit: switch account`}
+                        title={`${switchOffer.offer.label}: ${switchOffer.offer.over ? 'spent' : `${switchOffer.offer.leftPct}% left`} ${windowWords(switchOffer.offer.window)}. Switch account`}
+                        className="shrink-0 px-1 text-[var(--warning)]"
+                        onClick={(event) => { event.stopPropagation(); switchOffer.onSwitch(row.provider, switchOffer.offer.targets[0]?.label); }} />
+                ) : null}
             </div>
 
             <div data-column="workspace" data-workspace={row.workspaceId} {...(workspacePulsed ? { 'data-workspace-pulse': 'true' } : {})} className={`flex min-w-0 items-center gap-1.5${workspacePulsed ? ` ${WORKSPACE_PULSE}` : ''}`}>
@@ -261,6 +317,7 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
             </div>
             <div className="flex min-w-0 items-center gap-1.5">
                 <span className={`shrink-0 font-medium ${STATUS_TONE[status.tone]}`}>{status.word}</span>
+                {waiting ? <WaitingBadges owner={row.id} badges={waiting.badges} open={waiting.open} onToggle={waiting.onToggle} /> : null}
                 {status.detail ? <span className="truncate text-xs text-[var(--fg-3)]" {...(status.title ? { title: status.title } : {})}>{status.detail}</span> : null}
             </div>
 
@@ -319,8 +376,9 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
              * specifies violet for comms, and `tailwind-merge` resolves the later class.
              */}
             <div
+                data-comms-cell=""
                 className="flex items-center gap-1.5 text-xs text-[var(--fg-2)]"
-                {...(comms && comms.count > 0 && onReveal ? { onMouseEnter: () => onReveal(row.id), onMouseLeave: () => onReveal(null) } : {})}
+                {...(comms && comms.count > 0 && onReveal ? { onMouseEnter: (event: ReactMouseEvent) => { onReveal(row.id); onArc?.enter(row.id, event); }, onMouseMove: (event: ReactMouseEvent) => onArc?.move(event), onMouseLeave: () => { onReveal(null); onArc?.leave(); } } : {})}
             >
                 {peerLink ? (
                     // A peer in the reveal: its link to the focused row — messages · age of the newest.
@@ -355,6 +413,27 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                             {Math.round(context.used / 1000)}k
                         </span>
                     </>
+                ) : null}
+            </div>
+
+            {/* The windows column (Tynn #706): an icon Button and a menu of Terminal / Files, each in a NEW window; this one stays. */}
+            <div data-column="windows" className="flex items-center justify-end">
+                {windows ? (
+                    <Dropdown placement="bottom-end">
+                        <Dropdown.Trigger>
+                            <Button type="button" variant="ghost" size="xs" icon="app-window" data-windows-menu={row.id} aria-label={`Open ${row.name} in a new window`} title="Open in a new window" disabled={!windows.onTerminal && !windows.onFiles} className="px-1 text-[var(--fg-3)]" />
+                        </Dropdown.Trigger>
+                        <Dropdown.Items>
+                            {WINDOW_ENTRIES.map((entry) => {
+                                const open = entry.kind === 'terminal' ? windows.onTerminal : windows.onFiles;
+                                return (
+                                    <Dropdown.Item key={entry.kind} disabled={!open} onClick={() => open?.()}>
+                                        <span data-windows-entry={entry.kind} className="flex items-center gap-2 text-xs"><Icon name={entry.icon} size="xs" />{entry.label}</span>
+                                    </Dropdown.Item>
+                                );
+                            })}
+                        </Dropdown.Items>
+                    </Dropdown>
                 ) : null}
             </div>
         </div>
@@ -403,34 +482,197 @@ export interface DashboardProps {
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** Each provider's rate limit, buffered in main (the header's pills). */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** Every known account and the standing switch offers (Tynn #483): the header's account chips. Absent = the pills alone. */
+    accounts?: AccountsSnapshot | undefined;
+    /** One click to switch a provider's account (S9): the provider's own login, in its one home. */
+    onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
+    /** Not now on a switch offer. */
+    onDismissSwitchOffer?: ((id: string) => void) | undefined;
+    /** Design sign-in for the machine (Tynn #480). */
+    onDesignSignIn?: (() => void) | undefined;
+    /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
+    now?: number | undefined;
     /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
     mailSignals?: readonly MailSignal[] | undefined;
     /** Workspaces an agent acted in that the person has not visited since: their Workspace cells pulse. */
     pulsing?: ReadonlySet<string> | undefined;
+    /**
+     * WHAT WAITS ON THE PERSON (Tynn #730: the Deck merged into this board). Absent = no Deck here (a window that serves none):
+     * no badges, no "Needs you" chip, no Genie row.
+     */
+    waiting?: DashboardWaiting | undefined;
+    /** The windows column's openers (Tynn #706): a workspace's terminals view, or its Files, in a NEW window. Absent = disabled. */
+    onOpenTerminalWindow?: ((workspaceId: string) => void) | undefined;
+    onOpenFilesWindow?: ((workspaceId: string) => void) | undefined;
+    /** A workspace-share window's workspace (Tynn #690/#691): the column offers that workspace only. Absent = a workstation window. */
+    scopeWorkspaceId?: string | null | undefined;
 }
 
-function readShown(kind: 'sleeping' | 'stopped'): boolean {
-    try { return typeof window !== 'undefined' && window.localStorage.getItem(`genie.dashboard.show.${kind}`) === '1'; }
-    catch { return false; }
+export interface DashboardWaiting {
+    /** The Deck's items. */
+    items: readonly DeckItem[];
+    signals: SignalState;
+    /** The answer in flight, if any - which agent's (core/approval-answering.ts): only THAT agent's row refuses a second press. */
+    answering: ApprovalAnswering | null;
+    /** `note`: the person's words with an approval's answer; absent = none. */
+    onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
+    /** Open the item's agent (its chat). */
+    onOpenItem: (item: DeckItem) => void;
+    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
+    /** The last refused action, said beside THAT item (or under the header for the two bulk dismissals). */
+    formRefusal?: { itemId: string; reason: string } | null | undefined;
+    /** Dismiss an agent's question without an answer, with the notes written in its form. Absent = not offered. */
+    onDismiss?: ((item: DeckItem, notes: string[]) => void) | undefined;
+    /** "Dismiss all older than 1 day": the age, in ms. Absent = not offered. */
+    onDismissOlder?: ((olderThanMs: number) => void) | undefined;
+    /** "Dismiss all stale": exactly the ids shown marked stale. Absent = not offered. */
+    onDismissStale?: ((ids: string[]) => void) | undefined;
+    onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
+    /** The signal strip's update door (download, then install). */
+    onSignalAction?: ((action: SignalAction) => void) | undefined;
+    /** The action in flight on one of Genie's own items: that button shows progress, its row takes no second press. */
+    busy?: { itemId: string; optionId: string } | null | undefined;
+    /** The approvals a toast carries (core/approval-toasts.ts): the toast answers them, their rows show a marker. */
+    toastIds?: ReadonlySet<string> | undefined;
+    /** The item the reader was SENT to (`?item=<id>`): its agent's row is open on it, marked and scrolled to. */
+    focusItemId?: string | null | undefined;
+    /** Items drawn opened in place (a long to-do or message shows its first line; this opens the whole text). */
+    initiallyExpanded?: readonly string[] | undefined;
+    /** Rows drawn opened (a test of the opened row; the board itself opens one on a click): agent ids, or `genie:`. */
+    initiallyOpen?: readonly string[] | undefined;
+    /** The clock the ages are read against; now by default (tests pass a fixed one). */
+    now?: number | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing }: DashboardProps) {
+/**
+ * THE COMMS FLIGHT PATHS' HOVER (Tynn #750). Nothing is computed at rest. On entering a Comms cell the rows' name positions
+ * are measured ONCE (reads only, no writes in between); the pointer then follows through one requestAnimationFrame at a
+ * time, and the arches are derived (core/flight-arcs.ts) from the newest twelve partners of the last 24 h. Leaving drops
+ * all of it, so the overlay is not in the tree.
+ */
+interface ArcState {
+    readonly focus: string;
+    readonly pointer: Point;
+    readonly targets: Readonly<Record<string, Point>>;
+    /** Every row's text, measured once on entering: the labels keep off it. */
+    readonly obstacles: readonly Rect[];
+    readonly size: { width: number; height: number };
+    readonly reducedMotion: boolean;
+}
+
+function useFlightPaths(shown: readonly AgentRow[]) {
+    const surface = useRef<HTMLDivElement | null>(null);
+    const [state, setState] = useState<ArcState | null>(null);
+    const pending = useRef<{ x: number; y: number } | null>(null);
+    const scheduled = useRef(false);
+    const frame = useRef(0);
+    const live = useRef(false);
+    useEffect(() => () => { if (frame.current) cancelAnimationFrame(frame.current); }, []);
+    const enter = (id: string, event: ReactMouseEvent) => {
+        const host = surface.current;
+        const row = shown.find((r) => r.id === id);
+        if (!host || !row) return;
+        const box = host.getBoundingClientRect();
+        const targets: Record<string, Point> = {};
+        for (const link of row.links ?? []) {
+            if (link.ageSeconds > ARC_WINDOW_SECONDS || link.peer === id) continue;
+            const name = host.querySelector<HTMLElement>(`[data-agent="${CSS.escape(link.peer)}"] [data-agent-name]`);
+            if (!name) continue;
+            const r = name.getBoundingClientRect();
+            targets[link.peer] = { x: r.right - box.left + 8, y: r.top + r.height / 2 - box.top };
+        }
+        // Every text leaf on the board (rows, column headers, buttons), read in one go with the targets (no writes in between): what a label must not cover.
+        const obstacles: Rect[] = [];
+        host.querySelectorAll<HTMLElement>('*').forEach((el) => {
+            if (el.closest('[data-flight-paths]') || el.childElementCount > 0 || (el.textContent ?? '').trim() === '') return;
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) obstacles.push({ x: r.left - box.left - 2, y: r.top - box.top - 1, w: r.width + 4, h: r.height + 2 });
+        });
+        live.current = true;
+        setState({
+            focus: id,
+            pointer: { x: event.clientX - box.left, y: event.clientY - box.top },
+            targets,
+            obstacles,
+            size: { width: box.width, height: host.scrollHeight || box.height },
+            reducedMotion: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
+        });
+    };
+    const move = (event: ReactMouseEvent) => {
+        if (!live.current) return;
+        pending.current = { x: event.clientX, y: event.clientY };
+        if (scheduled.current) return;
+        scheduled.current = true;
+        frame.current = requestAnimationFrame(() => {
+            scheduled.current = false;
+            const at = pending.current;
+            const host = surface.current;
+            if (!at || !host || !live.current) return;
+            const box = host.getBoundingClientRect();
+            setState((prev) => (prev ? { ...prev, pointer: { x: at.x - box.left, y: at.y - box.top } } : prev));
+        });
+    };
+    const leave = () => {
+        live.current = false;
+        pending.current = null;
+        scheduled.current = false;
+        if (frame.current) cancelAnimationFrame(frame.current);
+        setState(null);
+    };
+    const row = state ? shown.find((r) => r.id === state.focus) : undefined;
+    const paths = state && row
+        ? {
+            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, obstacles: state.obstacles, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), pointer: state.pointer }),
+            size: state.size,
+            pointer: state.pointer,
+            reducedMotion: state.reducedMotion,
+        }
+        : null;
+    return { surface, paths, handlers: { enter, move, leave } };
+}
+
+
+/** The Genie row's key: items that belong to no agent, or whose agent has no row on screen. */
+export const GENIE_ROW = 'genie:';
+
+const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
+
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, now, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
     const all = genie ? [genie, ...rows] : rows;
-    const [showSleeping, setShowSleeping] = useState(() => readShown('sleeping'));
-    const [showStopped, setShowStopped] = useState(() => readShown('stopped'));
-    const shown = dashboardRows(all, { sleeping: showSleeping, stopped: showStopped });
-    const toggle = (kind: 'sleeping' | 'stopped') => {
-        const next = kind === 'sleeping' ? !showSleeping : !showStopped;
-        if (kind === 'sleeping') setShowSleeping(next); else setShowStopped(next);
-        try { window.localStorage.setItem(`genie.dashboard.show.${kind}`, next ? '1' : '0'); } catch { /* Applies in this window even when storage is unavailable. */ }
+    const { filter, toggle } = useDashboardFilter();
+    const { sleeping: showSleeping, stopped: showStopped } = filter;
+    const needsYou = useNeedsYouFilter();
+    const items = waiting?.items ?? NO_ITEMS;
+    // "Needs you": only the agents with something waiting - the Sleeping / Stopped filters do not hide one that needs the person.
+    const shown = waiting && needsYou.on ? dashboardRows(needsYouRows(all, items), { sleeping: true, stopped: true }) : dashboardRows(all, filter);
+    const groups = groupWaiting(items, new Set(shown.map((row) => row.id)));
+    // Which rows are open: a click on a badge opens one; the item the reader was sent to is open; under "Needs you" all are.
+    const focusItem = waiting?.focusItemId ?? null;
+    const focusKey = focusItem === null ? null : ([...groups.byAgent].find(([, list]) => list.some((i) => i.id === focusItem))?.[0] ?? (groups.genie.some((i) => i.id === focusItem) ? GENIE_ROW : null));
+    const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set(waiting?.initiallyOpen ?? []));
+    const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
+    const isOpen = (key: string): boolean => !closed.has(key) && (opened.has(key) || key === focusKey || (needsYou.on && waiting !== undefined));
+    const toggleOpen = (key: string): void => {
+        const wasOpen = isOpen(key);
+        setOpened((prev) => { const next = new Set(prev); if (wasOpen) next.delete(key); else next.add(key); return next; });
+        setClosed((prev) => { const next = new Set(prev); if (wasOpen) next.add(key); else next.delete(key); return next; });
     };
+    const focusRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => { focusRef.current?.scrollIntoView?.({ block: 'center' }); }, [focusItem]);
+    const rowProps: RowProps | null = waiting ? {
+        answering: waiting.answering, onAnswer: waiting.onAnswer, onOpenItem: waiting.onOpenItem, onAnswerForm: waiting.onAnswerForm,
+        formRefusal: waiting.formRefusal ?? null, focusId: focusItem, focusRef: focusRef as RefObject<HTMLDivElement | null>,
+        onDismiss: waiting.onDismiss, now: waiting.now ?? Date.now(), busy: waiting.busy, onTrustWorkspace: waiting.onTrustWorkspace, toastIds: waiting.toastIds, initiallyExpanded: waiting.initiallyExpanded,
+    } : null;
     const [ownFocus, setOwnFocus] = useState<string | null>(null);
     const focused = focusedId ?? ownFocus;
     const [ownReveal, setOwnReveal] = useState<string | null>(null);
     const reveal = revealOf(shown, revealId ?? ownReveal);
+    const arcs = useFlightPaths(shown);
+    const arcHandlers = arcs.handlers;
     const [ownTray, setOwnTray] = useState<string | null>(null);
     const openTray = trayId ?? ownTray;
     const go = (route: string) => { if (onNavigate) onNavigate(route); else if (route.startsWith('genie://agent/')) onOpenAgent(route.slice('genie://agent/'.length)); };
@@ -450,7 +692,10 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [visibleIds, focused, onOpenAgent]);
-    const lanes = reveal ? lanesFor(visibleIds, reveal) : null;
+    const band = deckBand(items);
+    const staleItems = dismissableStale(band);
+    const olderItems = dismissableOlderThan(band, waiting?.now ?? Date.now(), DAY_MS);
+    const strip = waiting ? signalStrip(waiting.signals) : [];
     const chips = summaryChips(all);
     const workspaceOf = (row: AgentRow) => workspaces?.find((workspace) => workspace.id === row.workspaceId);
     const nameOf = (row: AgentRow) => {
@@ -510,7 +755,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     }
 
     return (
-        <div data-surface="dashboard" className="relative flex min-h-0 flex-col">
+        <div ref={arcs.surface} data-surface="dashboard" className="relative flex min-h-0 flex-col">
             <div data-view-header="" className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-[var(--border-1)] px-5 py-2">
                 <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
                 <div className="flex items-center gap-3 text-xs text-[var(--fg-2)]">
@@ -521,6 +766,24 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     ))}
                 </div>
                 <span className="flex-1" />
+                {/* The questions nobody waits for any more: exactly the ones on screen, put aside in one go (the Deck's, kept). */}
+                {waiting?.onDismissStale && staleItems.length > 0 ? (
+                    <Button size="xs" type="button" data-action="deck-dismiss-stale" data-deck-stale={staleItems.length} onClick={() => waiting.onDismissStale?.(staleItems.map((i) => i.id))} title="Every question whose agent no longer waits; each agent is told" className={HEADER_BUTTON}>
+                        {`Dismiss all stale (${staleItems.length})`}
+                    </Button>
+                ) : null}
+                {/* The questions nobody is going to answer: put aside in one go, each agent told. Only when there are such. */}
+                {waiting?.onDismissOlder && olderItems.length > 0 ? (
+                    <Button size="xs" type="button" data-action="deck-dismiss-older" data-deck-older={olderItems.length} onClick={() => waiting.onDismissOlder?.(DAY_MS)} title="Each agent is told its question was dismissed without an answer" className={HEADER_BUTTON}>
+                        {`Dismiss all older than 1 day (${olderItems.length})`}
+                    </Button>
+                ) : null}
+                {/* NEEDS YOU (Tynn #730): only the agents with something waiting, beside the status filters, in the same store. */}
+                {waiting ? (
+                    <Button type="button" size="xs" icon="hand" data-dashboard-filter="needsYou" className={needsYou.on ? 'ring-1 ring-[var(--warning)]' : ''} aria-pressed={needsYou.on} onClick={needsYou.toggle}>
+                        {`Needs you ${needsYouChipCount(items)}`}
+                    </Button>
+                ) : null}
                 {(['sleeping', 'stopped'] as const).map((kind) => {
                     const active = kind === 'sleeping' ? showSleeping : showStopped;
                     return <Button key={kind} type="button" size="xs" data-dashboard-filter={kind} data-chip={active && all.some((row) => shownState(row) === kind) ? kind : undefined} style={stateStyle(kind)} className={active ? 'ring-1 ring-[var(--agent-status)]' : ''} aria-pressed={active} onClick={() => toggle(kind)}>
@@ -530,9 +793,23 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent">
                     {['J', 'K', '↵'].map((key) => <kbd key={key} className="rounded border border-[var(--border-1)] px-1 font-mono">{key}</kbd>)}
                 </span>
-                <RateLimitPills limits={rateLimits ?? {}} />
+                <RateLimitPills limits={rateLimits ?? {}} accounts={accounts} onSwitchAccount={onSwitchAccount} onDismissSwitchOffer={onDismissSwitchOffer} onDesignSignIn={onDesignSignIn} {...(now !== undefined ? { now } : {})} />
                 <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie">Chat <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span></Button>
             </div>
+            {/* "Dismiss all stale" or "Dismiss all older" refused: said under the header (Tynn #600). */}
+            {waiting?.formRefusal && (waiting.formRefusal.itemId === 'deck:stale' || waiting.formRefusal.itemId === 'deck:older') ? (
+                <p data-deck-refusal={waiting.formRefusal.itemId} role="alert" className="px-7 pb-2 text-xs text-[var(--danger)]">{waiting.formRefusal.reason}</p>
+            ) : null}
+            {/* The signal strip - silent unless something is true, and every signal a door (the Deck's, kept). */}
+            {strip.length > 0 ? (
+                <div data-signal-strip="" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-7 py-2">
+                    {strip.map((signal) => (
+                        <Button size="xs" key={signal.kind} type="button" data-signal={signal.kind} data-nav={signal.route} data-action={signal.action} onClick={() => (signal.action ? waiting?.onSignalAction?.(signal.action) : go(signal.route))} className={HEADER_BUTTON}>
+                            {signal.label}
+                        </Button>
+                    ))}
+                </div>
+            ) : null}
             {legend ? <div data-legend="" className="flex shrink-0 flex-wrap gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
                 <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full bg-[var(--fg-3)]" />Declared — reports plan, deliveries, comms, usage</span>
                 <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-[var(--fg-3)]" />Observed — terminal activity, commits and file writes only</span>
@@ -540,21 +817,38 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div> : null}
             <div className={`${GRID} h-7 items-center border-b border-[var(--border-1)] text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]`}>
                 {['Agent', 'Workspace', 'Status', 'Current target', 'Latest delivery', 'Comms', 'Context'].map((label) => <span key={label} className="truncate">{label}</span>)}
+                {/* Icon only (Tynn #706): the tooltip says what the column is. */}
+                <div data-column-header="windows" title="Open in a new window" aria-label="Open in a new window" className="flex items-center justify-end"><Icon name="app-window" size="xs" /></div>
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={row.id === genie?.id || windowEntriesFor(row.workspaceId, scopeWorkspaceId).length === 0 ? undefined : { onTerminal: onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined, onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined }} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
+                    {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}
+                {/* THE GENIE ROW: what belongs to no agent (a flow signal, a workstation item, Genie's own asks), and what waits on an agent with no row on screen. */}
+                {rowProps && groups.genie.length > 0 ? (
+                    <div data-waiting-genie="">
+                        <div className="flex h-8 items-center gap-3 border-b border-[var(--border-1)] pl-7 pr-5 text-[13px]">
+                            <Icon name="sparkles" size="sm" className="shrink-0 text-[var(--fg-3)]" />
+                            <span className="font-medium">Genie</span>
+                            <span className="text-xs text-[var(--fg-3)]">items that belong to no agent</span>
+                            <WaitingBadges owner={GENIE_ROW} badges={waitingBadges(groups.genie)} open={isOpen(GENIE_ROW)} onToggle={() => toggleOpen(GENIE_ROW)} />
+                        </div>
+                        {isOpen(GENIE_ROW) ? <WaitingItems owner={GENIE_ROW} items={groups.genie} row={rowProps} /> : null}
+                    </div>
+                ) : null}
             </div>
             {workspaces.length === 0 ? <p data-dashboard-no-active-workspaces="" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No active workspaces. Redock a hibernated workspace from the sidebar to see it here.</p>
-                : shown.length === 0 ? <p role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No agents shown. Use Sleeping or Stopped to include those agents.</p> : null}
+                : waiting && needsYou.on && shown.length === 0 && groups.genie.length === 0 ? <p data-needs-you="empty" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">Nothing needs you.</p>
+                : shown.length === 0 && !(waiting && needsYou.on) ? <p role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No agents shown. Use Sleeping or Stopped to include those agents.</p> : null}
             {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`flex items-center gap-3 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
                 {workspace.color ? <WorkspaceSwatch color={workspace.color} /> : null}
                 <span>{workspace.name ?? workspace.id} has no agents yet.</span><Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>
                 {faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
             </div>)}
             <MailSignalLayer signals={mailSignals ?? []} />
+            {arcs.paths ? <FlightPaths arcs={arcs.paths.arcs} size={arcs.paths.size} pointer={arcs.paths.pointer} reducedMotion={arcs.paths.reducedMotion} /> : null}
         </div>
     );
 }
@@ -564,12 +858,27 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
  * window. A click or Enter opens a POPOVER with every window (the owner, 2026-10-31: "can we make these cleaner? this
  * should be a popover not a tooltip"). Buffered in main, so this redraws at most once per provider per buffer.
  */
-export function RateLimitPills({ limits, now }: { limits: Readonly<Record<string, Headroom>>; now?: number }) {
-    const providers = Object.keys(limits).sort();
+export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn }: {
+    limits: Readonly<Record<string, Headroom>>;
+    now?: number;
+    /** Every known account and the standing offers (Tynn #483): a provider with accounts draws its account chip instead. */
+    accounts?: AccountsSnapshot | undefined;
+    onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
+    onDismissSwitchOffer?: ((id: string) => void) | undefined;
+    onDesignSignIn?: (() => void) | undefined;
+}) {
+    // Re-read twice a minute: a window that resets while the header is open turns Refreshed without a new reading.
+    const now = useNow(true, pinned, 30_000);
+    const viewOf = (p: string) => accounts?.providers.find((v) => v.provider === p) ?? null;
+    const providers = [...new Set([...Object.keys(limits), ...(accounts?.providers.map((v) => v.provider) ?? [])])].sort();
     if (providers.length === 0) return null;
     return (
         <div data-rate-limits="" className="flex items-center gap-1.5">
-            {providers.map((p) => <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} />)}
+            {providers.map((p) => {
+                const view = viewOf(p);
+                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} />;
+                return limits[p] ? <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} /> : null;
+            })}
         </div>
     );
 }
@@ -577,10 +886,12 @@ export function RateLimitPills({ limits, now }: { limits: Readonly<Record<string
 const LEVEL_TEXT: Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
 const LEVEL_FILL: Readonly<Record<LimitLevel, string>> = { ok: 'bg-[var(--success)]', warning: 'bg-[var(--warning)]', danger: 'bg-[var(--danger)]' };
 
-function RateLimitPill({ provider, limit, now }: { provider: string; limit: Headroom; now: number | undefined }) {
+function RateLimitPill({ provider, limit, now }: { provider: string; limit: Headroom; now: number }) {
     const [open, setOpen] = useState(false);
-    const tight = tightestWindow(limit);
-    const level = limitLevel(tight);
+    // Every window past its reset: Refreshed, never the last figure (Tynn #478).
+    const refreshed = allRefreshed(limit, now);
+    const tight = tightestWindow(limit, now);
+    const level = refreshed ? 'ok' : limitLevel(tight);
     const name = providerName(provider);
     return (
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
@@ -592,13 +903,13 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                     data-level={level}
                     aria-haspopup="dialog"
                     aria-expanded={open}
-                    aria-label={`${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
+                    aria-label={refreshed ? `${name} rate limits: refreshed` : `${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
                     // Enter and Space toggle here and cancel the click the browser would add, so one key press is one toggle.
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
                     className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
-                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span>
+                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{refreshed ? 'Refreshed' : tight.over ? 'over' : `${tight.leftPct}%`}</span>
                     <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span>
                 </Button>
             </Popover.Trigger>
@@ -608,7 +919,7 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                 data-rate-limit-popover={provider}
                 className="w-60 border-[var(--border-1)] bg-[var(--surface-raised)] p-3 text-[var(--fg-1)]"
             >
-                <RateLimitDetail provider={provider} limit={limit} now={now ?? Date.now()} />
+                <RateLimitDetail provider={provider} limit={limit} now={now} />
             </Popover.Content>
         </Popover>
     );
@@ -627,6 +938,11 @@ export function RateLimitDetail({ provider, limit, now }: { provider: string; li
                     <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
                     <Icon name="circle-help" size="xs" />
                     <span>unknown</span>
+                </div>
+            ) : readLimitWindow(w, now).refreshed ? (
+                <div key={w.window} data-rate-limit-window={w.window} data-level="refreshed" className="flex items-center gap-2 text-[var(--fg-3)]">
+                    <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
+                    <span data-rate-limit-pct="">Refreshed</span>
                 </div>
             ) : (
                 <div key={w.window} data-rate-limit-window={w.window} data-level={limitLevel(w)} className="flex flex-col gap-1">

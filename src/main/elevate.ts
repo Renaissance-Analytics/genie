@@ -1,4 +1,5 @@
 import { systemProgram } from '../core/program-lookup.js';
+import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostsFilePath } from '../core/front-door-caddy.js';
@@ -126,12 +127,38 @@ export function elevationBatchPlan(platform: NodeJS.Platform, steps: readonly St
     return { command: 'pkexec', args: ['/bin/sh', '-c', script] };
 }
 
-/** Copy the prepared file over the hosts file — the one elevated step the hosts sync needs. */
-export function hostsWriteStep(platform: NodeJS.Platform, tmpFile: string, hostsPath: string): Step {
+/** What the elevated step says when the staged file is not what Genie composed. */
+export const HOSTS_SWAPPED = 'the prepared hosts file changed after Genie wrote it; nothing was copied';
+
+/**
+ * Copy the prepared file over the hosts file — the one elevated step the hosts sync needs — ONLY IF it is still what
+ * Genie composed (Tynn #753). `hosts.next` sits in a folder the user (and so any process running as the user, an agent's
+ * shell included) can write, between staging and the person's Yes. So the elevated side reads it ONCE, checks those
+ * bytes' SHA-256 against `sha256` (the hash of what Genie composed, computed before anything was written), and writes
+ * those same bytes: nothing can swap the file between the check and the copy. A mismatch copies nothing and exits 3.
+ * Windows holds the bytes in memory; unix copies them first into a root-owned mktemp file the user cannot touch.
+ */
+export function hostsWriteStep(platform: NodeJS.Platform, tmpFile: string, hostsPath: string, sha256: string): Step {
+    if (!/^[0-9a-f]{64}$/i.test(sha256)) throw new Error(`hostsWriteStep needs the SHA-256 of the composed file, not ${JSON.stringify(sha256)}`);
     if (platform === 'win32') {
-        return { command: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command', `Copy-Item -LiteralPath ${psQuote(tmpFile)} -Destination ${psQuote(hostsPath)} -Force`] };
+        const script = [
+            `$b = [System.IO.File]::ReadAllBytes(${psQuote(tmpFile)})`,
+            `$h = -join ([System.Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('X2') })`,
+            `if ($h -ne ${psQuote(sha256.toUpperCase())}) { [Console]::Error.WriteLine(${psQuote(HOSTS_SWAPPED)}); exit 3 }`,
+            `[System.IO.File]::WriteAllBytes(${psQuote(hostsPath)}, $b)`,
+        ].join('; ');
+        return { command: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command', script] };
     }
-    return { command: 'cp', args: [tmpFile, hostsPath] };
+    const script = [
+        'set -e',
+        't=$(mktemp)',
+        `trap 'rm -f "$t"' EXIT`,
+        'cat -- "$1" > "$t"',
+        'h=$( { sha256sum "$t" 2>/dev/null || shasum -a 256 "$t"; } | cut -d " " -f 1)',
+        `if [ "$h" != "$3" ]; then echo ${shQuote(`genie: ${HOSTS_SWAPPED}`)} >&2; exit 3; fi`,
+        'cat -- "$t" > "$2"',
+    ].join('; ');
+    return { command: '/bin/sh', args: ['-c', script, 'genie-hosts', tmpFile, hostsPath, sha256.toLowerCase()] };
 }
 
 /** An exit code as the OS means it: a Windows HRESULT (certutil's 0x80070005 = access denied) in hex, a small code as is. */
@@ -214,8 +241,10 @@ export function realHostsIo(deps: { platform: NodeJS.Platform; tmpDir: string; h
         },
         write: (content) => writeFile(hostsPath, content, 'utf8'),
         stage: async (content) => {
+            // The hash of what Genie COMPOSED, taken before the file exists: never read back from the user-writable copy.
+            const sha256 = createHash('sha256').update(content, 'utf8').digest('hex');
             await writeFile(tmp, content, 'utf8');
-            return hostsWriteStep(deps.platform, tmp, hostsPath);
+            return hostsWriteStep(deps.platform, tmp, hostsPath, sha256);
         },
     };
 }

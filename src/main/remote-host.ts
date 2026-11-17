@@ -1,8 +1,9 @@
+import { LatestPush } from '../core/latest-push.js';
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
 import { AgentPush } from './agent-push.js';
-import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
+import { BATON_REFUSAL, type Baton, type PairingPins, type PinEnded } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
@@ -12,6 +13,7 @@ import {
     COMPANION_EVENT,
     WORKSPACE_SCOPED_METHODS,
     LOCAL_EVENTS as LOCAL_EVENT_CHANNELS,
+    TYPING_EVENT,
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
@@ -27,7 +29,8 @@ import {
     type WireMessage,
 } from '../core/remote-protocol.js';
 import type { Device, DeviceStore } from './remote-devices.js';
-import { pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
+import { guestRefusal, pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
+import type { DriveMode } from '../core/connected-here.js';
 import { DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
 import type { BlobOpener } from '../core/local-blobs.js';
@@ -73,6 +76,10 @@ const REMOTE_ATTACHMENT_MAX_BYTES = 512 * 1024;
 export type LocalAgentDetail = { readonly rows: readonly unknown[] };
 
 export interface HostApi {
+    /** The owned aggregator is supplied; its reads and events must not be answered by a window replica (Tynn #720). */
+    readonly ownsFeatures?: boolean;
+    /** Release transient view state for this admitted connection; never an invocation from the wire. */
+    releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
     readonly gapps?: () => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
@@ -110,7 +117,7 @@ const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'termi
 
 // 'workspaces.create' too: New can create a repository under the host owner's GitHub and declare it on their Tynn (Add workspace parity 11).
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
-const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke'];
+const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke'];
 
 /** What a guest of ONE workspace may never do, whichever workspace it names: the workstation's roster (Tynn #688). */
 const GUEST_ROSTER_METHODS: readonly string[] = ['workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.setGoverns'];
@@ -222,9 +229,11 @@ function withoutPairRequests(value: unknown): unknown {
     return { ...value, remote: { ...remote, pairRequests: [] } };
 }
 
+const isSetMode = (args: unknown[]): boolean => typeof args[0] === 'object' && args[0] !== null && (args[0] as { kind?: unknown }).kind === 'remote.setMode';
 const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' && args[0] !== null && (args[0] as { kind?: unknown }).kind === 'remote.answerPair';
 
 export class RemoteHost {
+    readonly #featurePushes = new Map<string, LatestPush<unknown>>();
     readonly #api: HostApi;
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
@@ -247,9 +256,18 @@ export class RemoteHost {
     /** Bytes a connection sent ahead of the call that uses them (genie#1346). */
     readonly #staging: UploadStaging;
     #pin: { code: string; expiresAt: number } | null = null;
+    /** Why the last PIN went without pairing, for Settings (Tynn #751). */
+    #pinEnded: PinEnded | null = null;
+    /** Ends the PIN on screen at its expiry (Tynn #751): a lapse is told, never found out from the device. */
+    #cancelPinClock: (() => void) | null = null;
     #next = 0;
     #tynnWatchSeq = 0;
     #locked = false;
+    /**
+     * WHO MAY ONLY WATCH (Tynn #732), by person (label), as the person at THIS machine set it. Kept for this run, not per
+     * connection: leaving and coming back does not undo it.
+     */
+    readonly #viewOnly = new Set<string>();
     /**
      * The host API's events, listened to ONLY while an authenticated connection exists (genie#1200). Listening builds an
      * agent's whole detail on every update of every agent (host-api.ts), and with no one connected #broadcast sent it to
@@ -316,6 +334,7 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        this.#featurePushes.delete(connection.id);
         connection.agentPush?.stop();
         connection.agentPush = null;
         const marketplace = this.#marketplaces.get(connection);
@@ -336,6 +355,10 @@ export class RemoteHost {
             connection.pendingPair = null;
         }
         const was = this.#connections.delete(connection.id);
+        if (was && connection.auth !== null) {
+            try { this.#api.releaseCaller?.(this.#callContext(connection)); }
+            catch { console.warn('[genie] feature caller cleanup failed'); }
+        }
         if (was && connection.auth !== null && !connection.local) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();
@@ -349,9 +372,34 @@ export class RemoteHost {
      * (and is allowed) takes the place of that one.
      */
     issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {
-        this.#pin = this.#pins.issue();
+        const pin = this.#pins.issue();
+        this.#pin = pin;
         this.#pinReplaces = options.replaces ?? null;
-        return this.#pin;
+        this.#pinEnded = null;
+        this.#cancelPinClock?.();
+        this.#cancelPinClock = this.#schedule(Math.max(0, pin.expiresAt - this.#now()) + 1, () => {
+            this.#cancelPinClock = null;
+            if (this.#pin === pin) this.#endPin('expired');
+        });
+        this.#changed();
+        return pin;
+    }
+
+    /**
+     * The PIN on screen goes (Tynn #751): `used` by a device that paired (nothing went wrong, so nothing is said), or
+     * `expired` / `cancelled` (said, with New PIN, carrying a Re-pair's device). `tell` = redraw Settings now.
+     */
+    #endPin(reason: 'used' | PinEnded['reason'], tell = true): void {
+        if (!this.#pin) return;
+        this.#cancelPinClock?.();
+        this.#cancelPinClock = null;
+        this.#pin = null;
+        const replaces = this.#pinReplaces;
+        if (reason !== 'used') {
+            this.#pinReplaces = null;
+            this.#pinEnded = { reason, at: this.#now(), ...(replaces ? { replaces } : {}) };
+        }
+        if (tell) this.#changed();
     }
 
     /** Connections, devices or a pairing changed: Settings and the prompt redraw. */
@@ -368,9 +416,16 @@ export class RemoteHost {
         return this.#hostName;
     }
 
+    /** Why the last PIN went without pairing (Tynn #751); null while one is good, after a pairing, or before any. */
+    pinEnded(): PinEnded | null {
+        this.activePin();
+        return this.#pinEnded;
+    }
+
     /** The PIN on this screen, while it is still good. */
     activePin(): { code: string; expiresAt: number } | null {
-        if (this.#pin && this.#now() > this.#pin.expiresAt) this.#pin = null;
+        // Read after its time, before its clock ran (a busy event loop): the same ending, said on this read.
+        if (this.#pin && this.#now() > this.#pin.expiresAt) this.#endPin('expired', false);
         return this.#pin;
     }
 
@@ -405,11 +460,32 @@ export class RemoteHost {
         return true;
     }
 
-    connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }> {
+    connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean; mode: DriveMode }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
             .filter((c) => c.auth !== null && !c.local)
-            .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver }));
+            .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver, mode: this.#viewOnly.has(c.auth!.label) ? 'view' as const : 'control' as const }));
+    }
+
+    /**
+     * Watch only, or full control, for one person (Tynn #732), set by the person at THIS machine (the banner's switch; a
+     * remote connection is refused upstream). To view only: their baton comes back at once, which also stops their Take
+     * Over windows (#batonChanged), and every change they send is refused from then on. Their windows are told either way.
+     */
+    setMode(label: string, mode: DriveMode): void {
+        if (mode === 'view') this.#viewOnly.add(label);
+        else this.#viewOnly.delete(label);
+        if (mode === 'view') {
+            for (const c of this.#connections.values()) if (c.auth !== null && !c.local && c.auth.label === label) this.#baton.release(c.id);
+        }
+        this.#batonChanged(null, null);
+    }
+
+    /** Why this connection may change nothing, when the person here set it to view only (Tynn #732); null otherwise. */
+    #viewOnlyRefusal(connection: Connection): string | null {
+        const auth = connection.auth;
+        if (connection.local || auth === null || auth.readonly || !this.#viewOnly.has(auth.label)) return null;
+        return `${this.#hostName} set ${auth.label} to view only`;
     }
 
     /** The owner's kill-switch: every write refused for everyone until unlocked; reads still answer. */
@@ -485,7 +561,7 @@ export class RemoteHost {
         }
         for (const c of this.#connections.values()) {
             if (c.auth === null || c.local || !c.batonWatch || c.id === except) continue;
-            const payload: BatonEvent = { driver: holder?.label ?? null, mine: holder?.connectionId === c.id, locked: this.#locked, by };
+            const payload: BatonEvent = { driver: holder?.label ?? null, mine: holder?.connectionId === c.id, locked: this.#locked, by, ...(this.#viewOnly.has(c.auth.label) ? { viewOnly: true as const } : {}) };
             this.#send(c, { kind: 'event', channel: BATON_EVENT, payload });
         }
     }
@@ -586,10 +662,16 @@ export class RemoteHost {
             connection.auth = { label: pre!.label, isOwner: true, workspaceId: null, readonly: false };
         } else if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
-            if (!r.ok) return this.#refuse(connection, r.reason, true);
+            if (!r.ok) {
+                // No tries left: the PIN on screen is dead, ran out or cancelled by wrong tries (Tynn #751).
+                if (r.attemptsLeft === 0 && this.#pin) this.#endPin(this.#now() > this.#pin.expiresAt ? 'expired' : 'cancelled');
+                return this.#refuse(connection, r.reason, true);
+            }
             // THE CONFIRM (q_8c07b142; Genie 1's confirmPair): the right PIN only raises "Pair this device?" on this screen.
             const replacing = this.#pinReplaces === null ? undefined : this.#devices.list().find((d) => d.id === this.#pinReplaces);
             this.#pinReplaces = null;
+            // Spent: the code is not left on screen as if it still worked (Tynn #751).
+            this.#endPin('used');
             const asked = this.#confirm.ask({ label, from: connection.socket.remoteAddress, replaces: replacing ? { id: replacing.id, label: replacing.label } : null });
             connection.pendingPair = asked.id;
             this.#send(connection, { kind: 'pairing', host: this.#hostName, expiresAt: asked.expiresAt });
@@ -617,6 +699,22 @@ export class RemoteHost {
             // The transport proved who this is (a Tynn grant and its key); without that proof there is nothing to take.
             const pre = connection.socket.preAuth;
             if (!pre) return this.#refuse(connection, 'this connection did not come through the Tynn relay', true);
+            /*
+             * A GUEST WAITS AT THE DOOR (Tynn #731; the owner, 2026-11-17): anyone a share admitted — not the owner's own
+             * machine — gets in only when the person at THIS machine presses Allow. Until then `auth` stays null, so every
+             * call is refused ("say hello first"), no event is sent, and the connection is not listed. Deny, no answer
+             * within the prompt's life, or the guest hanging up ends it. The answer is given on this machine's own screen
+             * only: the request is stripped from what any remote connection sees, and answering it from one is refused.
+             */
+            if (!pre.isOwner) {
+                const asked = this.#confirm.ask({ label: pre.label, from: connection.socket.remoteAddress, guest: { workspace: this.#workspaceName(pre.workspaceId), readonly: pre.readonly } });
+                connection.pendingPair = asked.id;
+                this.#send(connection, { kind: 'pairing', host: this.#hostName, expiresAt: asked.expiresAt, guest: true });
+                const answer = await asked.answer.catch(() => 'deny' as const);
+                connection.pendingPair = null;
+                if (answer === 'gone' || !this.#connections.has(connection.id)) return;
+                if (answer !== 'allow') return this.#refuse(connection, guestRefusal(answer, this.#hostName), true);
+            }
             connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
         }
         if (!connection.local && message.profile === 'mobile') connection.profile = 'mobile';
@@ -632,6 +730,8 @@ export class RemoteHost {
             workspaceId: connection.auth.workspaceId,
             // What the window may offer (Tynn #688): read-only is the host's word, from the grant, never the client's.
             readonly: connection.auth.readonly,
+            // The mode the person here set (Tynn #732): a window that comes back on view only takes no baton.
+            ...(!connection.local && this.#viewOnly.has(connection.auth.label) ? { viewOnly: true as const } : {}),
             ...(token ? { token } : {}),
             // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
             protocol: REMOTE_PROTOCOL,
@@ -658,6 +758,8 @@ export class RemoteHost {
                 if (String(args[0] ?? '') !== companion.terminalId) return refuse(COMPANION_ONLY);
                 if (companion.revoked !== null) return refuse(companion.revoked);
                 if (this.#locked) return refuse('this Genie is locked');
+                const view = this.#viewOnlyRefusal(connection);
+                if (view) return refuse(view);
                 try { return ok(await this.#api.invoke(method as RemoteMethod, args, this.#callContext(connection))); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
             }
             const read = method === 'baton.status' || method === 'agent.watch' || method === 'agent.unwatch'
@@ -745,6 +847,8 @@ export class RemoteHost {
             case 'baton.take': {
                 // Holding the baton would keep everyone who CAN change things from doing so.
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+                const view = this.#viewOnlyRefusal(connection);
+                if (view) return refuse(view);
                 // `{ force: true }` is Take control (Tynn #529): the owner from anyone; anyone else from anyone but the owner.
                 const force = (args[0] as { force?: unknown } | undefined)?.force === true;
                 const before = this.#baton.holder()?.connectionId ?? null;
@@ -794,6 +898,8 @@ export class RemoteHost {
             }
             case 'upload.begin': {
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+                const view = this.#viewOnlyRefusal(connection);
+                if (view) return refuse(view);
                 const input = (args[0] ?? {}) as { name?: unknown; size?: unknown };
                 const r = this.#staging.begin(connection.id, { name: input.name, size: input.size });
                 return r.ok ? ok({ id: r.id }) : refuse(r.reason);
@@ -811,12 +917,19 @@ export class RemoteHost {
 
         // Allow is pressed on THIS machine's screen, never sent from another device — not even the owner's (q_8c07b142).
         if (method === 'features.act' && isAnswerPair(args) && this.#callContext(connection).origin !== 'local-window') return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
+        // A person's mode is the person here's to set (Tynn #732): never from another connection, the person's own included.
+        if (method === 'features.act' && isSetMode(args) && this.#callContext(connection).origin !== 'local-window') return refuse(`who may change things on ${this.#hostName} is set on its own screen, never from another device`);
 
         // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
         if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
 
         // A read-only grant (Tynn #838): reads, nothing else.
         if (auth.readonly && capability !== 'read') return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+        // View only, as the person here set it (Tynn #732): the same, in its own words.
+        if (capability !== 'read') {
+            const view = this.#viewOnlyRefusal(connection);
+            if (view) return refuse(view);
+        }
         // Only the owner changes the host itself — a guest of the whole host included.
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
@@ -1003,6 +1116,14 @@ export class RemoteHost {
         return { seq: next.state.seq, detail: rest, rows: next.rows };
     }
 
+    /** What a guest's "Let it in?" names: its workspace's folder name (the id when the folder is not known), or null = the whole host. */
+    #workspaceName(workspaceId: string | null): string | null {
+        if (workspaceId === null) return null;
+        const folder = this.#api.workspacePaths?.()[workspaceId];
+        const name = folder ? folder.replace(/[/\\]+$/, '').split(/[/\\]/).pop() : undefined;
+        return name || workspaceId;
+    }
+
     /** A guest holds a link to ONE workspace; anything outside it is refused by name. */
     #guestScope(workspaceId: string, method: RemoteMethod, args: unknown[]): string | null {
         if (AGENT_SCOPED_METHODS.includes(method)) {
@@ -1086,6 +1207,26 @@ export class RemoteHost {
                 const e = payload as TynnWatchEvent;
                 if (![...c.tynnWatches.values()].some((w) => w.kind === e.kind && w.workspaceId === e.workspaceId)) continue;
             }
+            if (channel === 'features' && this.#api.ownsFeatures && !c.local) {
+                // Each admitted reader gets its own retained view, coalesced; no other caller's form/query is broadcast.
+                if (!c.auth.isOwner && c.auth.workspaceId !== null) continue;
+                let push = this.#featurePushes.get(c.id);
+                if (!push) {
+                    push = new LatestPush({ build: () => this.#api.invoke('features.snapshot', [], this.#callContext(c)), deliver: value => {
+                        if (this.#connections.get(c.id) !== c || c.auth === null) return;
+                        let answer = withoutPairRequests(value);
+                        if (!c.auth.isOwner) answer = this.#forNonOwner('features', answer, c.auth.workspaceId);
+                        if (answer !== NOT_SENT && c.profile === 'mobile') answer = this.#forPhone(c, 'features', answer);
+                        if (answer !== NOT_SENT) {
+                            const payload = Buffer.byteLength(JSON.stringify(answer)) > REMOTE_FRAME_MAX_BYTES - 4 * 1024
+                                ? { revision: ++this.#featuresRevision } : answer;
+                            this.#send(c, { kind: 'event', channel: 'features', payload });
+                        }
+                    } });
+                    this.#featurePushes.set(c.id, push);
+                }
+                push.request(); continue;
+            }
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);
@@ -1113,7 +1254,7 @@ export class RemoteHost {
     #forNonOwner(channel: string, payload: unknown, workspaceId: string | null): unknown {
         if (workspaceId !== null) return this.#forGuest(channel, payload, workspaceId);
         if (channel === 'features') return withoutRemoteSecrets(payload);
-        if (channel === 'snapshot' || channel === 'activity' || channel === 'terminal-data' || channel === 'terminal-exit' || channel.startsWith('agent:')) return payload;
+        if (channel === 'snapshot' || channel === 'activity' || channel === 'terminal-data' || channel === 'terminal-exit' || channel === TYPING_EVENT || channel.startsWith('agent:')) return payload;
         return NOT_SENT;
     }
 
@@ -1127,8 +1268,8 @@ export class RemoteHost {
     #forGuest(channel: string, payload: unknown, workspaceId: string): unknown {
         if (channel === 'snapshot') return filterSnapshotForWorkspace(payload as Parameters<typeof filterSnapshotForWorkspace>[0], workspaceId);
         if (channel.startsWith('agent:')) return this.#api.workspaceOfAgent(channel.slice('agent:'.length)) === workspaceId ? payload : NOT_SENT;
-        // An agent's activity feed (the Dashboard's lanes): only for an agent of the guest's workspace.
-        if (channel === 'activity') {
+        // An agent's activity feed (the Dashboard's lanes), or what someone is typing to it (Tynn #730): only for an agent of the guest's workspace.
+        if (channel === 'activity' || channel === TYPING_EVENT) {
             const agentId = (payload as { agentId?: unknown } | null)?.agentId;
             return typeof agentId === 'string' && this.#api.workspaceOfAgent(agentId) === workspaceId ? payload : NOT_SENT;
         }

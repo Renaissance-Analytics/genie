@@ -10,7 +10,7 @@ const scratch = mkdtempSync(join(tmpdir(), 'genie-shell-line-login-'));
 function host(binary: string | null) {
     const opened: string[] = [];
     const logins = new LoginHost({
-        terminals: { open: ((options: { command?: string }) => { opened.push(options.command ?? ''); return { id: `t${opened.length}`, pid: 1, shell: 'cmd', scrollback: '' }; }) as never, onExit: (() => () => {}) as never },
+        terminals: { open: ((options: { command?: string }) => { opened.push(options.command ?? ''); return { id: `t${opened.length}`, pid: 1, shell: 'cmd', scrollback: '' }; }) as never, onExit: (() => () => {}) as never, close: (() => true) as never },
         openWindow: () => {},
         runStatus: vi.fn(async () => 1),
         onSignedIn: () => {},
@@ -69,12 +69,11 @@ describe('who can ask for a shell line at all', () => {
     it('these, each decided on. A new one fails here until someone has read what reaches it', () => {
         const callers = walk('src/main').filter((file) => /\bshell: true\b/.test(code(file))).sort();
         expect(callers).toEqual([
-            // A held login's account (Tynn #699): the same status line, from login-host's statusCommandFor (checked path).
+            // A held login's account (Tynn #699) and a sign-in's status (Tynn #479, now run in the host, no longer in main.ts):
+            // the same status line, from login-host's statusCommandFor (checked path), through Node's own shell: true.
             'src/main/genie-host.ts',
             // Constant lines and a checked path (above).
             'src/main/login-host.ts',
-            // The status line beside it, through Node's own shell: true.
-            'src/main/main.ts',
             // An agent's `command`. It is a shell line on purpose, and the person approves that text.
             'src/main/mcp-tools-more.ts',
             // Passes on what it was asked.

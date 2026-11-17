@@ -17,6 +17,8 @@ export interface DeckAssemblyInput {
     readonly approvals: readonly DeckItem[];
     /** Genie's own asks about its front door (Trust its certificate). */
     readonly trust: readonly DeckItem[];
+    /** What fired rate-limit alerts left for the person (core/limit-alerts.ts LimitNoticeBook). */
+    readonly notices?: readonly DeckItem[] | undefined;
     readonly attention: Pick<AttentionStore, 'pending' | 'allUserItems'>;
     readonly inbox: Pick<InboxStore, 'unread'>;
     readonly agents: Readonly<Record<string, { name: string; workspaceId: string }>>;
@@ -38,6 +40,7 @@ export function assembleDeckItems(input: DeckAssemblyInput): DeckItem[] {
             return name === undefined && color === undefined ? i : { ...i, ...(name === undefined ? {} : { workspaceName: name }), ...(color === undefined ? {} : { workspaceColor: color }) };
         }),
         ...input.trust,
+        ...(input.notices ?? []),
         ...deckItemsFrom({
             questions: input.attention.pending(),
             userList: input.attention.allUserItems(),

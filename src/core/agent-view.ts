@@ -30,16 +30,17 @@ const TABS: Record<Fidelity, readonly AgentTab[]> = {
     /** Stream is first and always present. With no events it shows an empty state, not nothing. */
     /** Shells after Changes (the owner): what it has running in the background, read from its own ledger. */
     /** Settings last (Tynn #800): the agent's persona, mode, budget and skills, out of the rail. */
-    declared: ['stream', 'files', 'changes', 'shells', 'settings'],
+    /** No Files tab (the owner, 2026-11-16): files are the workspace's Files tab, one place. */
+    declared: ['stream', 'changes', 'shells', 'settings'],
     /** Activity first (the board). A Stream tab here would be a tab that cannot populate. */
-    observed: ['activity', 'terminal', 'files', 'changes'],
+    observed: ['activity', 'terminal', 'changes'],
     /**
      * Presence only.
      *
-     * Files and Changes come from git, which Genie can read without the remote agent's
+     * Changes come from git, which Genie can read without the remote agent's
      * cooperation. Everything else would be a claim about an unreachable machine.
      */
-    remote: ['files', 'changes'],
+    remote: ['changes'],
 };
 
 export function tabsFor(fidelity: Fidelity): readonly AgentTab[] {
@@ -333,7 +334,7 @@ export function personaView(text: string | null | undefined): { lines: readonly 
 export const LIVE_WINDOW_MS = 120_000;
 
 export function tabNote(rows: readonly TimedEvent[], tab: string, agentName: string, now: number): { kind: 'files' | 'live' | 'last'; text: string } | null {
-    if (tab === 'files' || tab === 'changes') return { kind: 'files', text: `Files and Changes open the workspace file panel, filtered to ${agentName}` };
+    if (tab === 'changes') return { kind: 'files', text: `Changes open the workspace file panel, filtered to ${agentName}` };
     if (tab !== 'stream') return null;
     const timed = rows.map((r) => r.at).filter((t): t is number => t !== null);
     if (timed.length === 0) return null;
@@ -451,7 +452,7 @@ export function railIsCollapsed(contentWidth: number): boolean {
     return contentWidth < RAIL_COLLAPSE_AT;
 }
 
-export type ApprovalPlacement = 'chat' | 'stream';
+export type ApprovalPlacement = 'chat' | 'stream' | 'toast';
 
 /**
  * WHERE a parked approval is actionable — and it is exactly one place.
@@ -469,8 +470,13 @@ export type ApprovalPlacement = 'chat' | 'stream';
  * Two live sets of buttons for one decision is not a cosmetic problem. Answering in one leaves
  * the other showing a question that has been resolved, and the reader cannot tell whether
  * their answer landed.
+ *
+ * THE TOAST (Tynn #730): an approval the approval toasts carry (`core/approval-toasts.ts`) is answered THERE — the toast is
+ * the actionable place, and the stream and the chat show the marker. `inToast` is false when no toast carries it (Do Not
+ * Disturb held it back; a window with no toasts), and then the composer's place is the answer as before.
  */
-export function approvalPlacement(agentId: string, chatSubject: string | null): ApprovalPlacement {
+export function approvalPlacement(agentId: string, chatSubject: string | null, inToast = false): ApprovalPlacement {
+    if (inToast) return 'toast';
     return chatSubject === agentId ? 'chat' : 'stream';
 }
 

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import { ELEVATION_WAITING_DECK_ID } from '../src/core/elevation-waiting.js';
+import { SITE_REACH_DECK_PREFIX } from '../src/core/site-reach.js';
 import type { PrivilegedStep } from '../src/main/elevate.js';
 import { composeHosting, type HostingStack } from '../src/main/hosting-compose.js';
 import { HostingService, WindowElevation } from '../src/main/hosting-host.js';
@@ -121,16 +122,18 @@ describe('Genie’s hosting in genie-host, read and driven from a window', () =>
         expect(w.replica.configuredHosts()).toEqual(r.stack.configuredHosts());
     });
 
-    it('with NO window, an elevation is not attempted: queued, answered “waiting for a window”, surfaced to the next window', async () => {
+    it('with NO window, a site change asks nothing of the OS (Tynn #753); an Approve with no window waits, and the next window is told', async () => {
         const r = await rig();
         // No window has connected: a site is added in the host (as an agent's tool or a declared site would), so the hosts
-        // block is due — and writing it needs the OS prompt.
+        // block is due, and writing it needs the OS prompt. Nothing is elevated: the ask waits for the person.
         await r.stack.envelopeSites.create({ name: 'shop', workspaceId: 'ws', repoPath: r.ws, serve: { mode: 'proxy' }, hostPort: 5174 });
         await tick();
         await r.stack.frontDoorSettled();
         expect(r.elevationsAsked).toEqual([]);
-        const hosts = r.stack.externalFrontDoor.running ? r.stack.externalFrontDoor.hosts : null;
-        expect(hosts && 'error' in hosts ? hosts.error : '').toMatch(/waiting for a window/);
+        expect(r.stack.trustDeckItems().map((i) => i.id)).toContain(`${SITE_REACH_DECK_PREFIX}shop.gen`);
+        // The person approves from somewhere with no window (a phone's Deck): held, answered “waiting for a window”.
+        const held = await r.stack.syncHosts();
+        expect('error' in held ? held.error : '').toMatch(/waiting for a window/);
         // The next window to connect is TOLD (a Deck item), and connecting is not an approval: nothing is elevated by it.
         const w = await r.window();
         await tick();
@@ -138,14 +141,23 @@ describe('Genie’s hosting in genie-host, read and driven from a window', () =>
         expect(w.replica.trustDeckItems().map((i) => i.id)).toContain(ELEVATION_WAITING_DECK_ID);
     });
 
-    it('CONTROL: with a window connected, the same elevation is asked of that window, and nothing waits', async () => {
+    it('CONTROL: with a window connected, the person’s Approve is the one elevation, asked of that window, and nothing waits', async () => {
         const r = await rig();
         const w = await r.window();
         await r.stack.envelopeSites.create({ name: 'shop', workspaceId: 'ws', repoPath: r.ws, serve: { mode: 'proxy' }, hostPort: 5174 });
         await tick();
         await r.stack.frontDoorSettled();
         await tick();
+        expect(r.elevationsAsked).toEqual([]);
+        expect(w.replica.trustDeckItems().map((i) => i.id)).toContain(`${SITE_REACH_DECK_PREFIX}shop.gen`);
+        expect(await w.replica.syncHosts()).toEqual({ changed: true, elevated: true });
+        await tick();
         expect(r.elevationsAsked.length).toBe(1);
         expect(w.replica.trustDeckItems().map((i) => i.id)).not.toContain(ELEVATION_WAITING_DECK_ID);
+        // The hosts write landed: what is left of "Open shop.gen in your browser" is the certificate (untrusted here), with
+        // no hosts block (Tynn #743).
+        const left = w.replica.trustDeckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX));
+        expect(left?.why).toBe('Your computer asks once for administrator permission: Genie trusts its own certificate. Until then the site works in Genie’s browser.');
+        expect(left?.detail).toBeUndefined();
     });
 });

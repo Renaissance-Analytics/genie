@@ -58,8 +58,12 @@ export interface GenieToolParts {
     readonly terminals: TerminalsPort;
     /** The env a terminal in a workspace gets — the Terminals tab's own (hosting-actions.ts `terminalEnvFor`). Absent = none. */
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
+    /** Puts a terminal that needs the person in front of them (Tynn #722); answers whether a window got it. Absent = nothing can be shown. */
+    readonly surfaceTerminal?: (request: { workspaceId: string; terminalId: string; agentName: string; reason: string }) => boolean;
     /** The services and sites the agents' `services` / `sites` tools act on. Absent = this Genie has none (doctor mode), and the tools say so. */
     readonly hosting?: HostingServices;
+    /** A workspace's trust verdict as last read (Tynn #753): the agents' `sites` / `services` act only in a trusted one. Absent = none is (fail closed). */
+    readonly workspaceTrusted?: (workspaceId: string) => boolean;
     /** Genie's browser, for the agents' `sites open` — the pane the Hosting tab's Open uses. Absent = none (doctor mode), and the tool says so. */
     readonly openInBrowser?: OpenInBrowser;
     /** The background processes the agents' `processes` tool acts on — the Processes tab's book and the supervisor's logs. Absent = none (doctor mode), and the tool says so. */
@@ -112,11 +116,13 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             approve: (caller, action, detail, call) => p.approve(caller, action, detail, call),
             resolveCaller: p.resolveCaller,
             ...(p.terminalEnv ? { envFor: p.terminalEnv } : {}),
+            ...(p.surfaceTerminal ? { surface: p.surfaceTerminal } : {}),
         },
         hosting: {
             resolveCaller: p.resolveCaller,
             approve: (caller, action, detail, call) => p.approve(caller, action, detail, call),
             services: p.hosting ?? null,
+            trusted: p.workspaceTrusted ?? (() => false),
             ...(p.openInBrowser ? { openInBrowser: p.openInBrowser } : {}),
             ...(p.serviceExec ? { exec: p.serviceExec } : {}),
         },

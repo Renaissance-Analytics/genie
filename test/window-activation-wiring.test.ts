@@ -60,7 +60,7 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
         // ...through agentOpensSite, which also pulses the site's workspace (genie#1265).
         expect(main).toMatch(/hosting: composed,\s*openInBrowser: agentOpensSite,/);
         expect(main).toMatch(/const agentOpensSite: OpenInBrowser = async \(url\) => \{\s*const r = await openInBrowserFor\('background'\)\(url\);/);
-        expect(main).toMatch(/\.\.\.processPorts\(\),\s*openInBrowser: openInBrowserFor\('user-gesture'\),/);
+        expect(main).toMatch(/featureWindow\(localDoor, \{[\s\S]*?openInBrowser: openInBrowserFor\('user-gesture'\),/);
     });
 
     it('a page in a site panel opening a window (window.open, a script, an agent driving the page) is background', () => {
@@ -76,7 +76,7 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
         expect(browser).toMatch(/onceShowable\(window, process\.platform, \(\) => showWhenReady\(window, \{ activation, /);
         expect(browser).toMatch(/bringUp\(entry!\.win, \{ activation, /);
         // The caller says which: `open(address, activation, remote)` has no default to fall back on.
-        expect(browser).toMatch(/open\(address: string \| undefined, activation: Activation, remote\?: RemoteBrowsing\)/);
+        expect(browser).toMatch(/open\(address: string \| undefined, activation: Activation, remote\?: RemoteBrowsing, anchor\?: Rect\)/);
     });
 });
 

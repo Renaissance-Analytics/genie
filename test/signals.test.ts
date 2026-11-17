@@ -45,7 +45,7 @@ describe('services.signals()', () => {
     it('GitHub blocking is what the GitHub account MEASURED (passed in by main), not a ticked box; mail an agent has not collected counts; the OS agent is not working when nothing probes it; no flows run', async () => {
         // The owner (2026-10-20): the two hand-ticked steps were "some dumb list". Whether GitHub blocks features is now
         // the account's own reading of GitHub (core/github.ts githubSignal), handed in like osAgentWorking.
-        expect(services.signals({ osAgentWorking: false, githubBlocked: false })).toEqual({ flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false });
+        expect(services.signals({ osAgentWorking: false, githubBlocked: false })).toEqual({ flowsRunning: 0, flowsLive: [], flowsEnded: [], uncollectedMail: 0, githubBlocked: false, osAgentWorking: false });
         expect(services.signals({ osAgentWorking: false, githubBlocked: true }).githubBlocked).toBe(true);
 
         onRoster('agent_a', 'atlas', 'tynn');

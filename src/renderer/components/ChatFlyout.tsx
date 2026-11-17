@@ -4,7 +4,9 @@ import { stableView } from '../stable-view.js';
 import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { ChatQueueBar } from './ChatQueueBar.js';
-import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { ChatPlanLine } from './ChatPlanLine.js';
+import { Button, Icon, PromptInput, Toast, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { ComposerFileLimit } from './ComposerFileLimit.js';
 import { toHotkey, fancyPlatform } from '../hotkey-strings.js';
 import { sendKeyHint } from '../../core/send-key.js';
 import { SentAttachments } from './SentAttachments.js';
@@ -15,10 +17,10 @@ import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
 import { ChatProse } from './ChatProse.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
-import { ApprovalCard } from './ApprovalCard.js';
+import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
-import { personText } from '../../core/person-text.js';
+import { personLine } from '../../core/person-text.js';
 import { chatFollowKey, mailSubject, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import { toolIcon } from '../../core/stream-view.js';
 import { ago } from '../../core/inbox-threads.js';
@@ -26,9 +28,12 @@ import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
-import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
+import { SendGrace, holdsSend, putBackUndone, type HeldSend } from '../../core/send-grace.js';
+import { ChatHeldSends } from './ChatHeldSend.js';
+import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
 import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
+import { draftChange, typingTail } from '../../core/typing-mirror.js';
 import { applyChatInsert, type ChatInsert, type DraftHandle } from '../../core/plan-pill.js';
 import { TurnStop } from './TurnStop.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
@@ -159,6 +164,12 @@ export function ChatQueuedNote({ id, agentName, silentSince, now, onSendNow }: {
     );
 }
 
+/** `ChatHeldSends` with its countdown kept current, only while something is held. */
+function ChatHeldSendsLive(props: Omit<Parameters<typeof ChatHeldSends>[0], 'now'>) {
+    const now = useNow(props.held.length > 0, undefined, 250);
+    return <ChatHeldSends {...props} now={now} />;
+}
+
 function ChatQueuedNoteLive(props: Omit<Parameters<typeof ChatQueuedNote>[0], 'now'>) {
     const now = useNow(true);
     return <ChatQueuedNote {...props} now={now} />;
@@ -198,9 +209,9 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
             )}
             {/* A SHORT PREVIEW, not the message (the owner, 2026-10-21: "I don't need to see so much content, that is what the
                 link to open it is for"): one plain line of it, at most two lines tall; the head opens it in full. */}
-            <p data-mail-preview={m.id} className="line-clamp-2 text-[13px] text-[var(--fg-2)]">{mailSubject(personText(m.text))}</p>
+            <p data-mail-preview={m.id} className="line-clamp-2 text-[13px] text-[var(--fg-2)]">{mailSubject(personLine(m.text))}</p>
             <span data-mail-receipt={m.delivered ? 'delivered' : 'waiting'} className="font-mono text-[11px] text-[var(--fg-3)]">{m.delivered ? 'Delivered' : 'Waiting'}</span>
-            {!m.delivered && m.reason ? <p data-mail-refusal={mailId} className="text-[12px] text-[var(--warning)]">{personText(m.reason)}</p> : null}
+            {!m.delivered && m.reason ? <p data-mail-refusal={mailId} className="text-[12px] text-[var(--warning)]">{personLine(m.reason)}</p> : null}
         </div>
     );
 }
@@ -213,6 +224,8 @@ export function ChatDeliveryRow(_props: { m: ChatThreadMessage; onOpenMail?: ((m
 }
 
 export interface ChatFlyoutProps {
+    /** The chat's agent is mid-turn (Tynn #745): a message typed now waits out the undo window (core/send-grace.ts). */
+    busy?: boolean | undefined;
     /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). */
     onChooseProviderProgram?: ((provider: string) => Promise<ProviderProgramChosen>) | undefined;
     thread: ChatThread | null;
@@ -230,6 +243,8 @@ export interface ChatFlyoutProps {
      * decision (`approvalPlacement`) and not a property of the conversation.
      */
     approval?: Approval | null | undefined;
+    /** A toast carries this approval (Tynn #730): it is answered THERE, and the chat shows a marker, not a second set of buttons. */
+    approvalInToast?: boolean | undefined;
     /**
      * Open a file the chat names, in the agent's workspace (core/chat-file-links.ts). Absent = nowhere to open it (genie's
      * own chat), and file references stay plain text.
@@ -308,6 +323,12 @@ export interface ChatFlyoutProps {
      */
     drafts?: ChatDraftKeeper | 'loading' | undefined;
     /**
+     * WHAT THE OTHER PERSON IS TYPING (Tynn #730, core/typing-mirror.ts): this window's composer text goes out through
+     * `onTyping`; another window's on this chat's agent comes in as `peerTyping`, shown over the composer, never in it.
+     */
+    onTyping?: ((agentId: string, text: string) => void) | undefined;
+    peerTyping?: { label: string; text: string } | null | undefined;
+    /**
      * A pill to put into a chat's draft (genie#1280: a plan step's chat icon, core/plan-pill.ts). Applied once that chat's
      * composer is mounted, then reported through `onInserted`. Focuses the composer only when the insert says so (the
      * person's click); nothing else here moves focus (genie#1235).
@@ -369,9 +390,9 @@ const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatM
 export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
 function ChatFlyoutBody({
-    onChooseProviderProgram,
-    thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
+    busy = false, onChooseProviderProgram,
+    thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -433,6 +454,38 @@ function ChatFlyoutBody({
      */
     const scrollRef = useRef<HTMLDivElement>(null);
     const followRef = useRef(true);
+    /*
+     * UNDO SEND (Tynn #745, core/send-grace.ts): a message typed to a busy agent waits out the window here, drawn at the end
+     * of its thread with Undo and Send now; then it goes as any send does. Nothing typed is lost when the chat goes away.
+     */
+    const onSendRef = useRef(onSend);
+    onSendRef.current = onSend;
+    // The words back in their chat's composer (core/send-grace.ts `putBackUndone`); only Undo, the person's click, focuses it.
+    const putBack = (chat: string, text: string, focus: boolean): void => {
+        putBackUndone(composerRefs.current, chat, text, focus,
+            keeper && chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
+    };
+    const putBackRef = useRef(putBack);
+    putBackRef.current = putBack;
+    const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
+        // Refused after the window: the words go back to the composer, with why — never lost.
+        if (out && out.kind === 'failed') {
+            putBackRef.current(h.chat, h.text, false);
+            setSendErrors((e) => withSendError(e, h.chat, out.reason));
+        }
+    }, (error: unknown) => {
+        putBackRef.current(h.chat, h.text, false);
+        setSendErrors((e) => withSendError(e, h.chat, errorWords(error)));
+    })));
+    const [, setHeldSeq] = useState(0);
+    useEffect(() => {
+        const off = grace.subscribe(() => setHeldSeq((n) => n + 1));
+        return () => { off(); grace.flush(); };
+    }, [grace]);
+    const undoSend = (id: string): void => {
+        const h = grace.undo(id);
+        if (h) putBack(h.chat, h.text, true);
+    };
     // What the end of the thread IS: its agent, how many messages, and how long the last one is — a reply is one row that
     // GROWS as the agent writes (beta.33 item 6), and keyed on the count alone its words were written below a chat that
     // did not move until the next message arrived.
@@ -604,7 +657,7 @@ function ChatFlyoutBody({
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
             {thread?.context || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} {...(thread?.context?.title ? { title: thread.context.title } : {})} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
-                    {thread?.context?.text ?? 'Working'}
+                    <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
                     {onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"
@@ -739,6 +792,8 @@ function ChatFlyoutBody({
                     onDiscardDraft={onDiscardDraft}
                     loadAttachment={threadAttachment}
                 />
+                {/* Held for the undo window (Tynn #745): where the message will be, so nothing moves when it goes. */}
+                <ChatHeldSendsLive held={grace.held(activeChat ?? '')} onUndo={undoSend} onSendNow={(id) => grace.sendNow(id)} />
                 {/* ONE QUEUE, ONE ACTION (Tynn #702): what waits and what was not delivered, counted, with one Send all now. */}
                 <ChatQueueBar
                     agentName={thread?.name ?? 'the agent'}
@@ -791,7 +846,11 @@ function ChatFlyoutBody({
              * approval renders wherever the composer is — one actionable rendering, and a
              * marker everywhere else.
              */}
-            {approval ? (
+            {approval && approvalInToast ? (
+                <div className="shrink-0 border-t border-[var(--border-1)]">
+                    <ApprovalMarker where="the toast at the bottom left" />
+                </div>
+            ) : approval ? (
                 <div className="shrink-0 border-t border-[var(--border-1)]">
                     <ApprovalCard
                         approval={approval}
@@ -807,8 +866,19 @@ function ChatFlyoutBody({
             <div
                 {...(color ? { 'data-composer-edge': color } : {})}
                 style={wsStyle(color)}
-                className={`shrink-0 border-t border-[var(--border-1)] p-2${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
+                className={`relative shrink-0 border-t border-[var(--border-1)] p-2${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
             >
+                {/*
+                 * WHAT THE OTHER PERSON IS TYPING (Tynn #730): floating just above the composer, so it takes no space and
+                 * nothing moves when it comes and goes; never in the box, so nobody's own words or caret are touched.
+                 */}
+                {peerTyping ? (
+                    <div data-peer-typing="" role="status" aria-live="polite" className="pointer-events-none absolute inset-x-2 bottom-full mb-1 flex items-center gap-1.5 rounded-md border border-[var(--border-1)] bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--fg-2)] shadow-sm">
+                        <Icon name="monitor" size="xs" className="shrink-0 text-[var(--fg-3)]" />
+                        <span className="shrink-0 font-medium">{peerTyping.label} is typing</span>
+                        <span className="min-w-0 truncate text-[var(--fg-3)]">{typingTail(peerTyping.text)}</span>
+                    </div>
+                ) : null}
                 {/*
                  * `PromptInput` — *"the chat composer every AI app rebuilds"*: auto-growing,
                  * slash commands, @-mentions, drop-to-attach, keyboard submit, live token
@@ -839,8 +909,12 @@ function ChatFlyoutBody({
                  * start empty, and react-fancy reads `defaultDraft` only at mount.
                  */}
                 {drafts !== 'loading' ? (
+                // The file limit's toast (ComposerFileLimit): fixed at the window's corner, so nothing here moves.
+                <Toast.Provider position="bottom-end" maxToasts={2}>
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
+                    // A file over MESSAGE_FILE_LIMIT is refused as it is added, counted against the draft as it is now.
+                    <ComposerFileLimit count={() => draftFileCount(composerRefs.current.get(chat)?.getDraft())}>
                     <PromptInput
                         ref={(handle: DraftHandle | null) => { if (handle) composerRefs.current.set(chat, handle); else composerRefs.current.delete(chat); }}
                         {...(contextUsage
@@ -872,10 +946,13 @@ function ChatFlyoutBody({
                          */
                         {...(keeper && chat !== '' ? {
                             ...(keeper.initial(chat) ? { defaultDraft: keeper.initial(chat)! } : {}),
-                            onDraftChange: (draft: ChatDraft) => keeper.change(chat, draft),
                             persistAttachment: (file: File) => keeper.persistFile(file),
                             restoreAttachment: (entry: ChatDraftFile) => keeper.restoreFile(entry),
                         } : {})}
+                        /* Each change: to the kept draft, and to the other people on this agent (Tynn #730). A window that keeps no
+                           drafts (a window driving another machine) still reports what is typed. Only the chat on screen is
+                           typed in: a hidden composer, holding its kept draft, never reports it as typing. */
+                        {...((keeper || onTyping) && chat !== '' ? { onDraftChange: draftChange(keeper, chat, chat === activeChat ? onTyping : undefined) } : {})}
                         /*
                          * THE SEND IS ACKNOWLEDGED (react-fancy 5.70.0, core/chat-send.ts): the send is returned, so the draft
                          * stays until the host has answered — a second send is refused meanwhile, and text typed meanwhile is
@@ -884,6 +961,13 @@ function ChatFlyoutBody({
                          */
                         onSubmit={(text, picked) => {
                             setSendErrors((e) => withSendError(e, chat, null));
+                            // To a busy agent, text only: held for the undo window; the composer empties now (Tynn #745).
+                            if (holdsSend({ busy, files: picked.length }) && text.trim() !== '') {
+                                grace.hold(chat, text);
+                                // It is drawn at the end of the thread: a reader following there sees it, as a sent one.
+                                if (followRef.current) setTimeout(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, 0);
+                                return Promise.resolve(undefined);
+                            }
                             return submitFromComposer({
                                 read: () => readAttachments(namePastedImages(text, picked), keeper ? (ref) => keeper.readRef(ref) : undefined),
                                 send: (files) => onSend(text, files, chat),
@@ -892,8 +976,10 @@ function ChatFlyoutBody({
                         }}
                         onSubmitError={(error: unknown) => setSendErrors((e) => withSendError(e, chat, typeof error === 'string' && error !== '' ? error : errorWords(error)))}
                     />
+                    </ComposerFileLimit>
                     )}
                 </ChatComposers>
+                </Toast.Provider>
                 ) : null}
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
@@ -941,7 +1027,7 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                     return (
                         <div key={m.id} data-chat-message={m.id} data-who="stopped" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
                             <Icon name="square" size="xs" />
-                            <span>{personText(m.text)}</span>
+                            <span>{personLine(m.text)}</span>
                             {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
                         </div>
                     );
@@ -969,7 +1055,7 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                     return (
                         <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
                             <span className="text-[var(--violet-400)]"><Icon name="arrow-right-left" size="xs" /></span>
-                            <span>{personText(m.text)}</span>
+                            <span>{personLine(m.text)}</span>
                         </div>
                     );
                 }
@@ -1061,9 +1147,9 @@ export function ChatCarriedRow({ m }: { m: ChatThreadMessage }) {
         <details data-chat-message={m.id} data-who="system" data-chat-carried="" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
             <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
                 <Icon name="arrow-right-left" size="xs" />
-                <span className="group-hover:underline">{personText(m.text)}</span>
+                <span className="group-hover:underline">{personLine(m.text)}</span>
             </summary>
-            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{personText(m.carried)}</pre>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{m.carried}</pre>
         </details>
     );
 }

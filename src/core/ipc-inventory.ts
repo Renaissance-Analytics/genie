@@ -41,7 +41,12 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:window-overlay-colors', 'window-port'],
     ['genie:window-overlay-colors-current', 'window-port'],
     ['genie:renderer-stall', 'window-port'],
+    ['genie:account-switch', 'window-port'],
+    ['genie:accounts', 'window-port'],
+    ['genie:accounts-act', 'window-port'],
+    ['genie:switch-offer-dismiss', 'window-port'],
     ['genie:design-login', 'window-port'],
+    ['genie:design-sign-in', 'window-port'],
     ['genie:provider-login', 'window-port'],
     ['genie:take-over', 'window-port'],
     // Take over from another machine (Tynn #529 part A): this machine's Take Over window, and its ticket read once.
@@ -58,7 +63,11 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-export', 'window-port'],
     ['genie:browser-window-open', 'window-port'],
     ['genie:files-popout', 'window-port'],
+    ['genie:terminals-popout', 'window-port'],
     ['genie:remote-open-window', 'window-port'],
+    // The connected machine's questions into THIS machine's question window, and how an answer went (Tynn #726).
+    ['genie:remote-questions', 'window-port'],
+    ['genie:remote-question-acted', 'window-port'],
     ['genie:connect-link', 'window-port'],
     ['genie:relay-open', 'later:P5 relay client moves into genie-host'],
     ['genie:relay-send', 'later:P5 relay client moves into genie-host'],
@@ -81,6 +90,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['question:draft', 'later:question window'],
     ['question:files', 'later:question window'],
     ['question:file', 'later:question window'],
+    ['question:open-in-files', 'later:question window'],
     ['question:drawer', 'later:question window'],
 
     ['site-panel:prepare', 'window-port'],

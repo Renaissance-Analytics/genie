@@ -6,7 +6,7 @@ import { sectionFromRoute, type SectionId } from './settings-nav.js';
  *
  * ```
  * genie://dashboard?group=workspace
- * genie://deck
+ * genie://dashboard?item=<id>   (genie://deck redirects here: the Deck merged into the Dashboard, Tynn #730)
  * genie://agent/<id>?tab=stream&lane=tools&at=ev_8831
  * genie://workspace/<id>?files=<path>&filter=changed     (the file panel; `files=` open with no file, `files=detached` popped out)
  * …&chat=<agent>&pin=right              on ANY surface
@@ -54,8 +54,8 @@ interface Common {
 export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 'activity' | 'settings';
 export type WorkspacePanel = 'files';
 /** `tab:<id>` is a tab the person designed (Tynn #282, core/workspace-tabs.ts). */
-export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | 'tynn' | `tab:${string}`;
-const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn'];
+export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | 'tynn' | 'artboard' | 'storage' | `tab:${string}`;
+const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn', 'artboard', 'storage'];
 /** A designed tab's id, as `core/workspace-tabs.ts` mints it; anything else in `view=` falls back to the Agents view. */
 const DESIGNED_TAB = /^tab:[A-Za-z0-9-]{1,40}$/;
 function workspaceViewOf(raw: string | null): WorkspaceView {
@@ -71,9 +71,11 @@ export type HostingTab = 'sites' | 'processes' | 'services';
 const HOSTING_TABS: readonly HostingTab[] = ['sites', 'processes', 'services'];
 
 export type Route =
-    | ({ surface: 'dashboard' } & Common)
-    /** The Deck, optionally opened ON one item (`?item=<id>`): where a waiting Dashboard row sends the reader (§4.1). */
-    | ({ surface: 'deck'; item: string | null } & Common)
+    /**
+     * The Dashboard, optionally opened ON one waiting item (`?item=<id>`): its agent's row opens on it. The Deck merged into the
+     * Dashboard (Tynn #730), so `genie://deck[?item=]` parses to this — an old link, a bookmark or a door keeps working.
+     */
+    | ({ surface: 'dashboard'; item?: string } & Common)
     /** `layout`: the Stream as a ledger (the default, writes nothing) or folded into `turns` cards (the board's `&layout=turns`). */
     | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null; layout: StreamLayout } & Common)
     /**
@@ -93,9 +95,11 @@ export type Route =
           filter: 'changed' | null;
           /** The panel in its own window (`?files=detached`). */
           detached: boolean;
+          /** The ArtBoard item the link points at (`&item=<id>`, on `view=artboard`): shown even when it has been decided (Tynn #739). Absent = none. */
+          artboardItem?: string | undefined;
       } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
-    | ({ surface: 'takeover'; terminalId: string; login?: string } & Common)
+    | ({ surface: 'takeover'; terminalId: string; login?: string; switching?: boolean; choose?: string } & Common)
     /** The file panel in its own window (§4.3): one workspace's panel, no chrome. `genie://files/<workspaceId>`. */
     | ({ surface: 'files'; workspaceId: string } & Common)
     /**
@@ -155,8 +159,11 @@ export function parseRoute(input: string): Route {
     };
 
     switch (head) {
-        case 'deck':
-            return { surface: 'deck', item: params.get('item') || null, ...common };
+        // The Deck merged into the Dashboard (Tynn #730): its route is the Dashboard, on the item it named.
+        case 'deck': {
+            const item = params.get('item');
+            return item ? { surface: 'dashboard', item, ...common } : dashboard(common);
+        }
 
         case 'agent': {
             // An empty id is NOT an agent. Falling through to the Dashboard is the honest
@@ -185,7 +192,7 @@ export function parseRoute(input: string): Route {
             if (!tail) return dashboard(common);
             // No chat and no pin: a TUI window has no chat to open. `login` names a provider's login window (its notice).
             const login = params.get('login');
-            return { surface: 'takeover', terminalId: tail, chat: null, pin: null, ...(login ? { login } : {}) };
+            return { surface: 'takeover', terminalId: tail, chat: null, pin: null, ...(login ? { login } : {}), ...(login && params.get('switch') === '1' ? { switching: true } : {}), ...(login && params.get('switch') === '1' && params.get('choose') ? { choose: params.get('choose')! } : {}) };
         }
         case 'flow': {
             // No id is not a window; `new` is a new flow, in the workspace the link names.
@@ -204,6 +211,8 @@ export function parseRoute(input: string): Route {
             // `panel=files` link still opens the panel.
             const files = params.get('files');
             const detached = files === 'detached';
+            const view = workspaceViewOf(params.get('view'));
+            const artboardItem = view === 'artboard' ? params.get('item') : null;
             return {
                 surface: 'workspace',
                 workspaceId: tail,
@@ -212,13 +221,16 @@ export function parseRoute(input: string): Route {
                 line: files !== null && files !== '' && !detached ? lineOf(params.get('line')) : null,
                 filter: files !== null && params.get('filter') === 'changed' ? 'changed' : null,
                 detached,
-                view: workspaceViewOf(params.get('view')),
+                view,
+                ...(artboardItem ? { artboardItem } : {}),
                 ...common,
             };
         }
 
-        case 'dashboard':
-            return dashboard(common);
+        case 'dashboard': {
+            const item = params.get('item');
+            return item ? { surface: 'dashboard', item, ...common } : dashboard(common);
+        }
 
         case 'settings': {
             // `genie://settings/<section>`; an older `?group=` link lands where its settings went.
@@ -268,6 +280,7 @@ export function formatRoute(route: Route): string {
             }
             break;
         case 'dashboard':
+            if (route.item) params.set('item', route.item);
             break;
         case 'agent':
             params.set('tab', route.tab);
@@ -283,17 +296,17 @@ export function formatRoute(route: Route): string {
                 if (route.file && route.line !== null && !route.detached) params.set('line', String(route.line));
             }
             if (route.view !== 'home') params.set('view', route.view);
+            if (route.view === 'artboard' && route.artboardItem) params.set('item', route.artboardItem);
             break;
         case 'takeover':
             if (route.login) params.set('login', route.login);
+            if (route.login && route.switching) params.set('switch', '1');
+            if (route.login && route.switching && route.choose) params.set('choose', route.choose);
             break;
         case 'files':
             break;
         case 'flow':
             if (route.flowId === null && route.workspaceId) params.set('workspace', route.workspaceId);
-            break;
-        case 'deck':
-            if (route.item) params.set('item', route.item);
             break;
     }
 

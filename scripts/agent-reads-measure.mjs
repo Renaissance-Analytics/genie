@@ -20,7 +20,7 @@
  * control: real extra page work on the door, compared with the ordinary IPC observation. Control intervals stay
  * outside ordinary timing, CPU and gap results; the paired comparator requires the controls to detect the slowdown.
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -82,10 +82,13 @@ const GAUGE = `(() => {
     return true;
 })()`;
 
+/** A value as a JavaScript literal for code sent to the page: JSON, with the characters that could end a script or a line escaped. */
+const jsLiteral = (value) => JSON.stringify(value).replace(/[<>\/\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
 /** CPU milliseconds of a process so far, from the OS. */
 function cpuMsOf(pid) {
     if (WIN) return Number(execFileSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${pid}).TotalProcessorTime.TotalMilliseconds`], { encoding: 'utf8' }).trim());
-    const fields = execFileSync('cat', [`/proc/${pid}/stat`], { encoding: 'utf8' });
+    const fields = readFileSync(`/proc/${pid}/stat`, { encoding: 'utf8' });
     const after = fields.slice(fields.lastIndexOf(')') + 2).split(' ');
     return (Number(after[11]) + Number(after[12])) * 10;
 }
@@ -284,7 +287,7 @@ async function main() {
 
     step('M5', 'one agent streaming 50 events a second for 60 s, watched');
     const streaming = await agentThat(cdp, workspaceId, 'm5', 200, 50);
-    await cdp.evaluate(`(() => { window.__updates = 0; window.__off = window.genieTest.subscribeAgent(${JSON.stringify(streaming)}, () => { window.__updates += 1; }); return true; })()`, 10_000);
+    await cdp.evaluate(`(() => { window.__updates = 0; window.__off = window.genieTest.subscribeAgent(${jsLiteral(streaming)}, () => { window.__updates += 1; }); return true; })()`, 10_000);
     await sleep(5_000);
     const host = ownedHostPid;
     const heap = createHeapSampler(cdp);

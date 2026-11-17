@@ -1,4 +1,5 @@
-import { WebContentsView, session, type BrowserWindow } from 'electron';
+import { WebContentsView, session, shell, type BrowserWindow } from 'electron';
+import { classifyNavigation } from '../core/browser-policy.js';
 import { certificateVerdict, genProxyConfig } from '../core/browser-origins.js';
 import { lazyViewPort, type ViewPort, type ViewHistory } from './browser-pane.js';
 import { genCertificateVerifier, type PresentedCertificate } from './browser-trust.js';
@@ -75,6 +76,15 @@ function createElectronView(window: BrowserWindow, options: BrowserViewOptions):
 
     const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // DEV SITES ONLY (Tynn #741): a link off the .gen sites and this machine's loopback never loads in the pane; an http(s)
+    // one opens in the person's own browser. The routes are not needed to tell: a .gen name is kept (the pane says
+    // whether anyone serves it), so an empty list classifies it as `no-site`, never `external`.
+    view.webContents.on('will-navigate', (event, url) => {
+        const nav = classifyNavigation(url, []);
+        if (nav.kind === 'site' || nav.kind === 'no-site' || nav.kind === 'web') return;
+        event.preventDefault();
+        if (nav.kind === 'external' && /^https?:/i.test(nav.url)) void shell.openExternal(nav.url).catch(() => {});
+    });
     window.contentView.addChildView(view);
     view.setVisible(false);
 

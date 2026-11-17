@@ -1,5 +1,5 @@
 import type { ToolStatus } from '../core/toolchain.js';
-import { probeTools, type CommandRunner, type LatestIndex } from './toolchain-prober.js';
+import { probeToolNamed, probeTools, type CommandRunner, type LatestIndex } from './toolchain-prober.js';
 import { execInProcess, streamInProcess, type LineStream, type RunOptions, type RunResult, type RunStreams } from './spawn-exec.js';
 
 export type { RunOptions, RunStreams };
@@ -42,6 +42,10 @@ export async function execFileText(binary: string, args: readonly string[], opti
 }
 
 /** The prober over the real runner. The index is injected so an offline machine still answers `unknown`. */
+export function probeToolLive(name: string, latest: LatestIndex, runner: CommandRunner = execFileRunner): Promise<ToolStatus | null> {
+    return probeToolNamed(name, runner, latest);
+}
+
 export function probeToolsLive(latest: LatestIndex, runner: CommandRunner = execFileRunner): Promise<ToolStatus[]> {
     return probeTools(runner, latest);
 }

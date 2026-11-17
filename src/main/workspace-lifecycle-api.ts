@@ -21,6 +21,8 @@ import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { addWorkspace, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, createWorkspace, hibernateWorkspace, listTynnOwners, listTynnProjects, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { repoOpsPorts } from './workspace-reads-api.js';
+import type { AgentId } from '../core/identity.js';
+import type { WorkspaceSaveOps } from './workspace-save-host.js';
 
 /**
  * ADDING, SLEEPING AND CHANGING A WORKSPACE, ONE WIRING FOR EVERY PROCESS THAT ANSWERS IT (Tynn #553, host split P5d.5e). The
@@ -123,6 +125,10 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
         // The one write: the move of old AGENT.md front matter into project.json (Tynn #694), temp + rename.
         writeTextAtomic: nodeAgentConfigFs().writeTextAtomic,
         register: async (input) => { const record = await registry().register(input); return { id: record.id, name: record.name }; },
+        // What project.json says of an adopted agent (Tynn #756, PR8): its IssueWatch, and whether it is the workspace's default.
+        setIssueWatch: async (id, setting) => { await registry().setIssueWatch(id as AgentId, setting); },
+        defaultAgentOf: (workspaceId) => w.registry()?.defaultAgentOf(workspaceId) ?? null,
+        setDefaultAgent: async (workspaceId, agentId) => { await registry().setDefaultAgent(workspaceId, agentId); },
         sacredName: async (workspaceId) => {
             const folder = w.registry()?.workspace(workspaceId)?.path;
             const manifest = folder ? await readFile(join(folder, 'project.json'), 'utf8').catch(() => null) : null;
@@ -136,17 +142,32 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
 
 type LifecycleKeys = 'previewAdd' | 'previewAddFromGit' | 'tynnProjects' | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'locateRepo' | 'confirmAdd' | 'create'
     | 'confirmAddFromGit' | 'readSource' | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'confirmAddFromTynn' | 'hibernate' | 'wake' | 'remove' | 'listRepos' | 'addRepo'
-    | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer';
+    | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer' | 'savePreview' | 'save' | 'cloneOffers' | 'applyOffer';
 
 const NOT_A_REMOTE = { ok: false as const, reason: 'that is not a remote Genie understands; choose None, GitHub or Paste URL' };
 /** A new envelope's remote, parsed here, never trusted. No choice = None (an older window). */
 const remoteOf = (raw: unknown): RemoteChoice | null | undefined => (raw === undefined || raw === null ? undefined : parseRemoteChoice(raw));
+
+/** What a host answers the offers with: the watcher's, wherever it lives (genie-host's own, or over the engine link). */
+export interface CloneOfferOps {
+    cloneOffers(workspaceId: unknown): Promise<unknown>;
+    applyOffer(workspaceId: unknown, offerId: unknown): Promise<unknown>;
+}
+
+const NO_OFFER_OPS: CloneOfferOps = {
+    cloneOffers: () => Promise.resolve({ ok: false as const, reason: 'this host does not watch a workspace’s repo' }),
+    applyOffer: () => Promise.resolve({ ok: false as const, reason: 'this host does not watch a workspace’s repo' }),
+};
 
 export function workspaceLifecycleApi(
     parts: WorkspaceLifecycle,
     wiring: Pick<WorkspaceLifecycleWiring, 'registry' | 'github'>,
     touch: () => void,
     setColor: (id: string, color: string) => Promise<unknown>,
+    /** Save to repo (Tynn #756). Absent: the host refuses it in words. */
+    saveOps?: WorkspaceSaveOps,
+    /** The offers a clone's repo brings (Tynn #756). Absent: the host refuses in words. */
+    offerOps?: CloneOfferOps,
 ): Pick<HostApiDeps['workspaceOps'], LifecycleKeys> {
     const { workspaceOps, envelopePorts, adoptionPorts, repoOps } = parts;
     return {
@@ -190,5 +211,8 @@ export function workspaceLifecycleApi(
         setDefaultAgent: (id, agentId) => wiring.registry()!.setDefaultAgent(id, agentId),
         setMcpServer: (id, name, on) => wiring.registry()!.setWorkspaceMcpServer(id, name, on).finally(touch),
         setColor,
+        cloneOffers: (id: unknown) => (offerOps ?? NO_OFFER_OPS).cloneOffers(id),
+        applyOffer: (id: unknown, offerId: unknown) => (offerOps ?? NO_OFFER_OPS).applyOffer(id, offerId),
+        ...(saveOps ? { savePreview: (id: unknown) => saveOps.savePreview(id), save: (id: unknown, choices: unknown) => saveOps.save(id, choices) } : {}),
     };
 }

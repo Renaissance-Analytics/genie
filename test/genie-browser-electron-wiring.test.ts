@@ -23,12 +23,12 @@ describe('the window’s session', () => {
         expect(count(win, /defaultSession|'persist:genie-browser'/g)).toBe(0);
     });
 
-    it('.gen routed to the front door, trusted only on Genie’s CA by the verifier’s verdict, every request secure-only', () => {
+    it('.gen routed to the front door, trusted only on Genie’s CA by the verifier’s verdict, every request secure-only or a dev server on loopback (Tynn #741)', () => {
         expect(count(win, /ses\.setProxy\(genProxyConfig\(/g)).toBe(1);
         expect(count(win, /ses\.setCertificateVerifyProc\(/g)).toBe(1);
         expect(count(win, /callback\(\s*-?\d+\s*\)/g)).toBe(0);
         expect(count(win, /ses\.webRequest\.onBeforeRequest\(/g)).toBe(1);
-        expect(win).toMatch(/callback\(\{ cancel: !isSecureBrowserUrl\(details\.url\) \}\)/);
+        expect(win).toMatch(/callback\(\{ cancel: !isAllowedBrowserRequest\(details\.url\) \}\)/);
     });
 
     it('a page load waits for the routing (a .gen load before it would go to DNS)', () => {
@@ -50,9 +50,9 @@ describe('each tab’s page', () => {
         expect(win).toMatch(/setWindowOpenHandler\(\(\{ url \}\) => \{\s*events\.openWindow\(url\);\s*return \{ action: 'deny' \};/);
     });
 
-    it('a link off the Genie sites leaves for the machine’s browser instead of loading here', () => {
+    it('a link off the dev sites leaves for the machine’s browser instead of loading here, through the brain (Tynn #741)', () => {
         expect(count(win, /wc\.on\('will-navigate'/g)).toBe(1);
-        expect(win).toMatch(/event\.preventDefault\(\)/);
+        expect(win).toMatch(/event\.preventDefault\(\);\s*if \('external' in target\) events\.external\(url\);/);
         expect(win).toMatch(/shell\.openExternal/);
     });
 

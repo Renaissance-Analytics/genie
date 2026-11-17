@@ -1,0 +1,58 @@
+import type { IssueWatchSetting } from '../core/issue-watch.js';
+import type { ServiceInstance } from '../core/services.js';
+import { withElements, type ElementSources } from '../core/workspace-elements.js';
+import type { LiveModel } from '../core/workspace-save.js';
+
+/**
+ * WHAT THE WORKSPACE HOLDS THAT A SAVE DECLARES (Tynn #756, PR3): its service engines, its own settings, its default agent
+ * and the agents' IssueWatch choices, read from the host's registries. Reads only; nothing here changes any of them.
+ */
+
+export interface SourcePorts {
+    readonly services: { list(): readonly ServiceInstance[] };
+    readonly settings: { workspaceValues(workspaceId: string): Readonly<Record<string, boolean | string>> };
+    readonly registry: {
+        defaultAgentOf(workspaceId: string): string | null;
+        workspaceMcpOff(workspaceId: string): string[];
+        listAgents(): readonly { id: string; name: string; workspaceId: string; issueWatch?: IssueWatchSetting }[];
+        listWorkspaces(): readonly { id: string; envFile?: string }[];
+    };
+    /** The flow store (Tynn #756, PR5). Absent: flows are not saved. */
+    readonly flows?: { list(workspaceId?: string): readonly { name: string; workspaceId: string; document: Record<string, unknown> }[] };
+    /** The process book (Tynn #756, PR6). Absent: processes are not saved. */
+    readonly processes?: { kept(): readonly { name: string; workspaceId: string; command: string; cwd: string; restart: 'never' | 'on-failure' | 'always'; schedule?: { cron: string; kind: 'command' | 'agent-nudge'; prompt?: string; agent?: string } }[] };
+}
+
+export function elementSourcesFor(ports: SourcePorts, workspaceId: string): ElementSources {
+    const agents = ports.registry.listAgents().filter((a) => a.workspaceId === workspaceId);
+    const defaultId = ports.registry.defaultAgentOf(workspaceId);
+    return {
+        services: ports.services.list(),
+        workspace: {
+            overrides: ports.settings.workspaceValues(workspaceId),
+            defaultAgent: agents.find((a) => a.id === defaultId)?.name ?? null,
+            envFile: ports.registry.listWorkspaces().find((w) => w.id === workspaceId)?.envFile ?? null,
+            mcpOff: ports.registry.workspaceMcpOff(workspaceId),
+        },
+        agents: agents.map((a) => ({ name: a.name, issueWatch: a.issueWatch ?? null })),
+        // Name, workspace and document only: the store's id, arming, runs and history stay on this machine.
+        ...(ports.flows ? { flows: ports.flows.list(workspaceId).filter((f) => f.workspaceId === workspaceId).map((f) => ({ name: f.name, workspaceId: f.workspaceId, document: f.document })) } : {}),
+        // Name, command, folder, restart and schedule only: the book's id, the person's intent and the run history stay on this machine.
+        ...(ports.processes ? { processes: ports.processes.kept().filter((p) => p.workspaceId === workspaceId).map((p) => ({ name: p.name, workspaceId: p.workspaceId, command: p.command, cwd: p.cwd, restart: p.restart, ...(p.schedule ? { schedule: { cron: p.schedule.cron, kind: p.schedule.kind, ...(p.schedule.prompt !== undefined ? { prompt: p.schedule.prompt } : {}), ...(p.schedule.agent !== undefined ? { agent: p.schedule.agent } : {}) } } : {}) })) } : {}),
+    };
+}
+
+/**
+ * A live-model loader (the one Save to repo plans from) with this workspace's declarations in it: the manifest as it is on
+ * disk, plus its services, workspace settings and agents' IssueWatch as they are now. No project.json is still none.
+ */
+export function liveModelWithElements(
+    base: (workspacePath: string) => Promise<LiveModel | null>,
+    sources: (workspaceId: string) => ElementSources | Promise<ElementSources>,
+    workspaceId: string,
+): (workspacePath: string) => Promise<LiveModel | null> {
+    return async (workspacePath) => {
+        const model = await base(workspacePath);
+        return model === null ? null : withElements(model, await sources(workspaceId), workspaceId).model;
+    };
+}

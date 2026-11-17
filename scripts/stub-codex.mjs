@@ -33,6 +33,8 @@
 import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { providerTickLine } from './provider-ticks.mjs';
 
 // Opt-in protocol-test journal: public method names only, never frame params or credentials.
 const methodLogIndex = process.argv.indexOf('--record-methods');
@@ -58,6 +60,8 @@ const TICKER = (() => {
     if (!Number.isInteger(owner) || owner <= 0) return false;
     try { process.kill(owner, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 })();
+// One identity per actual stub process, even when Windows reuses another process's PID.
+const TICKER_PROCESS = TICKER ? { pid: process.pid, generation: randomUUID(), bornAt: Date.now() } : null;
 /**
  * MEASURE MODE (scripts/agent-reads-measure.mjs, Tynn #564): while `<tmpdir>/genie-stub-codex-measure` names a live pid, a turn
  * writes `rows` whole messages (each its own ledger row) and then streams `rate` events a second. Read at each turn, so the
@@ -326,7 +330,7 @@ function handle(frame) {
             if (TICKER) {
                 let tick = 0;
                 note(`ticker: streaming as pid ${process.pid}`);
-                setInterval(() => { tick += 1; delta(`tick ${tick} pid ${process.pid}\n`); }, 250);
+                setInterval(() => { tick += 1; delta(providerTickLine(tick, TICKER_PROCESS)); }, 250);
                 return;
             }
 

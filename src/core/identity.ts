@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { OS_AGENT_NAME } from './os-agent.js';
-import type { AcpProvider } from './engine.js';
+import { isAcpProvider, type AcpProvider } from './engine.js';
 import type { IssueWatchSetting } from './issue-watch.js';
 import type { CarryOver } from './carry-over.js';
 
@@ -187,13 +187,12 @@ export interface AgentRecord {
      */
     readonly plan?: readonly PlanStepRecord[];
     /**
-     * EACH PROVIDER'S OWN SESSION (Tynn story #380): the native session the agent left on another provider, by provider,
-     * resumed when it switches back. `threadId` stays the CURRENT provider's; a record from before this field has none
+     * EACH PROVIDER'S OWN SESSION (Tynn story #380): the native session the agent left, by provider, resumed when it switches back. `threadId` stays the CURRENT provider's; a record from before this field has none
      * parked, which is what it had. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
-    readonly threadIds?: Readonly<Partial<Record<AcpProvider, string>>>;
-    /** When the agent last LEFT each provider (ISO): switching back carries only what happened since. OPTIONAL. */
-    readonly leftAt?: Readonly<Partial<Record<AcpProvider, string>>>;
+    readonly threadIds?: Readonly<Record<string, string>>;
+    /** When the agent last LEFT each provider (ISO): returning carries only what happened since. OPTIONAL. */
+    readonly leftAt?: Readonly<Record<string, string>>;
     /**
      * THE CONVERSATION A SWITCH CARRIES (Tynn story #380, core/carry-over.ts): held here and attached once to the next
      * prompt that goes; cleared when it went. Absent = nothing pending.
@@ -275,4 +274,39 @@ export function agentRecord(input: NewAgent): AgentRecord {
         mode: input.mode ?? 'manual',
         accessScope: input.accessScope ?? 'self',
     };
+}
+
+const ACCOUNT_SLOT = /^account_(legacy_(claude|codex)|[0-9a-f]{32})$/;
+
+/**
+ * An agent's native threads are PER PROVIDER. Older records parked them under `provider:account` (Tynn #475, before the
+ * one-active-account model); they fold back to the provider. A provider's legacy-account slot wins over a managed
+ * account's, and a slot already keyed by the provider wins over both.
+ */
+function providerSlots(value: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Invalid thread slots');
+    const ranked: Array<{ provider: string; text: string; rank: number }> = [];
+    let namespaced = false;
+    for (const [key, text] of Object.entries(value)) {
+        if (typeof text !== 'string') throw new Error('Invalid thread slot');
+        const [provider, account, extra] = key.split(':');
+        if (!isAcpProvider(provider) || extra !== undefined || (account !== undefined && !ACCOUNT_SLOT.test(account))) throw new Error('Invalid thread slot namespace');
+        if (account !== undefined) namespaced = true;
+        ranked.push({ provider, text, rank: account === undefined ? 2 : account.startsWith('account_legacy_') ? 1 : 0 });
+    }
+    if (!namespaced) return value;
+    const slots: Record<string, string> = {};
+    for (const { provider, text } of ranked.sort((a, b) => a.rank - b.rank)) slots[provider] = text;
+    return slots;
+}
+
+/** The read boundary: an agent carries no account (the provider's ACTIVE account is the host's), and its threads are the provider's. */
+export function withoutAgentAccount(record: AgentRecord): AgentRecord {
+    if (!isAcpProvider(record.provider)) throw new Error('Invalid account provider');
+    const { accountId: _account, ...rest } = record as AgentRecord & { accountId?: unknown };
+    const threadIds = providerSlots(record.threadIds);
+    const leftAt = providerSlots(record.leftAt);
+    if (!('accountId' in record) && record.threadIds === threadIds && record.leftAt === leftAt) return record;
+    return { ...rest, ...(threadIds !== undefined ? { threadIds } : {}), ...(leftAt !== undefined ? { leftAt } : {}) };
 }

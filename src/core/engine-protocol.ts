@@ -54,6 +54,23 @@ export const ENGINE_METHODS = [
     // A provider's model list, for an agent not running yet (beta.61.1): asked of the provider's CLI by genie-host, which has
     // the process supervisor. `[provider, refresh]`.
     'engine.providerModels',
+    // The persisted legacy account home for this machine's own login/status UI (S3); no credentials.
+    'engine.providerAccount',
+    // After a login: ask the provider who the account is now (Tynn #477). `[provider]`.
+    'engine.refreshAccountIdentity',
+    // A provider sign-in for one account, run in the host (Tynn #479). `[provider, accountId?]`; `[accountId]` cancels.
+    'engine.login',
+    'engine.cancelLogin',
+    // SWITCH ACCOUNT (Tynn #753): open the provider's own login in its one home, with the steps. No agent is touched. `[provider]`.
+    'engine.switchAccount',
+    // SWITCH OFFERS (Tynn #481): the offers genie-host makes when the active account's chosen window is near its limit. `[]`;
+    // Not now on one: `[offerId]`.
+    'engine.switchOffers',
+    // EVERY KNOWN ACCOUNT, with its readings, and the standing offers (Tynn #483): the header's account chips. `[]`.
+    'engine.accounts',
+    // Rename or forget a known account (Tynn #484). `[action]`.
+    'engine.accountsAct',
+    'engine.dismissSwitchOffer',
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',
@@ -131,7 +148,11 @@ export const ENGINE_METHODS = [
     'engine.updater',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
+    'engine.features',
+    'engine.featureQuestion',
+    'client.featureEffect',
     'engine.processes',
+    'engine.cloneOffers',
     // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
     // Their state is sent as `plugins.event` before `engine.ready` and again on every change.
     'engine.plugins',
@@ -257,7 +278,7 @@ export interface EngineAgentUpdate {
 /** `engine.global`: what is per provider or per host rather than per agent. Sent when it changed. */
 export interface EngineGlobalView {
     readonly startedIds: readonly string[];
-    readonly heldLogins: ReadonlyArray<{ provider: string; view: GateView }>;
+    readonly heldLogins: ReadonlyArray<{ provider: string; account: string; view: GateView }>;
     readonly signedOutProviders: readonly string[];
     readonly pausedProviders: readonly string[];
     readonly pausedAgents: Readonly<Record<string, readonly string[]>>;
@@ -278,7 +299,7 @@ export type EngineCallback =
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
     | { readonly name: 'turnNumbered'; readonly agentId: string; readonly n: number }
     | { readonly name: 'action'; readonly agentId: string; readonly kind: string }
-    | { readonly name: 'headroom'; readonly provider: string; readonly headroom: unknown }
+    | { readonly name: 'headroom'; readonly provider: string; readonly headroom: unknown; readonly stamp?: { readonly accountId: string; readonly runId: string; readonly fresh?: boolean } }
     | { readonly name: 'mcpServers'; readonly agentId: string; readonly reports: readonly unknown[] }
     | { readonly name: 'stopUnverified'; readonly agentId: string; readonly reason: string }
     // openFileForUser while no window was there (P3.1): shown when the next one connects.

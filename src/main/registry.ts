@@ -16,6 +16,7 @@ export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readR
 import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
+import { envFileName } from '../core/dotenv.js';
 import { slugsFor } from '../core/address.js';
 import { WorkspaceMailVisibility, hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
 
@@ -542,6 +543,23 @@ export class Registry {
         return { ok: true };
     }
 
+    /**
+     * The env file its sites' service connection is written to (`WorkspaceRecord.envFile`): a plain file name, or `null` for the
+     * default every workspace without one has (Tynn #756, PR8: a clone's project.json may name another). Never a path.
+     */
+    async setWorkspaceEnvFile(workspaceId: string, file: string | null): Promise<{ ok: true } | { ok: false; reason: string }> {
+        if (!this.#workspaces.some((w) => w.id === workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
+        if (file !== null && (file.trim() === '' || envFileName(file) === null)) return { ok: false, reason: `"${file}" is not a file name: an env file is a plain name inside each site's folder, like .env.local` };
+        this.#workspaces = this.#workspaces.map((w) => {
+            if (w.id !== workspaceId) return w;
+            const { envFile: _previous, ...rest } = w;
+            return file === null ? rest : { ...rest, envFile: file.trim() };
+        });
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return { ok: true };
+    }
+
     /** The MCP servers off by default for every agent of this workspace (Tynn #628); an agent's own switch wins. */
     workspaceMcpOff(workspaceId: string): string[] {
         return [...(this.#workspaces.find((w) => w.id === workspaceId)?.mcpOff ?? [])];
@@ -646,11 +664,11 @@ export class Registry {
     /**
      * Switch provider (Tynn story #380): identity, inbox, history, plan and the conversation stay with the agent. Each
      * provider keeps ITS OWN native session — a Claude session id means nothing to Codex — so the one it leaves is PARKED
-     * under the old provider (`threadIds`) with when it left (`leftAt`), and the new provider's is resumed when it has one
+     * under the old provider (`threadIds`) with when it left (`leftAt`), and the destination's is resumed when it has one
      * (`null` = it never ran there). `carryOver` is what the next prompt carries (core/carry-over.ts); a switch always
      * REPLACES it, never stacks. The model goes with the old provider unless the caller found it in the new provider's own
      * list (`keepModel`). The owner, 2026-10-21: "I need to be able to change provider as well as model". The same
-     * provider changes nothing.
+     * provider changes nothing. An agent has no account: the provider's ONE active account is the host's (Tynn #751).
      */
     async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean; carryOver?: CarryOver | null; now?: string }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
         if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
@@ -659,12 +677,13 @@ export class Registry {
         if (existing.provider === provider) return { ok: true, record: existing };
         const { model: _oldModel, carryOver: _oldCarry, ...withoutModel } = existing;
         const { carryOver: _carry, ...keptModel } = existing;
-        const parked: Partial<Record<AcpProvider, string>> = { ...(existing.threadIds ?? {}) };
-        if (existing.threadId) parked[existing.provider] = existing.threadId;
-        else delete parked[existing.provider];
-        const resumed = parked[provider] ?? null;
-        delete parked[provider];
-        const leftAt = { ...(existing.leftAt ?? {}), [existing.provider]: options.now ?? new Date().toISOString() };
+        const from = existing.provider, to = provider;
+        const parked: Record<string, string> = { ...(existing.threadIds ?? {}) };
+        if (existing.threadId) parked[from] = existing.threadId;
+        else delete parked[from];
+        const resumed = parked[to] ?? null;
+        delete parked[to];
+        const leftAt = { ...(existing.leftAt ?? {}), [from]: options.now ?? new Date().toISOString() };
         const record: AgentRecord = {
             ...(options.keepModel ? keptModel : withoutModel),
             provider,

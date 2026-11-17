@@ -24,6 +24,7 @@ import {
     type ToolCopy,
 } from '../core/toolchain-repair.js';
 import { SYSTEM_CA_BUNDLES } from '../core/php-trust.js';
+import { playwrightEnv } from '../core/playwright-managed.js';
 import { probeInstalled, type CommandRunner } from './toolchain-prober.js';
 
 /**
@@ -464,6 +465,8 @@ export function restoreToolchainEnv(ports: Pick<ToolchainOpsPorts, 'platform' | 
     if (prefix !== undefined && applied.some((d) => sameDir(dirOf(d), dirOf(prefix)) && !sameDir(d, prefix))) ports.env.set('NPM_CONFIG_PREFIX', prefix);
     const phpIni = ports.fs.exists(ini) && ports.fs.exists(bundle);
     if (phpIni) ports.env.set('PHP_INI_SCAN_DIR', phpIniScanDir(ports.env.get('PHP_INI_SCAN_DIR'), confDir, ports.platform));
+    // Playwright's browsers: ONE Genie-managed folder for every terminal, process, site and agent (Tynn #604).
+    for (const [name, value] of Object.entries(playwrightEnv(ports.dataDir))) ports.env.set(name, value);
     return { pathFirst: applied, phpIni };
 }
 

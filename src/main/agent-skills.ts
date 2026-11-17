@@ -27,7 +27,7 @@ export interface GenieSkill {
 export const GENIE_SKILLS: readonly GenieSkill[] = [
     {
         name: 'genie',
-        description: 'Use whenever you work inside Genie 2 or its `genie` MCP tools are available: what each tool is for.',
+        description: "Genie's guide, to read first (before searching for tools) whenever you work inside Genie 2 or its `genie` MCP tools are available: what each tool is for.",
         body: `# Working in Genie 2
 
 Genie's MCP server (\`genie\`) comes with your session. Its tools:
@@ -46,7 +46,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - Keep your steps short. Run long commands — test suites, builds, servers — in the background (your shell's background option, or \`processes\`) and check on them, rather than in one long step: messages from the person reach you only between your steps, so while one command runs they wait.
 - \`knowledge\` for the workstation's knowledge graph.
 - \`thumbsUp\` to say you are ready.
-- The official plugins' tools, while their plugin is on: \`ai.genie.artboard.post\` to put something you MADE (a rendered mockup, an image) in front of the person; add \`askVerdict: true\` only when you need them to approve or reject it before you go on, and the verdict and comment arrive in your inbox (without it the card just shows the artifact); \`ai.genie.presentation.createDeck\` and \`ai.genie.spreadsheet.createWorkbook\` to make a .pptx or an .xlsx. Markdown, Word, spreadsheet and slide files open in Genie's own editors.
+- The official plugins' tools, while their plugin is on: \`ai.genie.artboard.post\` to put something you MADE (a rendered mockup, an image) in front of the person; add \`askVerdict: true\` only when you need them to approve or reject it before you go on, and the verdict and comment arrive in your inbox (without it the card just shows the artifact); it lands in the workspace's ArtBoard tab, posting the same id again adds a new version, and \`readTrail: true\` with the id reads the versions, verdicts and comments, so a revision answers the last comment; \`ai.genie.presentation.createDeck\` and \`ai.genie.spreadsheet.createWorkbook\` to make a .pptx or an .xlsx. Markdown, Word, spreadsheet and slide files open in Genie's own editors.
 
 Workspace rules are in \`RULES.md\`; they may be stricter than this.
 `,
@@ -97,6 +97,7 @@ Genie sets up, starts and stops the workspace's service engines and sites. Never
 - \`services\` with action \`update\` (id) asks the person before pulling the existing image tag fresh and recreating its container. The approval names the affected workspaces, sites and processes; its name, data volumes, ports and credentials stay, and a stopped engine stays stopped.
 - A workspace's own engine is the one its variables come from, before any shared one. Postgres with pgvector is \`add\` with \`variant: "pgvector"\`; a custom image that is a Postgres (or MySQL, MariaDB, Redis, Mongo) is \`add\` with \`kind\`, and the workspace then gets DB_* from it. On a shared Postgres the workspace uses, \`services\` with action createDatabase (id, name) asks the person, then Genie creates another database owned by the workspace's role (a test database, say); connect to it by name with the workspace's own user. \`use\` (an engine's id) makes one engine the workspace's for its kind, and \`detach\` stops a shared one giving the workspace its variables while keeping its data; both ask the person.
 - \`sites\` with action \`add\` serves a folder at https://<name>.gen with the defaults the Hosting tab would use (the name is \`<folder>.<workspace>\` unless you give one); \`detect\` says what Genie would serve for a folder without doing anything; \`list\`, \`status\`, \`start\`, \`stop\`, \`restart\` and \`logs\` act at once; \`open\` shows the site to the person in Genie's browser; \`update\` and \`remove\` ask the person.
+- Sites are never served from sandbox/: it holds throwaway work. Build a site in repos/<name> and serve it from there.
 - Terminals and site processes already have the service variables.
 `,
     },

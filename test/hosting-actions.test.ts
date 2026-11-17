@@ -35,11 +35,15 @@ describe('the shared actions', () => {
         expect(DIRECT.filter((re) => re.test(shared))).toHaveLength(DIRECT.length);
     });
 
-    for (const file of ['src/main/feature-ipc.ts', 'src/main/mcp-tools-hosting.ts']) {
+    for (const file of ['src/main/feature-ipc.ts', 'src/main/feature-hosting.ts', 'src/main/mcp-tools-hosting.ts']) {
         it(`${file} makes them through hosting-actions.ts and keeps no copy of its own — the offending calls named`, () => {
             expect(existsSync(file)).toBe(true);
             const source = code(file);
-            expect(source).toMatch(/from '\.\/hosting-actions\.js'/);
+            if (file === 'src/main/feature-ipc.ts') {
+                expect(source).toMatch(/import \{[^}]*applyHostingFeatureAction[^}]*\} from '\.\/feature-hosting\.js'/);
+                expect(source).toMatch(/applyHostingFeatureAction\(services, action, state, next, ports\)/);
+                expect(source).toMatch(/hostingFeatureSnapshot\(services, state, ports, timed\)/);
+            } else expect(source).toMatch(/from '\.\/hosting-actions\.js'/);
             const allowed = ALLOWED[file] ?? [];
             expect(DIRECT.filter((re) => re.test(source) && !allowed.some((a) => a.source === re.source)).map((re) => re.source)).toEqual([]);
         });

@@ -11,7 +11,8 @@ describe('Genie wires it', () => {
     it('main makes the window from the Deck’s items and re-checks it on every attention change', () => {
         const main = strip('../src/main/main.ts');
         expect(main.match(/new QuestionWindow\(\{/g) ?? []).toHaveLength(1);
-        expect(main.match(/items:\s*\(\)\s*=>\s*composed\.deckItems\(\)/g) ?? []).toHaveLength(1);
+        // This machine's Deck, and the questions of the machine a window here drives (Tynn #726).
+        expect(main.match(/items:\s*\(\)\s*=>\s*\[\.\.\.composed\.deckItems\(\),\s*\.\.\.remoteQuestions\.items\(\)\]/g) ?? []).toHaveLength(1);
         expect(main.match(/composed\.attention\.onChange\(\(\)\s*=>\s*questionWindow\?\.changed\(\)\)/g) ?? []).toHaveLength(1);
     });
     it('the window’s page and preload are built', () => {

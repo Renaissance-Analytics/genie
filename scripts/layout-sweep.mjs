@@ -226,10 +226,13 @@ const HEADER_PROBE = `
     (() => {
         const header = document.querySelector('[data-surface="workspace"] [data-view-header]');
         const column = header ? header.closest('main') : null;
-        // THE POSITIVE CONTROL: the repos the header accounts for — its chips plus "+N more". Twelve seeded; fewer means
-        // the seed did not land and "nothing overflows" would mean nothing.
+        // THE POSITIVE CONTROL: the seeded workspace's own header — its name crumb and its actions — is what is measured.
+        // It lists no repos any more (the owner, 2026-11-16), so the twelve seeded repos are not in it: none healthy is locked.
+        // Its name is the seeded checkout's folder; its id is tynn.
+        const named = (header?.querySelector('[data-workspace-name]')?.textContent ?? '').trim();
+        const id = header?.closest('[data-surface="workspace"]')?.getAttribute('data-workspace') ?? null;
+        const actions = header ? header.querySelectorAll('[data-header-actions] [data-action]').length : 0;
         const chips = header ? header.querySelectorAll('[data-repo-chip]').length : 0;
-        const more = Number((header?.querySelector('[data-action="more-repos"]')?.textContent ?? '').match(/[0-9]+/)?.[0] ?? 0);
         // WHAT spills, when something does: each child whose right edge passes the header's content box, by how much — so
         // a failure names its element instead of only a number.
         const box = header ? header.getBoundingClientRect() : null;
@@ -244,7 +247,7 @@ const HEADER_PROBE = `
             return { over, what: (tag + ' ' + mark + ' ' + (el.textContent ?? '').trim().slice(0, 24)).trim(), width: Math.round(r.width) };
         }).filter((x) => x.over > 1).sort((a, b) => b.over - a.over).slice(0, 3) : [];
         return JSON.stringify({
-            repos: chips + more,
+            named, id, actions, chips,
             header: header ? header.scrollWidth - header.clientWidth : null,
             column: column ? column.scrollWidth - column.clientWidth : null,
             headerWidth: box ? Math.round(box.width) : null,
@@ -256,7 +259,7 @@ for (const width of WIDTHS) {
     await send('Emulation.setDeviceMetricsOverride', { width, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
     await new Promise((r) => setTimeout(r, 250));
     const r = JSON.parse(await evaluate(HEADER_PROBE));
-    check(r.repos >= 12, `${width}px — the workspace header accounts for the seeded repos`, `${r.repos} of 12`);
+    check(r.id === 'tynn' && r.named !== '' && r.actions >= 3 && r.chips === 0, `${width}px — the seeded workspace's header: its name, its actions, no repo list`, JSON.stringify({ id: r.id, named: r.named, actions: r.actions, chips: r.chips }));
     check(r.header !== null && r.header <= 1, `${width}px — the workspace header fits its column`, r.header > 1 ? `${r.header}px wider than its column (header ${r.headerWidth}px; spilling: ${JSON.stringify(r.spills)})` : '');
     check(r.column !== null && r.column <= 1, `${width}px — the page column does not scroll sideways`, r.column > 1 ? `${r.column}px wider` : '');
 }

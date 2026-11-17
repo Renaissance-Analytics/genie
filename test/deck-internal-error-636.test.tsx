@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
 import { MainErrorBook } from '../src/core/main-errors.js';
 import { answerDeck, type DeckAnswerPorts } from '../src/main/deck-answer.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 
 // Coverage added after the core implementation: prove it with an explicit mutation/restore on the test VM.
 // Render the real Deck and dispatch through the real resolver/answerer; native OS opening is not exercised here.
@@ -21,7 +21,7 @@ const filed = (kind: typeof kinds[number] = 'unhandled-rejection') => {
     return { book, item: book.deckItems()[0]! };
 };
 const draw = (item: DeckItem, expanded = false) => renderToStaticMarkup(
-    <Deck items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}}
+    <DeckOnDashboard items={[item]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}}
         onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} initiallyExpanded={expanded ? [item.id] : []} />,
 );
 const count = (html: string, text: string) => html.split(text).length - 1;

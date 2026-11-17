@@ -1,6 +1,7 @@
 import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { posix, win32 } from 'node:path';
 import { ACP_PROVIDERS } from '../core/engine.js';
+import { type ProviderAccountHome } from '../core/accounts.js';
 import { judgeProviderHealth, type CommandAnswer, type ProgramFile, type ProviderHealth } from '../core/provider-health.js';
 import { providerLogin } from '../core/provider-login.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
@@ -31,7 +32,7 @@ export interface ProviderHealthPorts {
     /** The program the person chose for this provider (Tynn #577), or `null`. */
     readonly chosen: (provider: string) => string | null;
     readonly now: () => number;
-    readonly run: (binary: string, args: readonly string[], options?: { readonly timeoutMs?: number }) => Promise<{ readonly exitCode: number; readonly stdout: string; readonly streams?: { readonly stdout: string; readonly stderr: string } }>;
+    readonly run: (binary: string, args: readonly string[], options?: { readonly timeoutMs?: number; readonly env?: Readonly<Record<string, string>>; readonly input?: string; readonly endInputOnOutput?: string }) => Promise<{ readonly exitCode: number; readonly stdout: string; readonly streams?: { readonly stdout: string; readonly stderr: string } }>;
 }
 
 const VERSION_TIMEOUT_MS = 20_000;
@@ -102,6 +103,7 @@ export function locateProviderProgram(provider: string, ports: ProviderHealthPor
 
 async function answer(ports: ProviderHealthPorts, binary: string, args: readonly string[], timeoutMs: number): Promise<CommandAnswer> {
     try {
+        // No environment of Genie's making: the provider is asked in its normal home (Tynn #753).
         const r = await ports.run(binary, args, { timeoutMs });
         const output = r.streams ? [r.streams.stdout, r.streams.stderr].filter(Boolean).join('\n') : r.stdout;
         return { exitCode: r.exitCode, output };
@@ -112,14 +114,15 @@ async function answer(ports: ProviderHealthPorts, binary: string, args: readonly
 }
 
 /** How to run the located program with `args`: a native program directly; an npm shim through cmd.exe, as a person's would. */
-function argvFor(provider: string, program: ProgramFile, args: readonly string[], ports: ProviderHealthPorts): [string, string[]] {
+export function argvFor(provider: string, program: ProgramFile, args: readonly string[], ports: ProviderHealthPorts): [string, string[]] {
     if (ports.platform !== 'win32') return [program.via ?? program.path, [...args]];
     if (RUNS_DIRECTLY.test(program.path)) return [program.path, [...args]];
     return platformArgv(provider, args, 'win32' as Platform, { platform: 'win32', env: ports.env as NodeJS.ProcessEnv, isFile: ports.isFile });
 }
 
-/** Measure one provider. Never throws. */
-export async function checkProviderHealth(provider: string, ports: ProviderHealthPorts): Promise<ProviderHealth> {
+/** Provider command failures are measurements; a mismatched account is refused before running. */
+export async function checkProviderHealth(provider: string, ports: ProviderHealthPorts, account?: ProviderAccountHome): Promise<ProviderHealth> {
+    if (account && account.provider !== provider) throw new Error('The status probe needs an account of its provider');
     const base = { provider, arch: ports.arch, checkedAt: ports.now() };
     const program = locateProviderProgram(provider, ports);
     const before = judgeProviderHealth({ ...base, program, version: null, status: null });

@@ -87,7 +87,7 @@ describe('New workspace: a real repository with its first commit, as the card pr
         expect(await git(ws, 'log', '-1', '--format=%s')).toBe('Initial commit — acme-storefront.agi envelope scaffolded by Genie');
 
         const tracked = (await git(ws, 'ls-files')).split('\n');
-        for (const f of ['project.json', '.gitignore', 'README.md', 'RULES.md', 'AGENTS.md', 'CLAUDE.md', 'repos/.gitkeep', '.ai/plans/.gitkeep', '.ai/knowledge/.gitkeep', '.ai/pm/.gitkeep', '.ai/chat/.gitkeep', '.ai/memory/.gitkeep', '.ai/issues/.gitkeep', 'sandbox/.gitkeep', '.trash/.gitkeep']) {
+        for (const f of ['project.json', '.gitignore', 'README.md', 'RULES.md', 'AGENTS.md', 'CLAUDE.md', 'repos/.gitkeep', '.ai/plans/.gitkeep', '.ai/knowledge/.gitkeep', '.ai/pm/.gitkeep', '.ai/chat/.gitkeep', '.ai/memory/.gitkeep', '.ai/issues/.gitkeep', '.ai/_dirty/.gitkeep', 'sandbox/.gitkeep', '.trash/.gitkeep']) {
             expect(tracked).toContain(f);
         }
         // Nothing written was left out of the commit.
@@ -112,6 +112,22 @@ describe('New workspace: a real repository with its first commit, as the card pr
         const status = (await git(ws, 'status', '--porcelain', '--untracked-files=all')).split('\n');
         expect(status).toContain('?? .ai/knowledge/note.md');
         expect(status.filter((l) => l.includes('sandbox/') || l.includes('.trash/'))).toEqual([]);
+    }, 60_000);
+
+    it('keeps what lands in .ai/_dirty/ out of git, and the folder itself in it (Tynn #818)', async () => {
+        const ws = await create();
+        await mkdir(join(ws, '.ai', '_dirty', 'drop'), { recursive: true });
+        await writeFile(join(ws, '.ai', '_dirty', 'upload.png'), 'x');
+        await writeFile(join(ws, '.ai', '_dirty', 'drop', 'notes.txt'), 'x');
+        expect(await ignored(ws, '.ai/_dirty/upload.png')).toBe(true);
+        expect(await ignored(ws, '.ai/_dirty/drop/notes.txt')).toBe(true);
+        // Positive controls, measured the same way: the folder's .gitkeep is tracked, and the rest of .ai/ is not ignored.
+        expect(await ignored(ws, '.ai/_dirty/.gitkeep')).toBe(false);
+        expect(await git(ws, 'ls-files', '.ai/_dirty')).toBe('.ai/_dirty/.gitkeep');
+        await writeFile(join(ws, '.ai', 'plans', 'plan.md'), 'x');
+        expect(await ignored(ws, '.ai/plans/plan.md')).toBe(false);
+        const status = (await git(ws, 'status', '--porcelain', '--untracked-files=all')).split('\n');
+        expect(status.filter((l) => l.includes('.ai/_dirty/'))).toEqual([]);
     }, 60_000);
 
     it('with no git identity on the machine, commits as Genie’s GitHub App bot — for that commit only', async () => {

@@ -91,6 +91,8 @@ export class BrowserPane {
         const nav = classifyNavigation(input, this.#routes());
         if (nav.kind === 'refused') return { ok: false, reason: nav.reason };
         if (nav.kind === 'no-site') return { ok: false, reason: `nothing is serving ${nav.host}` };
+        // Dev sites only (Tynn #741): the open web never loads in the pane.
+        if (nav.kind === 'external') return { ok: false, reason: `${new URL(nav.url).hostname} is not a dev site; it opens in your browser` };
         const seen = this.#reports;
         await this.#view.loadURL(nav.url);
         this.#view.setVisible(true);

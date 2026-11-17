@@ -134,6 +134,7 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
                 </div>
             ) : (
             <span
+                title={row.title}
                 className={[
                     'min-w-0 flex-1',
                     row.mono ? 'font-mono text-xs' : '',
@@ -148,8 +149,8 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
             >
                 {/* WHO spoke, on a message: a field in its colour, never a role word. */}
                 {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{personText(row.who.label)}</span> : null}
-                {/* No internal id in what the person reads (Tynn #696); the ledger keeps them. */}
-                {expanded && row.full !== undefined ? <span data-thought-full="" className="block whitespace-pre-wrap">{personText(row.full)}</span> : personText(row.main)}
+                {/* No internal id in what the person reads (Tynn #696); a mono row (a command, a figure) is verbatim, like code. */}
+                {expanded && row.full !== undefined ? <span data-thought-full="" className="block whitespace-pre-wrap">{personText(row.full)}</span> : row.mono ? row.main : personText(row.main)}
             </span>
             )}
 

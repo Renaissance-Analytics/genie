@@ -1,5 +1,6 @@
 import { AGENT_NAME } from './agent-adoption.js';
 import { formatLike } from './envelope-sites.js';
+import { parseIssueWatchSetting, type IssueWatchSetting } from './issue-watch.js';
 import { SCHEMA_REVISION, stampSchema } from './workspace-model.js';
 
 /**
@@ -7,7 +8,8 @@ import { SCHEMA_REVISION, stampSchema } from './workspace-model.js';
  * be in the project.json, not in the AGENT.md file as frontmatter. This duplicates context and bloats the window.").
  *
  * - **Where it lives:** `agents.<name>` in the workspace's project.json — Civicognita/shared-schemas v0.4.0: a Genie agent
- *   name for the key, `{ purpose, provider?, tuis?, model? }` for the value and NOTHING else (no secret, no persona prose).
+ *   name for the key, `{ purpose, provider?, tuis?, model? }` for the value and NOTHING else (no secret, no persona prose). v0.5.0
+ *   adds `issueWatch` (`{ delivery, kinds }`: how the agent hears IssueWatch); capability grants never travel.
  *   Writing it stamps that revision; a manifest on a newer revision is never rewritten (stampSchema).
  * - **The persona:** `.agents/<name>/AGENT.md` is only the persona text. A new one is the purpose, said once.
  * - **The one-time move:** an AGENT.md that still opens with `---` front matter (written before #694) has it moved here the
@@ -20,6 +22,8 @@ export interface AgentConfig {
     readonly provider?: string;
     readonly tuis?: readonly string[];
     readonly model?: string;
+    /** How it hears IssueWatch (v0.5.0). Absent = never chosen, and the default applies. */
+    readonly issueWatch?: IssueWatchSetting;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -28,7 +32,7 @@ const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() 
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
 /**
- * One agent's config as the schema allows it, or `null`: only the four keys are carried (anything else — a credential, a
+ * One agent's config as the schema allows it, or `null`: only the five keys are carried (anything else — a credential, a
  * persona — is dropped, never written), and a malformed value is not guessed at.
  */
 export function agentConfigOf(value: unknown): AgentConfig | null {
@@ -36,11 +40,18 @@ export function agentConfigOf(value: unknown): AgentConfig | null {
     if (value.provider !== undefined && !nonEmpty(value.provider)) return null;
     if (value.model !== undefined && !nonEmpty(value.model)) return null;
     if (value.tuis !== undefined && (!Array.isArray(value.tuis) || !value.tuis.every(nonEmpty))) return null;
+    let issueWatch: IssueWatchSetting | undefined;
+    if (value.issueWatch !== undefined) {
+        const parsed = parseIssueWatchSetting(value.issueWatch);
+        if (typeof parsed === 'string') return null;
+        issueWatch = parsed;
+    }
     return {
         purpose: value.purpose,
         ...(value.provider !== undefined ? { provider: value.provider as string } : {}),
         ...(value.tuis !== undefined ? { tuis: [...(value.tuis as string[])] } : {}),
         ...(value.model !== undefined ? { model: value.model as string } : {}),
+        ...(issueWatch !== undefined ? { issueWatch } : {}),
     };
 }
 
@@ -157,7 +168,8 @@ export function frontmatterMove(text: string, name: string): FrontmatterMove | n
     const fields = frontFields(m[1] ?? '');
     const body = text.slice(m[0].length).replace(/^(?:[^\S\r\n]*\r?\n)+/, '');
     const lines = body === '' ? [] : body.split(/\r?\n/);
-    const you = new RegExp(`^You are ${name.replace(/[-]/g, '\\-')}\\.\\s*`);
+    // The name is matched literally: every pattern character in it is escaped, the backslash first among them.
+    const you = new RegExp(`^You are ${name.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&')}\\.\\s*`);
     let purpose = fields.purpose !== undefined ? oneLine(fields.purpose) : '';
     if (purpose === '') {
         const first = lines.find((l) => l.trim() !== '' && !/^#/.test(l.trim()));

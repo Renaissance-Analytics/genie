@@ -1,5 +1,6 @@
 import { Button, Icon, Modal } from '@particle-academy/react-fancy';
 import { useState } from 'react';
+import { Flash } from './Flash.js';
 import { importedAgentsOffer, type ImportedAgent } from '../../core/agent-adoption.js';
 import { ProviderLogo } from './ProviderLogo.js';
 
@@ -70,7 +71,8 @@ export function ImportedAgentsView({ workspaceName, path, agents, busy, notice, 
                 </div>
             ) : null}
             {error ? <p data-imported-agents-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
-            {notice ? <p data-imported-agents-notice="" role="status" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 text-xs">{notice}</p> : null}
+            {/* The notice is a Flash, never a line on the page (the owner, 2026-11-16). */}
+            <Flash note={notice} />
             {unregisteredAgentList({ agents, busy, verb: { action: 'adopt-agent', label: 'Adopt', busyLabel: 'Adopting…' }, onAct: onAdopt })}
             <div className="flex items-center justify-end gap-2">
                 <Button type="button" size="xs" color="violet" icon="check" data-action="open-workspace" disabled={busy !== null} onClick={onOpen}>Open workspace</Button>
@@ -121,7 +123,7 @@ export function AgentRosterView({ registered, onDisk, busy, notice, error, onRea
                 <span className="text-xs font-semibold">On disk only</span>
                 <span className={muted}>An <span className="font-mono">.agents/&lt;name&gt;/AGENT.md</span> Genie has no registration for — unmounted, or brought by the project. Reattach reads its file; it never rewrites it.</span>
                 {error ? <p data-imported-agents-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
-                {notice ? <p data-imported-agents-notice="" role="status" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 text-xs">{notice}</p> : null}
+                <Flash note={notice} />
                 {onDisk === null ? (
                     <span data-roster-on-disk-loading="" className={muted}>Reading .agents/…</span>
                 ) : onDisk.length === 0 ? (

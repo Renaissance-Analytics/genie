@@ -120,7 +120,7 @@ describe('the features snapshot names its slow part', () => {
     });
 
     it('main writes those to the lifecycle log', () => {
-        const src = readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
+        const src = readFileSync('src/main/genie-host.ts', 'utf8').replace(/\r\n/g, '\n');
         expect(src).toMatch(/slowPart: \{ ms: [0-9_]+, log: \(part, ms\) => lifecycleLog\(`features slow part=\$\{part\} ms=\$\{ms\}`\) \}/);
     });
 });

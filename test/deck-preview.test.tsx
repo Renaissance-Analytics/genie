@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { deckPreview, type DeckItem, type SignalState } from '../src/core/deck.js';
 import { deckItemsFrom } from '../src/core/deck-sources.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 import { control } from './helpers/control-markup.js';
 
 /**
@@ -23,7 +23,7 @@ const itemsOf = (texts: string[]): DeckItem[] =>
         unreadDms: [], agents: {}, workspaceNames: {},
     } as unknown as Parameters<typeof deckItemsFrom>[0]);
 const render = (items: readonly DeckItem[]) =>
-    renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} />);
+    renderToStaticMarkup(<DeckOnDashboard items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} />);
 
 describe('the preview', () => {
     it('a multi-line item: its first line, and there is more', () => {

@@ -58,7 +58,7 @@ beforeEach(async () => {
     decision = 'allowed';
     printed = () => 'Migrated.\n';
     const exec: ServiceExec = async (input) => { ran.push(input); return { exitCode: 0, output: printed(input.env), timedOut: false }; };
-    tools = hostingTools({ resolveCaller: (id) => (id === 't-example' ? caller : null), approve: async (_c, action, detail) => { approvals.push(`${action}: ${detail}`); return decision; }, services, exec });
+    tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => (id === 't-example' ? caller : null), approve: async (_c, action, detail) => { approvals.push(`${action}: ${detail}`); return decision; }, services, exec });
 });
 afterEach(async () => {
     await services.shutdown();
@@ -145,7 +145,7 @@ describe('services exec — the MCP call goes away (genie#1360)', () => {
         const progress = () => {};
         let approvedWith: unknown;
         let execWith: Parameters<ServiceExec>[0] | undefined;
-        const own = hostingTools({
+        const own = hostingTools({ trusted: () => true, 
             resolveCaller: (id) => (id === 't-example' ? caller : null),
             approve: async (_c, _a, _d, call) => { approvedWith = call; return 'allowed'; },
             services,
@@ -160,7 +160,7 @@ describe('services exec — the MCP call goes away (genie#1360)', () => {
 
     it('a client disconnect reports the stopped-command error', async () => {
         const gone = new AbortController();
-        const own = hostingTools({
+        const own = hostingTools({ trusted: () => true, 
             resolveCaller: (id) => (id === 't-example' ? caller : null),
             approve: async () => 'allowed',
             services,

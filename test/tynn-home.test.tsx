@@ -157,7 +157,7 @@ describe('the Home page', () => {
     it('a save says running, then Tynn\'s reason with Retry', () => {
         const view = parseHome(DETAILS)!;
         expect(render({ state: { state: 'ready', view, op: { action: 'details.update', phase: 'running' } } })).toMatch(/data-tynn-op="running"[\s\S]*Saving/);
-        expect(render({ state: { state: 'ready', view, op: { action: 'details.update', phase: 'done' } } })).toMatch(/data-tynn-op="done"[\s\S]*Saved/);
+        expect(render({ state: { state: 'ready', view, op: { action: 'details.update', phase: 'done' } } })).not.toMatch(/data-tynn-op="done"/);
         const failed = render({ state: { state: 'ready', view, op: { action: 'details.update', phase: 'failed', reason: 'The slug format is invalid.' } }, onRetry: noop });
         expect(failed).toContain('The slug format is invalid.');
         expect(failed).toMatch(/data-tynn-retry/);

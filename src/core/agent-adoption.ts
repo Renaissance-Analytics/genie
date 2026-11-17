@@ -1,4 +1,5 @@
 import type { AgentConfig } from './agent-config.js';
+import type { IssueWatchSetting } from './issue-watch.js';
 import { isAcpProvider, type AcpProvider } from './engine.js';
 
 /**
@@ -44,6 +45,8 @@ export interface ImportedAgent {
     readonly instructions: string;
     /** Why it cannot be adopted as it stands, or `null`. */
     readonly refusal: string | null;
+    /** How its config says it hears IssueWatch (v0.5.0), applied when it is adopted. Absent: never chosen. A capability grant is never part of an offer. */
+    readonly issueWatch?: IssueWatchSetting;
 }
 
 /** Why `.agents/<folder>` cannot be adopted under its name, or `null`. `sacredName`: the workspace's one granted term. */
@@ -80,7 +83,7 @@ export function importedAgents(input: { files: readonly AgentFile[]; registered:
             const named = adoptionRefusal(f.folder, input.sacredName ?? null);
             const config = input.configs && Object.hasOwn(input.configs, f.folder) ? input.configs[f.folder] : undefined;
             const provider = providerOf(config, input.defaultProvider ?? ADOPTION_DEFAULT_PROVIDER);
-            return { name: f.folder, provider, instructions: `.agents/${f.folder}/AGENT.md`, refusal: named };
+            return { name: f.folder, provider, instructions: `.agents/${f.folder}/AGENT.md`, refusal: named, ...(config?.issueWatch ? { issueWatch: config.issueWatch } : {}) };
         });
 }
 

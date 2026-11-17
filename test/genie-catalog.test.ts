@@ -46,7 +46,7 @@ describe('the catalog alone lists today’s MCP tools', () => {
 });
 
 describe('a builtin goes through the same validator as a plugin', () => {
-    const badSchema = { name: 'brokenTool', title: 'Broken', description: 'A builtin with an invalid schema.', inputSchema: { type: 'string' } };
+    const badSchema = { name: 'brokenTool', title: 'Broken', description: 'A builtin with an invalid schema.', summary: 'A broken builtin.', inputSchema: { type: 'string' } };
 
     it('a builtin with an invalid schema is refused, and the catalog will not start with it', () => {
         expect(() => genieCatalog({ builtins: [...BUILTIN_TOOLS, badSchema] })).toThrow(/brokenTool.*inputSchema/);
@@ -80,7 +80,7 @@ function deps(pluginTools: AllToolsDeps['plugins']['plugins']['tools'] = () => [
         genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller: () => null, userActive: () => true, glow: () => false, thumbsUp: () => {} },
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller: () => null },
         attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
-        hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },
+        hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null, trusted: () => false },
         processes: { resolveCaller: () => null, approve: async () => 'denied', processes: null },
         flows: { resolveCaller: () => null, flows: null },
         plugins: { plugins: { tools: pluginTools, guard: () => null }, run: never as never, approve: async () => 'denied', resolveCaller: () => null },

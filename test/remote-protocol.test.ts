@@ -103,7 +103,12 @@ describe('the capability table', () => {
         // 160 with `agents.attachment` (one image a thread kept, read when a sent pill asks, Tynn #642): a read, agent-scoped.
         // 161 with `updates.forceDrain` (Tynn #616's graceful upgrade, its drain forced): the owner's, as every upgrade.
         expect(capabilityOf('updates.forceDrain')).toBe('upgrade');
-        expect(REMOTE_METHODS.length).toBe(161);
+        // 163 with `workspaces.savePreview` (a read) and `workspaces.save` (a write): Save to repo (Tynn #756), the owner's, workspace-scoped.
+        // 165 with `workspaces.cloneOffers` (a read) and `workspaces.applyOffer` (a write): the offers a clone's repo brings (Tynn #756), the owner's, workspace-scoped.
+        // 166 with `agents.typing` (what a composer holds, relayed to the other windows on the agent, Tynn #730): a write, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(166);
+        expect(capabilityOf('agents.typing')).toBe('write');
+        expect(AGENT_SCOPED_METHODS).toContain('agents.typing');
         expect(capabilityOf('agents.attachment')).toBe('read');
         expect(AGENT_SCOPED_METHODS).toContain('agents.attachment');
         for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');

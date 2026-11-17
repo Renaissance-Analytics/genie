@@ -5,6 +5,8 @@ import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnTabHost } from '../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../core/tynn-issues.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
+import { headerLimits, type AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { deviceExpiryAlert } from '../core/device-expiry.js';
 import { PairPrompt } from './components/PairPrompt.js';
 import type { MailSignal } from '../core/mail-signals.js';
@@ -19,8 +21,9 @@ import { chatScope, followChat } from '../core/chat-scope.js';
 import { composerMeter } from '../core/composer.js';
 import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
-import { Deck } from './components/Deck.js';
-import { ApprovalToasts } from './components/ApprovalToasts.js';
+import { ApprovalToastStack, useApprovalToasts } from './components/ApprovalToasts.js';
+import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import { ToastColumn } from './components/ToastColumn.js';
 import { earlierRuns, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { turnStopOffered } from '../core/agent-view.js';
@@ -28,6 +31,7 @@ import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
 import type { ProviderProgramChosen } from './components/ProviderProgramChoice.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
+import { useNow } from './use-now.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -36,6 +40,8 @@ import { TitleBar } from './components/TitleBar.js';
 import { RemoteRefusalBar } from './components/RemoteRefusalBar.js';
 import { UpdateWindow } from './components/UpdateWindow.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
+import { PanelHostContext } from './components/PluginPane.js';
+import { useArtboardWaiting } from './artboard-waiting.js';
 import { WorkspaceTabs } from './components/WorkspaceTabs.js';
 import { readPlanOpen, writePlanOpen } from '../core/plan-column.js';
 import { addTab, agentTabsOf, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
@@ -46,6 +52,9 @@ import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProje
 import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, KnowledgeSurface, SettingsSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { InboxFlyout } from './components/InboxFlyout.js';
+import { PersonInbox } from './components/PersonInbox.js';
+import { isPersonInbox, PERSON_INBOX, personItems, personUnread } from '../core/person-inbox.js';
+import { UNNAMED_AGENT } from '../core/inbox.js';
 import { EMPTY_FEATURES, type ActOutcome, type FeatureAction, type FeatureData } from './features.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
 import { mayBrowse } from '../core/workstation-role.js';
@@ -58,12 +67,13 @@ import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { planStepInsert, type ChatInsert } from '../core/plan-pill.js';
 import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { ConnectedHereBanner } from './components/ConnectedHereBanner.js';
 import { SafeModeBanner } from './components/SafeModeBanner.js';
 import { HangNoticeBar } from './components/HangNoticeBar.js';
 import { RendererNoticeBar } from './components/RendererNoticeBar.js';
@@ -116,12 +126,27 @@ export interface ShellProps {
     snapshot: GenieSnapshot;
     /** Every chat's kept draft (genie#1261, core/chat-draft-keeper.ts), handed to the chat; `'loading'` until read. */
     chatDrafts?: import('../core/chat-draft-keeper.js').ChatDraftKeeper | 'loading' | undefined;
+    /** What this window types, and what another window on the chat's agent is typing (Tynn #730); `label` null = the host's own window. */
+    onTyping?: ((agentId: string, text: string) => void) | undefined;
+    peerTyping?: { label: string | null; text: string } | null | undefined;
     /** What each agent just did with Genie, for its Dashboard row (genie#1209). */
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** The workspaces an agent acted in that the person has not visited since (genie#1265): their rows pulse. */
     pulsingWorkspaces?: ReadonlySet<string> | undefined;
     /** Each provider's rate limit for the Dashboard header. */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** Every known account and the standing switch offers, for the header's account chips (Tynn #483). */
+    accounts?: AccountsSnapshot | undefined;
+    /** One click to switch a provider's account (S9). */
+    onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
+    /** Rename or forget a known account (Tynn #484). */
+    onAccountsAct?: ((action: AccountsAction) => Promise<AccountsActResult>) | undefined;
+    /** Design sign-in for the machine (Tynn #480). */
+    onDesignSignIn?: (() => void) | undefined;
+    /** Not now on a switch offer (S8). */
+    onDismissSwitchOffer?: ((id: string) => void) | undefined;
+    /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
+    now?: number | undefined;
     /** Mail between agents for the Dashboard (genie#1209). */
     mailSignals?: readonly MailSignal[] | undefined;
     /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
@@ -180,6 +205,9 @@ export interface ShellProps {
      */
     onAnswerApproval: (agentId: string, optionId: string, note?: string, approval?: Approval | null) => void;
     /** Answering from the DECK names its agent, because the route is not on that agent. */
+    /** Genie's own alert toasts (genie#1211), drawn in the same bottom-left column as the approvals, above them (Tynn #730). */
+    alertToasts?: readonly AlertToast[] | undefined;
+    onDismissAlert?: ((id: string) => void) | undefined;
     /** An inline answer on a Deck item. The ITEM travels, because which channel it takes is decided by its id. */
     onAnswerDeckItem: (item: DeckItem, optionId: string, note?: string) => void;
     /** A multi-part question's form, filled in place (§4.5): labels and one note per question. */
@@ -198,6 +226,10 @@ export interface ShellProps {
     /** The Dashboard's row click: that agent's chat, docked beside the Dashboard, which stays (genie#1209). */
     onChatAgent?: ((agentId: string) => void) | undefined;
     onAddAgent: (workspaceId: string) => void;
+    /** Open Save to repo for a workspace (Tynn #756). Absent = this host cannot save, so no button. */
+    onSaveToRepo?: ((workspaceId: string) => void) | undefined;
+    /** What the routed workspace's repo brings (Tynn #756): its count, and the click that opens them. */
+    cloneOffers?: { workspaceId: string; count: number; onOpen: () => void } | undefined;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
     onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
@@ -228,6 +260,8 @@ export interface ShellProps {
     /** Workspaces whose file panel is in its own window (§4.3): the dock holds a bar, not the panel. */
     filesPopped?: readonly string[] | undefined;
     onPopOutFiles?: ((workspaceId: string) => void) | undefined;
+    /** A workspace's terminals view in a NEW window (Tynn #706): the Dashboard's windows column. Absent = that entry is disabled. */
+    onPopOutTerminals?: ((workspaceId: string) => void) | undefined;
     onBringBackFiles?: ((workspaceId: string) => void) | undefined;
     /** An agent is writing a file you have dirty (§4.3): the ask, and its lifting. */
     onPauseAgent?: ((agent: string, path: string) => void) | undefined;
@@ -335,6 +369,8 @@ function providerStatuses(features: FeatureData, agents: readonly { id: string; 
  */
 export type ShellRemote = {
     host: string; driver: string | null; driving: boolean; locked: boolean;
+    /** The person at the host set this window to watch only (Tynn #732). */
+    viewOnly?: boolean;
     lostTo?: string | null; onTakeControl?: () => void;
     refusal?: string | null; needsBaton?: boolean; onDismissRefusal?: () => void;
     /** The host badge's Disconnect (Tynn #640). */
@@ -356,9 +392,17 @@ export function Shell({
     address,
     snapshot,
     chatDrafts,
+    onTyping,
+    peerTyping,
     rowEmoji,
     pulsingWorkspaces,
     rateLimits,
+    accounts,
+    onSwitchAccount,
+    onDismissSwitchOffer,
+    onAccountsAct,
+    onDesignSignIn,
+    now,
     mailSignals,
     workspaceFaults,
     onLocateRepo,
@@ -382,6 +426,8 @@ export function Shell({
     onOpenAgent,
     onChatAgent: onChatAgentProp,
     onAddAgent,
+    onSaveToRepo,
+    cloneOffers,
     onAddWorkspace,
     onWakeWorkspace,
     onOpenBrowser,
@@ -396,6 +442,7 @@ export function Shell({
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
+    onPopOutTerminals,
     onBringBackFiles,
     onPauseAgent,
     onResumeAgent,
@@ -426,6 +473,8 @@ export function Shell({
     approvalRefusal = null,
     onAnswerApproval,
     onAnswerDeckItem,
+    alertToasts,
+    onDismissAlert,
     onAnswerDeckForm,
     deckFormRefusal,
     deckBusy,
@@ -463,8 +512,14 @@ export function Shell({
     // App redirects it — draws that page here meanwhile, never a surface of the workstation's.
     const scoped = windowScope.kind === 'workspace' ? windowScope : null;
     const readOnly = scoped?.readonly === true;
+    // THE APPROVAL TOASTS' STATE (Tynn #730), held here because the agent's page and the chat need to know which approvals a
+    // toast carries: the toast is where those are answered, and they show a marker instead of a second set of buttons.
+    const toasts = useApprovalToasts(snapshot.deckItems ?? NO_DECK_ITEMS, features.settings.values?.do_not_disturb === true);
+    const toastIds = useMemo(() => new Set(toasts.view.ids), [toasts.view.ids]);
+    const inToast = (agentId: string): boolean => !scoped && toastIds.has(`approval:${agentId}`);
     const route = routeInScope(askedRoute, windowScope, snapshot.agents);
-    const remoteShown = remote && readOnly ? { ...remote, onTakeControl: undefined } : remote;
+    // Read-only (a share) or view only (the host's person chose it, Tynn #732): nothing offers Take control.
+    const remoteShown = remote && (readOnly || remote.viewOnly === true) ? { ...remote, onTakeControl: undefined } : remote;
     // A read-only share's terminals send nothing that acts (Tynn #691), wherever one is drawn. One object per bridge.
     const shownTerminals = useMemo(() => (readOnly ? readOnlyTerminals(terminals) : terminals), [readOnly, terminals]);
     const parsed = parseRoute(route);
@@ -513,10 +568,17 @@ export function Shell({
     const workspaceFor = (id: string) => snapshot.workspaces?.find((w) => w.id === id) ?? null;
     // The workspace an agent's page belongs to (Tynn #805): its strip is drawn over the page.
     const agentWorkspace = parsed.surface === 'agent' ? workspaceFor(snapshot.agents.find((a) => a.id === parsed.agentId)?.workspaceId ?? '') : null;
+    // The ArtBoard tab's badge on an agent's page too (Tynn #739): the strip is the same wherever you are in the workspace.
+    const panelHost = useContext(PanelHostContext);
+    const agentArtboardWaiting = useArtboardWaiting(agentWorkspace?.id ?? null, panelHost.artboard, panelHost.files);
     const canServe = servable.includes(parsed.surface);
     /** The AgentInbox flyout rides the route (`inbox=`, core/route.ts): open on the threads (`''`), a thread, a message; or closed. */
-    const inboxOpen = parsed.inbox !== undefined && parsed.inbox !== null;
+    // `inbox=you` is the PERSON'S inbox (Tynn #742), not the AgentInbox: the flyout stays closed under it.
+    const personOpen = isPersonInbox(parsed.inbox);
+    const inboxOpen = parsed.inbox !== undefined && parsed.inbox !== null && !personOpen;
     const openInbox = (value: string | null): void => onNavigate(formatRoute({ ...parsed, inbox: value }));
+    /** The mail addressed to the person, from the snapshot the AgentInbox already holds (its unread and recent overlap). */
+    const personMail = features.inbox ? personItems([...features.inbox.unread, ...features.inbox.recent], (p) => features.inbox?.peers.find((x) => x.agentId === p)?.name ?? UNNAMED_AGENT) : [];
 
     /*
      * THE CHAT IS A COLUMN OF THE ROW, beside the page (the owner, 2026-10-19: "the chat still covers up the UX. Chat cannot
@@ -537,6 +599,8 @@ export function Shell({
      * the chat is already that agent's (core/chat-scope.ts chatSubjectFor); from anywhere else the click opens the agent.
      */
     const [chatInsert, setChatInsert] = useState<ChatInsert | null>(null);
+    // The clock the rate limits are read against: a window past its reset reads Refreshed, not its last figure (Tynn #478).
+    const limitsNow = useNow(true, now, 30_000);
     const insertSeq = useRef(Date.now());
     const discussStep = (agentId: string, step: string): void => {
         insertSeq.current += 1;
@@ -575,6 +639,10 @@ export function Shell({
     // The same object while every colour is the same (genie#1340): a context value, so a new-but-equal map would redraw every
     // consumer — the chat among them — for each estate push, memoised or not.
     const colorMap = useShared(useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]));
+    // THE RUNNING FLOWS in the header (Tynn #707). A failed or held end lingers a few seconds, so the clock ticks only while one is reported.
+    const flowsLive = snapshot.signals.flowsLive ?? [];
+    const flowsEnded = snapshot.signals.flowsEnded ?? [];
+    useNow(flowsEnded.length > 0, undefined, 1000); // the tick re-renders the bar, which reads the clock below
     // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
     const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
     /** Trust a workspace from an approval card that asks only because it isn't trusted (Tynn #618): the trust step's own action. */
@@ -618,6 +686,7 @@ export function Shell({
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk && !scoped ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
+                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); } } : undefined}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || scoped || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
@@ -663,6 +732,9 @@ export function Shell({
                     <button type="button" data-action="dismiss-dock-notice" aria-label="Dismiss" onClick={() => onDismissDockNotice?.()} className="text-[var(--fg-4)] hover:text-[var(--fg-2)]"><Icon name="x" size="xs" /></button>
                 </div>
             ) : null}
+
+            {/* SOMEONE IS CONNECTED TO THIS MACHINE (Tynn #726): on the machine being reached, never on a window driving another. */}
+            {remote ? null : <ConnectedHereBanner remote={features.remote} onAction={onFeature} onNavigate={onNavigate} />}
 
             {/* SAFE MODE (Tynn #386): after an unclean end nothing was started; each thing that ran has its own Start. */}
             {scoped ? null : <>
@@ -722,14 +794,21 @@ export function Shell({
                     // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
                     onAddWorkspace={onAddWorkspace}
                     onOpenBrowser={onOpenBrowser}
-                    // A provider limit running low lights the Dashboard row, from any page (genie#1268).
-                    rateLimitAlert={rateLimitAlert(rateLimits ?? {})}
+                    // A provider limit running low lights the Dashboard row, from any page (genie#1268): the ACTIVE account's
+                    // figures, never another account's (Tynn #753).
+                    rateLimitAlert={rateLimitAlert(headerLimits(rateLimits ?? {}, accounts), limitsNow)}
                     // A paired device close to expiring: a yellow ! on Settings, naming it and the date (q_8c07b142).
                     settingsAlert={deviceExpiryAlert(features.remote?.devices ?? [], Date.now())}
                     // THE AGENT LIST (Tynn #687): every agent of an awake workspace — a hibernated one's are ghosts — and a
                     // click picks the chat, as a Dashboard row does, without leaving the page on screen.
                     agents={snapshot.agents.filter((agent) => !hiddenWorkspaces.has(agent.workspaceId))}
                     onChatAgent={onChatAgent}
+                    // The row's terminal and folder buttons open WINDOWS, never navigate (Tynn #733): the agent's Take Over window and the
+                    // workspace's popped-out Files panel — the same openers the Agent and Files pages use.
+                    onOpenAgentTerminal={onTakeOver}
+                    onOpenWorkspaceFiles={onPopOutFiles}
+                    // THE PERSON'S INBOX (Tynn #742): one click from the rail, its unread count on the row.
+                    {...(featureAsk && !scoped ? { personInbox: { unread: features.inbox ? personUnread(features.inbox.unread) : null, open: personOpen, onToggle: () => openInbox(personOpen ? null : PERSON_INBOX) } } : {})}
                 />
                 </ErrorBoundary>
                 {/* "Pair this device?" — on every page, never focused (q_8c07b142). A remote window's snapshot carries none. */}
@@ -741,6 +820,8 @@ export function Shell({
                 </ErrorBoundary>
                 </>}
 
+                {/* THE PAGE COLUMN: the content beside the rail and BEFORE the chat dock - the approval toasts sit bottom-left inside it, so they are clear of the sidebar nav and can never reach the chat input (Tynn #730). */}
+                <div data-toast-region="" className="relative flex min-h-0 min-w-0 flex-1">
                 <main className="min-w-0 flex-1 overflow-auto">
                     {/*
                      * A route this build cannot serve renders NOTHING here, and `App` redirects
@@ -781,6 +862,11 @@ export function Shell({
                             pulsing={pulsingWorkspaces}
                             rowEmoji={rowEmoji}
                             rateLimits={rateLimits}
+                            accounts={accounts}
+                            onSwitchAccount={onSwitchAccount}
+                            onDismissSwitchOffer={onDismissSwitchOffer}
+                            onDesignSignIn={onDesignSignIn}
+                            now={now}
                             mailSignals={mailSignals}
                             rows={snapshot.agents}
                             // Genie's own row, its group first (the design mockup).
@@ -800,6 +886,10 @@ export function Shell({
                             // The row tray's doors (Open agent / Terminal / Files).
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
+                            // The windows column (Tynn #706): new windows, never a navigation; a share window offers its own workspace only.
+                            onOpenTerminalWindow={onPopOutTerminals}
+                            onOpenFilesWindow={onPopOutFiles}
+                            scopeWorkspaceId={scoped?.workspaceId}
                             faults={workspaceFaults}
                             // The fix: the host's picker and the manifest write; without a bridge for it, the registry's page.
                             onLocateRepo={onLocateRepo ?? ((id) => onNavigate(`genie://workspace/${id}`))}
@@ -810,6 +900,29 @@ export function Shell({
                                 else onOpenAgent(fix.agentId);
                             }}
                             onChat={() => onNavigate(formatRoute({ ...parsed, chat: 'genie' }))}
+                            // WHAT WAITS ON YOU (Tynn #730): the Deck merged into this board - badges on each agent's row, items under it.
+                            waiting={{
+                                items: snapshot.deckItems ?? NO_DECK_ITEMS,
+                                signals: { ...snapshot.signals, update: updateState },
+                                answering: answeringApproval,
+                                toastIds,
+                                focusItemId: parsed.item ?? null,
+                                onAnswer: (item, optionId, note) => onAnswerDeckItem(item, optionId, note),
+                                onTrustWorkspace: (workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' }),
+                                onAnswerForm: onAnswerDeckForm,
+                                formRefusal: deckRefusal ?? deckFormRefusal ?? null,
+                                busy: deckBusy,
+                                // Dismiss without an answer - one (with the notes written in its form), every stale one shown, or
+                                // every question older than a day; the agents are told (main).
+                                onDismiss: (item, notes) => deckAct(item.id, { kind: 'deck.dismiss', item, notes }),
+                                onDismissStale: (ids) => deckAct('deck:stale', { kind: 'deck.dismissStale', ids }),
+                                onDismissOlder: (olderThanMs) => deckAct('deck:older', { kind: 'deck.dismissOlder', olderThanMs }),
+                                onOpenItem: (item) => { if (item.agentId) onChatAgent(item.agentId); },
+                                onSignalAction: (action) => {
+                                    if (action === 'update-download') void updates.download();
+                                    else if (action === 'update-install') askInstall();
+                                },
+                            }}
                         />
                         </ErrorBoundary>
                     ) : null}
@@ -817,35 +930,9 @@ export function Shell({
                     {canServe && parsed.surface === 'knowledge' ? <ErrorBoundary surface="Knowledge"><KnowledgeSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'flows' ? <ErrorBoundary surface="Flows"><FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'hosting' ? <ErrorBoundary surface="Hosting" resetKeys={[parsed.tab]}><HostingSurface tab={parsed.tab} commandRun={parsed.commandRun} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /></ErrorBoundary> : null}
-                    {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} marketplace={marketplace} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} marketplace={marketplace} accountsSettings={{ snapshot: accounts, onSwitch: onSwitchAccount, onAct: onAccountsAct, onDesignSignIn }} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'browser' ? <ErrorBoundary surface="Browser"><BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /></ErrorBoundary> : null}
 
-                    {canServe && parsed.surface === 'deck' ? (
-                        <ErrorBoundary surface="Deck">
-                        <Deck
-                            items={snapshot.deckItems ?? []}
-                            focusId={parsed.item}
-                            signals={{ ...snapshot.signals, update: updateState }}
-                            answering={answeringApproval}
-                            onAnswer={(item, optionId, note) => onAnswerDeckItem(item, optionId, note)}
-                            onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
-                            onAnswerForm={onAnswerDeckForm}
-                            formRefusal={deckRefusal ?? deckFormRefusal ?? null}
-                            busy={deckBusy}
-                            // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
-                            // every question older than a day; the agents are told (main).
-                            onDismiss={(item, notes) => deckAct(item.id, { kind: 'deck.dismiss', item, notes })}
-                            onDismissStale={(ids) => deckAct('deck:stale', { kind: 'deck.dismissStale', ids })}
-                            onDismissOlder={(olderThanMs) => deckAct('deck:older', { kind: 'deck.dismissOlder', olderThanMs })}
-                            onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
-                            onNavigate={onNavigate}
-                            onSignalAction={(action) => {
-                                if (action === 'update-download') void updates.download();
-                                else if (action === 'update-install') askInstall();
-                            }}
-                        />
-                        </ErrorBoundary>
-                    ) : null}
 
                     {canServe && parsed.surface === 'agent' && agentDetail ? (
                         // AN AGENT OPENS INSIDE ITS WORKSPACE (Tynn #805; the owner's choice, as in Genie 1): its page sits under
@@ -861,6 +948,7 @@ export function Shell({
                                     color={agentWorkspace.color ?? null}
                                     canDesign={!readOnly && Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
                                     hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
+                                    artboardWaiting={agentArtboardWaiting}
                                     github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
                                     // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
                                     tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
@@ -910,6 +998,7 @@ export function Shell({
                                 onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
                                 // Take over is the host owner's (main/remote-host.ts), never a shared workspace's.
                                 onTakeOver={scoped ? undefined : onTakeOver}
+                                approvalInToast={inToast(agentDetail.agent.id)}
                                 answeringApproval={answeringFor(answeringApproval, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 approvalRefusal={refusalFor(approvalRefusal, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 onAnswerApproval={readOnly ? undefined : (optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note, agentDetail.session?.pendingApproval ?? null)}
@@ -960,18 +1049,22 @@ export function Shell({
                             onStartAgent={readOnly ? undefined : onStartAgent}
                             panel={parsed.panel}
                             view={parsed.view}
+                            artboardItem={parsed.artboardItem ?? null}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             tynnBoard={tynnBoard}
                             tynnIssues={tynnIssues}
                             onRefreshIssueWatch={() => onFeature({ kind: 'issueWatch.refresh', workspaceId: parsed.workspaceId })}
+                            {...(features.storage ? { storage: features.storage[parsed.workspaceId] ?? null, onStorageAction: onFeature } : {})}
                             onSetIssueWatchRepo={(owner, repo, change) => onFeature({ kind: 'issueWatch.setRepo', workspaceId: parsed.workspaceId, owner, repo, ...change })}
                             rows={snapshot.agents}
-                            // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Deck.
+                            // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Dashboard, on its agent's row.
                             deckItems={snapshot.deckItems ?? NO_DECK_ITEMS}
-                            onOpenDeckItem={scoped ? undefined : (id) => onNavigate(`genie://deck?item=${encodeURIComponent(id)}`)}
+                            onOpenDeckItem={scoped ? undefined : (id) => onNavigate(`genie://dashboard?item=${encodeURIComponent(id)}`)}
                             onOpenAgent={onOpenAgent}
                             agentTabs={agentTabsOf(snapshot.agents, parsed.workspaceId)}
                             onAddAgent={readOnly ? undefined : () => onAddAgent(parsed.workspaceId)}
+                            {...(readOnly || !onSaveToRepo ? {} : { onSaveToRepo: () => onSaveToRepo(parsed.workspaceId) })}
+                            {...(readOnly || !cloneOffers || cloneOffers.workspaceId !== parsed.workspaceId ? {} : { offers: { count: cloneOffers.count, onOpen: cloneOffers.onOpen } })}
                             // Another tab leaves the Files tab (beta.35 #41) — unless the files are popped out into their own window.
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view, ...(parsed.detached ? {} : { panel: null, file: null, line: null, filter: null }) }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}
@@ -1037,6 +1130,21 @@ export function Shell({
                         </div>
                     ) : null}
                 </main>
+                <ToastColumn>
+                {scoped ? null : <ErrorBoundary surface="Approvals">
+                <ApprovalToastStack
+                    view={toasts.view}
+                    onAnswer={(item, optionId, note) => { toasts.pressed(item); onAnswerDeckItem(item, optionId, note); }}
+                    onExpand={toasts.expand}
+                    onOpenAgent={(item) => { if (item.agentId) onChatAgent(item.agentId); }}
+                    workspaces={snapshot.workspaces}
+                    agents={snapshot.agents}
+                    onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
+                />
+                </ErrorBoundary>}
+                {alertToasts && onDismissAlert ? <AlertToasts toasts={alertToasts} onDismiss={onDismissAlert} /> : null}
+                </ToastColumn>
+                </div>
 
                 {/*
                  * THE AGENTINBOX FLYOUT (beta.33 item 19): over the content row, under the title bar — whose inbox icon stays
@@ -1060,29 +1168,31 @@ export function Shell({
                     </ErrorBoundary>
                 ) : null}
 
-                {/*
-                 * THE APPROVAL TOASTS (the owner, 2026-10-15: "I should not have to go to the deck to respond to every single
-                 * thing an agent needs"): an agent's gated Genie workflow, answered from any screen with the Deck's own answer,
-                 * so answering in either place clears both. Clear of the chat strip, a docked panel or an open flyout. Not
-                 * drawn over the Deck itself, which shows the same requests with the same buttons.
-                 */}
-                {scoped ? null : <ErrorBoundary surface="Approvals">
-                <ApprovalToasts
-                    items={snapshot.deckItems ?? NO_DECK_ITEMS}
-                    dnd={features.settings.values?.do_not_disturb === true}
-                    hidden={parsed.surface === 'deck'}
-                    onAnswer={onAnswerDeckItem}
-                    onOpenDeck={(item) => onNavigate(`genie://deck?item=${encodeURIComponent(item.id)}`)}
-                    right={chatDockWidth + 16}
-                />
-                </ErrorBoundary>}
+                {/* THE PERSON'S INBOX (Tynn #742): from the left, beside the rail row that opened it; over the page, which stays. */}
+                {featureAsk && !scoped ? (
+                    <ErrorBoundary surface="Inbox" resetKeys={[personOpen]}>
+                    <PersonInbox
+                        open={personOpen}
+                        items={personMail}
+                        onMarkRead={(messageId) => onFeature({ kind: 'inbox.markRead', messageId })}
+                        onMarkAllRead={() => onFeature({ kind: 'inbox.markAllRead' })}
+                        onReply={(threadKey) => openInbox(threadKey)}
+                        onClose={() => openInbox(null)}
+                    />
+                    </ErrorBoundary>
+                ) : null}
+
                 {/* THE CHAT, always: a column of this row, after the page — never over it, never closed. */}
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ErrorBoundary surface="Chat" resetKeys={[chatThread?.agentId ?? null]}>
                     <ChatFlyout
+                        // Mid-turn: a message typed now waits out the undo window first (Tynn #745).
+                        busy={chatSession?.running === true && chatSession.turnState === 'working'}
                         onChooseProviderProgram={onChooseProviderProgram}
                         thread={chatThread}
                         drafts={chatDrafts}
+                        onTyping={onTyping}
+                        peerTyping={peerTyping ? { label: peerTyping.label ?? remote?.host ?? 'This machine', text: peerTyping.text } : null}
                         insert={chatInsert}
                         onInserted={onInserted}
                         onWindowLines={onChatWindowLines}
@@ -1090,6 +1200,7 @@ export function Shell({
                         onDockWidth={setChatDockWidth}
                         contextUsage={chatThread ? composerMeter(chatSession) : null}
                         approval={readOnly ? null : chatApproval}
+                        approvalInToast={chatThread ? inToast(chatThread.agentId) : false}
                         commands={chatSession?.extensions?.commands ?? null}
                         answeringApproval={chatThread ? answeringFor(answeringApproval, chatThread.agentId, chatApproval) : null}
                         approvalRefusal={chatThread ? refusalFor(approvalRefusal, chatThread.agentId, chatApproval) : null}

@@ -65,7 +65,7 @@ describe('the Sidebar’s runtime pill: real buttons BESIDE the row, not spans i
     const row = { id: 'tynn', path: '/w/tynn', name: 'tynn', count: 2, alert: false, working: 0, processes: 'running', processesTitle: '1 process running', sites: 'none', sitesTitle: 'No hosted sites yet' } as unknown as RailItem;
     const memory = { getItem: () => '0', setItem: () => {} };
     const html = renderToStaticMarkup(
-        <Sidebar route="genie://dashboard" deckCount={0} workspaces={[row]} available={['deck', 'dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory} onOpenProcesses={() => {}} onOpenSites={() => {}} />,
+        <Sidebar route="genie://dashboard" deckCount={0} workspaces={[row]} available={['dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory} onOpenProcesses={() => {}} onOpenSites={() => {}} />,
     );
 
     it('processes and sites are react-fancy Buttons, named for what they open', () => {

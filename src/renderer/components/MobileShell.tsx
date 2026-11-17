@@ -21,12 +21,14 @@ import { MOBILE_PANELS, deviceLabelFromUserAgent, panelAfter, swipeStep, type Mo
 import { timeLeftWords } from '../../core/pair-confirm.js';
 import { useNow } from '../use-now.js';
 import { ApprovalCard } from './ApprovalCard.js';
+import { MobileKeep, type MobileKeepProps } from './MobileKeep.js';
 import { ChatMessages } from './ChatFlyout.js';
 import { ChatProse } from './ChatProse.js';
 import { ProviderLogo } from './ProviderLogo.js';
 import { QuestionForm } from './QuestionForm.js';
 import { Stream } from './Stream.js';
-import { personText } from '../../core/person-text.js';
+import { personLine } from '../../core/person-text.js';
+import { headroomOf } from '../../core/headroom.js';
 
 /**
  * THE PHONE'S SHELL — the owner, 2026-10-30: "The mobile ui only need the workspace selector, workstation dashboard, agent
@@ -78,6 +80,8 @@ export interface MobileShellProps {
     onOpenFiles?: ((workspaceId: string) => void) | undefined;
     /** The socket dropped and the phone is dialing again: said over this screen. */
     reconnecting?: boolean | undefined;
+    /** Just paired with a PIN: how to keep Genie on this phone, once (Tynn #752); absent/`null` = not now. */
+    keep?: MobileKeepProps | null | undefined;
 }
 
 const TONE: Record<'ok' | 'warn' | 'bad' | 'muted' | 'cool', string> = {
@@ -123,7 +127,7 @@ function Reconnecting() {
     );
 }
 
-export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onAnswerForm, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onAnswerForm, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false, keep = null }: MobileShellProps) {
     const hibernated = new Set((registeredWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const workspaces = registeredWorkspaces?.filter((workspace) => !hibernated.has(workspace.id)) ?? registeredWorkspaces;
     const selectedWorkspace = requestedWorkspace !== null && hibernated.has(requestedWorkspace) ? null : requestedWorkspace;
@@ -154,6 +158,7 @@ export function MobileShell({ host, locked, refusal, items: reportedItems, answe
             ) : null}
 
             <main data-mobile-scroll className={`${SCROLL} flex flex-col gap-3 px-4 pt-3 ${SAFE_BOTTOM}`}>
+                {keep ? <MobileKeep {...keep} /> : null}
                 {selectedWorkspace !== null && onOpenFiles ? (
                     <Button size="xs" labelClassName="contents" type="button" data-action="open-files" onClick={() => onOpenFiles(selectedWorkspace)} className={`${BUTTON} flex items-center gap-2 self-start`}>
                         <Icon name="folder-open" size="sm" />
@@ -192,13 +197,13 @@ function NeedsYou({ item, host, answering, onAnswer, onAnswerForm, label, worksp
             <div className="flex items-center gap-2 text-xs text-[var(--fg-3)]">
                 {item.blocking ? <span className="size-2 rounded-full bg-[var(--warning)]" aria-label="blocking" /> : null}
                 {/* Names only (Tynn #696): a workspace not known here is said by nothing rather than its id. */}
-                <span className="font-medium text-[var(--fg-1)]">{personText(label)}</span>
-                <span className="font-mono">{personText(workspace)}</span>
+                <span className="font-medium text-[var(--fg-1)]">{personLine(label)}</span>
+                <span className="font-mono">{personLine(workspace)}</span>
             </div>
             {item.answer.kind === 'inline' ? (
                 <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answering} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
             ) : (
-                <p className="mt-1 text-[13px]">{personText(item.title)}</p>
+                <p className="mt-1 text-[13px]">{personLine(item.title)}</p>
             )}
             {questions ? (
                 <div data-mobile-question={item.id} className={`mt-2 ${QUESTION_TOUCH}`}>
@@ -406,6 +411,8 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     const agentsKey = chatAgentsKey(agentRows ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const thread = useMemo(() => (detail ? chatThreadFrom(detail, detail.agent.id, agentRows ?? [], Date.now) : null), [detail, agentsKey]);
+    // A plan's limit reading in the ledger: its costs read as API prices, in the plan (Tynn #747).
+    const detailOnPlan = useMemo(() => (detail ? headroomOf(detail.rows) !== null : false), [detail]);
     const followKey = chatFollowKey(thread?.agentId ?? null, thread?.messages ?? []);
     // Following the end of the chat, as the desktop's does: new words come into view unless you scrolled up to read.
     useLayoutEffect(() => {
@@ -520,6 +527,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                             selectedId={selectedRow}
                             onSelect={setSelectedRow}
                             agentName={detail.agent.name}
+                            onPlan={detailOnPlan}
                             live={detail.session?.running === true && detail.session.turnState === 'working'}
                             loadToolOutput={loadToolOutput}
                         />

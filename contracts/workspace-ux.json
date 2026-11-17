@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.11.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.12.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.11.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.11.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes.",
+  "version": "0.12.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.12.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -679,7 +679,8 @@
         "query": [
           "view",
           "story",
-          "product"
+          "product",
+          "version"
         ],
         "lenses": {
           "active": [
@@ -694,6 +695,7 @@
             "done"
           ]
         },
+        "version": "version: the id of an ACTIVE version of the project; its stories, counts and tasks are what the page answers (default: the first active version). An id that is not an active version of the project is a missing path (404)",
         "selection": "story: the story whose slug ?story= names, else the lens's first story; its tasks are shown",
         "answer": [
           "project_id",
@@ -722,7 +724,16 @@
             "status",
             "description",
             "task_count",
-            "tasks_done"
+            "tasks_done",
+            "updated_at",
+            "acceptance_criteria",
+            "started_at",
+            "qa_at",
+            "done_at",
+            "pr_id",
+            "commit_id",
+            "pr_url",
+            "commit_url"
           ],
           "task": [
             "id",
@@ -733,7 +744,16 @@
             "claimed_by_me",
             "can_start",
             "version_active",
-            "features"
+            "features",
+            "updated_at"
+          ],
+          "version": [
+            "id",
+            "number",
+            "title",
+            "status",
+            "story_count",
+            "stories_done"
           ]
         },
         "taskOrder": [

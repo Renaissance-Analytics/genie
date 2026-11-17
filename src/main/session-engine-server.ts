@@ -1,3 +1,6 @@
+import type { AccountRecord } from '../core/accounts.js';
+import { accountsActionOf } from '../core/account-settings.js';
+import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
 import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
@@ -36,6 +39,7 @@ import type { SupervisorService } from './supervisor-host.js';
 import type { HostingService } from './hosting-host.js';
 import type { AppInboxHost } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
+import type { CloneOffersService } from './clone-offers-service.js';
 import type { ProcessesService } from './processes-host.js';
 import type { BrowserService } from './browser-service.js';
 import type { FlowsService } from './flows-host.js';
@@ -95,6 +99,7 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    readonly features?: FeatureCallers;
     /** This machine as a workstation (P3.4): the host holds its key. */
     readonly workstation?: WorkstationService;
     /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
@@ -125,6 +130,21 @@ export interface EngineServerOptions {
     readonly pid?: number;
     /** A provider's model list, from the host's one cache (core/provider-models.ts); `refresh` asks the CLI again. */
     readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
+    /** The host book's persisted legacy account; only this machine's window may ask. */
+    readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null;
+    /** A sign-in for one account, run here (Tynn #479). */
+    readonly login?: (provider: string, accountId: string | undefined) => { ok: true; terminalId: string } | { ok: false; reason: string };
+    readonly cancelLogin?: (accountId: string) => void;
+    /** Open the provider's own login in its one home so the person can switch accounts; no agent is touched (Tynn #753). */
+    readonly switchAccount?: (provider: string) => import('./account-switch-host.js').AccountSwitchStart;
+    /** The switch offers genie-host keeps (Tynn #481): listed, and dismissed (Not now), by this machine's window only. */
+    readonly switchOffers?: { offers(): readonly import('../core/switch-offer.js').SwitchOffer[]; dismiss(id: string): boolean };
+    /** Every known account with its readings, and the standing offers (Tynn #483): this machine's window only. No credential. */
+    readonly accounts?: () => import('../core/accounts-view.js').AccountsSnapshot;
+    /** Rename or forget a known account (Tynn #484): this machine's window only. */
+    readonly accountsAct?: (action: import('../core/account-settings.js').AccountsAction) => Promise<import('../core/account-settings.js').AccountsActResult>;
+    /** After a login: read the provider's account identity again (Tynn #477). */
+    readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
     readonly onShutdown?: () => void;
     /** The number of authenticated windows changed (the host's idle exit watches it). */
@@ -173,6 +193,8 @@ export interface EngineServerOptions {
     readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
+    /** The offers a clone's repo brings (Tynn #756: clone-offers-service.ts). Absent = `engine.cloneOffers` is refused. */
+    readonly cloneOffers?: CloneOffersService;
     /** Between the window and the Genie browser's process (P2b: browser-service.ts). Absent = `engine.browser` is refused. */
     readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
@@ -370,7 +392,7 @@ export class SessionEngineServer {
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
             onAction: (agentId, kind) => this.callback({ name: 'action', agentId, kind }),
-            onHeadroom: (provider, headroom) => this.callback({ name: 'headroom', provider, headroom }),
+            onHeadroom: (provider, headroom, stamp) => this.callback({ name: 'headroom', provider, headroom, ...(stamp ? { stamp } : {}) }),
             onMcpServers: (agentId, reports) => this.callback({ name: 'mcpServers', agentId, reports }),
         };
     }
@@ -477,6 +499,7 @@ export class SessionEngineServer {
             if (was) this.#options.browser?.dropped(String(conn.id));
             // Its disposable terminals end with it: nothing re-attaches one (Tynn story #378).
             if (was) this.#options.terminals?.dropped(String(conn.id));
+            if (was) this.#options.features?.dropOwner(conn.id);
             if (was) this.#options.files?.dropOwner(conn.id);
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) this.#options.tynnIssues?.dropOwner(conn.id);
@@ -614,6 +637,63 @@ export class SessionEngineServer {
             return this.#options.crash.dismiss();
         }
         // Remote access is the host's own too (Tynn #409), up before any agent engine: a phone may already be connected.
+        if (method === 'engine.featureQuestion') {
+            if (!conn.local || !conn.window || !this.#options.features) throw new Error('questions need this machine’s own window');
+            const action = args[0] as { kind?: string } | undefined;
+            if (!action || !['deck.answerForm', 'deck.dismiss'].includes(action.kind ?? '')) throw new Error('the question window answers or dismisses a question only');
+            return this.#options.features.call(conn.id, 'act', [action], { connectionId: 'question-window', origin: 'local-window',
+                profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'this Genie question window' },
+                async () => { throw new Error('the question window provides no other UI effects'); }, null);
+        }
+        if (method === 'engine.providerAccount') {
+            if (!conn.local || !conn.window) throw new Error('Provider account homes need this machine’s own window.');
+            if (!this.#options.providerAccount) throw new Error('The provider account book is unavailable.');
+            const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
+            return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
+        }
+        if (method === 'engine.login') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            if (!this.#options.login) throw new Error('Sign-in is not ready in the host yet.');
+            return this.#options.login(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'string' ? args[1] : undefined);
+        }
+        if (method === 'engine.cancelLogin') {
+            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
+            this.#options.cancelLogin?.(typeof args[0] === 'string' ? args[0] : '');
+            return true;
+        }
+        if (method === 'engine.switchAccount') {
+            if (!conn.local || !conn.window) throw new Error('Switching accounts needs this machine’s own window.');
+            if (!this.#options.switchAccount) throw new Error('Switching accounts is not ready in the host yet.');
+            return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '');
+        }
+        if (method === 'engine.accountsAct') {
+            if (!conn.local || !conn.window) throw new Error('Accounts need this machine’s own window.');
+            if (!this.#options.accountsAct) throw new Error('The accounts are not ready in the host yet.');
+            const action = accountsActionOf(args[0]);
+            if (!action) throw new Error('That is not an account action.');
+            return this.#options.accountsAct(action);
+        }
+        if (method === 'engine.accounts') {
+            if (!conn.local || !conn.window) throw new Error('Accounts need this machine’s own window.');
+            if (!this.#options.accounts) throw new Error('The accounts are not ready in the host yet.');
+            return this.#options.accounts();
+        }
+        if (method === 'engine.switchOffers' || method === 'engine.dismissSwitchOffer') {
+            if (!conn.local || !conn.window) throw new Error('Switch offers need this machine’s own window.');
+            if (!this.#options.switchOffers) throw new Error('Switch offers are not ready in the host yet.');
+            return method === 'engine.switchOffers' ? this.#options.switchOffers.offers() : this.#options.switchOffers.dismiss(typeof args[0] === 'string' ? args[0] : '');
+        }
+        if (method === 'engine.refreshAccountIdentity') {
+            if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');
+            await this.#options.refreshAccountIdentity?.(typeof args[0] === 'string' ? args[0] : '');
+            return true;
+        }
+        if (method === 'engine.features') {
+            if (!conn.local || !conn.window) throw new Error('features need this machine’s own window connection');
+            if (!this.#options.features) throw new Error('Genie’s feature services are still starting');
+            return this.#options.features.call(conn.id, String(args[0]), Array.isArray(args[1]) ? args[1] : [], args[2],
+                (connectionId, method, rest) => this.#reverseTo(conn, 'client.featureEffect', [connectionId, method, rest]), (args[3] ?? null) as FeatureBrowser | null);
+        }
         if (method === 'engine.remoteAccess') {
             if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
             if (!conn.local) throw new Error('Remote access is driven from a local window only.');
@@ -719,7 +799,7 @@ export class SessionEngineServer {
                 return true;
             }
             case 'engine.resumeLimit':
-                host.resumeLimit(str(0));
+                host.resumeLimit(str(0), typeof args[1] === 'string' ? args[1] : undefined);
                 return true;
             case 'engine.clearDesignLogin':
                 host.clearDesignLogin(str(0));
@@ -794,6 +874,9 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.cloneOffers':
+                if (!this.#options.cloneOffers) throw new Error('This host does not watch a workspace’s repo.');
+                return this.#options.cloneOffers.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.plugins':
                 if (!this.#options.plugins) throw new Error('This host keeps no plugins.');
                 if (!conn.local) throw new Error('Genie’s plugins are changed from a local window only.');
@@ -925,6 +1008,11 @@ export class SessionEngineServer {
     #reverse(method: EngineMethod, args: unknown[], options: { localOnly?: boolean } = {}): Promise<unknown> {
         const conn = [...this.#connections].filter((c) => c.authed && c.window && (options.localOnly !== true || c.local)).at(-1);
         if (!conn) return Promise.reject(new Error('No Genie window is connected to prepare this agent\'s credentials. Open Genie and start it again.'));
+        return this.#reverseTo(conn, method, args);
+    }
+
+    #reverseTo(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
+        if (!this.#connections.has(conn) || !conn.authed || !conn.window) return Promise.reject(new Error('the caller’s own window is no longer connected'));
         const id = conn.nextCall++;
         return new Promise((resolve, reject) => {
             conn.pending.set(id, { resolve, reject });
@@ -951,6 +1039,10 @@ export class SessionEngineServer {
     /** Features rings go only to the local connection whose views follow the page. */
     tynnFeaturesEvent(owner: string, event: TynnBoardHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnFeatures.event', event);
+    }
+
+    featuresChanged(): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && conn.window) this.#event(conn, 'features.invalidated', null);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

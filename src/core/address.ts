@@ -159,10 +159,8 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             return withQuery(`${ws}/${slug}/${agentSegment(ctx, agent)}${sub}`, params);
         }
         case 'dashboard':
-            return withQuery(`${ws}/dashboard`, params);
-        case 'deck':
             if (r.item) params.set('item', r.item);
-            return withQuery(`${ws}/deck`, params);
+            return withQuery(`${ws}/dashboard`, params);
         case 'hosting':
             if (r.tab) params.set('tab', r.tab);
             if (r.commandRun) {
@@ -177,6 +175,8 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             return withQuery(`${ws}/browser`, params);
         case 'takeover':
             if (r.login) params.set('login', r.login);
+            if (r.login && r.switching) params.set('switch', '1');
+            if (r.login && r.switching && r.choose) params.set('choose', r.choose);
             return withQuery(`${ws}/takeover/${r.terminalId}`, params);
         // The flow editor window keeps its route as it is (genie#1302): it is a window's identity, never a page in the
         // bar, and main finds an open editor by it (`openFlowEditorWindow`). The default below would have written
@@ -224,12 +224,13 @@ function routeOfPage(address: string, ctx: AddressContext): string | null {
     };
     if (second === undefined) return null;
     switch (second) {
-        case 'dashboard': return `genie://dashboard?group=${params.get('group') === 'status' ? 'status' : 'workspace'}`;
-        case 'deck': return `genie://deck${q(keep(['item']))}`;
+        case 'dashboard': return `genie://dashboard?group=${params.get('group') === 'status' ? 'status' : 'workspace'}${params.get('item') ? `&item=${encodeURIComponent(params.get('item')!)}` : ''}`;
+        // The Deck merged into the Dashboard (Tynn #730): its address is the Dashboard's, on the item it named.
+        case 'deck': return `genie://dashboard${q(keep(['item']))}`;
         case 'hosting': return `genie://hosting${q(keep(['tab', 'process', 'workspace']))}`;
         case 'settings': return third ? `genie://settings/${third}` : 'genie://settings';
         case 'browser': return `genie://browser${q(keep(['url']))}`;
-        case 'takeover': return third ? `genie://takeover/${third}${q(keep(['login']))}` : null;
+        case 'takeover': return third ? `genie://takeover/${third}${q(keep(['login', 'switch', 'choose']))}` : null;
         case 'knowledge': case 'flows': return `genie://${second}`;
         // The old Toolchain page is a Settings section now (beta.33 item 20): its address lands there.
         case 'toolchain': return 'genie://settings/toolchain';

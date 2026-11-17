@@ -3,6 +3,8 @@ import { LOCAL_FRAME_CHANNELS, type LocalFramePort } from '../core/local-frame.j
 import { FEATURE_CHANNELS, type PreloadBridge } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsActResult } from '../core/account-settings.js';
 import { browserStallEnv, watchRendererStalls } from './renderer-stalls.js';
 
 /**
@@ -36,12 +38,17 @@ const bridge: PreloadBridge = {
         return () => ipcRenderer.removeListener('genie:workspace-pulse', listener);
     },
     onAction: (onAction) => {
-        const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }): void => onAction(action);
+        const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[]; workspaceId?: string; terminalId?: string; agentName?: string; sound?: string; title?: string; body?: string; outcome?: unknown }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
         return () => ipcRenderer.removeListener('genie:action', listener);
     },
 
     providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
+    switchAccount: (provider, choose) => ipcRenderer.invoke('genie:account-switch', provider, choose) as Promise<{ ok: true } | { ok: false; reason: string }>,
+    accounts: () => ipcRenderer.invoke('genie:accounts') as Promise<AccountsSnapshot | null>,
+    accountsAct: (action) => ipcRenderer.invoke('genie:accounts-act', action) as Promise<AccountsActResult>,
+    dismissSwitchOffer: (id) => ipcRenderer.invoke('genie:switch-offer-dismiss', id) as Promise<boolean>,
+    designSignIn: () => ipcRenderer.invoke('genie:design-sign-in') as Promise<{ ok: true } | { ok: false; reason: string }>,
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
 
@@ -70,6 +77,8 @@ const bridge: PreloadBridge = {
     chooseProviderProgram: (provider) =>
         ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
 
+    popOutTerminals: (workspaceId) => ipcRenderer.invoke('genie:terminals-popout', workspaceId) as Promise<void>,
+
     scratchTerminal: (workspaceId) =>
         ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<
             { ok: true; terminalId: string } | { ok: false; reason: string }
@@ -86,6 +95,21 @@ const bridge: PreloadBridge = {
             const handler = () => listener();
             ipcRenderer.on('genie:remote-reconnect', handler);
             return () => { ipcRenderer.removeListener('genie:remote-reconnect', handler); };
+        },
+    },
+    // The connected machine's questions in THIS machine's question window (Tynn #726): reported while driving it; an
+    // answer main sends back is put to the host here, and how it went is said to main.
+    remoteQuestions: {
+        report: (host, items) => { ipcRenderer.send('genie:remote-questions', host, items); },
+        onAct: (handler) => {
+            const listener = (_event: unknown, request: { id: string; action: unknown }) => {
+                void Promise.resolve()
+                    .then(() => handler(request.action as never))
+                    .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }))
+                    .then((outcome) => { ipcRenderer.send('genie:remote-question-acted', request.id, outcome); });
+            };
+            ipcRenderer.on('genie:remote-question-act', listener);
+            return () => { ipcRenderer.removeListener('genie:remote-question-act', listener); };
         },
     },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.

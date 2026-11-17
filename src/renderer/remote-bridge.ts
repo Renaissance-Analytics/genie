@@ -5,8 +5,8 @@ import type { RepoListing } from '../core/github.js';
 import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
-import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
-import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, TYPING_EVENT, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
+import { NO_FILES, type AgentDetail, type CloneOffersReply, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
 import { isFeaturesRevision } from '../core/remote-frame.js';
 import { bytesToBase64 } from '../core/mobile.js';
@@ -24,6 +24,8 @@ import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
 import { localArtboardClient } from './local-artboard-client.js';
+import type { SavePreview, SaveResult } from '../core/workspace-save.js';
+import { readTypingEvent } from '../core/typing-mirror.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -52,7 +54,9 @@ export interface RemoteState {
     /** Minted on a PIN pairing — the client keeps it for next time. */
     readonly token: string | null;
     /** The PIN was right and the host's screen asks "Pair this device?" until `expiresAt` (q_8c07b142); `null` otherwise. */
-    readonly pairing?: { readonly expiresAt: number } | null;
+    readonly pairing?: { readonly expiresAt: number; readonly guest?: true } | null;
+    /** The person at the host set this person to watch only (Tynn #732): no baton, every change refused there. */
+    readonly viewOnly?: boolean;
     /** The build the host said in its welcome (P10.1e); absent/`null` = it said none. */
     readonly hostBuild?: string | null;
     /** The host runs a Genie older than this client needs (Tynn #651); the link was closed for it. */
@@ -192,17 +196,18 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 // An older host than this client needs is not a connection (Tynn #651): nothing is asked of it.
                 const tooOld = options.minBuild !== undefined ? welcomeSkew(m, options.minBuild) : null;
                 if (tooOld) { setState({ hostBuild }); skewed(tooOld); return; }
-                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, readonly: m.readonly === true, token: m.token ?? null, pairing: null, hostBuild, skew: null });
+                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, readonly: m.readonly === true, viewOnly: m.viewOnly === true, token: m.token ?? null, pairing: null, hostBuild, skew: null });
                 resolveReady({ ok: true });
                 // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
                 if (options.drive === true && options.companion === undefined && auth.kind !== 'local') {
                     void call('baton.watch');
-                    void control('baton.take');
+                    // On view only (Tynn #732) the host refuses the baton: it is not asked for.
+                    if (m.viewOnly !== true) void control('baton.take');
                 }
                 return;
             }
             case 'pairing':
-                setState({ pairing: { expiresAt: m.expiresAt } });
+                setState({ pairing: { expiresAt: m.expiresAt, ...(m.guest === true ? { guest: true as const } : {}) } });
                 return;
             case 'refused': {
                 // A call the host does not know: an older host than this client needs, said as such (Tynn #651).
@@ -301,6 +306,23 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             onProgress?.(Math.min(bytes.byteLength, at + UPLOAD_CHUNK_BYTES), bytes.byteLength);
         }
         return { ok: true, id };
+    };
+    /**
+     * A FAILED SEND FREES WHAT IT STAGED (the owner, 2026-11-16). The host holds MAX_OPEN_UPLOADS stagings per
+     * connection until a call takes them; one refused before taking them — a later file over the cap, the call's own gate
+     * (no baton, a scope) — left them holding every slot for the host's 10-minute sweep, so the owner's next message
+     * with a file was refused too, with the extra images long deleted. Aborting one the host already took is a no-op.
+     */
+    const unstage = (ids: readonly string[]): void => { for (const id of ids) void call('upload.abort', id); };
+    /**
+     * ONE STAGED SEND AT A TIME. Every chat of a window shares its connection's slots: two chats sending two files each at
+     * once would interleave their stagings and refuse one of them for slots the other holds. Each waits for the last.
+     */
+    let stagedSends: Promise<unknown> = Promise.resolve();
+    const oneAtATime = <T>(send: () => Promise<T>): Promise<T> => {
+        const run = stagedSends.then(send, send);
+        stagedSends = run.catch(() => undefined);
+        return run;
     };
 
     /** A phone's push applied to its window: the whole detail, `null` for no such agent, or `undefined` = ask again. */
@@ -469,6 +491,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
             setMcpServer: (workspaceId, name, on) => answer('workspaces.setMcpServer', workspaceId, name, on),
             setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
+            // The preview and the save are not ok/reason shapes themselves; a host's refusal still takes that shape.
+            savePreview: async (workspaceId) => { const r = await call('workspaces.savePreview', workspaceId); return r.ok ? (r.value as SavePreview) : { ok: false as const, reason: r.reason }; },
+            save: async (workspaceId, choices) => { const r = await call('workspaces.save', workspaceId, choices); return r.ok ? (r.value as SaveResult) : { ok: false as const, reason: r.reason }; },
+            cloneOffers: async (workspaceId) => { const r = await call('workspaces.cloneOffers', workspaceId); return r.ok ? (r.value as CloneOffersReply) : { ok: false as const, reason: r.reason }; },
+            applyOffer: async (workspaceId, offerId) => { const r = await call('workspaces.applyOffer', workspaceId, offerId); return r.ok ? (r.value as { ok: true } | { ok: false; reason: string }) : { ok: false as const, reason: r.reason }; },
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),
@@ -497,6 +524,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             toolOutput: (agentId, toolCallId) => answer('agents.toolOutput', agentId, toolCallId),
             // Inline when it fits a frame; this machine's own window takes a larger image as a blob (below, Tynn #642).
             attachment: (agentId, attachmentId) => answer('agents.attachment', agentId, attachmentId),
+            // What this window's composer holds (Tynn #730), and what another window on an agent is typing.
+            typing: (agentId, text, source) => answer('agents.typing', agentId, text, source),
+            onTyping: (listener) => on(local ? LOCAL_EVENTS.typing : TYPING_EVENT, (p) => { const event = readTypingEvent(p); if (event) listener(event); }),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: phone ? {
@@ -504,11 +534,13 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             children: (workspaceId, dir) => read('files.children', workspaceId, dir),
             open: (workspaceId, path) => answer('files.open', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
             readMedia: (workspaceId, path) => answer('files.readMedia', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
-            upload: async (workspaceId, dir, name, bytes, onProgress) => {
+            upload: (workspaceId, dir, name, bytes, onProgress) => oneAtATime(async () => {
                 const staged = await stage(name, bytes, onProgress);
                 if (!staged.ok) return staged;
-                return answer('files.upload', workspaceId, dir, { staged: staged.id }) as never;
-            },
+                const r = await answer('files.upload', workspaceId, dir, { staged: staged.id });
+                if (!(r as { ok?: unknown }).ok) unstage([staged.id]);
+                return r;
+            }) as never,
         } : { ...NO_FILES },
         // A phone's upload (§6.8): the bytes ride the socket; the host copies them into the inbox and drops the temp file.
         uploads: { sendFile: (to, text, name, base64) => answer<{ ok: true; messageId: string }>('inbox.sendFile', to, text, name, base64) },
@@ -567,15 +599,18 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
 
     /** A phone's message with photos/files: each staged in chunks, then the prompt names them (genie#1346). */
-    async function promptWithFiles(agentId: string, text: string, attachments: readonly { name: string; type: string; bytes: Uint8Array }[]): Promise<{ ok: boolean; reason?: string }> {
+    function promptWithFiles(agentId: string, text: string, attachments: readonly { name: string; type: string; bytes: Uint8Array }[]): Promise<{ ok: boolean; reason?: string }> {
+        return oneAtATime(() => sendWithFiles(agentId, text, attachments));
+    }
+    async function sendWithFiles(agentId: string, text: string, attachments: readonly { name: string; type: string; bytes: Uint8Array }[]): Promise<{ ok: boolean; reason?: string }> {
         const refs: Array<{ staged: string; type: string }> = [];
         for (const a of attachments) {
             const staged = await stage(a.name, a.bytes);
-            if (!staged.ok) return { ok: false, reason: `${a.name}: ${staged.reason}` };
+            if (!staged.ok) { unstage(refs.map((x) => x.staged)); return { ok: false, reason: `${a.name}: ${staged.reason}` }; }
             refs.push({ staged: staged.id, type: a.type });
         }
         const r = await call('prompt', agentId, text, refs);
-        if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false, reason: r.reason }; }
+        if (!r.ok) { unstage(refs.map((x) => x.staged)); setState({ lastRefusal: r.reason }); return { ok: false, reason: r.reason }; }
         const v = r.value as { ok?: boolean; reason?: string } | null;
         return v?.ok === true ? { ok: true } : { ok: false, ...(v?.reason ? { reason: v.reason } : {}) };
     }
@@ -593,7 +628,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     on(BATON_EVENT, (payload) => {
         const e = payload as BatonEvent;
         const lostTo = state.driving && !e.mine && e.by !== null ? e.by : e.mine ? null : (state.batonLostTo ?? null);
-        setState({ driver: e.driver, driving: e.mine, locked: e.locked, batonLostTo: lostTo });
+        // The mode the person at the host set (Tynn #732): said on every baton event, absent = full control.
+        setState({ driver: e.driver, driving: e.mine, locked: e.locked, batonLostTo: lostTo, viewOnly: e.viewOnly === true });
     });
 
     const blobRead = async <T>(method: ControlMethod | RemoteMethod, ...args: unknown[]): Promise<T> => {

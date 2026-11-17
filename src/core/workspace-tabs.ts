@@ -62,6 +62,10 @@ export type StripItem =
     | { readonly kind: 'tynn' }
     /** The workspace's files, a tab of their own (beta.35 #41): the tree and the editor take the whole tab. */
     | { readonly kind: 'files' }
+    /** The ArtBoard, a tab of its own beside Files (Tynn #739): what agents made, and every verdict on it. Always there. */
+    | { readonly kind: 'artboard' }
+    /** The workspace's disk by category, and its .trash (Tynn #697): where this window's host can measure it. */
+    | { readonly kind: 'storage' }
     | { readonly kind: 'add' }
     | { readonly kind: 'settings' };
 
@@ -69,17 +73,20 @@ export type StripItem =
  * Dashboard, the agents you opened (Tynn #805 — agents open INSIDE their workspace, as in Genie 1), the designed tabs in
  * the order made, +, Settings — + always just before Settings, Settings always last.
  */
-export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = [], extra: { github?: boolean; tynn?: boolean } = {}): StripItem[] {
+export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = [], extra: { github?: boolean; tynn?: boolean; storage?: boolean } = {}): StripItem[] {
     return [
         { kind: 'dashboard' },
         // FILES, ITS OWN TAB (the owner, 2026-10-21: the panel docked beside the dashboard was "garbage"): always there.
         { kind: 'files' },
+        // THE ARTBOARD, BESIDE FILES (the owner, 2026-11-15: "a dedicated tab like we did for files"): always there, not something to add to a grid.
+        { kind: 'artboard' },
         ...openAgents.map((a) => ({ kind: 'agent' as const, id: a.id, name: a.name })),
         ...state.tabs.map((t) => ({ kind: 'designed' as const, id: t.id, name: t.name })),
         // THE TYNN TAB (genie#1295): only for a workspace linked to a Tynn project — the tab IS that project, no picker.
         ...(extra.tynn ? [{ kind: 'tynn' as const }] : []),
         // IssueWatch's view (Tynn #806): only for a workspace linked to a Tynn project — the others have nothing to show.
         ...(extra.github ? [{ kind: 'github' as const }] : []),
+        ...(extra.storage ? [{ kind: 'storage' as const }] : []),
         { kind: 'add' },
         { kind: 'settings' },
     ];

@@ -7,7 +7,7 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
 
 /**
  * THE `turns` LAYOUT IN THE AGENT VIEW (the board): cards in place of the ledger, the chips row gone, the index
- * column and the strip kept, a `Turns` / `Ledger` toggle in the strip that writes `layout=` into the route.
+ * column kept. The `Turns` / `Ledger` door went with the session strip (beta.64); `layout=` in the route still picks it.
  */
 const agent = { id: 'a1', name: 'sable', provider: 'claude', fidelity: 'declared' as const, cwd: '/w/tynn', instructions: null };
 const working: LiveSession = { running: true, turnState: 'working', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as LiveSession;
@@ -32,11 +32,6 @@ describe('the turns layout', () => {
         expect(html).not.toContain('data-chips');
         expect(html).not.toContain('data-stream="rows"');
         expect(html).toContain('data-index-column');
-    });
-
-    it('the strip offers the other layout as a door that writes `layout=` into the route', () => {
-        expect(render()).toMatch(/data-action="toggle-layout"[^>]*data-nav="genie:\/\/agent\/a1\?tab=stream&amp;layout=turns"/);
-        expect(render({ layout: 'turns' })).toMatch(/data-action="toggle-layout"[^>]*data-nav="genie:\/\/agent\/a1\?tab=stream"/);
     });
 
     it('the ledger is the default: no cards', () => {

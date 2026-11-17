@@ -3,9 +3,11 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parseCommandLine } from '@particle-academy/fancy-term-host';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hostsFilePath } from '../src/core/front-door-caddy.js';
-import { GEN_CA_SUBJECT, TRUST_DECK_ID, trustInstallStep } from '../src/core/gen-ca.js';
+import { GEN_CA_SUBJECT, trustInstallStep } from '../src/core/gen-ca.js';
+import { SITE_REACH_DECK_PREFIX } from '../src/core/site-reach.js';
 import { hostsFileBlock } from '../src/core/gen-router.js';
 import type { ComposedServices, FrontDoorStatus } from '../src/main/compose.js';
 import type { ElevationOutcome, PrivilegedStep, Step } from '../src/main/elevate.js';
@@ -129,6 +131,8 @@ async function compose(caddyBin: string | null = CADDY): Promise<ComposedService
 
 const running = (s: ComposedServices) => s.externalFrontDoor as Extract<FrontDoorStatus, { running: true }>;
 const genieItems = (s: ComposedServices) => s.deckItems().filter((i) => i.source === 'genie');
+/** The Deck's asks that carry a hosts write (Tynn #753; since #743 inside "Open <name> in your browser"), by title. */
+const hostsAsks = (s: ComposedServices) => s.deckItems().filter((i) => i.id === 'genie:hosts-approval' || (i.id.startsWith(SITE_REACH_DECK_PREFIX) && i.detail !== undefined)).map((i) => i.title);
 const site = (s: ComposedServices, name = 'docs') => s.sites.create({ name, workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
 
 beforeEach(async () => {
@@ -174,17 +178,24 @@ describe('the hosts file', () => {
         expect(heard.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('a refused plain write goes through the OS prompt; a declined prompt is recorded with the block to paste, and syncHosts() tries again on request', async () => {
+    it('a refused plain write WAITS for the person (Tynn #753): no prompt, the ask in the Deck; Approve is the one prompt, a declined one keeps the block, Try again asks again', async () => {
         hosts.state.denyPlain = true;
         services = await compose();
         site(services, 'tynn');
         await settle();
-        expect(services.externalFrontDoor).toMatchObject({ hosts: { changed: true, elevated: true } });
+        expect(batches).toEqual([]);
+        expect(services.externalFrontDoor).toMatchObject({ hosts: { changed: false, elevated: false, awaitingApproval: true, manualBlock: hostsFileBlock(['tynn.gen']) } });
+        expect(hostsAsks(services)).toEqual(['Open tynn.gen in your browser']);
+        // The person's Approve (the Deck routes it to syncHosts): exactly one prompt, and the ask is gone.
+        expect(await services.syncHosts()).toEqual({ changed: true, elevated: true });
         expect(batches).toEqual([['hosts']]);
+        expect(hostsAsks(services)).toEqual([]);
 
-        hosts.state.denyElevated = true;
         site(services);
         await settle();
+        expect(batches).toEqual([['hosts']]);
+        hosts.state.denyElevated = true;
+        await services.syncHosts();
         const fd = services.externalFrontDoor as { hosts: { error: string; manualBlock: string } };
         expect(fd.hosts.error).toBe('Request dismissed');
         expect(fd.hosts.manualBlock).toBe(hostsFileBlock(['docs.gen', 'tynn.gen']));
@@ -237,25 +248,33 @@ describe('no admin prompt on a site’s start or stop (S4)', () => {
         expect(hosts.content()).toContain('::1 shop.gen');
     });
 
-    it('the same holds through the OS prompt: start/stop raise NO elevation; one new site raises one', async () => {
+    it('the same holds when the plain write is refused: start/stop raise NO elevation and no new ask; a new site is a new ask, never a prompt', async () => {
         hosts.state.denyPlain = true;
         services = await compose();
         site(services, 'docs');
         await settle();
+        expect(batches).toEqual([]);
+        expect(await services.syncHosts()).toEqual({ changed: true, elevated: true });
         expect(batches).toEqual([['hosts']]);
         for (let i = 0; i < 3; i++) { services.sites.stop('site_docs'); await settle(); services.sites.start('site_docs'); await settle(); }
         expect(batches).toEqual([['hosts']]);
+        expect(hostsAsks(services)).toEqual([]);
         site(services, 'tynn');
         await settle();
-        expect(batches).toEqual([['hosts'], ['hosts']]);
+        expect(batches).toEqual([['hosts']]);
+        expect(hostsAsks(services)).toEqual(['Open tynn.gen in your browser']);
     });
 
-    it('a burst of N site changes is ONE write — never a prompt per site', async () => {
+    it('a burst of N site changes is ONE ask, and the person’s Approve is ONE write — never a prompt per site', async () => {
         hosts.state.denyPlain = true;
         services = await compose();
         await settle();
         for (const name of ['a', 'b', 'c', 'd', 'e']) site(services, name);
         await settle();
+        expect(hosts.writes()).toBe(0);
+        expect(batches).toEqual([]);
+        expect(hostsAsks(services)).toEqual(['Open a.gen, b.gen, c.gen, d.gen and e.gen in your browser']);
+        await services.syncHosts();
         expect(hosts.writes()).toBe(1);
         expect(batches).toEqual([['hosts']]);
         for (const name of ['a', 'b', 'c', 'd', 'e']) expect(hosts.content()).toContain(`127.0.0.1 ${name}.gen`);
@@ -464,7 +483,7 @@ describe('trust is READ from the OS store by the CA’s thumbprint', () => {
         answer(false);
         await settle();
         expect(running(services).trusted).toBe(false);
-        expect(genieItems(services).map((i) => i.id)).toEqual([TRUST_DECK_ID]);
+        expect(genieItems(services).map((i) => i.id)).toEqual([`${SITE_REACH_DECK_PREFIX}docs.gen`]);
     });
 
     it('a store that cannot be read is untrusted WITH the reason, so the Trust door stays', async () => {
@@ -558,7 +577,7 @@ describe('Genie asks once, on the Deck', () => {
         await settle();
         const items = genieItems(services);
         expect(items).toHaveLength(1);
-        expect(items[0]).toMatchObject({ id: TRUST_DECK_ID, title: 'Trust Genie’s certificate so https://docs.gen works in your browser', agentId: null });
+        expect(items[0]).toMatchObject({ id: `${SITE_REACH_DECK_PREFIX}docs.gen`, title: 'Open docs.gen in your browser', agentId: null });
         expect(await services.trustCertificate()).toEqual({ ok: true });
         expect(genieItems(services)).toEqual([]);
     });
@@ -737,5 +756,40 @@ describe('completion after rejected front-door work', () => {
         expect(services.externalFrontDoor).toMatchObject({ running: true });
         expect(services.externalFrontDoor).not.toHaveProperty('reason');
         expect(pty.caddy()).toHaveLength(2);
+    });
+});
+
+/**
+ * THE FRONT DOOR'S CADDY COMMAND with a space in Genie's folders (Tynn #729): the binary and the Caddyfile are each ONE
+ * word for the pty's parser, as a site's Caddy is (caddy-space-729.test.ts). Genie's runtime and userData live under the
+ * person's profile, and a profile with a space split them into two arguments.
+ */
+describe('the front door’s Caddy command (Tynn #729)', () => {
+    const argv = (command: string) => parseCommandLine(command);
+
+    it('CONTROL: with no space, the parser reads the binary and a Caddyfile under Genie’s folder', async () => {
+        services = await compose();
+        await settle();
+        const [caddy] = pty.caddy();
+        const { command, args } = argv(caddy!.command!);
+        expect(command).toBe(CADDY);
+        expect(args[2]!.startsWith(dir) && args[2]!.endsWith('Caddyfile')).toBe(true);
+    });
+
+    it('a binary and a Genie folder with a space: the parser still reads each whole', async () => {
+        const parent = dir;
+        dir = join(parent, 'Genie Data');
+        mkdirSync(dir, { recursive: true });
+        try {
+            services = await compose('/opt/Genie App/caddy');
+            await settle();
+            const [caddy] = pty.caddy();
+            const { command, args } = argv(caddy!.command!);
+            expect(command).toBe('/opt/Genie App/caddy');
+            expect(args.slice(0, 2)).toEqual(['run', '--config']);
+            expect(args[2]!.startsWith(dir) && args[2]!.endsWith('Caddyfile')).toBe(true);
+        } finally {
+            dir = parent;
+        }
     });
 });

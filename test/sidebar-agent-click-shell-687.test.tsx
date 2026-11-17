@@ -45,7 +45,7 @@ function render() {
     const opened: string[] = [];
     captured.length = 0;
     renderToStaticMarkup(<Shell route={ROUTE} snapshot={snapshot}
-        servable={['dashboard', 'deck', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
+        servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
         selectedRowId={null} chatThread={null} pinned={null} files={NO_FILES} onNavigate={(r) => navigated.push(r)}
         onOpenAgent={(id) => opened.push(id)} onChatAgent={(id) => chatted.push(id)}
         onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}}

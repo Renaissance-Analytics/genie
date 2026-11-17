@@ -25,7 +25,7 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
         <Shell
             route="genie://dashboard?group=workspace"
             snapshot={snapshot}
-            servable={['dashboard', 'deck', 'agent', 'workspace']}
+            servable={['dashboard', 'agent', 'workspace']}
             agentDetail={null}
             agentResolved={false}
             selectedRowId={null}

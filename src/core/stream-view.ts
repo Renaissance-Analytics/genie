@@ -3,6 +3,7 @@ import { computeDiff } from '@particle-academy/fancy-file-commons';
 import { DIFF_TOO_LARGE, editLabel } from './file-edits.js';
 import type { StreamEvent, ToolKind } from './stream-event.js';
 import type { CommandRunRef } from './command-run.js';
+import { costWords } from './cost-words.js';
 
 /**
  * HOW THE STREAM IS READ — the ledger's presentation decisions, with no React in sight.
@@ -103,6 +104,8 @@ export interface LedgerRow {
      */
     toolOutput?: { text: string; toolCallId: string; whole: number | null; cut: boolean } | undefined;
     meta: string | null;
+    /** Hover words for the row (a cost figure's meaning, Tynn #747); absent = none. */
+    title?: string | undefined;
     /** `warn` = a tool still running (the board's amber `running`). */
     metaTone: 'default' | 'bad' | 'warn';
     /**
@@ -145,6 +148,11 @@ export interface RowContext {
      * up to then. Absent or 0 = no turn marker before it, and the divider says nothing about turns.
      */
     summarisedTurns?: number | undefined;
+    /**
+     * The provider reported a plan's limit windows (5 h, weekly) in this agent's ledger: its account is on a subscription
+     * plan, so a cost figure is what the tokens would cost at API prices, not a charge (Tynn #747).
+     */
+    onPlan?: boolean | undefined;
 }
 
 /**
@@ -402,8 +410,9 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
                 icon: 'brain',
                 tone: 'violet',
                 kind: 'think',
-                // Claude's API redacts reasoning by default: the thought arrives with no text. Said, not drawn blank.
-                main: row.event.text.trim() === '' ? 'Reasoning not sent by the provider' : oneLine(row.event.text),
+                // Claude's API redacts reasoning by default: the thought arrives with no text. It reads as what it is, a
+                // thought, never as a fault (Tynn #746: "Reasoning not sent by the provider" read as an error to a client).
+                main: row.event.text.trim() === '' ? 'Thinking' : oneLine(row.event.text),
                 italic: true,
                 // The owner (using beta.19): a thought EXPANDS on click to its whole reasoning — over the spec's
                 // "never expands". Nothing to expand when the provider sent no text.
@@ -423,9 +432,11 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             const parts = [`context ${thousands(row.event.used)} / ${thousands(row.event.size)}`];
             // The turn's own input and output, when the provider sent its totals (codex); absent, never `+0`.
             if (typeof row.event.turnIn === 'number' && typeof row.event.turnOut === 'number') parts.unshift(`+${thousands(row.event.turnIn)} in · +${thousands(row.event.turnOut)} out`);
-            // The TURN's cost, resolved from the running totals — never the running total under this name.
-            if (typeof row.event.turnCost === 'number') parts.push(`$${row.event.turnCost.toFixed(2)} this turn`);
-            return { ...base, icon: 'gauge', tone: 'muted', kind: 'usage', main: parts.join(' · '), mono: true, lane: null };
+            // The TURN's cost, resolved from the running totals — never the running total under this name. At API prices,
+            // and on a plan said to be in the plan, never read as a charge (Tynn #747, core/cost-words.ts).
+            const cost = typeof row.event.turnCost === 'number' ? costWords(row.event.turnCost, 'this turn', context.onPlan === true) : null;
+            if (cost) parts.push(cost.text);
+            return { ...base, icon: 'gauge', tone: 'muted', kind: 'usage', main: parts.join(' · '), mono: true, lane: null, ...(cost ? { title: cost.title } : {}) };
         }
 
         case 'plan':
@@ -746,19 +757,19 @@ function editCountsOf(rawInput: unknown): ReturnType<typeof editLineCounts> {
  * THE STREAM'S ROWS ACROSS PUSHES (genie#1340): a row the push did not change is the SAME object it was, so a memoised
  * row does not draw again. The host keeps a ledger row's object while it is unchanged and replaces it when it changes
  * (core/agent-push-wire.ts), and StreamPrep keeps its rows the same way; so a row is mapped again only when its object or
- * what its context says (duration, diff, agent name, summarised turns) changed. An edit's diff, when not given, is
+ * what its context says (duration, diff, agent name, summarised turns, whether the account is on a plan) changed. An edit's diff, when not given, is
  * counted from its own input once per edit.
  */
 export class LedgerRowCache {
-    readonly #kept = new WeakMap<TimedEvent, { durationMs: number | undefined; diff: RowContext['diff']; agentName: string | undefined; summarisedTurns: number | undefined; out: LedgerRow }>();
+    readonly #kept = new WeakMap<TimedEvent, { durationMs: number | undefined; diff: RowContext['diff']; agentName: string | undefined; summarisedTurns: number | undefined; onPlan: boolean | undefined; out: LedgerRow }>();
 
     row(row: TimedEvent, context: RowContext = {}): LedgerRow {
         const e = row.event;
         const diff = context.diff ?? (e.kind === 'tool' && e.toolKind === 'edit' ? editCountsFor(e) ?? undefined : undefined);
         const kept = this.#kept.get(row);
-        if (kept && kept.durationMs === context.durationMs && kept.agentName === context.agentName && kept.summarisedTurns === context.summarisedTurns && sameDiff(kept.diff, diff)) return kept.out;
+        if (kept && kept.durationMs === context.durationMs && kept.agentName === context.agentName && kept.summarisedTurns === context.summarisedTurns && kept.onPlan === context.onPlan && sameDiff(kept.diff, diff)) return kept.out;
         const out = ledgerRow(row, diff === undefined ? context : { ...context, diff });
-        this.#kept.set(row, { durationMs: context.durationMs, diff, agentName: context.agentName, summarisedTurns: context.summarisedTurns, out });
+        this.#kept.set(row, { durationMs: context.durationMs, diff, agentName: context.agentName, summarisedTurns: context.summarisedTurns, onPlan: context.onPlan, out });
         return out;
     }
 }

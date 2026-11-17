@@ -32,8 +32,8 @@ describe('commsOf', () => {
             collaborators: 2,
             commsAgeSeconds: 10,
             links: [
-                { peer: 'agent_c', count: 1, ageSeconds: 10 },
-                { peer: 'agent_b', count: 2, ageSeconds: 40 },
+                { peer: 'agent_c', count: 1, ageSeconds: 10, lastFrom: 'peer', unread: true, waiting: false },
+                { peer: 'agent_b', count: 2, ageSeconds: 40, lastFrom: 'peer', unread: true, waiting: false },
             ],
         });
     });

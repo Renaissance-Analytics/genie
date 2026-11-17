@@ -1,4 +1,6 @@
+import type { DriveMode } from '../core/connected-here.js';
 import type { PairRequest } from '../core/pair-confirm.js';
+import type { PinEnded } from '../core/remote.js';
 import type { RemoteAccessEvent, RemoteAccessStatus } from './remote-access-host.js';
 import type { Device } from './remote-devices.js';
 import { isLocalEvent, type RemoteHost } from './remote-host.js';
@@ -17,12 +19,16 @@ export interface RemoteAccessView {
     unavailable(): string | null;
     locked(): boolean;
     activePin(): { code: string; expiresAt: number } | null;
+    /** Why the last PIN went without pairing (Tynn #751). */
+    pinEnded?(): PinEnded | null;
     devices(): Device[];
     connections(): ReturnType<RemoteHost['connections']>;
     issuePin(options?: { replaces?: string }): unknown;
     revokeDevice(id: string): boolean | Promise<boolean>;
     lock(): unknown;
     unlock(): unknown;
+    /** Watch only, or full control, for one connected person (Tynn #732). */
+    setMode(label: string, mode: DriveMode): unknown;
     onChange(listener: () => void): () => void;
 }
 
@@ -63,6 +69,7 @@ export class RemoteAccessReplica implements RemoteAccessView {
     unavailable(): string | null { return this.#status.unavailable; }
     locked(): boolean { return this.#status.locked; }
     activePin(): { code: string; expiresAt: number } | null { return this.#status.pin; }
+    pinEnded(): PinEnded | null { return this.#status.pinEnded ?? null; }
     devices(): Device[] { return [...this.#status.devices]; }
     connections(): RemoteAccessStatus['connections'] { return [...this.#status.connections]; }
 
@@ -70,6 +77,7 @@ export class RemoteAccessReplica implements RemoteAccessView {
     async revokeDevice(id: string): Promise<boolean> { return (await this.#call('revokeDevice', [id])) === true; }
     lock(): Promise<unknown> { return this.#call('lock', []); }
     unlock(): Promise<unknown> { return this.#call('unlock', []); }
+    setMode(label: string, mode: DriveMode): Promise<unknown> { return this.#call('setMode', [label, mode]); }
     /** The listener follows `remote_access` (genie-host applies it); Restart from Settings. */
     apply(): Promise<void> { return this.#call('apply', []).then(() => undefined); }
     restart(): Promise<void> { return this.#call('restart', []).then(() => undefined); }

@@ -22,11 +22,13 @@ export interface TurnCardsProps {
     cards: readonly TurnCard[];
     rows: readonly TimedEvent[];
     agentName: string;
+    /** The agent's account is on a subscription plan: costs read as API prices (Tynn #747). */
+    onPlan?: boolean | undefined;
     selectedId: string | null;
     onSelect: (id: string) => void;
 }
 
-export function TurnCards({ cards, rows, agentName, selectedId, onSelect }: TurnCardsProps) {
+export function TurnCards({ cards, rows, agentName, onPlan = false, selectedId, onSelect }: TurnCardsProps) {
     const [toggled, setToggled] = useState<ReadonlySet<number>>(new Set());
     const byId = new Map(rows.map((r) => [r.id, r] as const));
     const isOpen = (c: TurnCard) => (toggled.has(c.n) ? !c.open : c.open);
@@ -56,7 +58,7 @@ export function TurnCards({ cards, rows, agentName, selectedId, onSelect }: Turn
                                 {card.rowIds.map((id) => {
                                     const row = byId.get(id);
                                     if (!row) return null;
-                                    return <StreamRow key={id} row={ledgerRow(row, { agentName })} selected={id === selectedId} onSelect={onSelect} />;
+                                    return <StreamRow key={id} row={ledgerRow(row, { agentName, onPlan })} selected={id === selectedId} onSelect={onSelect} />;
                                 })}
                             </div>
                         ) : null}

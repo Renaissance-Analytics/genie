@@ -1,5 +1,6 @@
 import { Button, Icon, Modal } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
+import { Flash } from './Flash.js';
 import { CONNECT_EMPTY_GUIDANCE, type ConnectProgress } from '../../core/connect-machine.js';
 import type { RoleChange, TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 
@@ -34,9 +35,8 @@ function Progress({ state, onRetry, retryAction }: { state: ConnectProgress; onR
     if (state.kind === 'working') {
         return <span data-connect-step="" className="flex items-center gap-1.5 text-xs text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" />{state.step}</span>;
     }
-    if (state.kind === 'done') {
-        return <span data-connect-done="" className="flex items-center gap-1.5 text-xs text-[var(--fg-2)]"><Icon name="check" size="xs" />{state.note}</span>;
-    }
+    // What happened is a Flash that comes and goes, never a line that pushes the layout (the owner, 2026-11-16).
+    if (state.kind === 'done') return <Flash note={state.note} />;
     if (state.kind === 'failed') {
         return (
             <span data-problem="connect" className="flex flex-wrap items-center gap-2 text-xs text-[var(--danger)]">
@@ -187,12 +187,15 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {}, onS
                                 </Button>
                             ) : null}
                             {w.connectable && onOpenWorkstation ? (
-                                <Button size="xs" type="button" data-action="open-workstation" title={`Open ${w.name} in its own window`} disabled={state.kind === 'working'} onClick={() => onOpenWorkstation(w)} className={`shrink-0 whitespace-nowrap ${OPEN_BUTTON}`}>Open</Button>
+                                // Its step is the button's spinner and "opened" a Flash on it: no line under the row (the owner, 2026-11-16).
+                                <Flash note={state.kind === 'done' ? state.note : null}>
+                                    <Button size="xs" type="button" data-action="open-workstation" title={state.kind === 'working' ? state.step : `Open ${w.name} in its own window`} loading={state.kind === 'working'} aria-busy={state.kind === 'working' ? true : undefined} onClick={() => onOpenWorkstation(w)} className={`shrink-0 whitespace-nowrap ${OPEN_BUTTON}`}>Open</Button>
+                                </Flash>
                             ) : (
                                 <span className="shrink-0 text-[11px] whitespace-nowrap text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
                             )}
                         </div>
-                        {onOpenWorkstation ? <Progress state={state} onRetry={() => onOpenWorkstation(w)} retryAction="retry-workstation" /> : null}
+                        {onOpenWorkstation && state.kind === 'failed' ? <Progress state={state} onRetry={() => onOpenWorkstation(w)} retryAction="retry-workstation" /> : null}
                         {changing?.id === w.id ? (
                             <RoleChangeForm
                                 to={changing.to}

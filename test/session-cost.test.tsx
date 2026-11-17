@@ -32,7 +32,7 @@ describe('resolveTurnCosts', () => {
 describe('the usage row', () => {
     it('reads the turn\'s own cost, never the running total', () => {
         const [, second] = resolveTurnCosts([usage('u1', 3.51), usage('u2', 4.12)]);
-        expect(ledgerRow(second!).main).toBe('context 1k / 200k · $0.61 this turn');
+        expect(ledgerRow(second!).main).toBe('context 1k / 200k · $0.61 this turn at API prices');
     });
 
     it('an unresolved report shows no cost rather than the running total under the wrong name (positive control above)', () => {

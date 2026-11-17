@@ -45,6 +45,11 @@ export interface ApprovalCardProps {
      * Rejects, or answers `{ ok: false, reason }`, when it could not. Absent = this surface cannot trust it, and offers nothing.
      */
     onTrustWorkspace?: (() => Promise<unknown>) | undefined;
+    /**
+     * Drawn INSIDE another surface's own frame (the approval toast, Tynn #730): no card margin, border or fill, and no
+     * A / D key hints — those keys act in the chat, never on a toast.
+     */
+    flat?: boolean | undefined;
 }
 
 /** Where "Trust this workspace" stands on a card. */
@@ -82,7 +87,7 @@ export function ApprovalText({ text }: { text: string }) {
     return <>{visibleApprovalText(text).map((part, i) => (part.named ? <span key={i} data-approval-named="" className="rounded bg-[var(--warning)]/15 px-0.5 font-semibold text-[var(--warning)]">{part.text}</span> : part.text))}</>;
 }
 
-export function ApprovalCardView({ approval, answering, refusal = null, onAnswer, agentName, note, onNote, onTrustWorkspace, trust = 'idle', onTrust }: ApprovalCardProps & { note: string; onNote: (note: string) => void; trust?: CardTrustPhase; onTrust?: () => void }) {
+export function ApprovalCardView({ approval, answering, refusal = null, onAnswer, agentName, note, onNote, onTrustWorkspace, trust = 'idle', onTrust, flat = false }: ApprovalCardProps & { note: string; onNote: (note: string) => void; trust?: CardTrustPhase; onTrust?: () => void }) {
     // Asked ONLY because the workspace isn't trusted, on a surface that can trust it: the way out is offered right here.
     const canTrust = approval.why === AUTONOMY_UNTRUSTED && onTrustWorkspace !== undefined;
     // The board's heading and meta, each only when the request reported the piece; the question itself always.
@@ -91,7 +96,8 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
     return (
         <div
             data-approval
-            className="m-3 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/5 p-3 text-[13px]"
+            {...(flat ? { 'data-approval-flat': '' } : {})}
+            className={flat ? 'text-[13px]' : 'm-3 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/5 p-3 text-[13px]'}
         >
             {heading ? (
                 <div className="mb-1 flex items-center gap-2">
@@ -160,7 +166,7 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
                         className={`rounded-md border px-2.5 py-1 text-xs disabled:opacity-50 ${TONE[option.tone]}`}
                     >
                         {option.label}
-                        {KEY_HINT[option.tone] ? <span data-key-hint={KEY_HINT[option.tone]} className="ml-1.5 rounded-sm border border-current/30 px-1 font-mono text-[10px] opacity-70">{KEY_HINT[option.tone]}</span> : null}
+                        {!flat && KEY_HINT[option.tone] ? <span data-key-hint={KEY_HINT[option.tone]} className="ml-1.5 rounded-sm border border-current/30 px-1 font-mono text-[10px] opacity-70">{KEY_HINT[option.tone]}</span> : null}
                     </Button>
                 ))}
             </div>

@@ -2,6 +2,7 @@ import type { WorkstationRole } from '../core/workstation-role.js';
 import type { TailscaleStatus } from '../main/tailscale-cli.js';
 import type { KeyringView } from '../main/linux-keyring.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import type { StorageView, TrashApproval } from '../core/workspace-storage.js';
 import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ServiceInstance } from '../core/services.js';
@@ -19,11 +20,14 @@ import type { DotnetVersionsView } from '../main/dotnet-versions.js';
 import type { RustVersionsView } from '../main/rust-versions.js';
 import type { RubyVersionsView } from '../main/ruby-versions.js';
 import type { JavaVersionsView } from '../main/java-versions.js';
+import type { PlaywrightBrowsersView } from '../main/playwright-browsers.js';
 import type { NodeVersionsView } from '../main/node-versions.js';
 import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { PairRequest } from '../core/pair-confirm.js';
+import type { PinEnded } from '../core/remote.js';
+import type { DriveMode } from '../core/connected-here.js';
 import type { AnnotatedRow, SyncResult } from '../core/integrations.js';
 import type { GithubView } from '../core/github.js';
 import type { PluginEntry } from '../main/plugin-host.js';
@@ -193,6 +197,8 @@ export interface RemoteSection {
     readonly unavailable: string | null;
     readonly locked: boolean;
     readonly pin: { code: string; expiresAt: number } | null;
+    /** Why the last PIN went without pairing (Tynn #751): the desktop says so and offers a new one. */
+    readonly pinEnded?: PinEnded | null | undefined;
     readonly devices: readonly Device[];
     /** "Pair this device?" waiting for Allow on this screen (q_8c07b142); always empty for a remote window. */
     readonly pairRequests?: readonly PairRequest[] | undefined;
@@ -235,7 +241,7 @@ export interface IntegrationsSection {
     readonly gated: readonly AnnotatedRow[];
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
     /** Genie's own MCP server (§6.9): where it listens, and whether a real server/discover answered at boot (§6.4). */
-    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly { name: string; description: string }[] };
+    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly import('../core/mcp-tool-summaries.js').McpToolRow[] };
     /** What the sync last did to each workspace's agent files: current, upgraded, or failed (absent before the first sync). */
     readonly agentFiles?: readonly AgentFilesReport[];
     /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
@@ -281,6 +287,17 @@ export interface ToolchainRefusal {
     readonly retry?: string;
 }
 
+/** One row's state in a "Check for updates" run (Tynn #714). `failed` carries its reason. */
+export type ToolCheckState =
+    | { readonly state: 'waiting' | 'checking' | 'up-to-date' | 'update-available' }
+    | { readonly state: 'failed'; readonly reason: string };
+
+/** A "Check for updates" run: each tool checked one at a time, each row's own state. Absent = no run has been shown. */
+export interface ToolchainCheckRun {
+    readonly running: boolean;
+    readonly rows: Readonly<Record<string, ToolCheckState>>;
+}
+
 export interface ToolchainSection {
     readonly tools: readonly ToolStatus[];
     readonly checkedAt: number | null;
@@ -295,6 +312,8 @@ export interface ToolchainSection {
     /** The last update that took: its row says so, with the version now answering. */
     readonly updated?: { readonly tool: string; readonly version: string };
     readonly result?: string;
+    /** The last or current "Check for updates" run (Tynn #714). */
+    readonly checkRun?: ToolchainCheckRun;
     /** Each refused or failed action, one per row, until that row's next action. Absent when there is none. */
     readonly refusals?: readonly ToolchainRefusal[];
     /** T4: Genie-managed PHP versions (with the sites pinned to each), the PATH PHP, and what can be installed. */
@@ -313,6 +332,8 @@ export interface ToolchainSection {
     readonly ruby?: RubyVersionsView;
     /** Genie's own Java (TC6d, Temurin), the java on PATH, and each LTS line's release here — or why not. */
     readonly java?: JavaVersionsView;
+    /** Genie's one Playwright browser install, shared by every workspace and worktree (Tynn #604). */
+    readonly playwright?: PlaywrightBrowsersView;
     /** Each language's default version (`null` = the system's own), read from Genie's `current/<lang>` links. */
     readonly defaults?: Readonly<Record<'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust' | 'ruby' | 'java', string | null>>;
     /** The machine's own PATH: whether Genie's defaults are on it, where, and exactly what would change (plan TC3b). */
@@ -340,12 +361,14 @@ export interface FeatureData {
     readonly inbox: InboxSection | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
     /** The Genie Browser: the page it shows (each .gen site at its own https origin), this machine's sites, and its history. */
-    readonly browser: { url: string | null; routes: readonly GenRoute[]; canGoBack: boolean; canGoForward: boolean };
+    readonly browser: { url: string | null; routes: readonly GenRoute[]; canGoBack: boolean; canGoForward: boolean; /** The host the last address off the dev sites opened in the person's browser for (Tynn #741). */ handedOff?: string | null };
     readonly remote: RemoteSection | null;
     readonly integrations: IntegrationsSection | null;
     readonly plugins: PluginsSection | null;
     /** IssueWatch's view per workspace id (Tynn #806), pushed by main; `null` until main reports. */
     readonly issueWatch: Readonly<Record<string, IssueWatchPanelView>> | null;
+    /** Each workspace's Storage tab (Tynn #697), as main holds it; absent/`null` = this window cannot measure. */
+    readonly storage?: Readonly<Record<string, StorageView>> | null;
     /** What's New for the running version, once (Tynn #762); `null`/absent = nothing to show. */
     readonly whatsNew?: { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it); absent/`null` = not known yet. */
@@ -386,6 +409,9 @@ export interface TrustStepView {
         readonly servers: readonly { readonly file: string; readonly name: string; readonly command: string }[];
         readonly gitKeys: readonly { readonly key: string; readonly value: string }[];
         readonly approvals: readonly string[];
+        /** The flows and processes a clone's files would create, with what they would run (Tynn #756, PR9b). Absent = none. */
+        readonly flows?: readonly { readonly file: string; readonly commands: readonly string[] }[];
+        readonly processes?: readonly { readonly file: string; readonly commands: readonly string[] }[];
     };
 }
 
@@ -409,6 +435,13 @@ export const EMPTY_FEATURES: FeatureData = {
 export type FeatureAction =
     /** The GitHub panel's Refresh: Tynn reads this workspace's repos now. */
     | { kind: 'issueWatch.refresh'; workspaceId: string }
+    /** STORAGE (Tynn #697): measure a workspace; move one item to its .trash; put one back; empty .trash with the person's approval. Ids only, never paths. */
+    | { kind: 'storage.measure'; workspaceId: string }
+    | { kind: 'storage.trash'; workspaceId: string; itemId: string }
+    | { kind: 'storage.restore'; workspaceId: string; trashId: string }
+    /** The one-click clean-up: the host moves only those of these ids that a fresh measure still suggests. */
+    | { kind: 'storage.cleanUp'; workspaceId: string; itemIds: string[] }
+    | { kind: 'storage.emptyTrash'; workspaceId: string; approval: TrashApproval }
     /** One repo's IssueWatch switch in Tynn (watch it; include a fork's upstream) — one field at a time. */
     | { kind: 'issueWatch.setRepo'; workspaceId: string; owner: string; repo: string; enabled?: boolean; includeUpstream?: boolean }
     | { kind: 'whatsNew.show' }
@@ -429,6 +462,8 @@ export type FeatureAction =
     | { kind: 'flows.remove'; flowId: string }
     /** The person's Run now: one run of the flow, armed or not; its outcome lands in the flow's run history. */
     | { kind: 'flows.runNow'; flowId: string }
+    /** Resume now for a run paused at its agent's provider limit (Tynn #749): the limit's hold is lifted at once. */
+    | { kind: 'flows.resumeLimit'; flowId: string }
     | { kind: 'flows.add'; workspaceId: string }
     | { kind: 'flows.cancelForm' }
     /** The Add-a-flow form, submitted as the USER (so `armed` is honoured). */
@@ -495,6 +530,9 @@ export type FeatureAction =
     | { kind: 'services.logs'; serviceId: string; tail?: number }
     | { kind: 'services.hideLogs' }
     | { kind: 'toolchain.check'; force?: boolean }
+    /** Tynn #714: re-check every installed tool one at a time (installs nothing); and stop it after the tool in flight. */
+    | { kind: 'toolchain.checkUpdates' }
+    | { kind: 'toolchain.stopCheck' }
     /**
      * `confirmed`: the person read the warning (Docker's restart, what runs on the old PHP) and chose to go ahead. A
      * REFUSAL is never confirmable. `version` (genie#1306): the version the button names — a language's patch or another
@@ -532,6 +570,8 @@ export type FeatureAction =
     | { kind: 'toolchain.removeRuby'; version: string }
     /** Install one Genie-managed JDK (Temurin, sha256-verified). `consent` is the person's click. */
     | { kind: 'toolchain.installJava'; version: string; consent: boolean }
+    /** Install (or update to) a Playwright version's browsers into Genie's one folder; `version` null = the newest. `consent` is the person's click. */
+    | { kind: 'toolchain.installPlaywright'; version: string | null; browsers?: readonly string[]; consent: boolean }
     | { kind: 'toolchain.removeJava'; version: string }
     /** Make a managed version a language's default, or `null` for the system's own (plan TC3a). */
     | { kind: 'toolchain.setDefault'; lang: 'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust' | 'ruby' | 'java'; version: string | null }
@@ -582,6 +622,8 @@ export type FeatureAction =
     | { kind: 'remote.answerPair'; id: string; allow: boolean }
     | { kind: 'remote.revokeDevice'; deviceId: string }
     | { kind: 'remote.lock' }
+    /** Watch only, or full control, for one connected person (Tynn #732): from this machine's own window only. */
+    | { kind: 'remote.setMode'; label: string; mode: DriveMode }
     | { kind: 'remote.unlock' }
     /** Stop and start the listener (Genie 1's restart). */
     | { kind: 'remote.restart' }
@@ -595,6 +637,8 @@ export type FeatureAction =
     | { kind: 'tailscale.up' }
     /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */
     | { kind: 'tailscale.install' }
+    /** Read Tailscale again: Remote access opened, or its window focused (Tynn #749). */
+    | { kind: 'tailscale.refresh' }
     /** Sign in to Tynn with a token; an empty token signs out. */
     | { kind: 'integrations.tynnSignIn' }
     | { kind: 'integrations.tynnCode'; code: string }
@@ -630,6 +674,7 @@ export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): To
     if (action.kind === 'toolchain.installDotnet' || action.kind === 'toolchain.removeDotnet') return refusals.find((r) => r.tool === 'dotnet' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installRust' || action.kind === 'toolchain.removeRust') return refusals.find((r) => r.tool === 'rust' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installRuby' || action.kind === 'toolchain.removeRuby') return refusals.find((r) => r.tool === 'ruby' && r.version === action.version) ?? null;
+    if (action.kind === 'toolchain.installPlaywright') return refusals.find((r) => r.tool === 'playwright' && r.version === (action.version ?? 'latest')) ?? null;
     if (action.kind === 'toolchain.installJava' || action.kind === 'toolchain.removeJava') return refusals.find((r) => r.tool === 'java' && r.version === action.version) ?? null;
     return null;
 }

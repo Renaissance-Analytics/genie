@@ -93,7 +93,7 @@ function wire(t: ClientTransport) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let id = 0;
     return {
-        hello: async () => { t.send(JSON.stringify({ kind: 'hello', auth: { kind: 'relay' } })); return next(); },
+        hello: async () => { t.send(JSON.stringify({ kind: 'hello', auth: { kind: 'relay' } })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
         call: async (method: string, ...args: unknown[]) => { t.send(JSON.stringify({ kind: 'call', id: ++id, method, args })); return next(); },
     };
 }
@@ -157,7 +157,7 @@ describe('the picker — react-fancy FileBrowser over the host listing', () => {
         expect(() => fileEntriesOf({ ok: false, reason: '/w/fancy is outside what this link shares' })).toThrow('/w/fancy is outside what this link shares');
     });
 
-    it('Choose is offered once something is picked, naming it (CONTROL: nothing picked, nothing to choose)', () => {
+    it('Choose is offered once something is picked, naming it (CONTROL: nothing picked at `/` before the roots are read: it may be the drive list, so nothing to choose; Tynn #733)', () => {
         const base = { mode: 'directory' as const, listDir: async () => ({ ok: true as const, path: '/', entries: [] }), onPick: () => {}, onCancel: () => {} };
         const none = renderToStaticMarkup(<HostPathPickerForm {...base} />);
         expect(control(none, 'data-action="pick-path"')!.open).toMatch(/\sdisabled=""/);

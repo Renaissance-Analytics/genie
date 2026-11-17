@@ -30,6 +30,8 @@ const dotIn = (row: string): { color: string; words: string } | null => {
  */
 const KEY = 'particle.academy/rate_limit';
 const at = (d: number, h: number) => new Date(2026, 9, d, h, 0).getTime();
+/** The test's clock, injected into the pills and the Shell: before every reset these readings carry. */
+const NOW = at(27, 12);
 const claude = {
     status: 'allowed', resetsAtMs: at(27, 16), rateLimitType: 'five_hour',
     windows: { five_hour: { utilization: 0.62, resetsAtMs: at(27, 16) }, seven_day: { utilization: 0.92, resetsAtMs: at(30, 9) }, seven_day_opus: { utilization: 0.4, resetsAtMs: at(31, 9) } },
@@ -74,9 +76,9 @@ describe('every reported window is kept', () => {
 
     it('the header keeps a window a later reading did not repeat, and takes the newer figure for one it did', () => {
         const board = new HeadroomBoard();
-        board.offer('claude', headroomFromMeta(claude)!, 0, 60_000);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, headroomFromMeta(claude)!, 0, 60_000);
         const later = headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 0.7, resetsAtMs: at(27, 16) } } })!;
-        expect(board.offer('claude', later, 60_000, 60_000)).toBe(true);
+        expect(board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, later, 60_000, 60_000)).toBe(true);
         const shown = board.view()['claude']!;
         expect(shown.leftPct).toBe(30);
         expect(shown.windows.map((w) => [w.window, w.leftPct])).toEqual([['5h', 30], ['7d', 8], ['7d opus', 60]]);
@@ -87,14 +89,14 @@ describe('the pill’s accessible name (the detail itself is a popover now: rate
     const named = (html: string, provider: string) => html.match(new RegExp(`data-rate-limit="${provider}"[^>]*aria-label="([^"]*)"`))?.[1] ?? '';
 
     it('names the provider and its most constrained window, in the sidebar dot’s words', () => {
-        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta(claude)!, codex: headroomFromMeta(codex)! }} />);
+        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta(claude)!, codex: headroomFromMeta(codex)! }} now={NOW} />);
         // Claude's binding window is the 5h (38% left), but its 7d has 8% left: the tighter one is what a person needs.
         expect(named(html, 'claude')).toBe('Claude Code rate limits: 8% left this week');
         expect(named(html, 'codex')).toBe('Codex rate limits: 60% left in the 5-hour window');
     });
 
     it('a spent window reads as over', () => {
-        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 1.08, resetsAtMs: at(27, 16) } } })! }} />);
+        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 1.08, resetsAtMs: at(27, 16) } } })! }} now={NOW} />);
         expect(named(html, 'claude')).toBe('Claude Code rate limits: over the limit in the 5-hour window');
     });
 });
@@ -126,16 +128,16 @@ describe('the sidebar alert', () => {
 
     it('clears once every window is back above 30%', () => {
         const board = new HeadroomBoard();
-        board.offer('claude', room(8, '7d'), 0, 60_000);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, room(8, '7d'), 0, 60_000);
         expect(rateLimitAlert(board.view())).toMatchObject({ level: 'danger' });
-        board.offer('claude', room(95, '7d'), 60_000, 60_000);
+        board.offer({ provider: 'claude', accountId: 'account_legacy_claude' }, room(95, '7d'), 60_000, 60_000);
         expect(rateLimitAlert(board.view())).toBeNull();
     });
 });
 
 describe('the dot on the Dashboard’s sidebar row', () => {
     const sidebar = (alert: Parameters<typeof Sidebar>[0]['rateLimitAlert'], collapsed = false) => renderToStaticMarkup(
-        <Sidebar route="genie://settings" deckCount={0} workspaces={[]} available={['deck', 'dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => (collapsed ? '1' : '0'), setItem: () => {} }} rateLimitAlert={alert} />,
+        <Sidebar route="genie://settings" deckCount={0} workspaces={[]} available={['dashboard', 'settings']} onNavigate={() => {}} railStorage={{ getItem: () => (collapsed ? '1' : '0'), setItem: () => {} }} rateLimitAlert={alert} />,
     );
     const dashboardRow = (html: string) => html.match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '';
 
@@ -172,7 +174,7 @@ describe('from any page: the Shell lights the dot from the header’s readings',
             route={route}
             snapshot={{ ...EMPTY_SNAPSHOT, workspaces: [], deckItems: [] }}
             features={EMPTY_FEATURES}
-            servable={['dashboard', 'deck', 'agent', 'settings', 'knowledge']}
+            servable={['dashboard', 'agent', 'settings', 'knowledge']}
             agentDetail={null}
             agentResolved
             selectedRowId={null}
@@ -190,6 +192,7 @@ describe('from any page: the Shell lights the dot from the header’s readings',
             onAnswerApproval={() => {}}
             onAnswerDeckItem={() => {}}
             rateLimits={rateLimits}
+            now={NOW}
         />,
     );
 

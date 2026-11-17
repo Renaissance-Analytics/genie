@@ -94,17 +94,19 @@ describe('opening a workstation shows its progress, then success or the reason w
     const row = (opening: Parameters<typeof TynnWorkstationRows>[0]['opening']) =>
         renderToStaticMarkup(<TynnWorkstationRows list={list} onOpenWorkstation={() => {}} opening={opening} />);
 
-    it('working: the current step, and Open is disabled so a second click does not open a second window', () => {
+    // REWRITTEN (the owner, 2026-11-16: no label that makes the UI jump): the step is the Open button's spinner, and
+    // "opened" is a Flash popover (test/flash-no-jump.test.tsx), never a line under the row.
+    it('working: Open is busy and disabled so a second click does not open a second window; no line under the row', () => {
         const html = row({ ws_a: { kind: 'working', step: 'Opening its window…' } });
-        expect(html).toContain('data-connect-step=""');
-        expect(html).toContain('Opening its window…');
+        expect(html).not.toContain('data-connect-step');
         expect(control(html, 'data-action="open-workstation"')!.open).toMatch(/\sdisabled=""/);
+        expect(control(html, 'data-action="open-workstation"')!.open).toMatch(/\saria-busy="true"/);
     });
 
-    it('done: says so', () => {
+    it('done: no line under the row', () => {
         const html = row({ ws_a: { kind: 'done', note: 'Opened in its own window' } });
-        expect(html).toContain('data-connect-done=""');
-        expect(html).toContain('Opened in its own window');
+        expect(html).not.toContain('data-connect-done');
+        expect(html).not.toContain('Opened in its own window');
     });
 
     it('failed: the reason, and Retry', () => {
@@ -141,8 +143,8 @@ describe('the share-link form: paste, Open, progress, then success or the reason
         expect(control(html, 'data-action="open-share-link"')!.open).toMatch(/\sdisabled=""/);
     });
 
-    it('done: what happened', () => {
-        expect(form({ kind: 'done', note: 'Opened the invite in your browser' })).toContain('Opened the invite in your browser');
+    it('done: what happened is a Flash popover, not a line in the form', () => {
+        expect(form({ kind: 'done', note: 'Opened the invite in your browser' })).not.toContain('Opened the invite in your browser');
     });
 
     it('failed: the reason, and Retry', () => {

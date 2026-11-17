@@ -5,8 +5,9 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { genieRoot } from './paths.js';
+import { scratchArea } from './scratch-area.js';
 
 const pexecFile = promisify(execFile);
 
@@ -80,6 +81,8 @@ export interface TailscaleStatus {
     // Tailscale login link expires, so a kept link is the "this link has expired" page. A sign-in asks `up` for a new one.
     /** How to get out of `state`; null when nothing is wrong (or nothing is known). */
     remedy?: TailscaleRemedy | null;
+    /** Genie's own Install is under way: downloading, checking, or its installer open and Tailscale not there yet (Tynn #748). */
+    installing?: boolean;
 }
 
 /** First IPv4 in a TailscaleIPs[] (the list also carries the IPv6 ULA). */
@@ -395,6 +398,18 @@ function runCli(
     return pexecFile(cli, args, { windowsHide: true, timeout: timeoutMs });
 }
 
+/**
+ * RUN THE TAILSCALE CLI, FOUND AT THIS CALL (Tynn #749): its stdout. The host's tailnet listener used a PATH lookup, and
+ * Windows' Tailscale installer adds its folder to the machine's PATH, which a process already running never sees: a
+ * Tailscale installed while Genie ran was looked for in System32 until Genie was shut down and relaunched. The CLI is
+ * looked up where Tailscale installs it ({@link tailscaleCliPath}), at every call.
+ */
+export async function tailscaleCommand(args: string[], timeoutMs: number, deps: Pick<TailscaleCliDeps, 'cliPath' | 'run'> = {}): Promise<string> {
+    const cli = (deps.cliPath ?? tailscaleCliPath)();
+    if (!cli) throw new Error('Tailscale is not installed on this machine.');
+    return (await (deps.run ?? runCli)(cli, args, timeoutMs)).stdout;
+}
+
 const EMPTY = { self: null, peers: [] as TailnetPeer[] };
 
 /** Is this stdout the status document, rather than noise printed alongside an
@@ -698,6 +713,8 @@ export interface InstallPorts {
     readonly download: (url: string) => Promise<Response>;
     readonly verify: (file: string) => Promise<AuthenticodeAnswer>;
     readonly launch: (file: string) => void;
+    /** An owned scratch directory, under the same root as the host. */
+    readonly scratch: () => string;
 }
 
 export async function installTailscale(over: Partial<InstallPorts> & Pick<InstallPorts, 'download'>): Promise<{
@@ -716,7 +733,7 @@ export async function installTailscale(over: Partial<InstallPorts> & Pick<Instal
         const res = await over.download(WIN_INSTALLER_URL);
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
         const buf = Buffer.from(await res.arrayBuffer());
-        const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'tailscale-setup-'));
+        const folder = fs.mkdtempSync(path.join((over.scratch ?? (() => scratchArea(genieRoot()).directory()))(), 'tailscale-setup-'));
         const dest = path.join(folder, 'tailscale-setup.exe');
         fs.writeFileSync(dest, buf);
         // Windows' verdict before anything runs. A check that cannot run is a refusal, never a pass.

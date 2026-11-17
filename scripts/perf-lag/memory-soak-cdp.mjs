@@ -8,7 +8,7 @@
  * What it does, in the real app: the owner's estate seeded (scripts/perf-lag/memory-soak-seed.mjs: 32 agents, ten threads
  * of 6,000 rows, four agents streaming the whole time, 9,500 mails, 240 open questions and 4 MB of attention history),
  * then for `--minutes` (default 30): a chat switch every 3 s (the agent's own view, then its workspace with its chat),
- * and every 20 s a question dismissed on the Deck (what the owner's answers did at 17:53). Every 10 s: window main's,
+ * and every 20 s a question dismissed on the Dashboard (what the owner's answers did at 17:53). Every 10 s: window main's,
  * genie-host's and the page's memory (process.memoryUsage + V8's heap), and the engine link's wire as each side read it
  * (chunks, the longest line, and how many characters a reader that re-joins its buffer per chunk would copy). Over the
  * whole run, in 5-minute windows, V8's SAMPLING HEAP PROFILER on window main and genie-host, objects collected by GC
@@ -308,8 +308,8 @@ try {
         if (now >= nextDismiss) {
             nextDismiss += DISMISS_MS;
             try {
-                await page.evaluate(`window.location.hash = '#genie://deck'; true`);
-                const ok = await until('a question on the Deck', () => page.evaluate(`(() => { const b = document.querySelector('[data-deck-dismiss]'); if (!b) return false; b.click(); return true; })()`), 15000);
+                await page.evaluate(`window.location.hash = '#genie://dashboard'; true`);
+                const ok = await until('a question on the Dashboard', () => page.evaluate(`(() => { document.querySelector('[data-waiting-badge=question]')?.click(); const b = document.querySelector('[data-deck-dismiss]'); if (!b) return false; b.click(); return true; })()`), 15000);
                 if (ok) summary.dismissals += 1;
             } catch (e) { summary.dismissFailures += 1; if (summary.dismissFailures <= 3) summary.errors.push(`dismiss: ${e.message}`); }
         }

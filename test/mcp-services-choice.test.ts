@@ -94,7 +94,7 @@ beforeEach(async () => {
     await services.engines.adoptFromV1({ instances: [v1Postgres], record: { at: '2026-10-15T00:00:00.000Z', sawV1: true, sawDocker: true } });
     callers['t-example'] = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: WS, workspacePath: join(dir, WS) };
     callers['t-other'] = { agentId: mintAgentId(), agentName: 'vega', workspaceId: OTHER, workspacePath: join(dir, OTHER) };
-    tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
+    tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
 });
 
 afterEach(async () => {

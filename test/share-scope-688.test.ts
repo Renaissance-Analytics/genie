@@ -83,6 +83,7 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('agents.diagnose', 'allow', [A], [[B]]),
         row('agents.toolOutput', 'allow', [A, 't1'], [[B, 't1']]),
         row('agents.attachment', 'allow', [A, 'i1'], [[B, 'i1']]),
+        row('agents.typing', 'allow', [A, 'hello', 'w1'], [[B, 'hello', 'w1']]),
         row('activity', 'allow', ['tynn'], [['fancy']]),
         row('takeOver', 'refuse', [A]),
     ],
@@ -112,6 +113,12 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('workspaces.remove', 'refuse', ['tynn']),
         // A workspace that governs others reaches them: never set from a link to one workspace.
         row('workspaces.setGoverns', 'refuse', ['tynn', []]),
+        // Save to repo writes the owner's repo and runs the owner's git: never from a link to one workspace (Tynn #756).
+        row('workspaces.savePreview', 'refuse', ['tynn']),
+        row('workspaces.save', 'refuse', ['tynn', {}]),
+        // The offers a clone's repo brings are the owner's to see and apply: never from a link to one workspace (Tynn #756).
+        row('workspaces.cloneOffers', 'refuse', ['tynn']),
+        row('workspaces.applyOffer', 'refuse', ['tynn', 'flow:.flows/a.json']),
     ],
     'the shared workspace itself': [
         row('workspaces.listRepos', 'allow', ['tynn'], [['fancy']]),
@@ -235,7 +242,9 @@ const OWNER: PreAuth = { label: 'glenn', isOwner: true, workspaceId: null, reado
 async function admitted(who: PreAuth, drive = true) {
     const c = connectRelay(who);
     c.send({ kind: 'hello', auth: { kind: 'relay' }, label: who.label });
-    const welcome = await c.next();
+    // A guest waits for Allow first (Tynn #731); this fixture's confirm allows at once.
+    let welcome = await c.next();
+    while (welcome.kind === 'pairing') welcome = await c.next();
     expect(welcome).toMatchObject({ kind: 'welcome', isOwner: who.isOwner, workspaceId: who.workspaceId });
     if (drive && !who.readonly) expect(await c.call('baton.take')).toMatchObject({ ok: true });
     return { c, welcome };

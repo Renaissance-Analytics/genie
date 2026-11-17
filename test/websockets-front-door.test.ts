@@ -91,7 +91,7 @@ describe('the shared WebSockets server', () => {
             't-example': { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'example', workspacePath: join(dir, 'example') } as Caller,
             't-genie': { agentId: mintAgentId(), agentName: 'genie', workspaceId: '__genie__', workspacePath: dir } as Caller,
         };
-        const tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: async () => 'allowed', services });
+        const tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => callers[id] ?? null, approve: async () => 'allowed', services });
         const list = async (terminalId: string) => {
             const r = await tools.find((t) => t.definition.name === 'services')!.handler({ action: 'list', terminalId } as never, { server: 'genie', tool: 'services', headers: {} });
             return { text: r.text, view: (JSON.parse(r.text).services as Array<Record<string, any>>).find((s) => s.engine === 'websockets') };

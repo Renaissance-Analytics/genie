@@ -58,7 +58,7 @@ describe('never when it should not', () => {
         ['a manual agent', { mode: 'manual' }],
         ['a plan with nothing left', { plan: { step: 5, of: 5, doing: '' } }],
         ['no plan at all', { plan: null }],
-        ['a turn the person STOPPED', { lastTurnEnd: 'stopped' }],
+        ['a turn the person STOPPED', { lastTurnEnd: 'stopped', stoppedByYou: true }],
         ['a FAILED turn', { lastTurnEnd: 'failed' }],
         ['a turn HELD for the limit', { lastTurnEnd: 'held' }],
         ['a SIGNED-OUT login', { lastTurnEnd: 'signed-out' }],

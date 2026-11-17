@@ -137,6 +137,11 @@ function rootInside(repoPath: string, root: string): string {
  * storage — `auto_https off`, no `tls` — so it names its own folder and does not clean it (`storage_clean_interval off`
  * is the tls app's disable_storage_clean), and keeps no autosave (`persist_config off`, as Genie 1's per-site Caddyfile
  * did: main/dev-server/serve-config.ts at v0.7.0-beta.342).
+ *
+ * THE ROOT IS ONE QUOTED ARGUMENT (Tynn #729; a client's workspace "Genie Trials", beta.63: Caddy exited right after
+ * loading). Genie 1 quoted it (quoteRoot, #167); Genie 2 wrote it bare, so Caddy read `Trials/...` as more arguments to
+ * `root` and refused the config. It goes through caddyPath, as the storage, certificate and key paths do, and a path
+ * that cannot be written into a Caddyfile is refused by name.
  */
 export function serveCaddyfile(input: CaddyfileInput): string | null {
     const { serve } = input;
@@ -145,7 +150,7 @@ export function serveCaddyfile(input: CaddyfileInput): string | null {
     const root = rootInside(input.repoPath, serve.root);
     if (!input.storageDir) throw new Error('a static or php site needs its own Caddy storage folder, never Caddy’s shared default');
     const storage = caddyPath(input.storageDir, 'storage');
-    const lines = ['{', '\tauto_https off', '\tadmin off', '\tpersist_config off', `\tstorage file_system ${storage}`, '\tstorage_clean_interval off', '}', '', `http://:${input.sitePort} {`, '\tbind 127.0.0.1', `\troot * ${root}`];
+    const lines = ['{', '\tauto_https off', '\tadmin off', '\tpersist_config off', `\tstorage file_system ${storage}`, '\tstorage_clean_interval off', '}', '', `http://:${input.sitePort} {`, '\tbind 127.0.0.1', `\troot * ${caddyPath(root, 'site root')}`];
     if (serve.mode === 'static') {
         if (serve.spa) lines.push('\ttry_files {path} /index.html');
         lines.push('\tfile_server');

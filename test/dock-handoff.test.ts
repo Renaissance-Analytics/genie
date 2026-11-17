@@ -13,7 +13,7 @@ describe('routeAfterPin', () => {
         expect(out).toEqual({ pinned: 'files', replaced: 'chat', refused: null });
         expect(routeAfterPin('genie://agent/kai?tab=stream&chat=kai&pin=right', out)).toBe('genie://agent/kai?tab=stream');
         expect(routeAfterPin('genie://dashboard?group=workspace&pin=right&chat=genie', out)).toBe('genie://dashboard?group=workspace');
-        expect(routeAfterPin('genie://deck?chat=genie', out)).toBe('genie://deck');
+        expect(routeAfterPin('genie://flows?chat=genie', out)).toBe('genie://flows');
     });
 
     it('leaves the route alone when the chat was not displaced — pinning the chat, pinning files over nothing, a refusal', () => {

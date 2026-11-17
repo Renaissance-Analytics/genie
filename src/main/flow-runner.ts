@@ -49,6 +49,8 @@ export interface FlowRunnerDeps {
 export interface RunObserver {
     readonly nodes?: (outcomes: Record<string, NodeOutcome>) => void;
     readonly log?: (nodeId: string, line: string) => void;
+    /** The run's step is paused at its agent's provider limit (Tynn #749), or goes again (`null`): kept with the run in flight, shown as Paused. */
+    readonly paused?: (info: { resumesAtMs: number | null; agentId: string; agent: string } | null) => void;
     /** Each step's output as it finishes (genie#1204): kept with the run in flight, so a quit can resume after it. */
     readonly output?: (nodeId: string, value: unknown) => void;
 }
@@ -75,6 +77,8 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         const step: { held: string | null } = { held: null };
         // Prompts of this run queued behind an agent's turn and not yet begun.
         let waiting = 0;
+        // The step paused at its agent's provider limit (Tynn #749), while it is: the run keeps its place and its inputs.
+        let paused: { resumesAtMs: number | null; agentId: string; agent: string } | null = null;
         const watch = <T>(p: Promise<T>): Promise<T> =>
             p.catch((error: unknown) => {
                 if (error instanceof HeldBack) step.held ??= error.message;
@@ -86,6 +90,13 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             promptAgent: (address, text, hooks) => watch(base.promptAgent(address, text, {
                 queued: (note) => { waiting += 1; observer?.log?.('', note); observer?.nodes?.(outcomes(false)); hooks?.queued?.(note); },
                 started: () => { waiting -= 1; observer?.nodes?.(outcomes(false)); hooks?.started?.(); },
+                paused: (info) => {
+                    paused = info;
+                    if (info !== null) observer?.log?.('', `paused: ${info.agent} is at its provider limit${info.resumesAtMs !== null ? `; it resumes at ${new Date(info.resumesAtMs).toISOString()}` : ''}`);
+                    observer?.paused?.(info);
+                    observer?.nodes?.(outcomes(false));
+                    hooks?.paused?.(info);
+                },
             })),
             runCommand: (workspaceId, command, cwd) => watch(base.runCommand(workspaceId, command, cwd)),
             addKnowledge: (input) => watch(base.addKnowledge(input)),
@@ -132,7 +143,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                 const o: NodeOutcome = status === 'done' ? 'ran'
                     : skipped.has(n.id) ? 'skipped'
                     : status === 'error' ? (step.held !== null ? 'held' : 'failed')
-                    : status === 'running' ? (final ? (step.held !== null ? 'held' : 'failed') : waiting > 0 ? 'queued' : 'running')
+                    : status === 'running' ? (final ? (step.held !== null ? 'held' : 'failed') : paused !== null ? 'paused' : waiting > 0 ? 'queued' : 'running')
                     : 'not reached';
                 return [n.id, o];
             }));
@@ -223,9 +234,19 @@ export function supervisedCommand(deps: SupervisedCommandDeps, run: { processId:
         });
 }
 
+/**
+ * THE LIMIT AN AGENT IS UNDER, as the host reports it (core/rate-limit-gate.ts GateView; session-host.ts `#limitOf`): `open`,
+ * `paused` until a reset, `retrying` on a stated backoff, or `needs-person`. Anything but `open` is a PAUSE for a flow (Tynn #749).
+ */
+export interface AgentLimitView {
+    readonly state: string;
+    readonly resumeAtMs?: number;
+    readonly nextTryAtMs?: number;
+}
+
 /** The live sessions, as the runner needs them (main.ts wires the session host). */
 export interface AgentSessionsPort {
-    session(agentId: string): { readonly running: boolean; readonly turnState: string; readonly pendingApproval?: unknown } | null;
+    session(agentId: string): { readonly running: boolean; readonly turnState: string; readonly pendingApproval?: unknown; readonly limit?: AgentLimitView | undefined } | null;
     /**
      * Start an agent that is not running, for a prompt (q_04ce323c: a flow's prompt is work, and work starts it) — main's
      * start-on-demand, refusing an asleep workspace or the agent cap. `false` = not started. Absent = never started here.
@@ -273,6 +294,7 @@ export interface AgentPrompterDeps {
  */
 export const FLOW_TURN_QUIET_MS = 30 * 60_000;
 export const FLOW_TURN_MAX_MS = 2 * 60 * 60_000;
+const NEEDS_PERSON = (name: string): string => `${name}'s provider needs you (credits or a sign-in) before it can go on: no timer ends that limit, so the flow stopped waiting`;
 
 /**
  * `genie/agent_prompt` on a live session: resolve the address, refuse what cannot be prompted, HOLD BACK
@@ -298,10 +320,51 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
         const who = deps.agent(id);
         const name = who?.name ?? address;
         if (who && deps.asleep(who.workspaceId)) throw new HeldBack(`${name}'s workspace is hibernated; the prompt was not delivered`);
+        /*
+         * A PROVIDER LIMIT IS A PAUSE (Tynn #749): the agent is held, not broken, and Genie resumes it at the reset. So a
+         * limited agent is never a finished turn (it reads idle while held), never a turn that failed to begin, and the time
+         * spent waiting is not time the step is judged by. `limitSeen`: a limit showed itself since the last quiet window.
+         */
+        let limitSeen = false;
+        let announced = false;
+        const limitOf = (): AgentLimitView | null => {
+            const l = deps.sessions.session(id)?.limit;
+            return l !== undefined && l.state !== 'open' ? l : null;
+        };
+        const pauseNote = (l: AgentLimitView | null): void => {
+            if (l !== null) limitSeen = true;
+            if ((l !== null) === announced) return;
+            announced = l !== null;
+            hooks?.paused?.(l === null ? null : { resumesAtMs: l.resumeAtMs ?? l.nextTryAtMs ?? null, agentId: id, agent: name });
+        };
         let session = deps.sessions.session(id);
         // NOT RUNNING: started for this prompt when the port can (q_04ce323c); its prompt then waits for the start.
         if ((!session || !session.running) && (await deps.sessions.start?.(id))) session = deps.sessions.session(id);
         if (!session || !session.running) throw new Error(`${name} is not running; a scheduled prompt has nowhere to go until it is started`);
+        // ALREADY AT ITS LIMIT: the prompt is not handed over (it would wait in the agent's queue, and run as a turn nobody awaits
+        // if this step ended first); it goes when the limit has reset. A limit no timer ends (credits, a sign-in) is the person's.
+        if (limitOf() !== null) {
+            let off: () => void = () => {};
+            try {
+                await new Promise<void>((done, fail) => {
+                    const check = (): void => {
+                        const s = deps.sessions.session(id);
+                        if (s === null || !s.running) { fail(new Error(`${name} stopped before the prompt could be delivered`)); return; }
+                        const l = limitOf();
+                        if (l !== null && l.state === 'needs-person') { fail(new Error(NEEDS_PERSON(name))); return; }
+                        pauseNote(l);
+                        if (l === null) done();
+                    };
+                    off = deps.sessions.subscribe((agentId) => { if (agentId === id) check(); });
+                    check();
+                });
+            } finally {
+                off();
+                pauseNote(null);
+            }
+            session = deps.sessions.session(id);
+            if (!session || !session.running) throw new Error(`${name} stopped before the prompt could be delivered`);
+        }
         const busy = session.turnState === 'working' || (session.pendingApproval !== null && session.pendingApproval !== undefined);
         // A turn's quiet bound (FLOW_TURN_QUIET_MS / FLOW_TURN_MAX_MS), shared by the wait in the queue and the wait for the turn.
         const after = deps.after ?? ((ms: number, fire: () => void) => { const t = setTimeout(fire, ms); return () => clearTimeout(t); });
@@ -312,6 +375,8 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
             let cancel: () => void = () => {};
             const watch = (): void => {
                 cancel = after(FLOW_TURN_QUIET_MS, () => {
+                    // A window with a limit in it is a pause, not a quiet agent: it is not counted, and nothing is judged by it.
+                    if (limitOf() !== null || limitSeen) { limitSeen = limitOf() !== null; seen = mark(); watch(); return; }
                     waited += FLOW_TURN_QUIET_MS;
                     const now = mark();
                     const quiet = now.n === seen.n && now.last === seen.last;
@@ -360,6 +425,7 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
                         if (superseded) { off(); fail(new HeldBack(`${name}: this prompt was replaced by a later fire of ${deps.by} while it was still queued, so it never went; the later one goes in its place`)); return; }
                         const s = deps.sessions.session(id);
                         if (s === null || !s.running) { off(); fail(new Error(`${name} stopped before the queued prompt was delivered`)); return; }
+                        pauseNote(limitOf());
                         if (!deps.sessions.isQueued!(id, q.id)) { off(); done(); }
                     };
                     wake = check;
@@ -370,6 +436,7 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
             } finally {
                 off();
                 cancelBound();
+                pauseNote(null);
                 if (QUEUED_FLOW_PROMPTS.get(key) === mine) QUEUED_FLOW_PROMPTS.delete(key);
             }
             queuedFirst = true;
@@ -400,8 +467,12 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
                 if (!sent) return false;
                 if (s === null || !s.running) fail(new Error(`${name} stopped before its turn finished`));
                 else if (s.turnState === 'failed') fail(new Error(`${name}'s turn failed`));
-                else if (began && s.turnState !== 'working') done();
-                else return false;
+                else if (s.limit !== undefined && s.limit.state !== 'open') {
+                    // HELD AT ITS LIMIT: idle is not "done" (the limit cut the turn); the resumed turn is the step's own and its end is.
+                    if (s.limit.state === 'needs-person') fail(new Error(NEEDS_PERSON(name)));
+                    else { pauseNote(s.limit); return false; }
+                } else if (began && s.turnState !== 'working') done();
+                else { pauseNote(null); return false; }
                 return true;
             };
             off = deps.sessions.subscribe((agentId) => {
@@ -430,6 +501,7 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
             await finished;
         } finally {
             cancelTimer();
+            pauseNote(null);
         }
         return deps.sessions
             .rows(id)

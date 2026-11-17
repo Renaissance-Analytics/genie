@@ -1,9 +1,10 @@
 import { BrowserWindow, ipcMain, screen, shell } from 'electron';
+import { relative } from 'node:path';
 import { loadWindowPage } from './window-pages.js';
 import type { QuestionView, QuestionWindow, QuestionWindowPort } from './question-window.js';
 import { genieWindowIcon } from './app-identity.js';
 import { askWindowBounds } from '../core/question-drawer.js';
-import { existingFiles, readQuestionFile } from './question-files.js';
+import { existingFiles, questionFileInside, readQuestionFile } from './question-files.js';
 import { onceShowable } from '../core/window-activation.js';
 
 /**
@@ -17,7 +18,7 @@ import { onceShowable } from '../core/window-activation.js';
 const WIDTH = 560;
 const HEIGHT = 520;
 
-export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null; workspacePath?: (workspaceId: string) => string | null }): (onClosed: () => void) => QuestionWindowPort {
+export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null; workspacePath?: (workspaceId: string) => string | null; openInFiles?: (workspaceId: string, path: string) => void }): (onClosed: () => void) => QuestionWindowPort {
     // The page's calls, registered once: what to show (asked on load), an answer, Later, Dismiss — an answer and a
     // Dismiss name the question they are for (any question in the window's queue, in any order) — a pick from the
     // queue, and the draft being written (kept in main, so a closed window loses nothing).
@@ -68,6 +69,19 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         const root = rootOf(rawId);
         if (root === null) return { ok: false, reason: 'Genie does not know this question’s workspace' };
         return typeof path === 'string' ? readQuestionFile(root, path) : { ok: false, reason: 'no such file' };
+    });
+    // A file the drawer cannot draw (a PDF, a binary) opens in Genie's Files panel: the question is looked up here and the
+    // path confined to its workspace again, so the page cannot name a file the drawer would have refused.
+    ipcMain.handle('question:open-in-files', (_e, rawId: unknown, path: unknown) => {
+        const id = idOf(rawId);
+        const held = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
+        const item = held.find((q) => q.id === id);
+        const root = rootOf(rawId);
+        const inside = !item?.workspaceId || root === null || typeof path !== 'string' ? null : questionFileInside(root, path);
+        if (!item?.workspaceId || root === null || inside === null) return false;
+        // The Files panel takes a workspace-relative path, forward slashes.
+        input.openInFiles?.(item.workspaceId, relative(root, inside).replace(/\\/g, '/'));
+        return true;
     });
     // The window WIDENS for the drawer and back (Genie 1's askWindowBounds): the width it had before is what it returns to.
     let current: BrowserWindow | null = null;

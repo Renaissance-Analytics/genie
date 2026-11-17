@@ -16,11 +16,13 @@ import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core
 import type { McpRow } from '../../core/agent-mcp.js';
 import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
 import { FidelityDot } from './Dashboard.js';
+import { Flash } from './Flash.js';
+import { ViewHeader } from './ViewHeader.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { ProviderProgramChoice, ProviderStartRefusal, type ProviderProgramChosen } from './ProviderProgramChoice.js';
-import { Breadcrumbs, Button, Checkbox, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
+import { Button, Checkbox, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
 import { accessChoice, accessFor, toggleChosen, type AccessChoice } from '../../core/agent-access.js';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
@@ -47,8 +49,9 @@ import type { AgentTab } from '../../core/route.js';
 import type { StreamFilter, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
 import { Lanes } from './Lanes.js';
-import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
-import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
+import { ChipsRow } from './ChipsRow.js';
+import { AgentPulse } from './AgentPulse.js';
+import { chipRow } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
 import { findRows, ledgerRow, visibleRows } from '../../core/stream-view.js';
 import { revertToolEdit, toolEditPathIn } from '../../core/revert-edit.js';
@@ -62,6 +65,7 @@ import { TurnCards } from './TurnCards.js';
 import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 import { turnCards } from '../../core/turn-cards.js';
 import type { StreamLayout } from '../../core/route.js';
+import { costWords } from '../../core/cost-words.js';
 
 /**
  * THE AGENT VIEW — the most important screen.
@@ -228,6 +232,8 @@ export interface AgentViewProps {
     cost: number | null;
     /** The agent the chat flyout is open on, from the route. Decides where an approval acts. */
     chatSubject?: string | null | undefined;
+    /** A toast carries this agent's approval (Tynn #730): it is answered THERE, and the stream shows a marker (`approvalPlacement`). */
+    approvalInToast?: boolean | undefined;
     /** The option id in flight for THIS agent's parked approval (core/approval-answering.ts); `null` = none. */
     answeringApproval?: string | null | undefined;
     /** The host's refusal of the last answer to THIS approval, in words, for the card. */
@@ -368,7 +374,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
-    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
+    chatSubject, approvalInToast = false, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
@@ -425,7 +431,7 @@ function AgentViewBody({
     const [cursorId, setCursorId] = useState<string | null>(cursorProp);
     useEffect(() => { if (cursorProp !== null) setCursorId(cursorProp); }, [cursorProp]);
     useEffect(() => { if (selectedId !== null) setCursorId(selectedId); }, [selectedId]);
-    // The Lanes drawer, closed on arrival (the board draws the strip and the chips; the tracks are behind `Lanes ▾` / `L`).
+    // The Lanes drawer, closed on arrival (the tracks are behind `L`).
     const [ownLanesOpen, setOwnLanesOpen] = useState(false);
     // Find in stream: the query is view state the box owns; `/` focuses the box, Escape in it clears.
     const [ownFind, setOwnFind] = useState('');
@@ -471,6 +477,9 @@ function AgentViewBody({
     const budget = budgetFor(session, cost, turns);
     // The provider's headroom (the board's rail row): the latest rate-limit reading in the ledger; none, no row.
     const headroom = useMemo(() => headroomOf(rows), [rows]);
+    // A plan's limit reading means a subscription plan: a cost figure is the API-price equivalent, in the plan (Tynn #747).
+    const onPlan = headroom !== null;
+    const sessionCost = budget && budget.cost !== null ? costWords(budget.cost, 'this session', onPlan) : null;
     // Whether this provider can ask at all (the driver's claim): said once in the rail when it cannot.
     const policy = approvalPolicySentence(agent.name, agent.provider, agent.raisesApprovals);
     // The persona path and the context note — both facts, both absent when unknown (§5).
@@ -510,19 +519,20 @@ function AgentViewBody({
 
     // A tab the agent does not have falls back to its first one, rather than rendering an empty
     // body under a tab strip that does not contain the selected tab.
-    const active = tabs.includes(tab) ? tab : (tabs[0] ?? 'files');
+    const active = tabs.includes(tab) ? tab : (tabs[0] ?? 'changes');
+    // The workspace's Files tab: an agent has no Files tab of its own (the owner, 2026-11-16).
+    const workspaceFiles = workspace ? `genie://workspace/${workspace.id}?files=` : null;
 
     const chatRoute = `genie://agent/${agent.id}?tab=${active}&chat=${agent.id}`;
 
     // THE INDEX COLUMN (the board): Turns / Files touched, counted from the rows; absent without turn markers.
     const shells = useMemo(() => agentShells(rows), [rows]);
     const index = active === 'stream' ? agentIndex(rows, session, workspace?.path ?? null, selectedId) : null;
-    // THE SESSION TIMELINE STRIP + CHIPS ROW (the board); the Lanes drawer behind `L`.
-    // The activity the Stream shows (replies live in the chat): the strip, the find and the lanes read the same rows.
+    // THE CHIPS ROW (the board); the Lanes drawer behind `L`.
+    // The activity the Stream shows (replies live in the chat): the find and the lanes read the same rows.
     // The same array while the rows are unchanged, so the Stream's own derivations (keyed on it) are not run again.
     const activity = useMemo(() => activityRows(rows), [rows]);
-    const timeline = active === 'stream' ? sessionTimeline(activity, session) : null;
-    // NEXT EDIT — `E` and the strip's button: a search ("find me the next one") that opens the edit it lands on, the
+    // NEXT EDIT — `E`: a search ("find me the next one") that opens the edit it lands on, the
     // cursor following. `false` when there is none.
     const nextEdit = (): boolean => {
         const next = nextEditAfter(rowsInRange(rows, range), selectedId);
@@ -535,10 +545,9 @@ function AgentViewBody({
     // The find's match count: content rows that say the query (structure rows are not matches); null without a query.
     const findMatches = findQuery.trim() === '' ? null : findRows(rowsInRange(activity, range), findQuery).filter((r) => r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
     const drawerOpen = lanesOpenProp ?? ownLanesOpen;
-    // THE `turns` LAYOUT (the board): the Stream folded into cards; the chips row goes, the index and the strip stay.
+    // THE `turns` LAYOUT (the board): the Stream folded into cards; the chips row goes, the index stays.
     const shownRows = findRows(rowsInRange(activity, range), findQuery);
     const cards = active === 'stream' && layout === 'turns' ? turnCards(shownRows, session, workspace?.path ?? null) : null;
-    const otherLayout = layout === 'turns' ? { label: 'Ledger', route: `genie://agent/${agent.id}?tab=stream` } : { label: 'Turns', route: `genie://agent/${agent.id}?tab=stream&layout=turns` };
 
     /**
      * Where a parked approval is ACTIONABLE — exactly one place.
@@ -549,7 +558,7 @@ function AgentViewBody({
      */
 
     const approval = session?.pendingApproval ?? null;
-    const placement = approvalPlacement(agent.id, chatSubject ?? null);
+    const placement = approvalPlacement(agent.id, chatSubject ?? null, approvalInToast);
 
     /*
      * `E` — the next edit (§4.2). One `keydown` listener; every decision is made by the pure
@@ -595,11 +604,11 @@ function AgentViewBody({
                     // In a field, Esc means "stop typing" and nothing more: blur, and let the
                     // rest of the map stay out of it.
                     if (typing) { target?.blur(); return; }
-                    // Otherwise: the Inspector FIRST, and only then the Deck (§4.2). Two
+                    // Otherwise: the Inspector FIRST, and only then the Dashboard (§4.2). Two
                     // presses to leave, so one stray Esc never throws the reader off the agent.
                     e.preventDefault();
                     if (selectedId !== null) { onSelect(null); return; }
-                    onNavigate('genie://deck');
+                    onNavigate('genie://dashboard');
                     return;
                 }
                 case 'toggle-lanes': {
@@ -671,39 +680,26 @@ function AgentViewBody({
 
     return (
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
-            {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
-            <div data-view-header="" className="@container flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
-                {/* THE TITLE PIECES, one cluster that shrinks and clips (the owner's checklist, 2026-10-14: at 1024px with the chat
-                    pinned the header is ~286px, and the crumb squeezed to nothing while the rest spilled past the header). The
-                    path gives way first; then the crumb and the name truncate, keeping a few letters; chip and pill stay whole. */}
-                <div data-header-title="" className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-                {/* THE BREADCRUMB, react-fancy's (the owner, 2026-11-01: menus and crumbs are navigation, not Buttons): back to its
-                    workspace (Tynn #805) by onNavigate — a genie:// address is routed by the app, not followed as a link — then the
-                    agent, the page you are on. Below md react-fancy folds it into a menu that keeps the way back. */}
-                <Breadcrumbs separator={<span className="text-[13px] text-[var(--fg-4)]">/</span>} className="min-w-0 shrink items-center gap-1.5 overflow-hidden">
-                    {workspace ? (
-                        <Breadcrumbs.Item data-crumb={workspace.id} data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
-                            {workspace.name ?? workspace.id}
-                        </Breadcrumbs.Item>
-                    ) : null}
-                    <Breadcrumbs.Item active data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium text-[var(--fg-1)] dark:text-[var(--fg-1)]">{agent.name}</Breadcrumbs.Item>
-                </Breadcrumbs>
-                <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'cool' ? 'cooling' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
-                <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
-                <span className="min-w-0 shrink-[1000] truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
-
-                <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
-                    <span className="size-1.5 rounded-full bg-current" />
-                    {pill.word}
-                    {/* A clock only while a turn runs. On an idle agent it counts up forever
-                        and reads as work in progress. */}
-                    {pill.elapsed ? <span className="font-mono tabular-nums">{pill.elapsed}</span> : null}
-                </span>
-                </div>
-
-                {/* The actions never wrap; in a header narrower than 46rem their words give way to the icon (the name stays in
-                    aria-label and title). */}
-                <div className="ml-auto flex shrink-0 items-center gap-1">
+            {/* ONE HEADER (ViewHeader.tsx; the owner, 2026-11-16): crumbs (back to its workspace, Tynn #805, then the agent),
+                its state (fidelity dot, provider chip, pill), its path, then its actions. */}
+            <ViewHeader
+                crumbs={[
+                    ...(workspace ? [{ label: workspace.name ?? workspace.id, title: `Back to ${workspace.name ?? workspace.id}`, onClick: () => onNavigate(`genie://workspace/${workspace.id}`), attrs: { 'data-crumb': workspace.id, 'data-nav': `genie://workspace/${workspace.id}` } }] : []),
+                    { label: agent.name, attrs: { 'data-agent-name': '' } },
+                ]}
+                path={agent.cwd}
+                status={<>
+                    <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'cool' ? 'cooling' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
+                    <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
+                    <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
+                        <span className="size-1.5 rounded-full bg-current" />
+                        {pill.word}
+                        {/* A clock only while a turn runs. On an idle agent it counts up forever
+                            and reads as work in progress. */}
+                        {pill.elapsed ? <span className="font-mono tabular-nums">{pill.elapsed}</span> : null}
+                    </span>
+                </>}
+                actions={<>
                     {/* START, when it is not running (the owner: there was no way to start the genie agent). */}
                     {actions.start && onStart ? (
                         <Button size="xs" labelClassName="contents" type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} aria-label="Start" className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
@@ -851,8 +847,8 @@ function AgentViewBody({
                             </Dropdown>
                         </>
                     ) : null}
-                </div>
-            </div>
+                </>}
+            />
 
             {ops?.lastOutcome ? (
                 <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p>
@@ -948,7 +944,11 @@ function AgentViewBody({
                     </Tabs.List>
                 </Tabs>
                 {/* THE TAB NOTE (the board), right of the tabs: where Files / Changes open; on the Stream, a measurement of the rows. */}
-                {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="ml-auto truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
+                <div className="ml-auto flex min-w-0 items-center gap-3">
+                    {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
+                    {/* THE AGENT PULSE (beta.64): the last minute of its work, on every tab; a fixed slot, so nothing moves. */}
+                    <AgentPulse rows={rows} working={session?.running === true && session.turnState === 'working'} now={clock} />
+                </div>
             </div>
 
             <div className="flex min-h-0 flex-1">
@@ -1006,26 +1006,13 @@ function AgentViewBody({
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     {active === 'stream' ? (
                         <>
-                            {timeline ? (
-                                <TimelineStrip
-                                    timeline={timeline}
-                                    lanesOpen={drawerOpen}
-                                    onToggleLanes={() => setOwnLanesOpen((open) => !open)}
-                                    onOpenRow={(rowId) => onNavigate(`genie://agent/${agent.id}?tab=stream&at=${rowId}`)}
-                                    layoutDoor={otherLayout}
-                                    onNavigate={onNavigate}
-                                    onNextEdit={() => { nextEdit(); }}
-                                    filter={lanes}
-                                    onFilter={(next) => onLanes?.(next)}
-                                />
-                            ) : null}
-                            {/* The board's empty state draws no chips and no strip: counts over nothing are furniture. */}
+                            {/* The board's empty state draws no chips: counts over nothing are furniture. */}
                             {layout === 'turns' || rows.length === 0 ? null : <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />}
                             {drawerOpen ? <Lanes rows={activity} range={range} onRange={(next) => onRange?.(next)} /> : null}
 
                             <div className="min-h-0 flex-1">
                                 {cards ? (
-                                    <TurnCards cards={cards} rows={shownRows} agentName={agent.name} selectedId={selectedId} onSelect={onSelect} />
+                                    <TurnCards cards={cards} rows={shownRows} agentName={agent.name} onPlan={onPlan} selectedId={selectedId} onSelect={onSelect} />
                                 ) : (
                                 <Stream
                                     rows={shownRows}
@@ -1036,13 +1023,14 @@ function AgentViewBody({
                                     cursorId={cursorId}
                                     onSelect={onSelect}
                                     agentName={agent.name}
+                                    onPlan={onPlan}
                                     live={session?.running === true && session.turnState === 'working'}
                                     parked={parkedDivider(session, now ?? (() => Date.now()))}
                                     persona={persona}
                                     markup={streamMarkup}
                                     loadToolOutput={agentToolOutput}
                                     onChat={() => onNavigate(chatRoute)}
-                                    onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
+                                    onEditPersona={workspaceFiles ? () => onNavigate(workspaceFiles) : undefined}
                                 />
                                 )}
                             </div>
@@ -1079,20 +1067,8 @@ function AgentViewBody({
                             ) : null}
 
                             {approval && placement === 'chat' ? <ApprovalMarker where="the chat" /> : null}
+                            {approval && placement === 'toast' ? <ApprovalMarker where="the toast at the bottom left" /> : null}
                         </>
-                    ) : null}
-
-                    {/* FILES (§4.3): the workspace's ONE file panel, mounted here for the agent's workspace. */}
-                    {active === 'files' ? (
-                        files && workspace ? (
-                            <div className="min-h-0 flex-1">
-                                <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => {}} onClose={() => onNavigate(`genie://agent/${agent.id}?tab=${tabs[0] ?? 'files'}`)} />
-                            </div>
-                        ) : (
-                            <p data-tab-unavailable="files" className="p-5 text-[13px] text-[var(--fg-3)]">
-                                {workspace ? 'This window has no file host, so the files cannot be shown here.' : `Genie does not know which workspace ${agent.name} belongs to, so its files cannot be shown.`}
-                            </p>
-                        )
                     ) : null}
 
                     {/* CHANGES: the files this agent changed this session (the host's own groups — never a guess), each opening in the panel. */}
@@ -1166,8 +1142,8 @@ function AgentViewBody({
                                             </span>
                                         ) : null}
                                         {/* No Cost at all when the provider reports none (codex): not `$0.00`, which claims the work was free. */}
-                                        {budget && budget.cost !== null ? (
-                                            <span data-rail-cost className="font-mono">{`$${budget.cost.toFixed(2)} this session · ${budget.turns} turns`}</span>
+                                        {budget && sessionCost ? (
+                                            <span data-rail-cost title={sessionCost.title} className="font-mono">{`${sessionCost.text} · ${budget.turns} turns`}</span>
                                         ) : budget ? (
                                             <span className="font-mono">{budget.turns} turns</span>
                                         ) : null}
@@ -1596,7 +1572,7 @@ function AgentViewBody({
                 {railModeNow === 'strip' ? (
                     <Button variant="ghost" size="xs" type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</Button>
                 ) : null}
-                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
+                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={workspaceFiles} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
                 {ended || termBlock ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
@@ -1692,9 +1668,11 @@ export function IssueWatchSettings({ name, prefs, onSet }: { name: string; prefs
                 <span data-issue-watch-delivery={shown.delivery}>
                     <Select size="xs" list={IW_DELIVERIES.map((d) => ({ value: d.value, label: d.label }))} value={shown.delivery} onValueChange={(v) => send({ delivery: v as IwDelivery, kinds: shown.kinds })} aria-label={`How ${name} hears GitHub`} />
                 </span>
-                {save === null ? null : (
+                {/* "Saved" is a Flash, never a word that shifts the row (the owner, 2026-11-16); a failure keeps Retry here. */}
+                <Flash note={save?.phase === 'saved' ? 'Saved' : null} />
+                {save === null || save.phase === 'saved' ? null : (
                     <span data-iw-save={save.phase} className="inline-flex min-w-0 items-center gap-2 text-[var(--fg-2)]">
-                        {save.phase === 'saving' ? 'Saving…' : save.phase === 'saved' ? 'Saved' : <>{save.reason}<Button size="xs" variant="ghost" onClick={() => send(save.setting)}>Retry</Button></>}
+                        {save.phase === 'saving' ? 'Saving…' : <>{save.reason}<Button size="xs" variant="ghost" onClick={() => send(save.setting)}>Retry</Button></>}
                     </span>
                 )}
             </div>

@@ -61,6 +61,8 @@ export const REMOTE_METHODS = [
     // A tool row's whole output, read when a person opens the row (Tynn story #386).
     'agents.toolOutput',
     'agents.attachment',
+    // What a composer holds now, relayed to the other windows on the agent (Tynn #730): a write, on the baton like a send.
+    'agents.typing',
     'workspaces.previewAdd',
     'workspaces.confirmAdd',
     'workspaces.create',
@@ -103,6 +105,10 @@ export const REMOTE_METHODS = [
     'workspaces.setGoverns',
     'workspaces.setDefaultAgent',
     'workspaces.setColor',
+    'workspaces.savePreview',
+    'workspaces.save',
+    'workspaces.cloneOffers',
+    'workspaces.applyOffer',
     'workspaces.setMcpServer',
     'addWorkspace',
     'takeOver',
@@ -179,9 +185,13 @@ export const BATON_EVENT = 'remote-baton';
 /** A Take Over window's connection is told when its ticket stops letting it type, and why (Tynn #529 part A). */
 export const COMPANION_EVENT = 'remote-companion';
 export interface CompanionEvent { readonly revoked: string }
-export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
+/** `viewOnly` (Tynn #732): the person at the host set this window's person to watch only; absent = full control. */
+export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null; readonly viewOnly?: true }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot', typing: 'local-typing' } as const;
+
+/** What another window on an agent is typing (Tynn #730), to a remote connection; this machine's windows hear LOCAL_EVENTS.typing. */
+export const TYPING_EVENT = 'agent-typing';
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -231,6 +241,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.toolOutput': 'read',
     // One image a thread kept, for a sent message's pill (Tynn #642): a read, agent-scoped.
     'agents.attachment': 'read',
+    'agents.typing': 'write',
     // Tynn #835: the folder is picked IN THE WINDOW (a FileBrowser over the host's own disk); the preview reads a path.
     'workspaces.previewAdd': 'read',
     // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
@@ -291,6 +302,11 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.setDefaultAgent': 'write',
     // A workspace's colour (genie#1300): written to its project.json, like the Settings beside it.
     'workspaces.setColor': 'write',
+    // Save to repo (Tynn #756): the preview (a fetch, then a diff) is a read; the save writes the workspace's repo files.
+    'workspaces.savePreview': 'read',
+    'workspaces.save': 'write',
+    'workspaces.cloneOffers': 'read',
+    'workspaces.applyOffer': 'write',
     // One MCP server on or off as a workspace's default for its agents (Tynn #628): a write, workspace-scoped.
     'workspaces.setMcpServer': 'write',
     'terminals.open': 'write',
@@ -343,9 +359,9 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
@@ -420,10 +436,14 @@ export type WireMessage =
      */
     | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string }
     /** `readonly` (Tynn #688): the host's word that this connection may only read; absent from an older host. */
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; token?: string; protocol?: number; build?: string }
+    /** `viewOnly` (Tynn #732): the person at the host has set this person to watch only; absent = full control. */
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; viewOnly?: true; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
-    /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
-    | { kind: 'pairing'; host: string; expiresAt: number }
+    /**
+     * The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). `guest`: a
+     * share-link guest waits for the person there to let it in instead (Tynn #731).
+     */
+    | { kind: 'pairing'; host: string; expiresAt: number; guest?: true }
     | { kind: 'call'; id: number; method: RemoteMethod | ControlMethod; args: unknown[] }
     | { kind: 'result'; id: number; ok: true; value: unknown }
     | { kind: 'result'; id: number; ok: false; reason: string }
@@ -492,7 +512,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
         case 'pairing':
             if (typeof raw.host !== 'string' || typeof raw.expiresAt !== 'number') return { ok: false, reason: 'a pairing frame needs host and expiresAt' };
-            return { ok: true, message: { kind: 'pairing', host: raw.host, expiresAt: raw.expiresAt } };
+            return { ok: true, message: { kind: 'pairing', host: raw.host, expiresAt: raw.expiresAt, ...(raw.guest === true ? { guest: true as const } : {}) } };
         default:
             return { ok: false, reason: `unknown message kind "${String(kind)}"` };
     }

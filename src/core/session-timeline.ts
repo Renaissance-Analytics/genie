@@ -1,87 +1,12 @@
 import { laneSummary, type Lane } from './lanes.js';
-import type { LiveSession } from './roster.js';
-import { FACETS, LANES, activityRows, facetsOf, laneOf, type Facet, type StreamFilter, type TimedEvent } from './stream-view.js';
+import { FACETS, LANES, activityRows, facetsOf, type Facet, type StreamFilter, type TimedEvent } from './stream-view.js';
 
 /**
- * THE SESSION TIMELINE STRIP AND THE CHIPS ROW (the board's `Agent View`).
+ * THE CHIPS ROW (the board's `Agent View`): the lane filter as the board draws it —
+ * `All 412 · Thoughts 61 · Tools 288 · Edits 17` — with All on when nothing is filtered.
  *
- * The strip, 46px above the Stream: one segment per turn placed by when it started, one tick per event coloured by
- * KIND, and the head bar at the right in the session's state. The chips row under it is the lane filter as the board
- * draws it — `All 412 · Messages 14 · Thoughts 61 · Tools 288 · Edits 17` — with All on when nothing is filtered.
- *
- * Positions are fractions of the span of every timed row, so the component draws at any width without knowing the
- * times. `null` when nothing is timed: a strip over no span would place things Genie cannot place, and the Lanes
- * drawer already says so in a sentence.
+ * The SESSION timeline strip that was modelled here went in beta.64; the agent pulse (`agent-pulse.ts`) replaced it.
  */
-
-export type TickKind = 'edit' | 'message' | 'thought' | 'tool';
-export type TimelineHead = 'ok' | 'warn' | 'bad';
-
-/** `showLabel`: the label is drawn only where there is room for it (`LABEL_GAP`); every segment names its turn when pointed at. */
-export interface TimelineSegment { label: string; n: number; showLabel: boolean; rowId: string; x: number; w: number }
-
-/**
- * The room a label needs, as a fraction of the strip: at most eight across it. Every segment used to print its label,
- * so thirty turns were thirty labels drawn on top of each other (the owner, 2026-10-18: "not readable at all").
- */
-export const LABEL_GAP = 1 / 8;
-export interface TimelineTick { id: string; x: number; kind: TickKind }
-
-export interface SessionTimeline {
-    segments: readonly TimelineSegment[];
-    ticks: readonly TimelineTick[];
-    /** The session's state at the right edge; `null` when it is not doing anything, or there is no session. */
-    head: TimelineHead | null;
-}
-
-function tickKind(row: TimedEvent): TickKind | null {
-    switch (laneOf(row.event)) {
-        case 'edits': return 'edit';
-        case 'messages': return 'message';
-        case 'thoughts': return 'thought';
-        case 'tools': return 'tool';
-        default: return null;
-    }
-}
-
-const round = (x: number): number => Math.round(x * 1000) / 1000;
-
-export function sessionTimeline(rows: readonly TimedEvent[], session: LiveSession | null): SessionTimeline | null {
-    const times = rows.map((r) => r.at).filter((t): t is number => t !== null);
-    if (times.length === 0) return null;
-    const start = Math.min(...times);
-    const end = Math.max(...times);
-    const span = end - start;
-    const at = (t: number): number => (span === 0 ? 0.5 : round((t - start) / span));
-
-    const turns = rows.filter((r) => r.event.kind === 'turn' && r.at !== null);
-    let lastLabel = -Infinity;
-    const segments: TimelineSegment[] = turns.map((r, i) => {
-        const x = at(r.at as number);
-        const next = turns[i + 1];
-        const w = round((next ? at(next.at as number) : 1) - x);
-        const n = (r.event as { n: number }).n;
-        const showLabel = x - lastLabel >= LABEL_GAP - 1e-9;
-        if (showLabel) lastLabel = x;
-        return { label: `T${n}`, n, showLabel, rowId: r.id, x, w };
-    });
-
-    const ticks: TimelineTick[] = [];
-    for (const r of rows) {
-        if (r.at === null) continue;
-        const kind = tickKind(r);
-        if (kind) ticks.push({ id: r.id, x: at(r.at), kind });
-    }
-
-    let head: TimelineHead | null = null;
-    if (session) {
-        if (session.pendingApproval) head = 'warn';
-        else if (session.turnState === 'failed') head = 'bad';
-        else if (session.turnState === 'working') head = 'ok';
-    }
-
-    return { segments, ticks, head };
-}
 
 export interface Chip {
     id: 'all' | StreamFilter;

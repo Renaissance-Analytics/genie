@@ -1,5 +1,5 @@
 import { Button, ContextMenu, Icon, MultiSwitch, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { fileMenuItems, type FileMenuAction, type FileMenuTarget } from '../../core/file-menu.js';
 import { CodeEditor, FileViewer, resolveFileKind } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
@@ -9,7 +9,7 @@ import { conflictBody, conflictHunks, conflictWords, takeLabel } from '../../cor
 import type { Pause } from '../../core/files-popout.js';
 import type { PanelPrefs } from '../../core/files-panel-prefs.js';
 import { EditorWand } from './EditorWand.js';
-import { EditorCursor, WordWrapSync } from './EditorSync.js';
+import { EditorCursor, PanelClickToEnd, WordWrapSync } from './EditorSync.js';
 import { CopyAnnounce } from './CopyText.js';
 import type { CopyState } from './ChatProse.js';
 
@@ -195,6 +195,31 @@ function decorate(nodes: readonly TreeNode[], marks: ReadonlyMap<string, { count
     });
 }
 
+/**
+ * WHICH FOLDERS ARE OPEN, AND A DOUBLE-CLICK OPENS ONE (Tynn #734). TreeNav toggles a folder on every click, so a
+ * double-click opened it and shut it again, which looked like nothing happened. The second click of a double-click
+ * never closes a folder. With no container holding the expansion (a host without lazy `children`), the panel holds it:
+ * a controlled `expandedIds` with nothing to change it kept every folder shut.
+ */
+export function useTreeExpansion(expanded: readonly string[] | undefined, onExpandedChange: ((ids: readonly string[]) => void) | undefined) {
+    const [own, setOwn] = useState<readonly string[]>([]);
+    const ids = expanded ?? own;
+    const repeat = useRef(false);
+    const change = (next: string[]) => {
+        const kept = repeat.current ? [...new Set([...ids, ...next])] : next;
+        repeat.current = false;
+        if (expanded === undefined) setOwn(kept);
+        onExpandedChange?.(kept);
+    };
+    return {
+        expandedIds: [...ids],
+        onExpandedChange: change,
+        // Capture runs before the row's own click: `detail` 2 is the second click of a double-click. A key resets it.
+        onClickCapture: (e: { detail: number }) => { repeat.current = e.detail >= 2; },
+        onKeyDownCapture: () => { repeat.current = false; },
+    };
+}
+
 function marksOf(state: FilesPanelState | null): Map<string, { count: number | null; tone: Tone; names: readonly string[] }> {
     const marks = new Map<string, { count: number | null; tone: Tone; names: readonly string[] }>();
     if (!state) return marks;
@@ -213,6 +238,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
     const tabDirty = (t: string) => (pluginTabs.find((p) => p.path === t)?.dirty ?? false) || (edit?.dirty === true && open?.path === t);
     // The row or tab right-clicked: the menu's items depend on what it is.
     const [menuFor, setMenuFor] = useState<{ path: string; target: FileMenuTarget } | null>(null);
+    const folders = useTreeExpansion(expanded, onExpandedChange);
     const menuItems = (path: string, target: FileMenuTarget) => fileActions ? fileMenuItems(target, fileActions).map((m, i) => (m.id === '-'
         ? <ContextMenu.Separator key={`sep-${i}`} />
         : <ContextMenu.Item key={m.id} onClick={() => fileActions.onAction(m.id as FileMenuAction, path, target)}>{m.label}</ContextMenu.Item>)) : null;
@@ -320,14 +346,16 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             <ContextMenu>
                                 <ContextMenu.Trigger className="h-full">
                                     {/* Capture runs before the row's own handler: empty space targets the root (New file / New folder, Tynn #844), a row sets its own. */}
-                                    <div data-file-menu="tree" className="h-full" onContextMenuCapture={() => setMenuFor({ path: '', target: 'tree-root' })}>
-                                        <TreeNav nodes={decorate(tree, marks, rows)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
+                                    <div data-file-menu="tree" className="h-full" onContextMenuCapture={() => setMenuFor({ path: '', target: 'tree-root' })} onClickCapture={folders.onClickCapture} onKeyDownCapture={folders.onKeyDownCapture}>
+                                        <TreeNav nodes={decorate(tree, marks, rows)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={folders.expandedIds} onExpandedChange={folders.onExpandedChange} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
                                     </div>
                                 </ContextMenu.Trigger>
                                 {menuFor && menuFor.target !== 'tab' && (menuItems(menuFor.path, menuFor.target)?.length ?? 0) > 0 ? <ContextMenu.Content>{menuItems(menuFor.path, menuFor.target)}</ContextMenu.Content> : null}
                             </ContextMenu>
                         ) : (
-                        <TreeNav nodes={decorate(tree, marks, rows)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />
+                        <div data-files-tree="" className="h-full" onClickCapture={folders.onClickCapture} onKeyDownCapture={folders.onKeyDownCapture}>
+                            <TreeNav nodes={decorate(tree, marks, rows)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={folders.expandedIds} onExpandedChange={folders.onExpandedChange} virtualize height="100%" rowHeight={26} />
+                        </div>
                         )
                     )}
                 </aside>
@@ -450,7 +478,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                         ) : (
                                             <div data-editor-theme={theme ?? 'auto'} className="flex h-full min-h-0 flex-col">
                                             <CodeEditor className="flex h-full min-h-0 flex-col" value={open.text} language={kind.language} readOnly={!edit} wordWrap={wordWrap} {...(baseline !== undefined ? { diffBase: baseline } : {})} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { cursorLine: line, highlightLines: [line] } : {})} theme={theme ?? 'auto'}>
-                                                <CodeEditor.Panel className="min-h-0 flex-1" />
+                                                <PanelClickToEnd className="flex min-h-0 flex-1 flex-col">
+                                                    <CodeEditor.Panel className="min-h-0 flex-1" />
+                                                </PanelClickToEnd>
                                                 <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} hunks={edit?.conflict && edit.conflict.path === open.path ? conflictHunks(open.text, edit.conflict.onDisk) : null} cursor={<EditorCursor />} />
                                                 <WordWrapSync wrap={wordWrap} />
                                                 {edit ? <EditorWand /> : null}

@@ -16,6 +16,7 @@ import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
 import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
+import { DesignOperationTracker, type DesignAuthEvent } from './design-auth.js';
 import { randomUUID } from 'node:crypto';
 import { SLEEPING_AFTER_IDLE_MS } from './agent-status.js';
 import { redockReorientation } from './redock.js';
@@ -39,8 +40,8 @@ export interface SessionDriver {
     start(): void;
     /** Deferred drivers surround the actual synchronous spawn with the session's ownership snapshot. */
     startTracked?(aroundSpawn: (spawn: () => void) => void): void;
-    /** Text, or ACP prompt content blocks when files are attached (prism-acp's `prompt`). */
-    prompt(content: string | readonly PromptBlock[]): void;
+    /** Text or ACP content blocks; Claude's prompt id (prism-acp 0.42), absent for a driver without prompt ids. */
+    prompt(content: string | readonly PromptBlock[]): string | void;
     kill(signal?: NodeJS.Signals): void;
     /**
      * CLOSE THE PROVIDER'S STDIN — prism-acp's `endInput()`: "tells the CLI no more turns are coming". Claude ends on its
@@ -138,6 +139,10 @@ export interface SteerRecordLike {
 
 /** A turn's outcome, as `prism-acp` reports it. */
 export interface TurnOutcomeLike {
+    /** The prompt id returned by ClaudeDriver.prompt (prism-acp 0.42); other drivers may omit it. */
+    readonly turnId?: string;
+    /** This prompt was consumed by the named turn, rather than becoming another turn. Its other fields repeat that outcome. */
+    readonly foldedInto?: string;
     /**
      * `null` when the turn did NOT finish cleanly.
      *
@@ -279,6 +284,18 @@ export function failedRunText(failure: string, code: number | null, signal: stri
 /** What a held agent is told when its provider's limit has reset and nothing was sent while it waited (Tynn #793). */
 export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continue where you left off.";
 
+const TASK_WORDS_MAX = 200;
+/**
+ * The nudge a cut turn is resumed with, NAMING WHAT IT WAS DOING (Tynn #749): the provider keeps the conversation, but the
+ * agent should be told which of its turns the limit cut off, in the words it was given. No task known -> the plain nudge.
+ */
+export function limitResumePrompt(task: string | null): string {
+    const words = (task ?? '').replace(/\s+/g, ' ').trim();
+    if (words === '') return LIMIT_RESUME_PROMPT;
+    const shown = words.length > TASK_WORDS_MAX ? `${words.slice(0, TASK_WORDS_MAX - 1)}…` : words;
+    return `${LIMIT_RESUME_PROMPT} Your last turn was cut off while working on: "${shown}".`;
+}
+
 /**
  * AN OVERLOADED PROVIDER IS WAITED OUT (the owner, 2026-10-23, a Codex agent "Broken · 8h 45m · serverOverloaded": "we
  * need to catch codex errors like this one"). prism-acp sorts Codex's `serverOverloaded` and Claude's 529 into
@@ -409,6 +426,8 @@ export interface AgentSessionOptions {
     onRateLimit?: (readings: readonly LimitReading[], message: string | null) => void;
     /** The provider's headroom, as a frame reports it — for the Dashboard header (main buffers it per provider). */
     onHeadroom?: (headroom: Headroom) => void;
+    /** Claude Design's authorization (Tynn #480): a refusal for want of /design-login, and every call that completes. */
+    onDesignAuth?: (event: DesignAuthEvent) => void;
     /** Each MCP server's state as the provider reports it (prism-acp 0.27.0, genie#1202): what a missing server is told by. */
     onMcpServers?: (reports: readonly McpServerReport[]) => void;
     /**
@@ -454,6 +473,8 @@ export class AgentSession {
      * nothing, so at the reset it is told nothing. Cleared when the reset is told, so it is told at most once per reset.
      */
     #cutByLimit = false;
+    /** What the turn in flight was asked, in the words it was given (a Genie resume nudge excepted): what a limit's nudge names. */
+    #turnTask: string | null = null;
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
@@ -483,6 +504,7 @@ export class AgentSession {
     #accountPaused: AccountPause | null = null;
     /** A tool was refused for want of Claude Design's `/design-login` (core/design-login.ts): the login window fixes it. */
     #designLogin = false;
+    readonly #designOps = new DesignOperationTracker();
     /**
      * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there. Claude Code takes it and usually
      * FOLDS it into the running turn (measured, the 2026-10-20 note in `onTurnEnd`), so no turn of its own may ever come;
@@ -497,21 +519,7 @@ export class AgentSession {
      * Each prompt still waiting for its turn, oldest first: who sent it (`by`, as `prompt` takes it), and what it was, so
      * one Claude DROPS at a Stop (prism-acp 0.37.0, `#dropped`) can be sent again or kept as a draft.
      */
-    #queued: Array<{ by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
-    /**
-     * A TURN'S END CAN BE HELD BY THE DRIVER (Tynn #684, genie#721). prism-acp's ClaudeDriver releases turn ends in the
-     * order the prompts were written (`#flushOutcomes`), and a prompt Claude Code FOLDS into a running turn gets no `result`
-     * of its own: it never settles, and every later turn's end waits behind it for the rest of the run. The `result` itself
-     * still arrives (its usage_update, mapped from the same frame, comes first), so that is what ends such a turn here.
-     * - `#resultAwaitingEnd`: a `result` came in this dispatch and no end has followed it yet (`#sawTurnResult`).
-     * - `#endsOut`: prompts handed to the driver whose end it has not reported, oldest first in the driver's own order.
-     * - `#endsOwed`: how many of the next ends the driver reports are for prompts already accounted for here — the folded
-     *   ones, and the turns closed on their `result` — and are dropped when they come, all at once after a cancel settles
-     *   the folded prompt (the owner's ledger: 26 `finished` rows in one second).
-     */
-    #resultAwaitingEnd = false;
-    #endsOut = 0;
-    #endsOwed = 0;
+    #queued: Array<{ turnId?: string; by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
     /**
      * THE DRIVER STOPPED ITSELF and will take no prompt again (prism-acp 0.37.0: Claude's cancel state uncertain,
      * `CANCEL_STATE_UNCERTAIN`). Not Broken — nothing about the agent is wrong — but this run is over: the person's next
@@ -719,19 +727,28 @@ export class AgentSession {
         // what waited behind it could never go — `#flushAfterTurn` refuses while a turn is open. Genie ends the turn
         // itself; what waited, or the "continue", goes when its end comes.
         if (this.#held && this.running && this.#inTurn) {
+            // A turn the limit did NOT touch is genuinely working (held only because its LOGIN was): it is not cut. The hold
+            // is lifted and what waited goes when that turn ends (Tynn #749).
+            if (!this.#cutByLimit && !this.#limitThisTurn) {
+                this.#held = false;
+                this.#overloadCancel?.();
+                this.#overloadCancel = null;
+                this.#changed();
+                return;
+            }
             const nudge = (this.#cutByLimit || this.#limitThisTurn) && this.#options.limitNudge !== false;
             this.#cutByLimit = false;
             this.#held = false;
             this.#overloadCancel?.();
             this.#overloadCancel = null;
-            if (nudge && !this.#afterTurn.some((p) => p.steer === undefined)) this.prompt(LIMIT_RESUME_PROMPT, 'genie');
+            if (nudge && !this.#afterTurn.some((p) => p.steer === undefined)) this.prompt(limitResumePrompt(this.#turnTask), 'genie');
             this.cancel('genie', 'interrupt');
             this.#changed();
             return;
         }
         const nudge = this.#cutByLimit && this.#options.limitNudge !== false;
         if (this.#held && this.running) this.#cutByLimit = false;
-        this.#resumeHeld(nudge ? LIMIT_RESUME_PROMPT : null);
+        this.#resumeHeld(nudge ? limitResumePrompt(this.#turnTask) : null);
     }
 
     /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's (`null`: nothing is sent). */
@@ -1404,7 +1421,6 @@ export class AgentSession {
             events: {
                 onUpdate: (update) => {
                     if (this.#ended) { this.#straggler(); return; }
-                    if (isTurnResult(update)) this.#sawTurnResult();
                     void this.#ingest(update);
                 },
                 onSteerUpdate: (update) => {
@@ -1644,6 +1660,19 @@ export class AgentSession {
         return null;
     }
 
+    /**
+     * A PROVIDER COMMAND FOR A CLI THAT RUNS IT FROM THE PROMPT (Claude, Tynn #702): handed over ALONE, with nothing of
+     * Genie's ahead of it, and shown as a small row. `false` = not now (a turn running, work held, still starting): the
+     * caller sends it the ordinary way.
+     */
+    promptCommand(text: string, by: string | null): boolean {
+        if (!this.#driver || !this.running) return false;
+        if (this.#inTurn || this.#held || this.#starting || this.#afterTurn.length > 0 || this.#needsNewDriver || this.#options.mayTakeWork?.() === false) return false;
+        if (by === 'you') this.resumeAfterStop();
+        this.#send(text, by, null, true, {}, true);
+        return true;
+    }
+
     /** Whether this agent's provider runs its commands as commands (`SessionDriver.runCommand`), not as prompt text. */
     get runsCommands(): boolean {
         return typeof this.#driver?.runCommand === 'function';
@@ -1674,7 +1703,8 @@ export class AgentSession {
         void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
         this.#inTurn = true;
         this.#limitThisTurn = false;
-        void this.#emitRow(promptRow(text, by, null, {}));
+        // The small row that it ran (not your message) comes once the provider ACCEPTED it; a refusal is only said (Tynn #702).
+        void accepted.then(() => { void this.#emitRow(commandRow(text)); }, () => {});
         this.#turnState = 'working';
         this.#stopCooling();
         this.#changed();
@@ -1729,33 +1759,33 @@ export class AgentSession {
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
-    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false, context: PromptContext = {}): void {
+    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false, context: PromptContext = {}, command = false): void {
         if (!this.#driver) throw new Error('session is not started');
         // The provider takes it FIRST: a prompt it refuses (Codex while a turn runs, a driver that throws) writes nothing
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
         // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
-        const carry = this.#carryOver;
-        const redockAt = this.#inTurn ? null : this.#redockAt;
+        // A PROVIDER COMMAND GOES ALONE (Tynn #702): the CLI runs /compact only at the start of the prompt, so nothing of
+        // Genie's goes ahead of it; all of it waits, still pending, for the next ordinary prompt.
+        const carry = command ? null : this.#carryOver;
+        const redockAt = this.#inTurn || command ? null : this.#redockAt;
         const redock = redockAt === null ? null : redockReorientation(redockAt);
         // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
-        const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
+        const rateWarning = this.#rateWarningPending && !command ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
         const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
-        const held = this.#inTurn ? null : this.#heldForNextWork;
+        const held = this.#inTurn || command ? null : this.#heldForNextWork;
         const heldShownAs = held === null ? null : this.#heldShownAs;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
-        this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
-        // One more end the driver will report, whenever it does (`#endHeldTurn`).
-        this.#endsOut += 1;
+        const turnId = this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
         if (redockAt !== null) {
             this.#redockAt = null;
             this.#options.onRedockSent?.(redockAt);
         }
-        this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
+        if (!command) this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;
@@ -1766,11 +1796,12 @@ export class AgentSession {
         }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
-        if (this.#inTurn) this.#queued.push({ by, text, sent, context });
+        if (this.#inTurn) this.#queued.push({ ...(typeof turnId === 'string' ? { turnId } : {}), by, text, sent, context });
         else {
             // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
             this.#queued = [];
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
+            if (!command && !(by === 'genie' && (text.startsWith(LIMIT_RESUME_PROMPT) || text.startsWith(OVERLOAD_RESUME_PROMPT)))) this.#turnTask = text;
             this.#inTurn = true;
             this.#limitThisTurn = false;
             this.#stopWindow = false;
@@ -1784,7 +1815,8 @@ export class AgentSession {
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
         // Instruction text is never drawn: one line says it was sent (Tynn #615).
         if (held !== null) void this.#emitRow(heldShownAs !== null ? { kind: 'notice', level: 'info', message: heldShownAs } : promptRow(held, 'genie', null, {}));
-        if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
+        if (record && command) void this.#emitRow(commandRow(text));
+        else if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
         // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
         this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
@@ -2349,45 +2381,18 @@ export class AgentSession {
         this.#options.onStateChange?.();
     }
 
-    /** The driver reported a prompt's end (`onTurnEnd`): one already accounted for is dropped; any other ends its turn. */
+    /** A joined prompt shares its parent's result; only an outcome for a turn of its own ends a turn here. */
     #onDriverTurnEnd(outcome: TurnOutcomeLike): void {
-        this.#resultAwaitingEnd = false;
-        this.#endsOut = Math.max(0, this.#endsOut - 1);
-        // In the driver's order, the owed ends come before any prompt written since (they were all written earlier).
-        if (this.#endsOwed > 0) {
-            this.#endsOwed -= 1;
+        if (outcome.foldedInto !== undefined) {
+            // The driver proves the join from Claude's result list. A listener may already have started newer work
+            // while the parent ended: do not close that turn, clear its queue, repeat a failure or restart Cooling.
+            if (outcome.turnId !== undefined) this.#queued = this.#queued.filter((p) => p.turnId !== outcome.turnId);
             return;
         }
         this.#turnEnded(outcome);
     }
 
-    /**
-     * A PROVIDER `result` (Claude's turn-scoped usage, `isTurnResult`). Its end, when the driver releases it, is reported in
-     * the SAME synchronous dispatch, after the updates (prism-acp `#emit`: updates, then `#flushOutcomes`). So a microtask
-     * later is after that dispatch: the end has come, or the driver is holding it.
-     */
-    #sawTurnResult(): void {
-        this.#resultAwaitingEnd = true;
-        queueMicrotask(() => this.#endHeldTurn());
-    }
-
-    /**
-     * The provider ended the turn and the driver holds its end behind a prompt that will never settle (`#endsOwed`). The
-     * turn is closed here, as the turn's end would have: `finished`, idle, cooling, what waited sent as a turn of its own.
-     * Nothing open (a `result` while idle), nothing closed. What is not known: the result's own stop reason — a held turn
-     * that failed (a limit, a sign-out) reads as replied; one the person stopped reads as stopped.
-     */
-    #endHeldTurn(): void {
-        if (!this.#resultAwaitingEnd || this.#ended) return;
-        this.#resultAwaitingEnd = false;
-        if (!this.#inTurn && this.#turnState !== 'working') return;
-        // Everything still out except what was sent into this turn (it may yet run as its own) is this turn's end, or a
-        // folded prompt's ahead of it: all are owed, and dropped when the driver lets them go.
-        this.#endsOwed = Math.max(0, this.#endsOut - this.#queued.length);
-        this.#turnEnded({ stopReason: this.#stopAskedBy !== null ? 'cancelled' : 'end_turn', isError: false, raw: 'result (its end held by the driver)' });
-    }
-
-    /** A turn ended: the provider said so (`onTurnEnd`), or its `result` came and its end is held (`#endHeldTurn`). */
+    /** A turn ended: the driver's actual outcome, including its own stop reason and failure. */
     #turnEnded(outcome: TurnOutcomeLike): void {
         this.#clearCancelWait();
         // Two turns are two replies even with nothing between them. Without this a
@@ -2755,6 +2760,9 @@ export class AgentSession {
     /** A row off the wire that is not a message chunk, arriving now or held until now: emitted, and what it says acted on. */
     #wireRow(event: StreamEvent): Promise<void> {
         const written = this.#emitRow(event);
+        // The machine's Design authorization (Tynn #480): only the host decides what this proves.
+        const auth = this.#options.onDesignAuth ? this.#designOps.track(event) : null;
+        if (auth) this.#options.onDesignAuth?.(auth);
         // REFUSED FOR WANT OF /design-login (#1081): said ONCE per login, after the refused call, however many calls fail.
         if (!this.#designLogin && designLoginRefused(event)) {
             this.#designLogin = true;
@@ -2835,27 +2843,6 @@ export interface PromptContext {
  */
 /** prism-acp's `META_USAGE`: a Claude `result` frame's usage, `scope: 'turn'` (a Codex reading is the THREAD's, mid-turn). */
 const USAGE_META = 'particle.academy/usage';
-/** prism-acp's `META_UNMAPPED_FRAME`, on the `turn complete` notice a `result` becomes when it carries no usable usage. */
-const UNMAPPED_FRAME_META = 'particle.academy/unmapped_frame';
-
-/**
- * A PROVIDER TURN'S `result` (Tynn #684): prism-acp's ClaudeDriver maps every `result` frame it accepts — and only those,
- * and only for a prompt this session wrote — to a usage_update with the turn's usage (`scope: 'turn'`), or, with no context
- * size or no per-call usage to report, to a `turn complete` debug notice. Never a replayed one.
- */
-function isTurnResult(update: Record<string, unknown>): boolean {
-    const meta = update['_meta'];
-    if (typeof meta !== 'object' || meta === null || replayOf(update) !== null) return false;
-    const m = meta as Record<string, unknown>;
-    if (update['sessionUpdate'] === 'usage_update') {
-        const usage = m[USAGE_META];
-        return typeof usage === 'object' && usage !== null && (usage as Record<string, unknown>)['scope'] === 'turn';
-    }
-    if (update['sessionUpdate'] !== 'notice' || !(UNMAPPED_FRAME_META in m)) return false;
-    const notice = update['notice'];
-    return typeof notice === 'object' && notice !== null && (notice as Record<string, unknown>)['message'] === 'turn complete';
-}
-
 /**
  * A REPLAYED UPDATE (genie#1249), by prism-acp's mark (`REPLAY_META`): `null` when the update is not history. `summary` is
  * the one sentence Genie says for the whole replay, from the summary notice that ends it (`REPLAY_SUMMARY_META`); every
@@ -2870,6 +2857,11 @@ function replayOf(update: Record<string, unknown>): { summary: string | null } |
     const count = (n: unknown, one: string) => `${typeof n === 'number' ? n : '?'} ${one}${n === 1 ? '' : 's'}`;
     const ended = complete === false ? '; it stopped before the end' : '';
     return { summary: `Resumed the thread: the provider replayed ${count(turns, 'turn')} (${count(items, 'item')}) of its history${ended}; not recorded again (already in this history).` };
+}
+
+/** The small row that a provider command ran (Tynn #702): a notice, not a message of yours. */
+function commandRow(text: string): StreamEvent {
+    return { kind: 'notice', level: 'info', message: `Ran ${text.trim()}` };
 }
 
 function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext, kept: readonly AttachmentRef[] = []): StreamEvent {

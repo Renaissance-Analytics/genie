@@ -1,11 +1,12 @@
-import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, screen, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { browserWindowBounds, browserWindowMove, type Rect } from '../core/browser-placement.js';
 import { loadWindowPage } from './window-pages.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { browserStorePath, storeRefusal, type BrowserStoreSide } from '../core/browser-store.js';
 import type { SyncedCookie } from '../core/cookie-sync.js';
 import { certificateVerdict, genProxyConfig } from '../core/browser-origins.js';
-import { initialGenUrl, isSecureBrowserUrl, normalizeNavUrl } from '../core/genie-browser.js';
+import { browserTarget, isAllowedBrowserRequest } from '../core/genie-browser.js';
 import { browserWindowOptions, overlayColorsOk, TITLE_BAR_HEIGHT } from '../core/window.js';
 import { genieWindowIcon } from './app-identity.js';
 import { genCertificateVerifier, type PresentedCertificate } from './browser-trust.js';
@@ -19,16 +20,19 @@ import { bringUp, onceShowable, showWhenReady, type Activation, type ActivationL
  * load-bearing lines are source-checked (test/genie-browser-electron-wiring.test.ts):
  *
  * - ONE window per workstation: this one's, and one for each Tynn workstation a window here is driving (step 4) —
- *   1200 x 820, its title bar hidden; the chrome (browser.html, its own preload) owns the top, the native buttons drawn
- *   over it on Windows and Linux;
+ *   1200 x 820 (cut to the display's work area), its title bar hidden, placed over the Genie window that asked, on its
+ *   display, else on the display under the cursor (Tynn #739: Electron's default is the PRIMARY display's centre); the
+ *   chrome (browser.html, its own preload) owns the top, the native buttons drawn over it on Windows and Linux;
  * - its OWN session: `.gen` routed to Genie's front door (the PAC from core), a `.gen` certificate trusted only when
- *   Genie's CA signed it for that name, and every request a page makes cancelled unless it travels secure (Genie 1).
+ *   Genie's CA signed it for that name, and every request a page makes cancelled unless it travels secure (Genie 1), or
+ *   is a dev server's own http/ws on this machine's loopback (Tynn #741);
  *   Another workstation's window gets an IN-MEMORY session of its own: routed to the door that carries its pages over
  *   the relay (remote-browsers.ts), trusting THAT host's CA, as its answer named it — never this machine's;
  * - a WebContentsView per tab, isolated from Node with NO preload — and NOT sandboxed: a sandboxed child view never
  *   receives its renderer's start-up data and the page draws blank (electron#44897; Genie 1 site-view.ts);
- * - a page's new window goes to the brain (a tab, for a Genie site) and is denied; a link off the Genie sites opens in
- *   the machine's browser instead of loading here.
+ * - DEV SITES ONLY (Tynn #741): a page's new window goes to the brain (a tab, for a dev site) and is denied; a link off
+ *   the dev sites is stopped and handed to the brain, which opens it in the person's browser and says so. A fresh window
+ *   with no address opens on the welcome page, never on a site the person did not pick (Tynn #740).
  */
 
 export interface GenieBrowserWindowOptions {
@@ -41,6 +45,8 @@ export interface GenieBrowserWindowOptions {
     readonly caPem: string | null;
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
+    /** Each local host's label: its workspace's name, never its id (core/browser-sites.ts). */
+    readonly siteLabels?: () => Readonly<Record<string, string>>;
     readonly log?: (line: string) => void;
     /** With these, this machine's tabs use the workspace stores of `side: 'browser'`. */
     readonly genieHome?: string;
@@ -62,7 +68,7 @@ export function guardSession(ses: Session, caPem: () => string | null): void {
         callback(last.verify({ hostname: request.hostname, certificatePem: request.certificate.data }));
     });
     ses.webRequest.onBeforeRequest((details, callback) => {
-        callback({ cancel: !isSecureBrowserUrl(details.url) });
+        callback({ cancel: !isAllowedBrowserRequest(details.url) });
     });
 }
 
@@ -156,7 +162,7 @@ export interface GenieBrowserWindows {
      * brings the window up and focuses it; anything else (an agent's `sites open`, a page's window.open) opens it
      * inactive, or flashes an open one — never takes the keyboard.
      */
-    open(address: string | undefined, activation: Activation, remote?: RemoteBrowsing): { ok: true } | { ok: false; error: string };
+    open(address: string | undefined, activation: Activation, remote?: RemoteBrowsing, anchor?: Rect): { ok: true } | { ok: false; error: string };
     /** A panel's site alone in its own window (the owner: "a single site ux"), with the browser's store. */
     openSingle(panelKey: string, url: string): void;
     closeSingle(panelKey: string): void;
@@ -250,7 +256,9 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         void routed;
         return { ses, routed: () => sharedSession!.routed };
     };
-    const hostsOf = (key: string): readonly string[] => (key === LOCAL || key.startsWith(SINGLE) ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
+    /** This machine's window (or a panel's single site): its loopback is the person's own dev servers. */
+    const isLocal = (key: string): boolean => key === LOCAL || key.startsWith(SINGLE);
+    const hostsOf = (key: string): readonly string[] => (isLocal(key) ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
 
     const createView = (window: BrowserWindow, key: string, tabId: string, events: TabViewEvents, url: string): TabViewPort => {
         const { ses, routed: routing } = sessionFor(key, url);
@@ -271,16 +279,17 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             events.openWindow(url);
             return { action: 'deny' };
         });
-        // A link off the Genie sites: the machine's browser (http(s) only), never this window.
+        // A link off the dev sites: stopped, and the brain opens it in the person's browser and says so (Tynn #741).
         wc.on('will-navigate', (event, next) => {
             const url = next;
-            if ('url' in normalizeNavUrl(url, new Set(hostsOf(key)))) {
+            const target = browserTarget(url, new Set(hostsOf(key)), { loopback: isLocal(key) });
+            if ('url' in target) {
                 // Another workspace's site: its own tab, with its own login. This view keeps its session for life.
-                if ((key === LOCAL || key.startsWith(SINGLE)) && storeOf(url) !== storeOf(wc.getURL())) { event.preventDefault(); events.openWindow(url); }
+                if (isLocal(key) && storeOf(url) !== storeOf(wc.getURL())) { event.preventDefault(); events.openWindow(url); }
                 return;
             }
             event.preventDefault();
-            if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => {});
+            if ('external' in target) events.external(url);
         });
         return {
             load: (url) => {
@@ -303,9 +312,25 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         };
     };
 
-    const make = (key: string, title: string, activation: Activation): { window: BrowserWindow; brain: GenieBrowser } => {
+    /** The browser window's own size, cut to fit where it opens. */
+    const ownSize = (): { width: number; height: number } => { const o = browserWindowOptions(process.platform); return { width: o.width, height: o.height }; };
+    /** A fresh window's bounds (Tynn #739): over the window that asked, on its display; else the display under the cursor. */
+    const placeFresh = (anchor: Rect | undefined): Rect => {
+        const display = anchor ? screen.getDisplayMatching(anchor) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+        return browserWindowBounds({ anchor: anchor ?? null, workArea: display.workArea, size: ownSize() });
+    };
+    /** An open window and the person's click from a Genie window on another display: brought to that display. */
+    const placeOpen = (win: BrowserWindow, activation: Activation, anchor: Rect | undefined): void => {
+        if (!anchor) return;
+        const there = screen.getDisplayMatching(anchor);
+        const move = browserWindowMove({ activation, anchor, workArea: there.workArea, size: ownSize(), onAnchorDisplay: screen.getDisplayMatching(win.getBounds()).id === there.id });
+        if (move) win.setBounds(move);
+    };
+
+    const make = (key: string, title: string, activation: Activation, anchor?: Rect): { window: BrowserWindow; brain: GenieBrowser } => {
         const window = new BrowserWindow({
             ...browserWindowOptions(process.platform),
+            ...placeFresh(anchor),
             ...genieWindowIcon(options.here),
             title,
             backgroundColor: '#0a0a0c',
@@ -314,10 +339,14 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         });
         const b = new GenieBrowser({
             enabledHosts: () => hostsOf(key),
+            ...(options.siteLabels && (key === LOCAL || key.startsWith(SINGLE)) ? { siteLabels: options.siteLabels } : {}),
             newTabId: () => `tab-${++seq}`,
             createView: (id, events, url) => createView(window, key, id, events, url),
             ...(key === LOCAL || key.startsWith(SINGLE) ? { storeOf } : {}),
             push: (snapshot) => { if (!window.isDestroyed()) window.webContents.send('browser-window:state', snapshot); },
+            // Off the dev sites (Tynn #741): the person's own browser, http(s) only.
+            openExternal: (url) => { if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => {}); },
+            loopback: isLocal(key),
         });
         // The chrome is Genie's page: it never navigates; a link in it opens in the machine's browser.
         window.webContents.setWindowOpenHandler(({ url }) => {
@@ -361,20 +390,22 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             const entry = windows.get(`${SINGLE}${panelKey}`);
             if (entry && !entry.win.isDestroyed()) entry.win.close();
         },
-        open: (address, activation, remote) => {
+        open: (address, activation, remote, anchor) => {
             const key = remote?.key ?? LOCAL;
             if (remote) remotes.set(key, remote);
             let entry = windows.get(key);
             const fresh = !entry || entry.win.isDestroyed();
             if (fresh) {
-                const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser', activation);
+                const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser', activation, anchor);
                 if (key === LOCAL) m.brain.setNotice(notice, noticeRestart);
                 entry = { win: m.window, browser: m.brain };
                 windows.set(key, entry);
             } else {
+                placeOpen(entry!.win, activation, anchor);
                 bringUp(entry!.win, { activation, reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) });
             }
-            const target = address ?? (fresh ? initialGenUrl(hostsOf(key)) : null);
+            // No address: the welcome page (Tynn #740), a fresh window's first view, never the first site served.
+            const target = address ?? null;
             if (target === null) return { ok: true };
             // A site opened from Genie shows its tab when one is open (genie#1196): never a second tab on the same site.
             // Who asked decides the tab too (genie#1265): an agent's site waits in a tab behind the person's.

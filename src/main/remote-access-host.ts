@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
-import { Baton, PairingPins } from '../core/remote.js';
-import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
+import type { DriveMode } from '../core/connected-here.js';
+import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
+import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
 import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
@@ -33,6 +34,7 @@ export interface HostRemoteApiPorts {
      * A getter: genie-host builds it once its session host is up.
      */
     readonly alone?: HostApi | (() => HostApi | null);
+    readonly onAloneReady?: (listener: () => void) => () => void;
     /** A Pilot's Take Over window closed: the TUI it started goes with it, whoever else is connected. */
     readonly takeOverEnded?: (terminalId: string) => void;
     /** The workspace an agent is in (a guest is held to its own), from the host's roster. */
@@ -45,10 +47,16 @@ export interface HostRemoteApiPorts {
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
+    const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
+    const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
     return {
+        get ownsFeatures() { return alone()?.ownsFeatures === true; },
+        releaseCaller: context => alone()?.releaseCaller?.(context),
         invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);
+            const owned = alone();
+            if (owned?.ownsFeatures && featureMethod(method)) return owned.invoke(method, args, context);
             // These reads and writes share the host's store even while a window is connected (Tynn #666).
             if (HOST_WORKSPACE_READ_METHODS.has(method)) {
                 const answers = alone();
@@ -62,10 +70,14 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
         },
         onEvent: (listener, options) => {
             // A window's replica can echo this change. Only the owned store's signal counts (Tynn #666).
-            const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed') listener(channel, payload); }) ?? (() => {});
+            const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed' && !(alone()?.ownsFeatures && featureEvent(channel))) listener(channel, payload); }) ?? (() => {});
             // Other families keep their existing window/no-window event source.
-            const offAlone = alone()?.onEvent((channel, payload) => { if (channel === 'workspace-settings-changed' || !ports.window.connected()) listener(channel, payload); }, options) ?? (() => {});
-            return () => { offWindow(); offAlone(); };
+            let offAlone: (() => void) | null = null;
+            const bind = () => { if (!offAlone) offAlone = alone()?.onEvent((channel, payload) => {
+                if (channel === 'workspace-settings-changed' || (alone()?.ownsFeatures && featureEvent(channel)) || !ports.window.connected()) listener(channel, payload);
+            }, options) ?? null; };
+            const offReady = ports.onAloneReady?.(bind); bind();
+            return () => { offWindow(); offReady?.(); offAlone?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
         ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
@@ -81,6 +93,8 @@ export interface RemoteAccessStatus {
     readonly unavailable: string | null;
     readonly locked: boolean;
     readonly pin: { code: string; expiresAt: number } | null;
+    /** Why the last PIN went without pairing (Tynn #751); absent from an older host = not said. */
+    readonly pinEnded?: PinEnded | null;
     readonly devices: Device[];
     readonly connections: ReturnType<RemoteHost['connections']>;
     readonly pairRequests: ReturnType<PairApprovals['requests']>;
@@ -132,7 +146,7 @@ export class RemoteAccessHost {
 
     status(): RemoteAccessStatus {
         const r = this.remote;
-        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests(), wants: r.wanted() };
+        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), pinEnded: r.pinEnded(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests(), wants: r.wanted() };
     }
 
     issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {
@@ -149,6 +163,11 @@ export class RemoteAccessHost {
 
     unlock(): void {
         this.remote.unlock();
+    }
+
+    /** Watch only, or full control, for one connected person (Tynn #732). */
+    setMode(label: string, mode: DriveMode): void {
+        this.remote.setMode(label, mode);
     }
 
     answerPair(id: string, allow: boolean): { ok: true } | { ok: false; reason: string } {
@@ -186,7 +205,7 @@ export interface RemoteAccessServicePorts {
  * (session-engine-server.ts). Settings → Workstation's remote section reads the status and drives the PIN, the devices,
  * the lock and the pair answers; the newest window forwards its events.
  */
-const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'answerPair', 'apply', 'restart', 'start', 'stop']);
+const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'setMode', 'answerPair', 'apply', 'restart', 'start', 'stop']);
 
 export class RemoteAccessService {
     readonly #access: RemoteAccessHost;
@@ -217,6 +236,12 @@ export class RemoteAccessService {
             case 'revokeDevice': return a.revokeDevice(String(args[0]));
             case 'lock': a.lock(); return true;
             case 'unlock': a.unlock(); return true;
+            case 'setMode': {
+                const [label, mode] = args;
+                if (typeof label !== 'string' || (mode !== 'view' && mode !== 'control')) throw new Error('setMode names a person and view or control');
+                a.setMode(label, mode);
+                return true;
+            }
             case 'answerPair': return a.answerPair(String(args[0]), args[1] === true);
             case 'apply': await this.#ports.switch.apply(); return a.status();
             // The handlers genie.remote-access's catalog payload names (genie-catalog.ts): start follows the setting.

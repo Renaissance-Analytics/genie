@@ -27,12 +27,12 @@ describe('the route', () => {
 
 describe('the strip', () => {
     it('Dashboard, Files, your tabs, +, Settings — no fixed Terminals tab', () => {
-        expect(stripOf(render('home'))).toEqual(['home', 'files', 'tab:tab-1', 'add', 'settings']);
+        expect(stripOf(render('home'))).toEqual(['home', 'files', 'artboard', 'tab:tab-1', 'add', 'settings']);
         expect(render('home')).toMatch(/data-workspace-tab="add"[^>]*aria-label="New tab"/);
     });
 
     it('no settings to keep tabs in → no + (a control that does nothing is not offered)', () => {
-        expect(stripOf(renderToStaticMarkup(<Workspace workspace={ws} terminals={noTerminals} view="home" rows={[]} />))).toEqual(['home', 'files']);
+        expect(stripOf(renderToStaticMarkup(<Workspace workspace={ws} terminals={noTerminals} view="home" rows={[]} />))).toEqual(['home', 'files', 'artboard']);
     });
 });
 

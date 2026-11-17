@@ -55,8 +55,8 @@ describe('where it lives', () => {
     });
 
     it('a GitHub tab after the designed tabs, only for a workspace linked to a Tynn project (CONTROL: not linked, none)', () => {
-        expect(tabStrip({ tabs: [] }, [], { github: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'github', 'add', 'settings']);
-        expect(tabStrip({ tabs: [] }, [], { github: false }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'add', 'settings']);
+        expect(tabStrip({ tabs: [] }, [], { github: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'artboard', 'github', 'add', 'settings']);
+        expect(tabStrip({ tabs: [] }, [], { github: false }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'artboard', 'add', 'settings']);
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'github' }} canDesign hasSettings github onView={() => {}} onAdd={() => {}} onOpenAgent={() => {}} />);
         expect(control(html, 'data-workspace-tab="github"')).toMatchObject({ tag: 'button', tab: true });
         expect(control(html, 'data-workspace-tab="github"')!.text).toMatch(/^GitHub(?![\w])/);
@@ -78,10 +78,11 @@ describe('where it lives', () => {
     it('the features carry it, pushed: none until main reports (EMPTY), and main gives each workspace its view', () => {
         expect(EMPTY_FEATURES.issueWatch).toBeNull();
         const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-        expect(main).toMatch(/issueWatch: \(\) => issueWatchPanels\(\)/);
+        const composition = readFileSync('src/main/genie-host.ts', 'utf8');
+        expect(composition).toContain('issueWatch: () => featureIssueWatch.panels(hostRegistry.listWorkspaces(), workspaceTynnProject, Date.now())');
         // The entry is recorded where Tynn is heard, genie-host (P5c), and every change reaches the window's panel.
         const host = readFileSync('src/main/issue-watch-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
         expect(host).toMatch(/onEntry: \(entry\) => \{\s*this\.#latest\.set\(entry\.projectId, entry\);\s*this\.#delivered\.set\(entry\.projectId, this\.#now\(\)\);[\s\S]*?this\.#changed\(\);\s*\}/);
-        expect(main).toMatch(/issueWatchNow\?\.onChange\(\(\) => \{ pushFeatures\(\); \}\);/);
+        expect(composition).toContain('issueWatch.onEvent(event => { featureIssueWatch.apply(event); featureChanged(); });');
     });
 });

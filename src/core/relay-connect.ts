@@ -16,7 +16,8 @@ import { skewSentence } from './drone-version.js';
  */
 export type RelayStep = 'tynn' | 'relay' | 'host';
 export type RelayConnect =
-    | { readonly kind: 'working'; readonly step: RelayStep }
+    /** `asking` (Tynn #731): at `host`, the machine's person is being asked to let this guest in. */
+    | { readonly kind: 'working'; readonly step: RelayStep; readonly asking?: true }
     /**
      * `skew` (Tynn #651): the drone runs a Genie older than this Pilot needs: its build (`null`: it did not say) and this
      * Pilot's, to update it to. Said in place of the reason, which is the drone's protocol words.
@@ -46,6 +47,12 @@ export function offlineSentence(name: string | null): string {
     return `${shown(name)} is offline: it needs Genie running, signed in, and Remote access on.`;
 }
 
+/** The connect view while the host's person is asked to let this guest in (Tynn #731): only at the host step. */
+export function withAsking(connect: RelayConnect, pairing: { readonly guest?: true } | null | undefined): RelayConnect {
+    if (connect.kind !== 'working' || connect.step !== 'host' || pairing?.guest !== true) return connect;
+    return { ...connect, asking: true };
+}
+
 export function relayConnectView(name: string | null, state: RelayConnect): RelayConnectView {
     const who = shown(name);
     const labels: Record<RelayStep, string> = {
@@ -70,6 +77,6 @@ export function relayConnectView(name: string | null, state: RelayConnect): Rela
             status: i < at ? 'done' : i > at ? 'waiting' : state.kind === 'failed' ? 'failed' : 'working',
         })),
         problem: state.kind !== 'failed' ? null : state.skew ? skewSentence(name, state.skew) : state.offline ? offlineSentence(name) : state.reason,
-        notice: null,
+        notice: state.kind === 'working' && state.asking === true ? `Waiting for ${who} to let you in…` : null,
     };
 }

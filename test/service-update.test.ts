@@ -264,7 +264,7 @@ describe('service update through the UI and MCP', () => {
     for (const verdict of ['allowed', 'denied'] as const) {
         it(`MCP ${verdict}: person approval names the image and affected workspace before any pull`, async () => composed(async (s, d) => {
             const approvals: string[] = [];
-            const reg = hostingTools({ services: s,
+            const reg = hostingTools({ trusted: () => true,  services: s,
                 resolveCaller: () => ({ agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'project', workspacePath: '/project' }),
                 approve: async (_caller, action, detail) => {
                     approvals.push(`${action}: ${detail}`);
@@ -285,7 +285,7 @@ describe('service update through the UI and MCP', () => {
 
     it('MCP refuses another workspace’s engine without requesting approval or touching Docker', async () => composed(async (s, d) => {
         let asks = 0;
-        const reg = hostingTools({ services: s,
+        const reg = hostingTools({ trusted: () => true,  services: s,
             resolveCaller: () => ({ agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'other', workspacePath: '/other' }),
             approve: async () => { asks++; return 'allowed'; },
         }).find((r) => r.definition.name === 'services')!;

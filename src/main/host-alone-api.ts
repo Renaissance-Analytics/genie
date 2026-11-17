@@ -8,7 +8,7 @@ import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
 import type { Finished } from './attention-store.js';
 import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
-import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
+import { workspaceLifecycleApi, workspaceLifecyclePorts, type CloneOfferOps, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { workspaceSettingsOps } from './workspace-reads-api.js';
 import { workspaceTynnApi } from './workspace-tynn-api.js';
 import { buildHostApi, type HostApiDeps } from './host-api.js';
@@ -18,6 +18,7 @@ import type { HostApi } from './remote-host.js';
 import type { SessionHost } from './session-host.js';
 import { startForWork, startForYourMessage } from './start-on-demand.js';
 import type { SettingsStore } from './settings-store.js';
+import { WORKSPACE_SAVE_UNAVAILABLE, type WorkspaceSaveOps } from './workspace-save-host.js';
 
 /**
  * THE PHONE'S METHODS, ANSWERED BY GENIE-HOST WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2).
@@ -44,6 +45,8 @@ export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMeth
     'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
     'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions',
     'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput', 'agents.attachment',
+    // What someone is typing (Tynn #730): with no window open, a Pilot and a guest still see each other's.
+    'agents.typing',
 ]);
 
 /** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
@@ -62,6 +65,7 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
     'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn',
     'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.locateRepo',
     'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.setMcpServer',
+    'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer',
 ]);
 
 /** The Tynn tab, read and changed (Tynn #553, P5d.5f). A live view's change reads stay the local window's. */
@@ -109,10 +113,16 @@ export interface HostAlonePorts {
     readonly workspaceLifecycle: Omit<WorkspaceLifecycleWiring, 'registry' | 'engine' | 'finished'>;
     /** A workspace's colour, written to its project.json. */
     readonly colors: { set(path: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** Save to repo (Tynn #756), over this host's registry, disk and git. Absent: refused in words. */
+    readonly workspaceSave?: WorkspaceSaveOps;
+    /** The offers a clone's repo brings (Tynn #756): genie-host's watcher. Absent: refused in words. */
+    readonly cloneOffers?: CloneOfferOps;
     /** genie-host's Tynn account, as the Tynn tab reaches it, and its page reader. */
     readonly tynnTab: { board: Parameters<typeof workspaceTynnApi>[0]; readPage: Parameters<typeof workspaceTynnApi>[1] };
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
+    /** The owned feature aggregator (Tynn #720), supplied when its measured contributors are composed. */
+    readonly features?: HostApiDeps['features'];
 }
 
 export function hostAloneApi(ports: HostAlonePorts): HostApi {
@@ -186,7 +196,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             start: (record, cwd) => engine().start(record, cwd),
             stop: (id) => engine().stop(id),
             cancel: (id, intent) => engine().cancel(id, 'you', intent),
-            resumeLimit: (provider) => engine().resumeLimit(provider),
+            resumeLimit: (provider, accountId) => engine().resumeLimit(provider, accountId),
             prompt: (id, text, by) => engine().prompt(id, text, by),
             promptWith: (id, text, attachments, by) => engine().promptWith(id, text, attachments, by),
             resolvePrompt: (id, promptId, action) => engine().resolvePrompt(id, promptId, action),
@@ -201,22 +211,24 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
             onSettingsChanged: (listener) => ports.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
             ...workspaceSettingsOps(() => ports.settings),
-            ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor),
+            ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor, ports.workspaceSave ?? WORKSPACE_SAVE_UNAVAILABLE, ports.cloneOffers),
             ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
-        features: windowOnly<HostApiDeps['features']>('features', {
+        features: ports.features ?? {
+            // Optional subscription hooks must really be absent, not synthesized as throwing window methods.
+            // Production supplies HostFeatures; this legacy Deck-only fallback owns no feature change source.
+            snapshot: async () => { throw new Error(needsWindow('features.snapshot')); },
             // The Deck's answer only (the phone's Deck, deck-answer.ts); the phone reads nothing back from it.
             act: async (action: FeatureAction) => {
                 if (action.kind !== 'deck.answer' && action.kind !== 'deck.answerForm') throw new Error(needsWindow(`features.act ${action.kind}`));
                 await answerDeck(action, { attention: ports.attention, approvals: ports.approvals, inbox: ports.inbox, deliverToAgent: ports.deliverToAgent });
                 return {} as FeatureData;
             },
-            onChange: () => () => {},
-        }),
+        },
         activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry.listAgents(), workspaceId), subscribe: (listener) => activityFeeds.subscribe(listener) },
         headroom: ports.headroom,
         updates: ports.updates ?? null,
     };
-    return buildHostApi(deps);
+    return { ...buildHostApi(deps), ...(ports.features ? { ownsFeatures: true } : {}) };
 }

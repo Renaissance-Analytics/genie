@@ -137,6 +137,7 @@ const CALLS: Record<string, (id: string) => unknown[]> = {
     'agents.diagnose': (id) => [id],
     'agents.toolOutput': (id) => [id, 'call_1'],
     'agents.attachment': (id) => [id, 'att_1'],
+    'agents.typing': (id) => [id, 'hello', 'window-pilot'],
 };
 
 describe('every agents.* call is answered with no window', () => {

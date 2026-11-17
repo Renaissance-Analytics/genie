@@ -42,6 +42,14 @@ export function genieHome(home: string = homedir()): string {
     return join(home, '.genie');
 }
 
+/** The person's OS profile, for reading/updating their shell startup files; never a root for Genie's data. */
+export function userHome(): string { return homedir(); }
+
+/** The existing provider homes are recorded as legacy references only; accounts never inspect their contents. */
+export function legacyProviderHomes(env: Readonly<Record<string, string | undefined>> = process.env, home: string = homedir()): { claude: string; codex: string } {
+    return { claude: env.CLAUDE_CONFIG_DIR || join(home, '.claude'), codex: env.CODEX_HOME || join(home, '.codex') };
+}
+
 /**
  * THE ONE DATA ROOT (the host split, P7): `GENIE_HOME` when it is set, `~/.genie` when it is not. The host, the browser
  * process and the updater helper read it here and only here (a source guard, test/p7-one-data-root.test.ts); every path

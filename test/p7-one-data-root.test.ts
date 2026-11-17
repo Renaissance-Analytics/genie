@@ -123,7 +123,7 @@ describe('the login scratch and envelope staging come from the caller’s root',
         const before = readdirSync(tmpdir()).filter((n) => n.startsWith('genie-login-p7probe-'));
         const opened: Array<{ cwd: string }> = [];
         const host = new LoginHost({
-            terminals: { open: ((o: { cwd: string }) => { opened.push(o); return { id: 't1', pid: 1, shell: 'sh' }; }) as never, onExit: (() => () => {}) as never },
+            terminals: { open: ((o: { cwd: string }) => { opened.push(o); return { id: 't1', pid: 1, shell: 'sh' }; }) as never, onExit: (() => () => {}) as never, close: (() => true) as never },
             openWindow: () => {},
             runStatus: async () => 1,
             onSignedIn: () => {},
@@ -227,7 +227,7 @@ const EXCEPTIONS: Record<string, { lines: string[]; why: string }> = {
         why: 'the folder picker starts at the person’s home: a place to look from, not a write of Genie’s data',
     },
     'src/main/session-host.ts': {
-        lines: ["import { homedir } from 'node:os';", 'return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };'],
+        lines: ["import { homedir } from 'node:os';", 'return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };'],
         why: 'a provider’s model list is asked from its own home, outside any project',
     },
 };
@@ -269,7 +269,7 @@ describe('the window wires its scratch from its root, and stops the sweep on qui
     const main = readFileSync('src/main/main.ts', 'utf8');
     it('the login and Import from Git take the scratch area’s folder; the sweep is scheduled and stopped in before-quit', () => {
         expect(main).toMatch(/scratchArea\(genieRoot\(\)\)/);
-        expect(main).toMatch(/new LoginHost\(\{[\s\S]{0,400}scratch: \(\) => /);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/new LoginHost\(\{[\s\S]{0,400}scratch: \(\) => hostScratch\.directory\(\)/);
         expect(main).toMatch(/stagingDirectory: \(\) => scratch\.directory\(\)/);
         expect(readFileSync('src/main/workspace-lifecycle-api.ts', 'utf8')).toMatch(/nodeEnvelopePorts\(\{ stagingBase: w\.stagingDirectory \}\)/);
         expect(main).toMatch(/scheduleScratchSweep\(genieRoot\(\)/);

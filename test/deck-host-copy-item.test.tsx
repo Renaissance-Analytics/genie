@@ -8,7 +8,7 @@ import { resolveDeckAnswer } from '../src/core/deck-resolve.js';
 import { MainErrorBook, retryHostCopy } from '../src/core/main-errors.js';
 import { answerDeck, type DeckAnswerPorts } from '../src/main/deck-answer.js';
 import { materializeHostRuntime } from '../src/main/host-runtime.js';
-import { Deck } from '../src/renderer/components/Deck.js';
+import { DeckOnDashboard } from './helpers/deck-on-dashboard.js';
 
 /**
  * THE DECK ITEM GENIE FILES WHEN ITS HOST'S COPY CANNOT BE MADE (Tynn #693; the owner, beta.61: "this is a stupid design
@@ -31,8 +31,8 @@ const lines = (item: DeckItem) => item.title.split('\n').filter((l) => l.trim() 
 const optionsOf = (item: DeckItem) => (item.answer.kind === 'inline' ? item.answer.options.map((o) => `${o.id}=${o.label}`) : []);
 const text = (html: string) => html.replace(/&#x27;/g, '\'').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const count = (hay: string, needle: string) => hay.split(needle).length - 1;
-const draw = (items: readonly DeckItem[], more: Partial<Parameters<typeof Deck>[0]> = {}) =>
-    text(renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} {...more} />));
+const draw = (items: readonly DeckItem[], more: Partial<Parameters<typeof DeckOnDashboard>[0]> = {}) =>
+    text(renderToStaticMarkup(<DeckOnDashboard items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} {...more} />));
 
 describe('the item’s words', () => {
     it('the title is one short sentence: what happened and what it means; the error is not in it', () => {

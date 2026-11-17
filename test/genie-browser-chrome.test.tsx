@@ -77,17 +77,17 @@ describe('the page box and the empty states (Genie 1)', () => {
         expect(render(snap())).toContain('data-browser-page');
     });
 
-    it('no tab: "No site open." with the way forward — pick a site, or that there are none yet', () => {
+    it('no tab: the welcome page (Tynn #740), a button per site, or how to get one when there are none', () => {
         const some = render(snap());
-        expect(some).toContain('No site open.');
-        expect(some).toContain('Pick a site above to open it.');
+        expect(some).toContain('data-browser-welcome');
+        expect(some.match(/data-browser-welcome-site="/g)).toHaveLength(2);
         const none = render(snap({ sites: [] }));
-        expect(none).toContain('No site open.');
-        expect(none).toContain('No Genie sites are being served.');
+        expect(none).toContain('No sites yet.');
         expect(none).not.toContain('data-browser-site=');
+        expect(none).not.toContain('data-browser-welcome-site=');
     });
 
-    it('CONTROL: with a tab open, no empty state', () => {
-        expect(render(snap({ tabs: [tab('tynn')], active: 'tynn' }))).not.toContain('No site open.');
+    it('CONTROL: with a tab open, no welcome page', () => {
+        expect(render(snap({ tabs: [tab('tynn')], active: 'tynn' }))).not.toContain('data-browser-welcome');
     });
 });
