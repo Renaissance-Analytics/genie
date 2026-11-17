@@ -25,7 +25,7 @@ export function ViewHeader({ crumbs, status, path, actions }: { crumbs: readonly
                 {/* react-fancy's Breadcrumbs (menus and crumbs are navigation, not Buttons); below md it folds into a menu. */}
                 <Breadcrumbs separator={<span className="text-[13px] text-[var(--fg-4)]">/</span>} className="min-w-0 shrink items-center gap-1.5 overflow-hidden">
                     {crumbs.map((c, i) => (i < last ? (
-                        <Breadcrumbs.Item key={i} {...c.attrs} onClick={c.onClick} title={c.title ?? c.label} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
+                        <Breadcrumbs.Item key={i} {...c.attrs} {...(c.onClick ? { onClick: c.onClick } : {})} title={c.title ?? c.label} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
                             {c.label}
                         </Breadcrumbs.Item>
                     ) : (

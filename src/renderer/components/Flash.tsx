@@ -18,6 +18,8 @@ export function Flash({ note, children, attrs }: { note: string | null; children
         const t = setTimeout(() => setShown(null), FLASH_MS);
         return () => clearTimeout(t);
     }, [note]);
+    // Nothing to say and nothing to wrap: nothing at all in the page.
+    if (children === undefined && shown === null) return null;
     return (
         <Popover open={shown !== null} onOpenChange={(open) => { if (!open) setShown(null); }} placement="top">
             <Popover.Trigger className={children === undefined ? 'pointer-events-none absolute' : 'inline-flex shrink-0'} aria-hidden={children === undefined ? true : undefined}>

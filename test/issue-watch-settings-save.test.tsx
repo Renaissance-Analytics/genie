@@ -40,7 +40,6 @@ function mount(onSet: Props['onSet'], prefs = PREFS) {
 const box = (kind: string) => host.querySelector(`[data-issue-watch-kind="${kind}"] input`) as HTMLInputElement;
 const toggle = (kind: string) => act(() => { box(kind).click(); });
 const status = () => host.querySelector('[data-iw-save]');
-afterEach(() => { document.querySelectorAll('[data-react-fancy-portal]').forEach((n) => n.remove()); });
 
 describe('each change says what happened', () => {
     it('saving, then saved', async () => {
