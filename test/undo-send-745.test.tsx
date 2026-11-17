@@ -19,7 +19,7 @@ vi.mock('@particle-academy/react-fancy', async (original) => {
 });
 const { ChatFlyout } = await import('../src/renderer/components/ChatFlyout.js');
 const { ChatHeldSends } = await import('../src/renderer/components/ChatHeldSend.js');
-const { SendGrace, UNDO_SEND_MS, draftWithUndone, holdsSend } = await import('../src/core/send-grace.js');
+const { SendGrace, UNDO_SEND_MS, draftWithUndone, holdsSend, putBackUndone } = await import('../src/core/send-grace.js');
 type ChatThread = import('../src/renderer/components/ChatFlyout.js').ChatThread;
 type HeldSend = import('../src/core/send-grace.js').HeldSend;
 
@@ -103,7 +103,36 @@ describe('the grace window (core/send-grace.ts)', () => {
     });
 });
 
-const A: ChatThread = { agentId: 'a_lark', name: 'lark', fidelity: 'declared', unread: null, messages: [] };
+describe('the words go back (putBackUndone)', () => {
+    const typed = { v: 1 as const, text: 'and also', pills: [], attachments: [] };
+    function handles() {
+        const calls: Array<{ text: string; focus: boolean | undefined }> = [];
+        const map = new Map([['a_lark', { getDraft: () => typed, setDraft: (d: { text: string }, o?: { focus?: boolean }) => { calls.push({ text: d.text, focus: o?.focus }); } }]]);
+        return { map, calls };
+    }
+
+    it('Undo (the person’s click) puts them in the composer and focuses it, and keeps them in the draft store', () => {
+        const { map, calls } = handles();
+        const kept: string[] = [];
+        putBackUndone(map as never, 'a_lark', 'fix the header', true, { initial: () => null, change: (_c, d) => { kept.push(d.text); } });
+        expect(calls).toEqual([{ text: 'fix the header\nand also', focus: true }]);
+        expect(kept).toEqual(['fix the header\nand also']);
+    });
+
+    it('a send refused after the window puts them back WITHOUT taking the caret (genie#1235)', () => {
+        const { map, calls } = handles();
+        putBackUndone(map as never, 'a_lark', 'fix the header', false, null);
+        expect(calls).toEqual([{ text: 'fix the header\nand also', focus: false }]);
+    });
+
+    it('a chat whose composer is not mounted: kept in the draft store, from what it holds', () => {
+        const kept: string[] = [];
+        putBackUndone(new Map(), 'a_wren', 'later', false, { initial: () => ({ v: 1, text: 'draft', pills: [], attachments: [] }), change: (_c, d) => { kept.push(d.text); } });
+        expect(kept).toEqual(['later\ndraft']);
+    });
+});
+
+const A: ChatThread ={ agentId: 'a_lark', name: 'lark', fidelity: 'declared', unread: null, messages: [] };
 type Submit = (text: string, picked: unknown[]) => unknown;
 
 function composer(busy: boolean, onSend: (...a: unknown[]) => Promise<{ kind: 'sent' }>) {

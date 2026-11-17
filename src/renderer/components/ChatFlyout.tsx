@@ -28,7 +28,7 @@ import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
-import { SendGrace, draftWithUndone, holdsSend, type HeldSend } from '../../core/send-grace.js';
+import { SendGrace, holdsSend, putBackUndone, type HeldSend } from '../../core/send-grace.js';
 import { ChatHeldSends } from './ChatHeldSend.js';
 import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
@@ -453,22 +453,19 @@ function ChatFlyoutBody({
      */
     const onSendRef = useRef(onSend);
     onSendRef.current = onSend;
-    const putBack = (chat: string, text: string): void => {
-        const handle = composerRefs.current.get(chat);
-        const next = draftWithUndone(handle?.getDraft() ?? (keeper && chat !== '' ? keeper.initial(chat) ?? null : null), text);
-        handle?.setDraft(next, { focus: true });
-        if (keeper && chat !== '') keeper.change(chat, next);
-    };
+    // The words back in their chat's composer (core/send-grace.ts `putBackUndone`); only Undo, the person's click, focuses it.
+    const putBack = (chat: string, text: string, focus: boolean): void => putBackUndone(composerRefs.current, chat, text, focus,
+        keeper && chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
     const putBackRef = useRef(putBack);
     putBackRef.current = putBack;
     const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
         // Refused after the window: the words go back to the composer, with why — never lost.
         if (out && out.kind === 'failed') {
-            putBackRef.current(h.chat, h.text);
+            putBackRef.current(h.chat, h.text, false);
             setSendErrors((e) => withSendError(e, h.chat, out.reason));
         }
     }, (error: unknown) => {
-        putBackRef.current(h.chat, h.text);
+        putBackRef.current(h.chat, h.text, false);
         setSendErrors((e) => withSendError(e, h.chat, errorWords(error)));
     })));
     const [, setHeldSeq] = useState(0);
@@ -478,9 +475,8 @@ function ChatFlyoutBody({
     }, [grace]);
     const undoSend = (id: string): void => {
         const h = grace.undo(id);
-        if (h) putBack(h.chat, h.text);
+        if (h) putBack(h.chat, h.text, true);
     };
-    const heldHere = grace.held(thread?.agentId ?? '').length;
     // What the end of the thread IS: its agent, how many messages, and how long the last one is — a reply is one row that
     // GROWS as the agent writes (beta.33 item 6), and keyed on the count alone its words were written below a chat that
     // did not move until the next message arrived.
@@ -538,7 +534,7 @@ function ChatFlyoutBody({
             el.scrollTop = el.scrollHeight - anchorRef.current;
             anchorRef.current = null;
         } else if (followRef.current) el.scrollTop = el.scrollHeight;
-    }, [followKey, lines, heldHere]);
+    }, [followKey, lines]);
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
      *
@@ -945,6 +941,8 @@ function ChatFlyoutBody({
                             // To a busy agent, text only: held for the undo window; the composer empties now (Tynn #745).
                             if (holdsSend({ busy, files: picked.length }) && text.trim() !== '') {
                                 grace.hold(chat, text);
+                                // It is drawn at the end of the thread: a reader following there sees it, as a sent one.
+                                if (followRef.current) requestAnimationFrame(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; });
                                 return Promise.resolve(undefined);
                             }
                             return submitFromComposer({

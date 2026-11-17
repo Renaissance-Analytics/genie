@@ -1,4 +1,5 @@
 import type { ChatDraft } from './chat-drafts.js';
+import type { DraftHandle } from './plan-pill.js';
 
 /**
  * UNDO SEND (Tynn #745, LiftPoint onboarding 00:31: "Once it's sent, it's sent. I don't have a way to back out").
@@ -132,4 +133,22 @@ export class SendGrace {
 export function draftWithUndone(current: ChatDraft | null, text: string): ChatDraft {
     const base = current ?? { v: 1 as const, text: '', pills: [], attachments: [] };
     return { ...base, text: base.text.trim() === '' ? text : `${text}\n${base.text}` };
+}
+
+/**
+ * Put undone (or refused) words back in their chat's composer, ahead of what was typed since, and in its kept draft. The
+ * caret moves only when `focus` — the person's own Undo click; a send refused after the window never takes it (genie#1235).
+ */
+export function putBackUndone(
+    handles: ReadonlyMap<string, DraftHandle>,
+    chat: string,
+    text: string,
+    focus: boolean,
+    keep: { initial: (chat: string) => ChatDraft | null; change: (chat: string, draft: ChatDraft) => void } | null,
+): ChatDraft {
+    const handle = handles.get(chat);
+    const next = draftWithUndone(handle?.getDraft() ?? keep?.initial(chat) ?? null, text);
+    handle?.setDraft(next, { focus });
+    keep?.change(chat, next);
+    return next;
 }
