@@ -29,6 +29,7 @@ export async function presentationFixture() {
         const ports: HostFeaturePresentation = {
             openFlowEditor: async route => { record(owner, 'flow', route); },
             openInBrowser: async url => { record(owner, 'site', url); view.url = url; return { ok: true }; },
+            openExternal: async url => { record(owner, 'external', url); },
             browser: { snapshot: () => ({ ...view }), navigate: async url => { record(owner, 'navigate', url); view.url = url; },
                 back: async () => { record(owner, 'back'); view.url = 'https://previous.gen/'; view.canGoForward = true; },
                 forward: async () => { record(owner, 'forward'); view.url = 'https://next.gen/'; view.canGoBack = true; },
@@ -63,6 +64,7 @@ export async function presentationFixture() {
         deliverToAgent: async (id, text) => { deliveries.push([id, text]); return true; },
         trustCertificate: async () => { record('host', 'trust-certificate'); return { ok: true }; },
         deferTrustCertificate: () => { record('host', 'defer-certificate'); }, syncHosts: () => f.hosting.syncHosts(),
+        deferHosts: () => { record('host', 'defer-hosts'); },
         deckItems: () => deckItems,
     };
     Object.assign(f.service.ports, { presentation: resolve, system, deck });

@@ -141,6 +141,10 @@ export function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, f
                 ) : null}
             </div>
 
+            {/* WHY GENIE ASKS, in place (Tynn #743): what the computer will be asked and why — "Open shop.gen in your
+                browser" says the one prompt before it is clicked, never behind Show all. Drawn from the first paint. */}
+            {item.source === 'genie' && item.why ? <p data-deck-why={item.id} className="mt-1 max-w-[72ch] text-[12px] leading-snug text-[var(--fg-3)]">{item.why}</p> : null}
+
             {/* The whole text, opened (its line breaks kept): instructions read step by step, not as one run-on line. */}
             {expanded && !questions ? <DeckItemBody item={item} /> : null}
 

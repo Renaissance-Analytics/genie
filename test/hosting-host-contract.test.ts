@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import { ELEVATION_WAITING_DECK_ID } from '../src/core/elevation-waiting.js';
+import { SITE_REACH_DECK_PREFIX } from '../src/core/site-reach.js';
 import type { PrivilegedStep } from '../src/main/elevate.js';
 import { composeHosting, type HostingStack } from '../src/main/hosting-compose.js';
 import { HostingService, WindowElevation } from '../src/main/hosting-host.js';
@@ -129,7 +130,7 @@ describe('Genie’s hosting in genie-host, read and driven from a window', () =>
         await tick();
         await r.stack.frontDoorSettled();
         expect(r.elevationsAsked).toEqual([]);
-        expect(r.stack.trustDeckItems().map((i) => i.id)).toContain('genie:hosts-approval');
+        expect(r.stack.trustDeckItems().map((i) => i.id)).toContain(`${SITE_REACH_DECK_PREFIX}shop.gen`);
         // The person approves from somewhere with no window (a phone's Deck): held, answered “waiting for a window”.
         const held = await r.stack.syncHosts();
         expect('error' in held ? held.error : '').toMatch(/waiting for a window/);
@@ -148,11 +149,15 @@ describe('Genie’s hosting in genie-host, read and driven from a window', () =>
         await r.stack.frontDoorSettled();
         await tick();
         expect(r.elevationsAsked).toEqual([]);
-        expect(w.replica.trustDeckItems().map((i) => i.id)).toContain('genie:hosts-approval');
+        expect(w.replica.trustDeckItems().map((i) => i.id)).toContain(`${SITE_REACH_DECK_PREFIX}shop.gen`);
         expect(await w.replica.syncHosts()).toEqual({ changed: true, elevated: true });
         await tick();
         expect(r.elevationsAsked.length).toBe(1);
         expect(w.replica.trustDeckItems().map((i) => i.id)).not.toContain(ELEVATION_WAITING_DECK_ID);
-        expect(w.replica.trustDeckItems().map((i) => i.id)).not.toContain('genie:hosts-approval');
+        // The hosts write landed: what is left of "Open shop.gen in your browser" is the certificate (untrusted here), with
+        // no hosts block (Tynn #743).
+        const left = w.replica.trustDeckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX));
+        expect(left?.why).toBe('Your computer asks once for administrator permission: Genie trusts its own certificate. Until then the site works in Genie’s browser.');
+        expect(left?.detail).toBeUndefined();
     });
 });

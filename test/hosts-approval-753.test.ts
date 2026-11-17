@@ -6,6 +6,7 @@ import { join, relative } from 'node:path';
 import type { JsonObject } from '@particle-academy/prism-mcp';
 import { afterEach, describe, expect, it } from 'vitest';
 import { hostsFileBlock } from '../src/core/gen-router.js';
+import { SITE_REACH_DECK_PREFIX } from '../src/core/site-reach.js';
 import { mintAgentId } from '../src/core/identity.js';
 import type { DeckItem } from '../src/core/deck.js';
 import { answerDeck, type DeckAnswerPorts } from '../src/main/deck-answer.js';
@@ -71,7 +72,10 @@ async function call(tools: Registration[], name: 'sites' | 'services', args: Jso
 }
 
 const settled = async (r: HostingRig) => { await tick(); await r.stack.frontDoorSettled(); await tick(); };
-const hostsAsk = (r: HostingRig): DeckItem | undefined => r.stack.trustDeckItems().find((i) => i.id === 'genie:hosts-approval');
+// Since Tynn #743 the ask for a NEW name is the one "Open <name> in your browser" row (core/site-reach.ts); with the
+// certificate already trusted (as these rigs say) it carries the hosts write alone.
+const hostsAsk = (r: HostingRig): DeckItem | undefined => r.stack.trustDeckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX));
+const trustedRig = () => hostingRig({ hosting: { trustStore: { has: async () => true } } });
 
 describe('an agent’s site never raises the OS prompt: Genie asks in the Deck, and the person’s Approve is the prompt', () => {
     it('agent `sites add` with a window connected → ZERO Elevator calls', async () => {
@@ -85,22 +89,23 @@ describe('an agent’s site never raises the OS prompt: Genie asks in the Deck, 
         expect(rig.elevationsAsked).toEqual([]);
     });
 
-    it('…and the person is asked in the Deck: administrator permission, the name, Approve / Not now / Copy the block', async () => {
-        rig = await hostingRig();
+    it('…and the person is asked in the Deck, in place: “Open shop.gen in your browser”, why the computer asks, Open in browser / Not now / Copy the block', async () => {
+        rig = await trustedRig();
         await rig.window();
         const { tools } = agentTools(rig);
         await call(tools, 'sites', { action: 'add', name: 'shop', repoPath: rig.ws, mode: 'proxy', hostPort: 5175 });
         await settled(rig);
         const item = hostsAsk(rig);
-        expect(item?.title).toBe('Genie needs administrator permission to add shop.gen to your hosts file so your normal browser can open it');
-        expect(item?.answer).toEqual({ kind: 'inline', options: [{ id: 'approve', label: 'Approve', tone: 'ok' }, { id: 'later', label: 'Not now', tone: 'neutral' }, { id: 'copy-detail', label: 'Copy the block', tone: 'neutral' }] });
+        expect(item?.title).toBe('Open shop.gen in your browser');
+        expect(item?.why).toBe('Your computer asks once for administrator permission: Genie adds shop.gen to your hosts file. Until then the site works in Genie’s browser.');
+        expect(item?.answer).toEqual({ kind: 'inline', options: [{ id: 'open', label: 'Open in browser', tone: 'ok' }, { id: 'later', label: 'Not now', tone: 'neutral' }, { id: 'copy-detail', label: 'Copy the block', tone: 'neutral' }] });
         expect(item?.detail).toBe(hostsFileBlock(['shop.gen']));
         const hosts = rig.stack.externalFrontDoor.running ? rig.stack.externalFrontDoor.hosts : null;
         expect(hosts).toMatchObject({ changed: false, awaitingApproval: true, manualBlock: hostsFileBlock(['shop.gen']) });
     });
 
-    it('the person’s Approve is the ONE elevation, carrying the hosts step; the ask is then gone', async () => {
-        rig = await hostingRig();
+    it('the person’s Open in browser is the ONE elevation, carrying the hosts step; the ask is then gone', async () => {
+        rig = await trustedRig();
         const w = await rig.window();
         const { tools } = agentTools(rig);
         await call(tools, 'sites', { action: 'add', name: 'shop', repoPath: rig.ws, mode: 'proxy', hostPort: 5175 });
@@ -108,8 +113,8 @@ describe('an agent’s site never raises the OS prompt: Genie asks in the Deck, 
         const item = hostsAsk(rig);
         expect(item).toBeDefined();
         expect(rig.elevationsAsked).toHaveLength(0);
-        const ports = { attention: {} as never, approvals: {} as never, inbox: {} as never, syncHosts: () => w.replica.syncHosts(), deferHosts: () => w.replica.deferHosts() } as DeckAnswerPorts;
-        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'approve' }, ports);
+        const ports = { attention: {} as never, approvals: {} as never, inbox: {} as never, trustCertificate: () => w.replica.trustCertificate(), syncHosts: () => w.replica.syncHosts(), deferHosts: () => w.replica.deferHosts() } as DeckAnswerPorts;
+        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, ports);
         await settled(rig);
         expect(rig.elevationsAsked.map((b) => b.map((s) => s.id))).toEqual([[HOSTS_STEP_ID]]);
         expect(hostsAsk(rig)).toBeUndefined();
