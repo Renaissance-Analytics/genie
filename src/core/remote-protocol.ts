@@ -61,6 +61,8 @@ export const REMOTE_METHODS = [
     // A tool row's whole output, read when a person opens the row (Tynn story #386).
     'agents.toolOutput',
     'agents.attachment',
+    // What a composer holds now, relayed to the other windows on the agent (Tynn #730): a write, on the baton like a send.
+    'agents.typing',
     'workspaces.previewAdd',
     'workspaces.confirmAdd',
     'workspaces.create',
@@ -185,7 +187,10 @@ export const COMPANION_EVENT = 'remote-companion';
 export interface CompanionEvent { readonly revoked: string }
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot', typing: 'local-typing' } as const;
+
+/** What another window on an agent is typing (Tynn #730), to a remote connection; this machine's windows hear LOCAL_EVENTS.typing. */
+export const TYPING_EVENT = 'agent-typing';
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -235,6 +240,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.toolOutput': 'read',
     // One image a thread kept, for a sent message's pill (Tynn #642): a read, agent-scoped.
     'agents.attachment': 'read',
+    'agents.typing': 'write',
     // Tynn #835: the folder is picked IN THE WINDOW (a FileBrowser over the host's own disk); the preview reads a path.
     'workspaces.previewAdd': 'read',
     // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
@@ -352,7 +358,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
 export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 

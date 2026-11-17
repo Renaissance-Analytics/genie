@@ -10,7 +10,8 @@ import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-o
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { cancelIntent, type CancelIntent, type CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
-import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, TYPING_EVENT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { TYPING_MAX_CHARS, type TypingEvent } from '../core/typing-mirror.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { HostApi } from './remote-host.js';
@@ -303,6 +304,8 @@ const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0
 
 export function buildHostApi(deps: HostApiDeps): HostApi {
     const agent = (id: unknown): AgentRecord | null => deps.find(str(id));
+    /** The typing relay's listeners: each event stream (onEvent) while it is open (Tynn #730). */
+    const typingListeners = new Set<(event: TypingEvent) => void>();
     const owner = (): LocalOwnerDeps => {
         if (!deps.localOwner) throw new Error('this host has no local owner operations');
         return deps.localOwner;
@@ -508,6 +511,18 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.attachment':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'attachment names an agent and an image' };
                 return deps.agentOps.attachment ? deps.agentOps.attachment(args[0], args[1]) : { ok: false, reason: 'this host keeps no images' };
+            /*
+             * WHAT A COMPOSER HOLDS NOW (Tynn #730): relayed, never kept, to every window on this machine and every remote one
+             * (RemoteHost filters a guest to its workspace). Whoever typed is the CALLER, as RemoteHost admitted it: this
+             * machine's own window is `null`, anyone else by their connection's label. Nothing the caller says names them.
+             */
+            case 'agents.typing': {
+                const r = agent(args[0]);
+                if (!r || typeof args[1] !== 'string' || typeof args[2] !== 'string' || args[2] === '' || args[2].length > 64) return { ok: false, reason: 'typing names an agent, its text and the window' };
+                const event: TypingEvent = { agentId: r.id, text: args[1].slice(0, TYPING_MAX_CHARS), source: args[2], label: context.origin === 'local-window' ? null : context.label };
+                for (const listener of [...typingListeners]) listener(event);
+                return { ok: true };
+            }
             case 'workspaces.previewAdd':
                 // Preserve the retired native wizard's early refusals before any coercion or disk operation.
                 if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
@@ -791,6 +806,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
                 deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
+                // What another window is typing (Tynn #730): this machine's windows on their own channel, remote ones on theirs.
+                (() => {
+                    const onTyping = (event: TypingEvent) => { listener(TYPING_EVENT, event); listener(LOCAL_EVENTS.typing, event); };
+                    typingListeners.add(onTyping);
+                    return () => { typingListeners.delete(onTyping); };
+                })(),
             ];
             return () => { for (const off of offs) off(); };
         },

@@ -13,6 +13,7 @@ import {
     COMPANION_EVENT,
     WORKSPACE_SCOPED_METHODS,
     LOCAL_EVENTS as LOCAL_EVENT_CHANNELS,
+    TYPING_EVENT,
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
@@ -1186,7 +1187,7 @@ export class RemoteHost {
     #forNonOwner(channel: string, payload: unknown, workspaceId: string | null): unknown {
         if (workspaceId !== null) return this.#forGuest(channel, payload, workspaceId);
         if (channel === 'features') return withoutRemoteSecrets(payload);
-        if (channel === 'snapshot' || channel === 'activity' || channel === 'terminal-data' || channel === 'terminal-exit' || channel.startsWith('agent:')) return payload;
+        if (channel === 'snapshot' || channel === 'activity' || channel === 'terminal-data' || channel === 'terminal-exit' || channel === TYPING_EVENT || channel.startsWith('agent:')) return payload;
         return NOT_SENT;
     }
 
@@ -1200,8 +1201,8 @@ export class RemoteHost {
     #forGuest(channel: string, payload: unknown, workspaceId: string): unknown {
         if (channel === 'snapshot') return filterSnapshotForWorkspace(payload as Parameters<typeof filterSnapshotForWorkspace>[0], workspaceId);
         if (channel.startsWith('agent:')) return this.#api.workspaceOfAgent(channel.slice('agent:'.length)) === workspaceId ? payload : NOT_SENT;
-        // An agent's activity feed (the Dashboard's lanes): only for an agent of the guest's workspace.
-        if (channel === 'activity') {
+        // An agent's activity feed (the Dashboard's lanes), or what someone is typing to it (Tynn #730): only for an agent of the guest's workspace.
+        if (channel === 'activity' || channel === TYPING_EVENT) {
             const agentId = (payload as { agentId?: unknown } | null)?.agentId;
             return typeof agentId === 'string' && this.#api.workspaceOfAgent(agentId) === workspaceId ? payload : NOT_SENT;
         }

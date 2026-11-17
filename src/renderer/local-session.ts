@@ -301,6 +301,9 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             diagnose: (id) => requestAgent((agents) => agents.diagnose(id)),
             toolOutput: (id, toolCallId) => requestAgent((agents) => agents.toolOutput(id, toolCallId)),
             attachment: (id, attachmentId) => requestAgent((agents) => agents.attachment(id, attachmentId)),
+            // Tynn #730: what this window types, and what another window on an agent types, across a reconnect.
+            typing: (id, text, source) => requestAgent((agents) => agents.typing?.(id, text, source) ?? Promise.resolve({ ok: false, reason: 'this host relays no typing' })),
+            onTyping: (listener) => subscribe((b) => b.agents.onTyping?.(listener) ?? (() => {})),
         },
         workspaces: {
             previewAdd: (path) => request((ws) => ws.previewAdd(path)),

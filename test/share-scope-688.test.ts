@@ -83,6 +83,7 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('agents.diagnose', 'allow', [A], [[B]]),
         row('agents.toolOutput', 'allow', [A, 't1'], [[B, 't1']]),
         row('agents.attachment', 'allow', [A, 'i1'], [[B, 'i1']]),
+        row('agents.typing', 'allow', [A, 'hello', 'w1'], [[B, 'hello', 'w1']]),
         row('activity', 'allow', ['tynn'], [['fancy']]),
         row('takeOver', 'refuse', [A]),
     ],
