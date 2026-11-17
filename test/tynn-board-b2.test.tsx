@@ -200,9 +200,10 @@ describe('the tab', () => {
         expect(html).toMatch(/data-tynn-retry=""/);
     });
 
-    it('a finished action says it worked', () => {
+    // REWRITTEN (the owner, 2026-11-16): "it worked" is a Flash popover, never a line that pushes the board.
+    it('a finished action adds no line', () => {
         const html = renderToStaticMarkup(<TynnBoardPanel state={{ state: 'ready', view: STORIES, op: { action: 'story.create', phase: 'done' } }} onScope={noop} onAction={noop} />);
-        expect(html).toMatch(/data-tynn-op="done"/);
+        expect(html).not.toMatch(/data-tynn-op="done"/);
         expect(html).not.toMatch(/data-tynn-new-form=/);
     });
 

@@ -40,6 +40,7 @@ function mount(onSet: Props['onSet'], prefs = PREFS) {
 const box = (kind: string) => host.querySelector(`[data-issue-watch-kind="${kind}"] input`) as HTMLInputElement;
 const toggle = (kind: string) => act(() => { box(kind).click(); });
 const status = () => host.querySelector('[data-iw-save]');
+afterEach(() => { document.querySelectorAll('[data-react-fancy-portal]').forEach((n) => n.remove()); });
 
 describe('each change says what happened', () => {
     it('saving, then saved', async () => {
@@ -49,7 +50,8 @@ describe('each change says what happened', () => {
         expect(save.sent).toEqual([{ delivery: 'push', kinds: ['issue.new', 'pr.new'] }]);
         expect(status()?.getAttribute('data-iw-save')).toBe('saving');
         await save.finish({ ok: true });
-        expect(status()?.getAttribute('data-iw-save')).toBe('saved');
+        expect(status()).toBeNull(); // "Saved" is a Flash popover (2026-11-16), not a word in the row
+        expect(document.querySelector('[data-flash]')?.textContent).toContain('Saved');
     });
 
     it('the box follows the click at once, and goes back if the save fails', async () => {
@@ -74,7 +76,8 @@ describe('each change says what happened', () => {
         expect(save.sent).toEqual([{ delivery: 'push', kinds: ['issue.new', 'pr.new'] }, { delivery: 'push', kinds: ['issue.new', 'pr.new'] }]);
         expect(status()?.getAttribute('data-iw-save')).toBe('saving');
         await save.finish({ ok: true });
-        expect(status()?.getAttribute('data-iw-save')).toBe('saved');
+        expect(status()).toBeNull(); // "Saved" is a Flash popover (2026-11-16), not a word in the row
+        expect(document.querySelector('[data-flash]')?.textContent).toContain('Saved');
     });
 
     it('a save that throws is a failure, not a spinner forever', async () => {
@@ -99,7 +102,8 @@ describe('each change says what happened', () => {
         await act(async () => { answers[0]!({ ok: false, reason: 'stale' }); await Promise.resolve(); });
         expect(status()?.getAttribute('data-iw-save')).toBe('saving');
         await act(async () => { answers[1]!({ ok: true }); await Promise.resolve(); });
-        expect(status()?.getAttribute('data-iw-save')).toBe('saved');
+        expect(status()).toBeNull(); // "Saved" is a Flash popover (2026-11-16), not a word in the row
+        expect(document.querySelector('[data-flash]')?.textContent).toContain('Saved');
     });
 });
 

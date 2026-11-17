@@ -19,14 +19,14 @@ const session = (over: Partial<LiveSession> = {}): LiveSession => ({
 
 describe('tabs by fidelity — ABSENCE of a tab, not a disabled tab', () => {
     it('gives a declared agent Stream, Files, Changes and Shells, with Stream first', () => {
-        expect(tabsFor('declared')).toEqual(['stream', 'files', 'changes', 'shells', 'settings']);
+        expect(tabsFor('declared')).toEqual(['stream', 'changes', 'shells', 'settings']);
     });
 
     it('gives an observed agent Activity first (the board), then Terminal, and NO Stream at all', () => {
         // Genie sees bytes from that TUI and nothing else. A Stream tab there would be a tab
         // that cannot populate — and *"a disabled control is an accusation; a different shape
         // is a fact."*
-        expect(tabsFor('observed')).toEqual(['activity', 'terminal', 'files', 'changes']);
+        expect(tabsFor('observed')).toEqual(['activity', 'terminal', 'changes']);
         expect(tabsFor('observed')).not.toContain('stream');
     });
 
@@ -51,7 +51,7 @@ describe('tabs by fidelity — ABSENCE of a tab, not a disabled tab', () => {
     it('gives a remote agent the two tabs it can fill, and no composer-bearing one', () => {
         // Presence only. Files and Changes come from git, which Genie can read without the
         // agent's cooperation; everything else would be a claim about an unreachable machine.
-        expect(tabsFor('remote')).toEqual(['files', 'changes']);
+        expect(tabsFor('remote')).toEqual(['changes']);
     });
 });
 

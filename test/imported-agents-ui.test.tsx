@@ -59,13 +59,14 @@ describe('the workspace came with agents', () => {
         expect(bolt!.open).toMatch(/\sdisabled=""/);
         expect(bolt!.open).not.toMatch(/aria-busy="true"/);
         expect(bolt!.inner).not.toMatch(/animate-spin/);
-        expect(html).toContain('atlas is registered. Its .agents/atlas/AGENT.md was read, not rewritten.');
+        // The notice is a Flash popover (2026-11-16), never a line on the page.
+        expect(html).not.toContain('atlas is registered.');
         expect(html).toContain('acme already has an agent named bolt');
     });
 
-    it('once all are adopted the screen stays as the confirmation, with nothing left to press but Open', () => {
+    it('once all are adopted nothing is left to press but Open; the notice is a Flash, not a line', () => {
         const html = renderToStaticMarkup(<ImportedAgentsView {...base} agents={[]} notice="bolt is registered." />);
-        expect(html).toContain('bolt is registered.');
+        expect(html).not.toContain('bolt is registered.');
         expect(html).not.toContain('data-action="adopt-agent"');
         expect(html).toContain('data-action="open-workspace"');
     });

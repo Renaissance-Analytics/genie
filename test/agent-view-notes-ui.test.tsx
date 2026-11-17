@@ -24,7 +24,7 @@ describe('the tab note', () => {
     it('on the Stream: the live count; on Files: where it opens', () => {
         // Two timed rows inside the window: the turn marker 50 s ago and the edit 30 s ago — the span runs from the earliest.
         expect(render()).toMatch(/data-tab-note="live"[^>]*>2 events in the last 50s</);
-        expect(render({ tab: 'files' })).toMatch(/data-tab-note="files"[^>]*>Files and Changes open the workspace file panel, filtered to atlas</);
+        expect(render({ tab: 'changes' })).toMatch(/data-tab-note="files"[^>]*>Changes open the workspace file panel, filtered to atlas</);
     });
 });
 
@@ -34,7 +34,7 @@ describe('the diff header and footer', () => {
         expect(html).toContain('data-inspector="diff"');
         expect(html).toMatch(/data-diff-header[^>]*>[\s\S]*?\+1[\s\S]*?edit 1 of 1/);
         expect(html).not.toMatch(/data-diff-header[^>]*>[\s\S]*?−0/);
-        expect(html).toMatch(/data-action="open-in-files"[^>]*data-nav="genie:\/\/agent\/a1\?tab=files"/);
+        expect(html).toMatch(/data-action="open-in-files"[^>]*data-nav="genie:\/\/workspace\/tynn\?files="/);
         expect(html).not.toContain('Revert this edit');
     });
 });

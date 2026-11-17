@@ -61,6 +61,9 @@ export function headerRepos<R extends { slug: string; lock?: LockState | { heldS
     return { inline: ordered.slice(0, count), more: ordered.slice(count) };
 }
 
+/** RED stub. */
+export function lockedRepos<R>(_repos: readonly R[]): R[] { return []; }
+
 export function repoChip(status: RepoStatus): RepoChip {
     if (status.lock) return { label: `${status.slug} · index.lock held`, tone: 'bad', fix: status.lock.stale ? 'Remove stale lock' : null };
     return { label: status.branch ? `${status.slug} · ${status.branch}` : status.slug, tone: 'normal', fix: null };
