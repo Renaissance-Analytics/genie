@@ -7,10 +7,15 @@
  * A person is a LABEL: a Pilot's Take Over window is a second connection under the same label, and is one person.
  */
 
+/** How a connected person may use this machine (Tynn #732): watch only, or full control. The person HERE picks it. */
+export type DriveMode = 'view' | 'control';
+
 export interface HereConnection {
     readonly id: string;
     readonly label: string;
     readonly driving: boolean;
+    /** Absent from an older host = full control. */
+    readonly mode?: DriveMode;
 }
 
 export interface ConnectedHere {
@@ -18,6 +23,8 @@ export interface ConnectedHere {
     readonly labels: readonly string[];
     /** Who holds the baton; `null` = nobody drives. */
     readonly driver: string | null;
+    /** Who may only watch (Tynn #732), in the order they appear. */
+    readonly viewOnly: readonly string[];
 }
 
 /** Who is connected now; `null` = nobody. */
@@ -25,7 +32,8 @@ export function connectedHere(connections: readonly HereConnection[]): Connected
     if (connections.length === 0) return null;
     const labels: string[] = [];
     for (const c of connections) if (!labels.includes(c.label)) labels.push(c.label);
-    return { labels, driver: connections.find((c) => c.driving)?.label ?? null };
+    const viewOnly = labels.filter((label) => connections.some((c) => c.label === label && c.mode === 'view'));
+    return { labels, driver: connections.find((c) => c.driving)?.label ?? null, viewOnly };
 }
 
 function names(labels: readonly string[]): string {
@@ -33,11 +41,14 @@ function names(labels: readonly string[]): string {
     return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 }
 
-/** The banner's words: who, and who drives. */
+/** The banner's words: who, who drives, and who may only watch (Tynn #732). */
 export function connectedWords(here: ConnectedHere): string {
     const who = `${names(here.labels)} ${here.labels.length === 1 ? 'is' : 'are'} connected`;
-    if (here.driver === null) return who;
-    return here.labels.length === 1 && here.labels[0] === here.driver ? `${who} · driving` : `${who} · ${here.driver} driving`;
+    const alone = here.labels.length === 1;
+    const parts = [who];
+    if (here.driver !== null) parts.push(alone && here.labels[0] === here.driver ? 'driving' : `${here.driver} driving`);
+    if (here.viewOnly.length > 0) parts.push(alone ? 'view only' : `${names(here.viewOnly)} view only`);
+    return parts.join(' · ');
 }
 
 /** The desktop notification for one arrival. */

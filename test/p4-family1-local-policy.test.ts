@@ -87,7 +87,7 @@ describe('local windows are not remote devices or remote state changes', () => {
         await local();
         expect(host.connections()).toEqual([]);
         await remote();
-        expect(host.connections()).toEqual([{ id: expect.any(String), label: 'remote driver', isOwner: true, workspaceId: null, driving: false }]);
+        expect(host.connections()).toEqual([{ id: expect.any(String), label: 'remote driver', isOwner: true, workspaceId: null, driving: false, mode: 'control' }]);
     });
     it('local hello/close request no remote-state snapshot; remote hello/close still notify', async () => {
         const change = vi.fn();

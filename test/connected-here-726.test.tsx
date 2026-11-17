@@ -28,7 +28,7 @@ describe('who is connected, in few words', () => {
     });
 
     it('one person with two windows is one name; the driver is named', () => {
-        expect(connectedHere([PILOT, PILOT_TAKEOVER])).toEqual({ labels: ['Pilot laptop'], driver: 'Pilot laptop' });
+        expect(connectedHere([PILOT, PILOT_TAKEOVER])).toEqual({ labels: ['Pilot laptop'], driver: 'Pilot laptop', viewOnly: [] });
         expect(connectedWords(connectedHere([PILOT, PILOT_TAKEOVER])!)).toBe('Pilot laptop is connected · driving');
     });
 

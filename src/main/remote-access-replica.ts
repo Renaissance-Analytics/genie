@@ -1,3 +1,4 @@
+import type { DriveMode } from '../core/connected-here.js';
 import type { PairRequest } from '../core/pair-confirm.js';
 import type { PinEnded } from '../core/remote.js';
 import type { RemoteAccessEvent, RemoteAccessStatus } from './remote-access-host.js';
@@ -26,6 +27,8 @@ export interface RemoteAccessView {
     revokeDevice(id: string): boolean | Promise<boolean>;
     lock(): unknown;
     unlock(): unknown;
+    /** Watch only, or full control, for one connected person (Tynn #732). */
+    setMode(label: string, mode: DriveMode): unknown;
     onChange(listener: () => void): () => void;
 }
 
@@ -74,6 +77,7 @@ export class RemoteAccessReplica implements RemoteAccessView {
     async revokeDevice(id: string): Promise<boolean> { return (await this.#call('revokeDevice', [id])) === true; }
     lock(): Promise<unknown> { return this.#call('lock', []); }
     unlock(): Promise<unknown> { return this.#call('unlock', []); }
+    setMode(label: string, mode: DriveMode): Promise<unknown> { return this.#call('setMode', [label, mode]); }
     /** The listener follows `remote_access` (genie-host applies it); Restart from Settings. */
     apply(): Promise<void> { return this.#call('apply', []).then(() => undefined); }
     restart(): Promise<void> { return this.#call('restart', []).then(() => undefined); }

@@ -27,6 +27,7 @@ import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { PairRequest } from '../core/pair-confirm.js';
 import type { PinEnded } from '../core/remote.js';
+import type { DriveMode } from '../core/connected-here.js';
 import type { AnnotatedRow, SyncResult } from '../core/integrations.js';
 import type { GithubView } from '../core/github.js';
 import type { PluginEntry } from '../main/plugin-host.js';
@@ -621,6 +622,8 @@ export type FeatureAction =
     | { kind: 'remote.answerPair'; id: string; allow: boolean }
     | { kind: 'remote.revokeDevice'; deviceId: string }
     | { kind: 'remote.lock' }
+    /** Watch only, or full control, for one connected person (Tynn #732): from this machine's own window only. */
+    | { kind: 'remote.setMode'; label: string; mode: DriveMode }
     | { kind: 'remote.unlock' }
     /** Stop and start the listener (Genie 1's restart). */
     | { kind: 'remote.restart' }

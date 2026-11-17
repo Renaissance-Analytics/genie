@@ -2363,7 +2363,7 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
     if (state?.connected && state.host) {
         return (
             <div data-remote-connected className="flex flex-wrap items-center gap-3 text-sm">
-                <span>Driving {state.host} — {state.locked ? 'locked' : state.driving ? 'you hold the baton' : state.driver ? `${state.driver} is driving` : 'nobody is driving'}</span>
+                <span>Driving {state.host} — {state.viewOnly ? 'view only' : state.locked ? 'locked' : state.driving ? 'you hold the baton' : state.driver ? `${state.driver} is driving` : 'nobody is driving'}</span>
                 {upgradeLine}
                 {/* The host's OWNER only: a shared workspace cannot change the host itself (main/remote-host.ts refuses it). */}
                 {onUpgradeHost && state.isOwner && !upgrading ? <Button size="xs" type="button" data-action="upgrade-host" className={`ml-auto ${button}`} onClick={onUpgradeHost}>Upgrade {state.host}</Button> : null}

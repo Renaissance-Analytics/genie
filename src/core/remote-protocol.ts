@@ -185,7 +185,8 @@ export const BATON_EVENT = 'remote-baton';
 /** A Take Over window's connection is told when its ticket stops letting it type, and why (Tynn #529 part A). */
 export const COMPANION_EVENT = 'remote-companion';
 export interface CompanionEvent { readonly revoked: string }
-export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
+/** `viewOnly` (Tynn #732): the person at the host set this window's person to watch only; absent = full control. */
+export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null; readonly viewOnly?: true }
 
 export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot', typing: 'local-typing' } as const;
 
@@ -435,7 +436,8 @@ export type WireMessage =
      */
     | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string }
     /** `readonly` (Tynn #688): the host's word that this connection may only read; absent from an older host. */
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; token?: string; protocol?: number; build?: string }
+    /** `viewOnly` (Tynn #732): the person at the host has set this person to watch only; absent = full control. */
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; viewOnly?: true; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
     /**
      * The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). `guest`: a
