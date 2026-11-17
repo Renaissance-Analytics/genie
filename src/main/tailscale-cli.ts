@@ -81,6 +81,8 @@ export interface TailscaleStatus {
     // Tailscale login link expires, so a kept link is the "this link has expired" page. A sign-in asks `up` for a new one.
     /** How to get out of `state`; null when nothing is wrong (or nothing is known). */
     remedy?: TailscaleRemedy | null;
+    /** Genie's own Install is under way: downloading, checking, or its installer open and Tailscale not there yet (Tynn #748). */
+    installing?: boolean;
 }
 
 /** First IPv4 in a TailscaleIPs[] (the list also carries the IPv6 ULA). */
