@@ -153,6 +153,7 @@ import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
 import { PlaywrightHost, osConnections } from './playwright-host.js';
+import { playwrightServerPort } from './playwright-server.js';
 import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
@@ -1247,7 +1248,7 @@ async function main(): Promise<void> {
         server: {
             supervisor: processSupervisor, workspaceId: 'genie', cwd: home,
             cliDir: (version) => join(home, 'genie2-toolchain', 'playwright', 'cli', version),
-            allocatePort: () => 20_000 + (randomBytes(2).readUInt16BE(0) % 20_000),
+            allocatePort: playwrightServerPort,
             mintToken: () => randomBytes(32).toString('base64url'),
             now: () => Date.now(),
             connections: (port) => osConnections(port, process.platform, async (binary, args) => { const r = await execFileRunner(binary, args, { timeoutMs: 10_000 }); return { exitCode: r.exitCode, stdout: r.streams.stdout }; }),

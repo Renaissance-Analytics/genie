@@ -17,6 +17,7 @@ import { ConnectRemote } from '../src/renderer/components/FeatureSurfaces.js';
 import { TitleBar } from '../src/renderer/components/TitleBar.js';
 import type { FeatureAction, RemoteSection } from '../src/renderer/features.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
+import { markupRoot, nodeText } from './helpers/markup-text.js';
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 let el: HTMLDivElement;
@@ -31,13 +32,17 @@ const section = (connections: Conn[]): RemoteSection => ({
     host: 'client-box', url: null, unavailable: null, locked: false, pin: null, devices: [], pairRequests: [], connections,
     enabled: true, firewall: false, firewallRule: null, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null,
 } as unknown as RemoteSection);
+/** The radios of one person's mode switch, as [label, aria-checked], read from the parsed markup. */
 const radios = (html: string, label: string) => {
-    const at = html.indexOf(`data-connected-mode="${label}"`);
-    expect(at).toBeGreaterThan(-1);
-    const after = html.indexOf('data-connected-mode="', at + 1);
-    const group = html.slice(at, after === -1 ? html.length : after);
-    expect(group).toMatch(/role="radiogroup"/);
-    return [...group.matchAll(/role="radio"[^>]*aria-checked="(true|false)"[^>]*>([\s\S]*?)<\//g)].map((m) => [m[2]!.replace(/<[^>]+>/g, ''), m[1]]);
+    const switcher = Array.from(markupRoot(html).querySelectorAll('[data-connected-mode]')).find((e) => e.getAttribute('data-connected-mode') === label);
+    expect(switcher, `a mode switch for ${label}`).toBeDefined();
+    const group = switcher!.matches('[role="radiogroup"]') ? switcher! : switcher!.querySelector('[role="radiogroup"]');
+    expect(group, 'a radiogroup').not.toBeNull();
+    return Array.from(group!.querySelectorAll('[role="radio"]')).map((r) => {
+        const checked = r.getAttribute('aria-checked');
+        expect(['true', 'false'], 'aria-checked is true or false').toContain(checked);
+        return [nodeText(r), checked];
+    });
 };
 
 describe('the banner on the machine being reached (Tynn #732)', () => {

@@ -107,10 +107,24 @@ class Cdp {
     on(listener) { this.#listeners.push(listener); }
     send(method, params = {}) { const id = this.#next++; return new Promise((r) => { this.#pending.set(id, r); this.#socket.send(JSON.stringify({ id, method, params })); }); }
     async evaluate(expression) {
-        const frame = await Promise.race([this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }), sleep(30_000).then(() => { throw new Error(`no answer in 30 s: ${expression.slice(0, 80)}`); })]);
+        return Cdp.#value(await this.#answer(this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }), expression));
+    }
+    /**
+     * Runs `fn` in the page with `args` passed as real CDP arguments (Runtime.callFunctionOn), never spliced into code: the page
+     * receives the values, not text to evaluate (CodeQL #118/#119). `fn` is a constant function of this script; it sees only
+     * the page's globals and its own arguments. The result comes back by value.
+     */
+    async call(fn, ...args) {
+        const global = Cdp.#value(await this.#answer(this.send('Runtime.evaluate', { expression: 'globalThis' }), 'globalThis'), 'objectId');
+        return Cdp.#value(await this.#answer(this.send('Runtime.callFunctionOn', { objectId: global, functionDeclaration: fn.toString(), arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true }), fn.name || 'a function'));
+    }
+    #answer(request, what) {
+        return Promise.race([request, sleep(30_000).then(() => { throw new Error(`no answer in 30 s: ${what.slice(0, 80)}`); })]);
+    }
+    static #value(frame, key = 'value') {
         if (frame.error) throw new Error(`CDP error: ${JSON.stringify(frame.error)}`);
         if (frame.result?.exceptionDetails) throw new Error(`page threw: ${frame.result.exceptionDetails.exception?.description ?? 'unknown'}`);
-        return frame.result?.result?.value;
+        return frame.result?.result?.[key];
     }
     close() { this.#socket.close(); }
 }
@@ -143,10 +157,11 @@ const check = (name, ok, detail) => { proof.checks.push({ name, ok: Boolean(ok),
 
 let cdp;
 const ev = (expression) => cdp.evaluate(expression);
-async function waitFor(label, expression, ms = 30_000) {
+/** `probe` is an expression for the page, or a function that asks it (cdp.call) and resolves to the answer. */
+async function waitFor(label, probe, ms = 30_000) {
     const until = Date.now() + ms;
     while (Date.now() < until) {
-        try { if (await ev(expression)) return true; } catch { /* no document yet */ }
+        try { if (await (typeof probe === 'function' ? probe() : ev(probe))) return true; } catch { /* no document yet */ }
         await sleep(300);
     }
     proof.notes.push(`timed out waiting for ${label}`);
@@ -251,7 +266,7 @@ try {
     if (wait > 0) await sleep(wait);
     const meridian = by('meridian');
     const cellSel = `[data-surface="dashboard"] [data-agent="${meridian.id}"] [data-comms-cell]`;
-    await waitFor('meridian\'s Comms cell to count its collaborators', `(document.querySelector(${JSON.stringify(cellSel)})?.textContent ?? '').match(/[1-9]/) !== null`, 60_000);
+    await waitFor('meridian\'s Comms cell to count its collaborators', () => cdp.call((sel) => (document.querySelector(sel)?.textContent ?? '').match(/[1-9]/) !== null, cellSel), 60_000);
 
     await startCast(WIDTH, HEIGHT);
     // 1. AT REST: pointer away, nothing drawn.
@@ -262,7 +277,7 @@ try {
     await shot('01-rest');
 
     // 2. HOVER: a real pointer on the Comms icon.
-    const cell = JSON.parse(await ev(`(() => { const r = document.querySelector(${JSON.stringify(cellSel)}).getBoundingClientRect(); const i = document.querySelector(${JSON.stringify(cellSel)} + ' svg')?.getBoundingClientRect() ?? r; return JSON.stringify({ x: i.x + i.width / 2, y: i.y + i.height / 2, left: r.left, right: r.right, top: r.top, bottom: r.bottom }); })()`));
+    const cell = await cdp.call((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); const i = document.querySelector(`${sel} svg`)?.getBoundingClientRect() ?? r; return { x: i.x + i.width / 2, y: i.y + i.height / 2, left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }, cellSel);
     await mouse(cell.x - 2, cell.y);
     await mouse(cell.x, cell.y);
     await sleep(400);
@@ -271,7 +286,7 @@ try {
     check('hovering the Comms icon draws the overlay', hover.overlay === true);
     // The same hover left STILL for 1.5 s, with nothing re-sent: does the overlay stay, and does the browser still say :hover?
     await sleep(1500);
-    proof.idle = JSON.parse(await ev(`JSON.stringify({ overlay: Boolean(document.querySelector('[data-flight-paths]')), hovered: document.querySelector(${JSON.stringify(cellSel)}).matches(':hover') })`));
+    proof.idle = await cdp.call((sel) => ({ overlay: Boolean(document.querySelector('[data-flight-paths]')), hovered: document.querySelector(sel).matches(':hover') }), cellSel);
     say(`idle after 1.5 s still: ${JSON.stringify(proof.idle)}`);
     await mouse(cell.x, cell.y);
     await sleep(300);
