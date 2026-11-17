@@ -45,7 +45,8 @@ describe('refocusingMenu', () => {
 
     it('the terminal pane hands fancy-term that menu, focusing its own terminal', () => {
         const src = readFileSync('src/renderer/components/TerminalPane.tsx', 'utf8');
-        expect(src).toContain('refocusingMenu(() => term.current?.focus())');
+        // xterm's textarea, focused without scrolling the window (genie#1290's rule for every .focus( in the renderer).
+        expect(src).toContain('refocusingMenu(() => term.current?.xterm?.textarea?.focus({ preventScroll: true }))');
         expect(src).toMatch(/const (\w+) = useMemo\(\(\) => refocusingMenu\([\s\S]*contextMenu=\{\1\}/);
     });
 });
