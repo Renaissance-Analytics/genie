@@ -15,7 +15,8 @@ const remote: NonNullable<FeatureData['remote']> = {
     url: 'wss://alphar.tailnet.invalid:7421',
     unavailable: null,
     locked: false,
-    pin: { code: '482913', expiresAt: 10 },
+    // A PIN still good (Tynn #751: one past its time reads as expired, with New PIN).
+    pin: { code: '482913', expiresAt: Date.now() + 120_000 },
     devices: [{ id: 'dev_1', label: 'glenn’s phone', pairedAt: 't', lastSeenAt: 't', expiresAt: 't' }],
     connections: [{ id: 'conn_1', label: 'glenn’s phone', isOwner: true, workspaceId: null, driving: true }],
     // The switch is on (Tynn #820): these describe a host that listens or tries to.
