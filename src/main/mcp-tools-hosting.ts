@@ -1,6 +1,7 @@
 import { OS_WORKSPACE } from '../core/os-agent.js';
 import { randomUUID } from 'node:crypto';
-import { resolve as resolvePath } from 'node:path';
+import { relative as relativePath, resolve as resolvePath } from 'node:path';
+import { sandboxRefusal } from '../core/envelope-sites.js';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
@@ -469,7 +470,10 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links — a link into another workspace
         // is refused — and the workspace itself is a folder a site may serve.
         try {
-            return confinePathSync(caller.workspacePath, given || fallback, 'nothing was read or done', { allowRoot: true });
+            const folder = confinePathSync(caller.workspacePath, given || fallback, 'nothing was read or done', { allowRoot: true });
+            // Never from sandbox/ (Tynn #738), said before anything is read there, for detect as for add and update.
+            const sandbox = sandboxRefusal(relativePath(caller.workspacePath, folder));
+            return sandbox === null ? folder : { refused: `${sandbox} Nothing was read or done.` };
         } catch (error) {
             if (error instanceof OutsideWorkspaceError) return { refused: `${given || fallback} is outside this workspace; a site serves a folder inside it, and nothing was read or done` };
             throw error;
