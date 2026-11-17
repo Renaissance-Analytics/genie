@@ -1,4 +1,42 @@
+import { MAX_OPEN_UPLOADS } from './mobile-wire.js';
 import type { LiveSession } from './roster.js';
+
+/**
+ * ## A message carries at most MESSAGE_FILE_LIMIT files, and the composer says so when one is added
+ *
+ * Every file of a message is staged on the host before the message's one `prompt` call takes them all
+ * (renderer/remote-bridge.ts `promptWithFiles`), and the host holds at most MAX_OPEN_UPLOADS per connection — a bound
+ * on what one connection makes it keep in memory. So that cap is the most files one message carries; queueing a
+ * fourth would not help, because the message cannot go until all of its files are held at once.
+ *
+ * Only the host knew it, so the owner (2026-11-16) pasted a fourth image, wrote a long message, and learned at Send.
+ * The composer now refuses the file that would go over the limit at the paste, the drop or the pick
+ * (renderer/components/ComposerFileLimit.tsx), and nothing of it enters the draft.
+ */
+export const MESSAGE_FILE_LIMIT = MAX_OPEN_UPLOADS;
+
+/** The files a draft already holds: its picked files and its pasted images. A text pill is not a file. */
+export function draftFileCount(draft: { pills: readonly { kind: string }[]; attachments: readonly unknown[] } | null | undefined): number {
+    if (!draft) return 0;
+    return draft.attachments.length + draft.pills.filter((p) => p.kind === 'image').length;
+}
+
+/**
+ * The files a paste, drop or pick would add. A paste adds its images, and only when it carries no text (react-fancy
+ * holds a pasted picture only from a pure image paste; a document's copy carries a picture OF its text beside it).
+ */
+export function incomingFileCount(kind: 'paste' | 'drop' | 'pick', data: { files: ArrayLike<{ type: string }> | null | undefined; text?: string | undefined }): number {
+    const files = Array.from(data.files ?? []);
+    if (kind !== 'paste') return files.length;
+    if ((data.text ?? '') !== '') return 0;
+    return files.filter((f) => f.type.startsWith('image/')).length;
+}
+
+/** Why the incoming files are not added, or `null` when they fit. */
+export function fileLimitRefusal(current: number, incoming: number, limit: number = MESSAGE_FILE_LIMIT): string | null {
+    if (incoming <= 0 || current + incoming <= limit) return null;
+    return `A message carries up to ${limit} files; ${incoming === 1 ? 'this one was' : 'these were'} not added.`;
+}
 
 /**
  * THE COMPOSER'S TWO DECISIONS THAT ARE NOT LAYOUT (react-fancy 5.39.0's `PromptInput`, react-fancy#32).

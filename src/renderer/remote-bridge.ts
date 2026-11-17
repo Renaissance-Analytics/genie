@@ -303,6 +303,23 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         }
         return { ok: true, id };
     };
+    /**
+     * A FAILED SEND FREES WHAT IT STAGED (the owner, 2026-11-16). The host holds MAX_OPEN_UPLOADS stagings per
+     * connection until a call takes them; one refused before taking them — a later file over the cap, the call's own gate
+     * (no baton, a scope) — left them holding every slot for the host's 10-minute sweep, so the owner's next message
+     * with a file was refused too, with the extra images long deleted. Aborting one the host already took is a no-op.
+     */
+    const unstage = (ids: readonly string[]): void => { for (const id of ids) void call('upload.abort', id); };
+    /**
+     * ONE STAGED SEND AT A TIME. Every chat of a window shares its connection's slots: two chats sending two files each at
+     * once would interleave their stagings and refuse one of them for slots the other holds. Each waits for the last.
+     */
+    let stagedSends: Promise<unknown> = Promise.resolve();
+    const oneAtATime = <T>(send: () => Promise<T>): Promise<T> => {
+        const run = stagedSends.then(send, send);
+        stagedSends = run.catch(() => undefined);
+        return run;
+    };
 
     /** A phone's push applied to its window: the whole detail, `null` for no such agent, or `undefined` = ask again. */
     const applyPush = (agentId: string, push: PhonePush): AgentDetail | null | undefined => {
@@ -510,11 +527,13 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             children: (workspaceId, dir) => read('files.children', workspaceId, dir),
             open: (workspaceId, path) => answer('files.open', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
             readMedia: (workspaceId, path) => answer('files.readMedia', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
-            upload: async (workspaceId, dir, name, bytes, onProgress) => {
+            upload: (workspaceId, dir, name, bytes, onProgress) => oneAtATime(async () => {
                 const staged = await stage(name, bytes, onProgress);
                 if (!staged.ok) return staged;
-                return answer('files.upload', workspaceId, dir, { staged: staged.id }) as never;
-            },
+                const r = await answer('files.upload', workspaceId, dir, { staged: staged.id });
+                if (!(r as { ok?: unknown }).ok) unstage([staged.id]);
+                return r;
+            }) as never,
         } : { ...NO_FILES },
         // A phone's upload (§6.8): the bytes ride the socket; the host copies them into the inbox and drops the temp file.
         uploads: { sendFile: (to, text, name, base64) => answer<{ ok: true; messageId: string }>('inbox.sendFile', to, text, name, base64) },
@@ -573,15 +592,18 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
 
     /** A phone's message with photos/files: each staged in chunks, then the prompt names them (genie#1346). */
-    async function promptWithFiles(agentId: string, text: string, attachments: readonly { name: string; type: string; bytes: Uint8Array }[]): Promise<{ ok: boolean; reason?: string }> {
+    function promptWithFiles(agentId: string, text: string, attachments: readonly { name: string; type: string; bytes: Uint8Array }[]): Promise<{ ok: boolean; reason?: string }> {
+        return oneAtATime(() => sendWithFiles(agentId, text, attachments));
+    }
+    async function sendWithFiles(agentId: string, text: string, attachments: readonly { name: string; type: string; bytes: Uint8Array }[]): Promise<{ ok: boolean; reason?: string }> {
         const refs: Array<{ staged: string; type: string }> = [];
         for (const a of attachments) {
             const staged = await stage(a.name, a.bytes);
-            if (!staged.ok) return { ok: false, reason: `${a.name}: ${staged.reason}` };
+            if (!staged.ok) { unstage(refs.map((x) => x.staged)); return { ok: false, reason: `${a.name}: ${staged.reason}` }; }
             refs.push({ staged: staged.id, type: a.type });
         }
         const r = await call('prompt', agentId, text, refs);
-        if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false, reason: r.reason }; }
+        if (!r.ok) { unstage(refs.map((x) => x.staged)); setState({ lastRefusal: r.reason }); return { ok: false, reason: r.reason }; }
         const v = r.value as { ok?: boolean; reason?: string } | null;
         return v?.ok === true ? { ok: true } : { ok: false, ...(v?.reason ? { reason: v.reason } : {}) };
     }
