@@ -41,7 +41,24 @@ Genie is not signed in to Tynn here, so there is no Tynn work tracker. Keep the 
 `;
 }
 
-export function sharedProtocol(tools: readonly ProtocolTool[], tracking: WorkTracking = 'files'): string {
+/**
+ * DOES THE WORKSPACE HAVE RULES YET (Tynn #736)? A workspace Genie just made has no `RULES.md`, or one holding only
+ * Genie's own heading (agent-routers.ts writes `# Workspace rules`): an agent there has nothing but generic files.
+ * Headings and blank lines are not rules.
+ */
+export function hasProjectRules(_rules: string | null): boolean {
+    return true; // RED stub (#736)
+}
+
+/** The orientation an agent gets while the workspace has no rules (Tynn #736, #737). */
+function firstRunSection(): string {
+    return ''; // RED stub (#736, #737)
+}
+
+/** Where Genie's own guide is (Tynn #736). */
+const GUIDE = ''; // RED stub (#736)
+
+export function sharedProtocol(tools: readonly ProtocolTool[], tracking: WorkTracking = 'files', firstRun = false): string {
     // NAMES ONLY (the owner, 2026-10-18: no duplicate info in the system prompt chain): each tool's description already
     // reaches the agent through the MCP tool list; this file is read into every agent's instructions on top of it.
     const list = tools.length > 0
@@ -61,7 +78,7 @@ This file is written by Genie 2. You are one of several agents working for one p
 **Genie’s MCP server (\`genie\`) comes with your session.** Its tools:
 
 ${list}
-
+${GUIDE}
 - When you finish a piece of work, call \`imDone\` with a handoff: what you did, what is unfinished, what the next run picks up.
 - **DO NOT leave questions in chat responses; ask them with \`ForceTheQuestion\`.** The person does not read the chat to find decisions, so a question in a reply is lost. A decision only the person can make goes through \`ForceTheQuestion\` (it returns at once; the answer arrives in your inbox). Anything else, just say it.
 - **Never tell the person something is on their screen unless the tool said so.** A terminal you start can be running only in the background: \`manageTerminals\` says in its result whether the person can see it, and when it needs them (a login, a 2FA code, a prompt) create it with \`forPerson: true\`.
@@ -83,7 +100,7 @@ Genie's chat renders Markdown plus these (as a session; a terminal's replies are
 - Never write buttons, forms or approval cards: they are removed.
 
 ${workSection(tracking)}
-Workspace rules are in \`RULES.md\`. Your own persona is \`.agents/<your name>/AGENT.md\`.
+${firstRun ? firstRunSection() : ''}Workspace rules are in \`RULES.md\`. Your own persona is \`.agents/<your name>/AGENT.md\`.
 `;
 }
 

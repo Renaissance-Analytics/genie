@@ -1,4 +1,4 @@
-import { providerProtocol, sharedProtocol, type ProtocolTool, type WorkTracking } from '../core/genie-protocol.js';
+import { hasProjectRules, providerProtocol, sharedProtocol, type ProtocolTool, type WorkTracking } from '../core/genie-protocol.js';
 import { join } from 'node:path';
 import type { SyncTarget } from '../core/integrations.js';
 
@@ -156,7 +156,9 @@ export async function writeAgentProtocol(input: { workspacePath: string; fs: Syn
     // Written only when it differs, so a sync that changed nothing reports nothing (Settings' agent-files line).
     const put = async (path: string, text: string) => { if ((await input.fs.read(path)) !== text) await input.fs.write(path, text); };
     const dir = join(input.workspacePath, '.agents', '_genie').replace(/\\/g, '/');
-    await put(`${dir}/shared.md`, sharedProtocol(input.tools, input.tracking ?? 'files'));
+    // No rules in the workspace yet (a fresh one): the protocol carries a first-run orientation (Tynn #736, #737).
+    const firstRun = !hasProjectRules(await input.fs.read(join(input.workspacePath, 'RULES.md').replace(/\\/g, '/')));
+    await put(`${dir}/shared.md`, sharedProtocol(input.tools, input.tracking ?? 'files', firstRun));
     const providers = new Set(['claude', 'codex']);
     for (const name of (await input.fs.list?.(dir)) ?? []) {
         const m = /^genie-([a-z0-9-]+)\.md$/.exec(name);
