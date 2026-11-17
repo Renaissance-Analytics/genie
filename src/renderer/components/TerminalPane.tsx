@@ -1,5 +1,6 @@
 import { Terminal, type TerminalHandle } from '@particle-academy/fancy-term';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { refocusingMenu } from '../../core/terminal-menu.js';
 import { outputStep, type OutputView } from '../../core/terminal-output-stream.js';
 
 /**
@@ -58,6 +59,8 @@ export function TerminalPane({ paneId, output, outputEnd, outputEpoch, readOnly,
     // A terminal made again (a remount) starts empty: it is given everything again.
     useEffect(() => () => { shown.current = null; }, []);
     useEffect(() => { if (!apply()) void term.current?.ready.then(() => apply()); }, [output, outputEnd, outputEpoch, apply]);
+    // THE MENU GIVES THE KEYBOARD BACK (beta.64, core/terminal-menu.ts): fancy-term's own items; after each, this terminal is focused.
+    const menu = useMemo(() => refocusingMenu(() => term.current?.focus()), []);
     return (
         <Terminal
             ref={term}
@@ -66,6 +69,7 @@ export function TerminalPane({ paneId, output, outputEnd, outputEpoch, readOnly,
             readOnly={readOnly}
             onData={onData}
             onResize={onResize}
+            contextMenu={menu}
             // Clickable output (fancy-term 0.8.0): a URL opens in the browser through the window's link guard; a file path
             // (`src/app.ts:42:7`) goes to the workspace, which opens it in its file panel at the line when it is inside.
             links={{
