@@ -46,6 +46,8 @@ export interface StreamProps {
     diffs?: ReadonlyMap<string, { plus: number; minus: number; newFile: boolean }> | undefined;
     /** The agent's name, for its message rows' speaker label. */
     agentName?: string | undefined;
+    /** The agent's account is on a subscription plan (its ledger holds a plan's limit reading): costs read as API prices (Tynn #747). */
+    onPlan?: boolean | undefined;
     /** The empty state's actions (the board): `Message <agent> ⌘J` and `Edit <persona>`; absent = no button. */
     persona?: string | null | undefined;
     onChat?: (() => void) | undefined;

@@ -22,6 +22,8 @@ export interface TurnCardsProps {
     cards: readonly TurnCard[];
     rows: readonly TimedEvent[];
     agentName: string;
+    /** The agent's account is on a subscription plan: costs read as API prices (Tynn #747). */
+    onPlan?: boolean | undefined;
     selectedId: string | null;
     onSelect: (id: string) => void;
 }

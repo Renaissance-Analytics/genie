@@ -103,6 +103,8 @@ export interface LedgerRow {
      */
     toolOutput?: { text: string; toolCallId: string; whole: number | null; cut: boolean } | undefined;
     meta: string | null;
+    /** Hover words for the row (a cost figure's meaning, Tynn #747); absent = none. */
+    title?: string | undefined;
     /** `warn` = a tool still running (the board's amber `running`). */
     metaTone: 'default' | 'bad' | 'warn';
     /**
@@ -145,6 +147,11 @@ export interface RowContext {
      * up to then. Absent or 0 = no turn marker before it, and the divider says nothing about turns.
      */
     summarisedTurns?: number | undefined;
+    /**
+     * The provider reported a plan's limit windows (5 h, weekly) in this agent's ledger: its account is on a subscription
+     * plan, so a cost figure is what the tokens would cost at API prices, not a charge (Tynn #747).
+     */
+    onPlan?: boolean | undefined;
 }
 
 /**

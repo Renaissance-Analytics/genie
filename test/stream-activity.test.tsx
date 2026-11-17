@@ -12,7 +12,7 @@ import { StreamRow } from '../src/renderer/components/StreamRow.js';
  * reasoning content"). So: replies and your messages live in the chat, not the Stream; prism-acp's debug notices
  * ("thinking", "session started", "turn complete") are not rows — the "thinking" one's token estimate goes onto its
  * thought; a thought EXPANDS on click to its full text (the owner's word over the spec's "never expands"); a thought
- * whose text the provider did not send (Claude's API redacts reasoning by default) says so; the rate-limit notice
+ * whose text the provider did not send (Claude's API redacts reasoning by default) says Thinking (Tynn #746); the rate-limit notice
  * reads as the headroom line, not a raw ISO date.
  */
 const t = (id: string, event: StreamEvent): TimedEvent => ({ id, event, at: 1 });
@@ -45,9 +45,9 @@ describe('a thought expands', () => {
         expect(open).toMatch(/data-thought-full[^>]*>First I read the failing test\.\nThen the controller\.</);
     });
 
-    it('a thought with no text says the provider did not send it, and keeps its estimate', () => {
+    it('a thought with no text says Thinking (never a fault, Tynn #746), and keeps its estimate', () => {
         const row = ledgerRow(t('k', { kind: 'think', text: '', tokens: null, estimate: 642 }));
-        expect(row.main).toBe('Reasoning not sent by the provider');
+        expect(row.main).toBe('Thinking');
         expect(row.meta).toBe('~642 tok');
         expect(row.expandable).toBe(false);
     });
