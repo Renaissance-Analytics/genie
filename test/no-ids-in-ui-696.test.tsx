@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { Drawer } from '@particle-academy/react-fancy';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
 import { inboxThreads, pairKey, type ThreadMail } from '../src/core/inbox-threads.js';
-import { idsIn, personText } from '../src/core/person-text.js';
+import { contentCopyPayload, inlineCopyText } from '../src/core/chat-copy.js';
+import { idsIn, personLine, personText } from '../src/core/person-text.js';
 import { AlertToasts } from '../src/renderer/components/AlertToasts.js';
 import { ChatMailRow } from '../src/renderer/components/ChatFlyout.js';
 import { ChatProse } from '../src/renderer/components/ChatProse.js';
@@ -18,6 +19,11 @@ import { MobileShell } from '../src/renderer/components/MobileShell.js';
  * The guard renders the surfaces a person reads from fixtures FULL of ids (agent_*, q_*, msg_*, flow_*, a workspace ULID,
  * a bare UUID) and fails on any id-shaped string in what a person sees: the text, and the title / aria-label / alt /
  * placeholder attributes. `data-*`, `href` and `key` are the app's, not the person's, and are not read.
+ *
+ * THE STATED EXCEPTION — CODE (the coordinator's review of PR #1931): fenced code, inline code and `<pre>` text are what a
+ * person copies to run or paste, so they are shown and copied EXACTLY as written, ids included, like an approval's command.
+ * A filtered command that is copied is a broken command. The guard skips `<code>` and `<pre>`; the tests below prove the
+ * code keeps its id and copies it unchanged.
  */
 const AGENT = 'agent_0123456789abcdef0123456789abcdef';
 const QID = 'q_90ef0195-4818-43f9-9273-3442f387948c';
@@ -30,11 +36,16 @@ const T = Date.UTC(2026, 10, 13, 12, 0, 0);
 const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#x27;': "'", '&#39;': "'", '&nbsp;': ' ' };
 /** What a person reads of some markup: its text, and the attributes a screen, a tooltip or a screen reader shows. */
 function personFacing(html: string): string {
-    const attrs = [...html.matchAll(/\s(?:title|aria-label|alt|placeholder)="([^"]*)"/g)].map((m) => m[1]!);
-    const text = html.replace(/<[^>]*>/g, ' ');
+    // Code is exempt (above): shown and copied verbatim.
+    const prose = html.replace(/<pre\b[\s\S]*?<\/pre>|<code\b[\s\S]*?<\/code>/g, ' ');
+    const attrs = [...prose.matchAll(/\s(?:title|aria-label|alt|placeholder)="([^"]*)"/g)].map((m) => m[1]!);
+    const text = prose.replace(/<[^>]*>/g, ' ');
     return [text, ...attrs].join('\n').replace(/&(?:amp|lt|gt|quot|#x27|#39|nbsp);/g, (e) => ENTITIES[e] ?? e);
 }
 const idsShown = (html: string): string[] => idsIn(personFacing(html));
+const decode = (s: string): string => s.replace(/&(?:amp|lt|gt|quot|#x27|#39|nbsp);/g, (e) => ENTITIES[e] ?? e);
+/** The text of every `<code>` in some markup, as drawn (tags inside it, a highlighter's spans, dropped). */
+const codeTexts = (html: string): string[] => [...html.matchAll(/<code\b[^>]*>([\s\S]*?)<\/code>/g)].map((m) => decode(m[1]!.replace(/<[^>]*>/g, '')));
 
 describe('the gauge (positive and negative controls)', () => {
     it('recognises every id shape the app mints or relays — and not a name, a commit, a version or a sentence', () => {
@@ -60,9 +71,25 @@ describe('personText: the person’s reading of a text, ids removed, at render',
         expect(mail).toContain(QID);
     });
 
-    it('a dismissal’s "(Your question q_….)" reads "(Your question.)"; an id in backticks leaves no empty code', () => {
+    it('a dismissal’s "(Your question q_….)" reads "(Your question.)"', () => {
         expect(personText(`Dismissed. (Your question ${QID}.)`)).toBe('Dismissed. (Your question.)');
-        expect(personText(`wrote to \`${AGENT}\` about it`)).toBe('wrote to about it');
+    });
+
+    it('CODE IS VERBATIM: inline code and a fenced block keep their ids exactly; the prose around them does not', () => {
+        expect(personText(`wrote to \`${AGENT}\` about it`)).toBe(`wrote to \`${AGENT}\` about it`);
+        const fence = '```';
+        const fenced = `Run this, ${AGENT}:\n\n${fence}\ngenie agent restart ${AGENT} --flow ${FLOW}\n${fence}\n`;
+        expect(personText(fenced)).toBe(`Run this:\n\n${fence}\ngenie agent restart ${AGENT} --flow ${FLOW}\n${fence}\n`);
+        expect(personText(`~~~\ncurl /q/${QID}\n~~~ then ${MSG}`)).toBe(`~~~\ncurl /q/${QID}\n~~~ then`);
+    });
+
+    it('a FLAT line (a preview, a search snippet, a toast: text drawn as text, never as code) has no id even where the message had code', () => {
+        const fence = '```';
+        const mail = `Run this:\n${fence}\ngenie agent restart ${AGENT}\n${fence}\nor \`${MSG}\``;
+        expect(idsIn(personLine(mail))).toEqual([]);
+        expect(personLine(`Answer to your question ${QID}: yes`)).toBe('Answer to your question: yes');
+        // CONTROL: the same mail through personText is code-verbatim, so a flat surface that used it would draw the ids.
+        expect(idsIn(personText(mail)).length).toBeGreaterThan(0);
     });
 
     it('link targets and URLs keep theirs (they are how an in-app link reaches its agent); their words do not', () => {
@@ -92,7 +119,22 @@ describe('the surfaces, from fixtures full of ids (control: each fixture really 
         const html = renderToStaticMarkup(<ChatProse text={prose} />);
         expect(idsShown(html)).toEqual([]);
         // CONTROL: the words around the ids are still there.
-        for (const words of ['Asked', 'about it', 'genie agent restart', 'atlas', 'is on it']) expect(personFacing(html)).toContain(words);
+        for (const words of ['Asked', 'about it', 'atlas', 'is on it']) expect(personFacing(html)).toContain(words);
+    });
+
+    it('a code block in a reply is drawn verbatim, id included, and its copy button copies it unchanged', () => {
+        const command = `genie agent restart ${AGENT} --flow ${FLOW}`;
+        const fence = '```';
+        const html = renderToStaticMarkup(<ChatProse text={`Run this:\n\n${fence}\n${command}\n${fence}\n\nor ping \`${MSG}\`.`} />);
+        const codes = codeTexts(html);
+        const block = codes.find((c) => c.includes('genie agent restart'));
+        expect(block?.trim()).toBe(command);
+        // What fancy's code button hands the clipboard (core/chat-copy.ts), and the inline code's own button.
+        expect(contentCopyPayload({ kind: 'code', text: block!.trim(), html: '' }).plain).toBe(command);
+        const inline = codes.find((c) => c.includes(MSG));
+        expect(inlineCopyText({ tag: 'code', text: inline!, href: null, inBlock: false })).toEqual({ kind: 'inline', text: MSG });
+        // CONTROL: the prose around the code is still filtered.
+        expect(idsShown(html)).toEqual([]);
     });
 
     describe('the AgentInbox flyout', () => {
@@ -150,6 +192,13 @@ describe('the surfaces, from fixtures full of ids (control: each fixture really 
         expect(html).toContain('data-deck-item');
         expect(idsShown(html)).toEqual([]);
         expect(personFacing(html)).toContain('ship the flow');
+    });
+
+    it('a Deck item’s technical detail, opened, is verbatim in its <pre> (an error to copy); its title is filtered', () => {
+        const opened = deckItem({ id: 'todo1', answer: { kind: 'form', fields: 1 } } as Partial<DeckItem>);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[opened]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} initiallyExpanded={['todo1']} />);
+        expect(html).toMatch(new RegExp(`<pre[^>]*data-deck-detail="todo1"[^>]*>run ${UUID} failed in ${MSG}</pre>`));
+        expect(idsShown(html)).toEqual([]);
     });
 
     it('the mobile UI’s Needs you', () => {

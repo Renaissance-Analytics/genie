@@ -13,9 +13,10 @@
  *  - a bare UUID;
  *  - a ULID (26 Crockford base32 characters; a workspace's id is one).
  *
- * What is NOT touched: a Markdown link's TARGET (`](…)`) and a bare URL — not drawn as text, and the way an in-app link
- * reaches its agent. Anything else is the person's reading, ids removed: `Answer to your question q_…:` reads `Answer to
- * your question:`, `(Your question q_….)` reads `(Your question.)`.
+ * What is NOT touched: code (fenced and inline — shown and copied verbatim, see `KEEP`), a Markdown link's TARGET (`](…)`)
+ * and a bare URL — not drawn as text, and the way an in-app link reaches its agent. Anything else is the person's reading,
+ * ids removed: `Answer to your question q_…:` reads `Answer to your question:`, `(Your question q_….)` reads
+ * `(Your question.)`.
  */
 
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
@@ -26,17 +27,26 @@ export function idsIn(text: string): string[] {
     return [...(text ?? '').matchAll(new RegExp(ID_SOURCE, 'g'))].map((m) => m[0]);
 }
 
-/** What a person never reads, so ids are left alone there: link targets and bare URLs. */
-const KEEP = /\]\([^)\n]*\)|https?:\/\/[^\s<>)\]]+/g;
+/**
+ * Left exactly as written:
+ *  - CODE — a fenced block (``` or ~~~) and inline code: what a person copies to run or paste, so it is shown and copied
+ *    verbatim, ids included, like an approval's command (the review of PR #1931: a filtered command that is copied is a
+ *    broken command);
+ *  - what a person never reads: a link's target and a bare URL.
+ */
+const KEEP = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|``[^\n]+?``|`[^`\n]+`|\]\([^)\n]*\)|https?:\/\/[^\s<>)\]]+/g;
 
 /** Where an id was: the tidying below only ever touches what an id left behind, never the rest of the text. */
 const GONE = '\u0000';
 
 function stripIds(text: string): string {
     return text
+        // The comma that only introduced an id goes with it when the id ended the clause: `Run this, agent_…:` reads `Run this:`,
+        // not `Run this,:`. A comma that is the prose's own (the id is followed by more words) stays.
+        .replace(new RegExp(`,[ \\t]*${ID_SOURCE}(?=[:;.!?])`, 'g'), GONE)
         .replace(new RegExp(`[ \\t]*${ID_SOURCE}`, 'g'), GONE)
-        // An id in backticks or brackets leaves no empty code span or brackets.
-        .replace(new RegExp(`\`${GONE}\`|\\(${GONE}\\)`, 'g'), GONE)
+        // An id in brackets leaves no empty brackets (code never gets here: it is kept whole).
+        .replace(new RegExp(`\\(${GONE}\\)`, 'g'), GONE)
         // An address whose workspace was an id: `bolt@` reads `bolt`.
         .replace(new RegExp(`(\\w)@${GONE}`, 'g'), `$1${GONE}`)
         // At a line's start, or between two spaces, the id takes one space with it.
@@ -58,4 +68,15 @@ export function personText(text: string | null | undefined): string | null | und
         at = m.index! + m[0].length;
     }
     return out + stripIds(text.slice(at));
+}
+
+/**
+ * Text drawn as FLAT text (a preview, a search snippet, a toast), never as code: there is nothing to copy there, so no id is kept
+ * anywhere in it, a fenced block's included. `personText` is for what is drawn as Markdown, where code is a block with a copy button.
+ */
+export function personLine(text: string): string;
+export function personLine(text: string | null | undefined): string | null | undefined;
+export function personLine(text: string | null | undefined): string | null | undefined {
+    if (!text || idsIn(text).length === 0) return text;
+    return stripIds(text);
 }

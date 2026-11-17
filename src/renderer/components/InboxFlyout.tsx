@@ -7,7 +7,7 @@ import { sendKeyNow } from '../send-key-store.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
 import { UNNAMED_AGENT } from '../../core/inbox.js';
 import { highlightParts, inViewOrder, mergeWindow, ORDER_ICON, questionHeader, questionRef, scrollAfterInsert, searchSnippet, THREAD_BUFFER, type ThreadOrder } from '../../core/inbox-view.js';
-import { personText } from '../../core/person-text.js';
+import { personLine, personText } from '../../core/person-text.js';
 import type { AskedRecord } from '../../main/attention-store.js';
 import type { InboxMessage } from '../../main/inbox-store.js';
 import type { InboxSearchResult, InboxSection, InboxThreadView } from '../features.js';
@@ -299,7 +299,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                             <span data-app-level={m.app.level} className={`inline-flex ${APP_LEVEL_TONE[m.app.level]}`}><Icon name={APP_LEVEL_ICON[m.app.level]} size="xs" /></span>
                             <span className="min-w-0 truncate">{m.app.subject}</span>
                         </div>
-                        <p className="whitespace-pre-wrap break-words text-[13px] text-[var(--fg-2)]">{personText(m.text)}</p>
+                        <p className="whitespace-pre-wrap break-words text-[13px] text-[var(--fg-2)]">{personLine(m.text)}</p>
                         {m.app.link ? (
                             <Button data-app-link={m.app.link} href={m.app.link} target="_blank" rel="noreferrer" size="xs" variant="ghost" icon="external-link" className="w-fit border border-[var(--border-1)]">
                                 {new URL(m.app.link).host}
@@ -392,7 +392,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                             <span className="text-[var(--violet-400)]">{marked(`${nameOf(m.from)} → ${nameOf(m.to)}`, s.query)}</span>
                             <span>{ago(Date.parse(m.sentAt), p.now)}</span>
                         </span>
-                        <span className="break-words text-[13px] font-normal text-[var(--fg-2)]">{marked(searchSnippet(personText(m.text), s.query, 90), s.query)}</span>
+                        <span className="break-words text-[13px] font-normal text-[var(--fg-2)]">{marked(searchSnippet(personLine(m.text), s.query, 90), s.query)}</span>
                     </Button>
                 ))}
             </>
@@ -458,7 +458,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                         {t.attachments > 0 ? <Icon name="paperclip" size="xs" className="text-[var(--fg-4)]" /> : null}
                                         <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{Number.isNaN(t.lastAt) ? '' : ago(t.lastAt, p.now)}</span>
                                     </span>
-                                    <span className="truncate text-[12px] text-[var(--fg-3)]">{`${t.lastFrom}: ${personText(t.lastPreview)}`}</span>
+                                    <span className="truncate text-[12px] text-[var(--fg-3)]">{`${t.lastFrom}: ${personLine(t.lastPreview)}`}</span>
                                     <span className="flex items-center gap-2 font-mono text-[11px]">
                                         {t.unread > 0 ? <span data-thread-unread={t.unread} className="text-[var(--warning)]">{`${t.unread} unread`}</span> : null}
                                         {t.waiting ? <span data-thread-waiting={t.waiting.count} className="text-[var(--violet-400)]">{`waiting on ${t.waiting.agent} · ${ago(t.waiting.since, p.now)}`}</span> : null}
