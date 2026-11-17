@@ -75,7 +75,7 @@ describe('the banner', () => {
         const html = banner([PILOT, GUEST]);
         expect(html).toMatch(/role="status"/);
         expect(html).toMatch(/data-connected-here="2"/);
-        expect(html).toContain('Guest tablet and Pilot laptop are connected · Pilot laptop driving');
+        expect(html).toContain('Pilot laptop and Guest tablet are connected · Pilot laptop driving');
         expect(html).toMatch(/data-action="connected-here-lock"[^>]*>[\s\S]*?Lock</);
         expect(html).toMatch(/data-action="connected-here-manage"/);
     });
