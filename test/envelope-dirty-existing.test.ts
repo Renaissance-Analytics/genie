@@ -50,6 +50,16 @@ function tree(root: string): Record<string, string> {
     return out;
 }
 
+/**
+ * Folder links are junctions (a normal Windows user can make one; on Linux the type is ignored and it is a symlink). A
+ * FILE link needs a privilege a normal Windows user lacks (EPERM), so the .gitignore-link CONTROL runs where one can be
+ * made: always on Linux, where the break probe proves it.
+ */
+const canLinkAFile = (() => {
+    const d = mkdtempSync(join(tmpdir(), 'dirty-filelink-'));
+    try { writeFileSync(join(d, 'a'), ''); symlinkSync(join(d, 'a'), join(d, 'b'), 'file'); return true; } catch { return false; } finally { rmSync(d, { recursive: true, force: true }); }
+})();
+
 const run = (root: string) => ensureEnvelopeDirty({ workspacePath: root, fs: nodeDirtyFs() });
 const gitignore = (root: string) => readFileSync(join(root, '.gitignore'), 'utf8');
 
@@ -124,7 +134,7 @@ describe('ensureEnvelopeDirty: an existing envelope with no .ai/_dirty/', () => 
         const elsewhere = mkdtempSync(join(tmpdir(), 'dirty-elsewhere-'));
         made.push(elsewhere);
         rmSync(join(root, '.ai'), { recursive: true });
-        symlinkSync(elsewhere, join(root, '.ai'), 'dir');
+        symlinkSync(elsewhere, join(root, '.ai'), 'junction');
         const before = tree(root);
         await run(root);
         expect(tree(root)).toEqual(before);
@@ -135,14 +145,14 @@ describe('ensureEnvelopeDirty: an existing envelope with no .ai/_dirty/', () => 
         const root = envelope({ '.gitignore': 'node_modules/\n' });
         const elsewhere = mkdtempSync(join(tmpdir(), 'dirty-elsewhere-'));
         made.push(elsewhere);
-        symlinkSync(elsewhere, join(root, '.ai', '_dirty'), 'dir');
+        symlinkSync(elsewhere, join(root, '.ai', '_dirty'), 'junction');
         const before = tree(root);
         await run(root);
         expect(tree(root)).toEqual(before);
         expect(readdirSync(elsewhere)).toEqual([]);
     });
 
-    it('CONTROL: the .gitignore is a link: nothing is written, through it or beside it', async () => {
+    it.skipIf(!canLinkAFile)('CONTROL: the .gitignore is a link: nothing is written, through it or beside it (skipped where this user cannot make a file link)', async () => {
         const root = envelope();
         const elsewhere = mkdtempSync(join(tmpdir(), 'dirty-elsewhere-'));
         made.push(elsewhere);
