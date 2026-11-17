@@ -18,12 +18,15 @@ export function parseTailscaleStatus(json: string): TailscaleStatus {
     } catch {
         return { ok: false, reason: 'tailscale status did not answer JSON' };
     }
-    const status = raw as { BackendState?: unknown; Self?: { DNSName?: unknown; TailscaleIPs?: unknown } };
+    const status = raw as { BackendState?: unknown; Self?: { DNSName?: unknown; TailscaleIPs?: unknown }; CurrentTailnet?: { MagicDNSEnabled?: unknown } | null };
     if (status.BackendState !== 'Running') return { ok: false, reason: `Tailscale is not running (BackendState ${String(status.BackendState ?? 'unknown')})` };
     const ips = Array.isArray(status.Self?.TailscaleIPs) ? (status.Self!.TailscaleIPs as unknown[]).filter((x): x is string => typeof x === 'string') : [];
     const ip = ips.find((x) => /^\d+\.\d+\.\d+\.\d+$/.test(x));
     if (!ip) return { ok: false, reason: 'Tailscale reports no IPv4 address for this machine' };
-    const dns = typeof status.Self?.DNSName === 'string' ? status.Self.DNSName.replace(/\.$/, '') : '';
+    // MagicDNS off on the tailnet (Tynn #752): Tailscale still reports the node's name, but a phone cannot resolve it, so
+    // the address is the IP, and Settings says to turn MagicDNS on. Not reported (an older Tailscale): the name stands.
+    const magicDnsOff = status.CurrentTailnet?.MagicDNSEnabled === false;
+    const dns = !magicDnsOff && typeof status.Self?.DNSName === 'string' ? status.Self.DNSName.replace(/\.$/, '') : '';
     return { ok: true, ip, dnsName: dns || ip };
 }
 
