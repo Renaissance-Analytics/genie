@@ -1154,6 +1154,8 @@ export function Shell({
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ErrorBoundary surface="Chat" resetKeys={[chatThread?.agentId ?? null]}>
                     <ChatFlyout
+                        // Mid-turn: a message typed now waits out the undo window first (Tynn #745).
+                        busy={chatSession?.running === true && chatSession.turnState === 'working'}
                         onChooseProviderProgram={onChooseProviderProgram}
                         thread={chatThread}
                         drafts={chatDrafts}
