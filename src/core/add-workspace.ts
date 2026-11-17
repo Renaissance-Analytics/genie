@@ -34,13 +34,20 @@ export function newWorkspaceProblem(name: string, parent: string): string | null
  * commit already in its shape instead of rewriting four files of a repository a minute old.
  */
 
-/** Genie 1's skeleton. Each gets a `.gitkeep` so git keeps the empty folder. */
-export const ENVELOPE_DIRS: readonly string[] = ['repos', '.ai', '.ai/plans', '.ai/knowledge', '.ai/pm', '.ai/chat', '.ai/memory', '.ai/issues', 'sandbox', '.trash'];
+/**
+ * Genie 1's skeleton, plus `.ai/_dirty` (Tynn #818, the owner 2026-11-17: Genie 1's drop folder for files sent to a
+ * workspace, measured and cleaned up on the Storage tab with `.trash`). Each gets a `.gitkeep` so git keeps the empty folder.
+ */
+export const ENVELOPE_DIRS: readonly string[] = ['repos', '.ai', '.ai/plans', '.ai/knowledge', '.ai/pm', '.ai/chat', '.ai/memory', '.ai/issues', '.ai/_dirty', 'sandbox', '.trash'];
 
-/** Genie 1's .gitignore: sandbox/ and .trash/ never committed, their `.gitkeep` kept so the folders survive a clone. */
+/** Genie 1's .gitignore: sandbox/, .ai/_dirty/ and .trash/ never committed, their `.gitkeep` kept so the folders survive a clone. */
 export const ENVELOPE_GITIGNORE = `# Envelope-owned scratch, never committed.
 sandbox/**
 !sandbox/.gitkeep
+
+# Files dropped into the workspace: kept here, never committed.
+.ai/_dirty/**
+!.ai/_dirty/.gitkeep
 
 # Soft-delete buffer.
 .trash/**
@@ -76,8 +83,9 @@ ${folder}/
 │   ├── pm/          Project management
 │   ├── chat/        Saved conversations
 │   ├── memory/      Long-lived agent memory
-│   └── issues/      Issue notes
-├── sandbox/         Scratch space (gitignored)
+│   ├── issues/      Issue notes
+│   └── _dirty/      Files dropped into the workspace (gitignored)
+├── sandbox/        Scratch space (gitignored)
 └── .trash/          Soft-delete buffer (gitignored)
 \`\`\`
 
@@ -121,6 +129,8 @@ You are working inside a **\`.agi\` envelope**: a project monorepo.
   - \`.ai/chat/\` — saved conversations
   - \`.ai/memory/\` — long-lived memory
   - \`.ai/issues/\` — issue notes
+  - \`.ai/_dirty/\` — files dropped into the workspace, gitignored. Not
+    knowledge: move what should be kept somewhere above.
 - \`sandbox/\` — scratch space, gitignored. Use freely; never relied upon.
 - \`.trash/\` — soft-delete buffer, gitignored.
 - \`project.json\` — the envelope manifest (repo registry + metadata).
