@@ -15,6 +15,9 @@ export function windowBridge<B>(input: { bound: string | null; connected: boolea
     return input.bound !== null ? undefined : input.local;
 }
 
+// INERT STUB for the Tynn #726 RED: exported, answers nothing. The GREEN commit replaces it.
+export function windowChromeOf<C>(_input: { local: { readonly windowChrome?: C } | undefined }): C | undefined { return undefined; }
+
 /** The window's route from its address: by the context it reads; with none yet, an internal route as it is. */
 export function routeFor(address: string, ctx: AddressContext | null): string {
     return ctx ? routeOfAddress(address, ctx) ?? DEFAULT_ROUTE : isInternalRoute(address) ? address : DEFAULT_ROUTE;
