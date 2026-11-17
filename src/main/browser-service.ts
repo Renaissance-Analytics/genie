@@ -48,12 +48,20 @@ function browserRemote(raw: unknown): BrowserRemote {
     return { key: r.key as string, title: r.title as string, port: r.port as number, ca: r.ca as string | null, hosts: r.hosts as string[] };
 }
 
+/** The Genie window that asked for the browser, in screen coordinates: where the browser window opens (Tynn #739). */
+export interface BrowserAnchor {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+}
+
 export type BrowserEvent =
     | { readonly kind: 'facts'; readonly facts: BrowserFacts }
     /** Whether a window holds the front door. With none, `.gen` pages cannot load until P5 moves the door to the host. */
     | { readonly kind: 'door'; readonly up: boolean }
     /** `url` null: the browser with its first site. */
-    | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation; readonly remote?: BrowserRemote }
+    | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation; readonly remote?: BrowserRemote; readonly anchor?: BrowserAnchor }
     /** Another workstation's door moved, or learned that host's CA: its window's session reads it live. */
     | { readonly kind: 'remoteVia'; readonly key: string; readonly port: number; readonly ca: string | null }
     | { readonly kind: 'pages'; readonly pages: readonly BrowserPage[] }
@@ -139,7 +147,8 @@ export class BrowserService {
             case 'open': {
                 if (this.#ports.unavailable !== undefined) throw new Error(this.#ports.unavailable);
                 if (typeof args[0] !== 'string' && args[0] !== null && args[0] !== undefined) throw new Error('an address to open has to be text');
-                const remote = args[2] === undefined ? undefined : browserRemote(args[2]);
+                // `null` too: an absent remote before an anchor travels the link as null.
+                const remote = args[2] === undefined || args[2] === null ? undefined : browserRemote(args[2]);
                 const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const, ...(remote ? { remote } : {}) };
                 if (this.#browser === null) {
                     this.#held.push(event);
