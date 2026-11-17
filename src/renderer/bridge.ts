@@ -185,6 +185,15 @@ export interface GenieBridge {
         takeOverTicket?(): Promise<string | null>;
     };
     /**
+     * THE CONNECTED MACHINE'S QUESTIONS IN THIS MACHINE'S QUESTION WINDOW (Tynn #726; main/remote-questions.ts). `report`:
+     * this window drives `host`, whose Deck is `items` (an empty list takes it back). `onAct`: answer or Dismiss one through
+     * the host's own features.act; the handler's outcome is what the question window says. Host-only: absent on a remote bridge.
+     */
+    remoteQuestions?: {
+        report(host: string, items: readonly import('../core/deck.js').DeckItem[]): void;
+        onAct?(handler: (action: FeatureAction) => Promise<{ ok: true } | { ok: false; reason: string }>): () => void;
+    };
+    /**
      * Every chat's unsent draft, kept by THIS machine's main so it survives a restart and a reload (genie#1261,
      * main/chat-draft-store.ts). Host-only: absent on a remote bridge — a remote host's agents are not this machine's.
      */

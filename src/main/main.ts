@@ -30,7 +30,7 @@ import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { CommsCache } from '../core/comms.js';
 import { askerLiveFrom } from './asker-live.js';
-import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
+import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
@@ -137,6 +137,7 @@ import { featureReplica } from './feature-replica.js';
 import { featureWindow } from './feature-window.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
+import { RemoteQuestions } from './remote-questions.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
 import { thisMachineWorkstationIds } from './this-machine.js';
@@ -3039,13 +3040,42 @@ async function boot(): Promise<void> {
     // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It
     // reads the SAME items Pending Questions (the Deck) shows and answers through the same action, so the two stay one
     // workflow: a question asked opens it; one answered in either place leaves both.
+    // THE CONNECTED MACHINE'S QUESTIONS (Tynn #726): a window driving another machine reports that machine's live
+    // questions; they join this window and its queue, and an answer goes back through that window to the host's own
+    // features.act (main/remote-questions.ts).
+    const remoteQuestions = new RemoteQuestions({
+        send: (sender, request) => {
+            const contents = webContents.fromId(sender);
+            if (!contents || contents.isDestroyed()) return false;
+            contents.send('genie:remote-question-act', request);
+            return true;
+        },
+    });
+    const questionReporters = new Set<number>();
+    ipcMain.on('genie:remote-questions', (event, host: unknown, items: unknown) => {
+        if (typeof host !== 'string' || !Array.isArray(items)) return;
+        const sender = event.sender.id;
+        if (remoteQuestions.report(sender, host, items)) questionWindow?.changed();
+        if (questionReporters.has(sender)) return;
+        questionReporters.add(sender);
+        event.sender.once('destroyed', () => { questionReporters.delete(sender); if (remoteQuestions.drop(sender)) questionWindow?.changed(); });
+    });
+    ipcMain.on('genie:remote-question-acted', (event, id: unknown, outcome: unknown) => {
+        if (typeof id === 'string') remoteQuestions.settle(event.sender.id, id, outcome);
+    });
     questionWindow = new QuestionWindow({
-        items: () => composed.deckItems(),
+        items: () => [...composed.deckItems(), ...remoteQuestions.items()],
         open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null, openInFiles: (workspaceId, path) => { revealMainWindow('question: Open in Files'); showToPerson({ activation: 'user-gesture', route: `genie://workspace/${encodeURIComponent(workspaceId)}?files=${encodeURIComponent(path)}`, reason: 'question: Open in Files' }); } }),
-        answer: async (item, selections, notes) => { await questionAction({ kind: 'deck.answerForm', item, selections, notes, note: '' }); },
+        answer: async (item, selections, notes) => {
+            if (remoteQuestions.owns(item.id)) return remoteQuestions.act(item, { kind: 'deck.answerForm', selections, notes });
+            await questionAction({ kind: 'deck.answerForm', item, selections, notes, note: '' });
+        },
         // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told, with the
         // notes the person wrote in the form.
-        dismiss: async (item, notes) => { await questionAction({ kind: 'deck.dismiss', item, notes }); },
+        dismiss: async (item, notes) => {
+            if (remoteQuestions.owns(item.id)) return remoteQuestions.act(item, { kind: 'deck.dismiss', notes });
+            await questionAction({ kind: 'deck.dismiss', item, notes });
+        },
         // Do Not Disturb (Settings → General) is the ONE thing that keeps the window shut (the owner, 2026-10-15: "If DnD
         // is not turned on then FTQ always opens for every agent"). Read at every change; the agent is still told the DND
         // reply at once (attention-store.ts), and the question waits in Pending Questions.

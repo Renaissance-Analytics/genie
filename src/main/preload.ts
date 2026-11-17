@@ -97,6 +97,21 @@ const bridge: PreloadBridge = {
             return () => { ipcRenderer.removeListener('genie:remote-reconnect', handler); };
         },
     },
+    // The connected machine's questions in THIS machine's question window (Tynn #726): reported while driving it; an
+    // answer main sends back is put to the host here, and how it went is said to main.
+    remoteQuestions: {
+        report: (host, items) => { ipcRenderer.send('genie:remote-questions', host, items); },
+        onAct: (handler) => {
+            const listener = (_event: unknown, request: { id: string; action: unknown }) => {
+                void Promise.resolve()
+                    .then(() => handler(request.action as never))
+                    .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }))
+                    .then((outcome) => { ipcRenderer.send('genie:remote-question-acted', request.id, outcome); });
+            };
+            ipcRenderer.on('genie:remote-question-act', listener);
+            return () => { ipcRenderer.removeListener('genie:remote-question-act', listener); };
+        },
+    },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
     sitePanels: {
         prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,
