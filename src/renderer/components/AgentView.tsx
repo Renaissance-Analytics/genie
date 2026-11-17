@@ -47,8 +47,9 @@ import type { AgentTab } from '../../core/route.js';
 import type { StreamFilter, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
 import { Lanes } from './Lanes.js';
-import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
-import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
+import { ChipsRow } from './ChipsRow.js';
+import { AgentPulse } from './AgentPulse.js';
+import { chipRow } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
 import { findRows, ledgerRow, visibleRows } from '../../core/stream-view.js';
 import { revertToolEdit, toolEditPathIn } from '../../core/revert-edit.js';
@@ -523,7 +524,6 @@ function AgentViewBody({
     // The activity the Stream shows (replies live in the chat): the strip, the find and the lanes read the same rows.
     // The same array while the rows are unchanged, so the Stream's own derivations (keyed on it) are not run again.
     const activity = useMemo(() => activityRows(rows), [rows]);
-    const timeline = active === 'stream' ? sessionTimeline(activity, session) : null;
     // NEXT EDIT — `E` and the strip's button: a search ("find me the next one") that opens the edit it lands on, the
     // cursor following. `false` when there is none.
     const nextEdit = (): boolean => {
@@ -540,7 +540,6 @@ function AgentViewBody({
     // THE `turns` LAYOUT (the board): the Stream folded into cards; the chips row goes, the index and the strip stay.
     const shownRows = findRows(rowsInRange(activity, range), findQuery);
     const cards = active === 'stream' && layout === 'turns' ? turnCards(shownRows, session, workspace?.path ?? null) : null;
-    const otherLayout = layout === 'turns' ? { label: 'Ledger', route: `genie://agent/${agent.id}?tab=stream` } : { label: 'Turns', route: `genie://agent/${agent.id}?tab=stream&layout=turns` };
 
     /**
      * Where a parked approval is ACTIONABLE — exactly one place.
@@ -950,7 +949,11 @@ function AgentViewBody({
                     </Tabs.List>
                 </Tabs>
                 {/* THE TAB NOTE (the board), right of the tabs: where Files / Changes open; on the Stream, a measurement of the rows. */}
-                {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="ml-auto truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
+                <div className="ml-auto flex min-w-0 items-center gap-3">
+                    {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
+                    {/* THE AGENT PULSE (beta.64): the last minute of its work, on every tab; a fixed slot, so nothing moves. */}
+                    <AgentPulse rows={rows} working={session?.running === true && session.turnState === 'working'} now={clock} />
+                </div>
             </div>
 
             <div className="flex min-h-0 flex-1">
@@ -1008,19 +1011,6 @@ function AgentViewBody({
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     {active === 'stream' ? (
                         <>
-                            {timeline ? (
-                                <TimelineStrip
-                                    timeline={timeline}
-                                    lanesOpen={drawerOpen}
-                                    onToggleLanes={() => setOwnLanesOpen((open) => !open)}
-                                    onOpenRow={(rowId) => onNavigate(`genie://agent/${agent.id}?tab=stream&at=${rowId}`)}
-                                    layoutDoor={otherLayout}
-                                    onNavigate={onNavigate}
-                                    onNextEdit={() => { nextEdit(); }}
-                                    filter={lanes}
-                                    onFilter={(next) => onLanes?.(next)}
-                                />
-                            ) : null}
                             {/* The board's empty state draws no chips and no strip: counts over nothing are furniture. */}
                             {layout === 'turns' || rows.length === 0 ? null : <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />}
                             {drawerOpen ? <Lanes rows={activity} range={range} onRange={(next) => onRange?.(next)} /> : null}
