@@ -75,6 +75,8 @@ export interface FeaturePorts {
         status(): import('./tailscale-cli.js').TailscaleStatus | null;
         up(): Promise<import('./tailscale-cli.js').TailscaleUpResult>;
         install(): Promise<{ started: boolean; url?: string; message?: string }>;
+        /** Read Tailscale again, and keep reading while it is not connected (bounded): Remote access opened or focused (Tynn #749). */
+        refresh?(): Promise<unknown>;
     };
     /** The listener following its switch (main/remote-access.ts, Tynn #820); absent = no host side (doctor mode). */
     readonly remoteAccess?: { apply(): Promise<void>; restart(): Promise<void> };

@@ -634,6 +634,8 @@ export type FeatureAction =
     | { kind: 'tailscale.up' }
     /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */
     | { kind: 'tailscale.install' }
+    /** Read Tailscale again: Remote access opened, or its window focused (Tynn #749). */
+    | { kind: 'tailscale.refresh' }
     /** Sign in to Tynn with a token; an empty token signs out. */
     | { kind: 'integrations.tynnSignIn' }
     | { kind: 'integrations.tynnCode'; code: string }

@@ -396,6 +396,14 @@ function runCli(
     return pexecFile(cli, args, { windowsHide: true, timeout: timeoutMs });
 }
 
+/**
+ * RUN THE TAILSCALE CLI, FOUND AT THIS CALL (Tynn #749). RED STUB: inert, refuses every call.
+ */
+export async function tailscaleCommand(args: string[], timeoutMs: number, deps: Pick<TailscaleCliDeps, 'cliPath' | 'run'> = {}): Promise<string> {
+    void args; void timeoutMs; void deps;
+    throw new Error('Tailscale is not installed on this machine.');
+}
+
 const EMPTY = { self: null, peers: [] as TailnetPeer[] };
 
 /** Is this stdout the status document, rather than noise printed alongside an
