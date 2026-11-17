@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { AgentFilesHealth, type AgentFilesStep, type SyncSource } from '../core/agent-files-health.js';
 import type { WorkTracking } from '../core/genie-protocol.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
+import { ensureEnvelopeDirty, nodeDirtyFs } from './envelope-dirty.js';
 import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
 import { writeAgentProtocol } from './config-sync-targets.js';
@@ -31,6 +32,9 @@ export function featureWorkspaceFiles(deps: { mayWriteInto(folder: string): Prom
             const steps: AgentFilesStep[] = [
                 // First, whatever the switches: the files that carry Genie's MCP token are kept out of a commit.
                 { step: 'gitignore', run: (t) => writeAgentGitignore({ workspacePath, fs: nodeFs(t) }) },
+                // An existing .agi envelope gets the .ai/_dirty/ drop folder new envelopes have had since #2033 (Tynn #818):
+                // made once, with its .gitignore lines, and never through a link. Not an agent file, so not behind the switch.
+                { step: 'dirty', run: (t) => ensureEnvelopeDirty({ workspacePath, fs: nodeDirtyFs(t) }) },
                 // The protocol files (.agents/_genie/), true for Genie 2, listing the tools Genie's MCP actually serves.
                 { step: 'protocol', run: (t) => writeAgentProtocol({ workspacePath, enabled: on, tools: deps.tools(), tracking: deps.tracking(), fs: nodeFs(t) }) },
             ];
