@@ -228,7 +228,7 @@ const HEADER_PROBE = `
         const column = header ? header.closest('main') : null;
         // THE POSITIVE CONTROL: the seeded workspace's own header — its name crumb and its actions — is what is measured.
         // It lists no repos any more (the owner, 2026-11-16), so the twelve seeded repos are not in it: none healthy is locked.
-        // Its name is the seeded checkout's folder; its id is `tynn`.
+        // Its name is the seeded checkout's folder; its id is tynn.
         const named = (header?.querySelector('[data-workspace-name]')?.textContent ?? '').trim();
         const id = header?.closest('[data-surface="workspace"]')?.getAttribute('data-workspace') ?? null;
         const actions = header ? header.querySelectorAll('[data-header-actions] [data-action]').length : 0;
