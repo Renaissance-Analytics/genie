@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { asleepOnlyEngine, enginesToRelease, enginesToResume } from '../core/hibernate-engines.js';
 import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
 import { PortAllocator } from '../core/port-allocator.js';
+import { commandWord } from '../core/php-versions.js';
 import type { ServiceInstance } from '../core/services.js';
 import { websocketRoutes } from './websocket-front-door.js';
 import { mailpitRoutes } from '../core/mailpit-name.js';
@@ -389,7 +390,8 @@ function startExternalFrontDoor(input: {
         id: FRONT_DOOR_ID,
         workspaceId: '_genie',
         name: 'Genie front door (Caddy)',
-        command: `${caddyBin} run --config ${caddyfile} --adapter caddyfile --watch`,
+        // Each path ONE word for the pty's parser (Tynn #729): a profile with a space split the binary or the Caddyfile.
+        command: `${commandWord(caddyBin)} run --config ${commandWord(caddyfile)} --adapter caddyfile --watch`,
         cwd: caddyDir,
         env: { XDG_DATA_HOME: join(caddyDir, 'data'), XDG_CONFIG_HOME: join(caddyDir, 'config') },
         restart: 'always' as const,

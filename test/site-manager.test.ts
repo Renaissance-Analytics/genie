@@ -117,7 +117,7 @@ describe('a php site — a FastCGI worker, then Caddy', () => {
         ]);
         for (const o of pty.opened) expect(o).toMatchObject({ cwd: '/repos/app', env: { APP_ENV: 'local' } });
         expect(written[0]!.content).toContain('php_fastcgi 127.0.0.1:4102');
-        expect(written[0]!.content).toContain('root * /repos/app/public');
+        expect(written[0]!.content).toContain('root * "/repos/app/public"');
     });
 
     it('the php-cgi worker — and only it — is given Genie’s CA ini directory, read at each start; the site’s own env wins', () => {
