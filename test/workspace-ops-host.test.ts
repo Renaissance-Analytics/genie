@@ -176,7 +176,7 @@ describe('creating a new workspace', () => {
         expect(f.calls.some((c) => c.startsWith('gitInit:'))).toBe(false);
         expect(f.calls.at(-2)).toBe('gitFirstCommit:/w/acme-storefront.agi:Initial commit — acme-storefront.agi envelope scaffolded by Genie');
         expect(f.calls.at(-1)).toMatch(/^addWorkspace:acme-storefront:.*acme-storefront\.agi$/);
-        for (const file of ['project.json', '.gitignore', 'README.md', 'RULES.md', 'AGENTS.md', 'CLAUDE.md', 'sandbox/.gitkeep', '.trash/.gitkeep']) {
+        for (const file of ['project.json', '.gitignore', 'README.md', 'RULES.md', 'AGENTS.md', 'CLAUDE.md', 'sandbox/.gitkeep', '.trash/.gitkeep', '.ai/_dirty/.gitkeep']) {
             expect(f.files).toHaveProperty([`/w/acme-storefront.agi/${file}`]);
         }
         expect(f.files['/w/acme-storefront.agi/project.json']).toMatchObject({ name: 'Acme Storefront', $schema: SCHEMA });
