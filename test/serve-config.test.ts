@@ -60,7 +60,7 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
         const plain = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: 'dist', spa: false } })!;
         expect(plain).toContain('http://:4101 {');
         expect(plain).toContain('bind 127.0.0.1');
-        expect(plain).toContain('root * /repo/dist');
+        expect(plain).toContain('root * "/repo/dist"');
         expect(plain).toContain('file_server');
         expect(plain).not.toContain('try_files');
 
@@ -70,7 +70,7 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
 
     it('php: public/ behind php_fastcgi on the worker port', () => {
         const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
-        expect(php).toContain('root * /repo/public');
+        expect(php).toContain('root * "/repo/public"');
         expect(php).toContain('php_fastcgi 127.0.0.1:4102 {');
         // The request is HTTPS to PHP (moic.gen rendered blank: http:// asset links on an https page). COUNTED: exactly
         // one of each, inside the php_fastcgi block.

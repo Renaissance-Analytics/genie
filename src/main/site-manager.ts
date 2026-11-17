@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { commandWord } from '../core/php-versions.js';
 import { genHost, laravelServeCommand, serveCaddyfile, type DevServer, type ServeSpec } from '../core/serve-config.js';
 import type { SupervisorApi } from './process-supervisor.js';
 import { SITE_READY_CEILING_MS } from './port-probe.js';
@@ -571,7 +572,9 @@ export class SiteManager {
     #runCaddy(record: SiteRecord, caddy: string, caddyfile: string, env: Readonly<Record<string, string>> | undefined, proc: (procId: string, name: string, command: string, env: Readonly<Record<string, string>> | undefined) => unknown): void {
         const configPath = join(this.#deps.configDir, record.id, 'Caddyfile');
         this.#deps.writeConfig(configPath, caddyfile);
-        proc(record.id, `${record.host} server`, `${caddy} run --config ${configPath} --adapter caddyfile`, env);
+        // Each path ONE word for the pty's parser (Tynn #729): Genie's install and config folders sit under the person's
+        // profile, and a profile with a space split the binary or the Caddyfile into two arguments.
+        proc(record.id, `${record.host} server`, `${commandWord(caddy)} run --config ${commandWord(configPath)} --adapter caddyfile`, env);
     }
 
     /** Fires after create, declare, start, stop and remove — what re-renders the external front door's Caddyfile. */
