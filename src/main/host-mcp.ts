@@ -67,6 +67,8 @@ export interface HostMcpPorts {
      * supervisor. Absent = the host's hosting did not start, and the tools say so. Only `sites open` needs the window.
      */
     readonly hosting?: import('./hosting-actions.js').HostingServices;
+    /** A workspace's trust verdict as last read (Tynn #753): `sites` and `services` act only in a trusted one. Absent = none is. */
+    readonly workspaceTrusted?: (workspaceId: string) => boolean;
     /** Host-owned command execution, with the existing approval, confinement and cancellation contract. */
     readonly serviceExec?: import('./mcp-tools-hosting.js').ServiceExec;
     /** The terminals `manageTerminals` acts on (P3.3e): the host's own. Absent = the tool is the window's. */
@@ -175,6 +177,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.flows ? { flows: ports.flows } : {}),
             ...(ports.mail ? { mail: ports.mail } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
+            ...(ports.workspaceTrusted ? { workspaceTrusted: ports.workspaceTrusted } : {}),
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },

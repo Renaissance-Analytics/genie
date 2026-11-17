@@ -666,6 +666,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         retryFrontDoor: () => hosting.retryFrontDoor(),
         trustCertificate: () => hosting.trustCertificate(),
         deferTrustCertificate: () => hosting.deferTrustCertificate(),
+        deferHosts: () => hosting.deferHosts(),
         routes: () => hosting.routes(),
         configuredHosts: () => hosting.configuredHosts(),
         // One assembly for the window's Deck and genie-host's (deck-assembly.ts, Tynn #551).

@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { Elevator, PRIVILEGED_STEP_EXIT_BASE, elevationBatchPlan, elevationPlan, exitCodeText, hostsWriteStep, realHostsIo, runElevated, runElevatedBatch, stepOutcome, type ElevationOutcome, type Plan, type PrivilegedStep } from '../src/main/elevate.js';
 
 /**
@@ -92,14 +93,25 @@ describe('the program an elevated step runs', () => {
     });
 });
 
-describe('the hosts-file write step', () => {
-    it('copies the prepared file over the hosts file — Copy-Item on Windows, cp elsewhere', () => {
-        expect(hostsWriteStep('win32', 'C:\\Users\\me\\.genie\\runtime\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts')).toEqual({
+/** A SHA-256 as hex: what Genie composed, hashed before the staged file existed (Tynn #753). */
+const H = 'ab'.repeat(32);
+/** The Windows step's script for the prepared file at tmp, verbatim. */
+const winHostsScript = (tmp: string, hash = H) => `$b = [System.IO.File]::ReadAllBytes('${tmp}'); $h = -join ([System.Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('X2') }); if ($h -ne '${hash.toUpperCase()}') { [Console]::Error.WriteLine('the prepared hosts file changed after Genie wrote it; nothing was copied'); exit 3 }; [System.IO.File]::WriteAllBytes('C:\\Windows\\System32\\drivers\\etc\\hosts', $b)`;
+const unixHostsScript = 'set -e; t=$(mktemp); trap \'rm -f "$t"\' EXIT; cat -- "$1" > "$t"; h=$( { sha256sum "$t" 2>/dev/null || shasum -a 256 "$t"; } | cut -d " " -f 1); if [ "$h" != "$3" ]; then echo \'genie: the prepared hosts file changed after Genie wrote it; nothing was copied\' >&2; exit 3; fi; cat -- "$t" > "$2"';
+
+describe('the hosts-file write step (hash-checked, Tynn #753)', () => {
+    it('reads the prepared file ONCE, checks its SHA-256 against what Genie composed, and writes those same bytes — never a bare Copy-Item or cp', () => {
+        expect(hostsWriteStep('win32', 'C:\\Users\\me\\.genie\\runtime\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts', H)).toEqual({
             command: 'powershell',
-            args: ['-NoProfile', '-NonInteractive', '-Command', `Copy-Item -LiteralPath 'C:\\Users\\me\\.genie\\runtime\\hosts.next' -Destination 'C:\\Windows\\System32\\drivers\\etc\\hosts' -Force`],
+            args: ['-NoProfile', '-NonInteractive', '-Command', winHostsScript('C:\\Users\\me\\.genie\\runtime\\hosts.next')],
         });
-        expect(hostsWriteStep('linux', '/h/.genie/runtime/hosts.next', '/etc/hosts')).toEqual({ command: 'cp', args: ['/h/.genie/runtime/hosts.next', '/etc/hosts'] });
-        expect(hostsWriteStep('darwin', '/h/.genie/runtime/hosts.next', '/etc/hosts')).toEqual({ command: 'cp', args: ['/h/.genie/runtime/hosts.next', '/etc/hosts'] });
+        expect(hostsWriteStep('linux', '/h/.genie/runtime/hosts.next', '/etc/hosts', H)).toEqual({ command: '/bin/sh', args: ['-c', unixHostsScript, 'genie-hosts', '/h/.genie/runtime/hosts.next', '/etc/hosts', H] });
+        expect(hostsWriteStep('darwin', '/h/.genie/runtime/hosts.next', '/etc/hosts', H.toUpperCase())).toEqual({ command: '/bin/sh', args: ['-c', unixHostsScript, 'genie-hosts', '/h/.genie/runtime/hosts.next', '/etc/hosts', H] });
+    });
+
+    it('refuses to build a step without a real SHA-256: there is no unchecked copy', () => {
+        expect(() => hostsWriteStep('win32', 'C:\\g\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts', '')).toThrow(/SHA-256/);
+        expect(() => hostsWriteStep('linux', '/g/hosts.next', '/etc/hosts', 'abc')).toThrow(/SHA-256/);
     });
 });
 
@@ -127,7 +139,7 @@ describe('runElevated', () => {
 describe('ONE prompt for a batch (genie#604): elevationBatchPlan', () => {
     const win = [
         { command: 'certutil', args: ['-addstore', '-f', 'Root', 'C:\\Users\\Jo Example\\.genie\\runtime\\gen-ca\\ca.crt'] },
-        hostsWriteStep('win32', 'C:\\Users\\Jo Example\\.genie\\runtime\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts'),
+        hostsWriteStep('win32', 'C:\\Users\\Jo Example\\.genie\\runtime\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts', H),
     ];
     const decoded = (plan: Plan): string => Buffer.from(/'-EncodedCommand','([A-Za-z0-9+/=]+)'/.exec(plan.args[3]!)![1]!, 'base64').toString('utf16le');
 
@@ -141,7 +153,7 @@ describe('ONE prompt for a batch (genie#604): elevationBatchPlan', () => {
         expect(asWritten(decoded(plan)).split('\n')).toEqual([
             `& 'C:\\Windows\\System32\\certutil.exe' '-addstore' '-f' 'Root' 'C:\\Users\\Jo Example\\.genie\\runtime\\gen-ca\\ca.crt'`,
             'if ($LASTEXITCODE -ne 0) { exit 90 }',
-            `& 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' '-NoProfile' '-NonInteractive' '-Command' 'Copy-Item -LiteralPath ''C:\\Users\\Jo Example\\.genie\\runtime\\hosts.next'' -Destination ''C:\\Windows\\System32\\drivers\\etc\\hosts'' -Force'`,
+            `& 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' '-NoProfile' '-NonInteractive' '-Command' '${winHostsScript('C:\\Users\\Jo Example\\.genie\\runtime\\hosts.next').replace(/'/g, "''")}'`,
             'if ($LASTEXITCODE -ne 0) { exit 91 }',
             'exit 0',
         ]);
@@ -167,7 +179,7 @@ describe('ONE prompt for a batch (genie#604): elevationBatchPlan', () => {
 describe('runElevatedBatch: which step stopped it', () => {
     const steps: PrivilegedStep[] = [
         { id: 'trust', label: 'install Genie’s certificate into the trust store', step: { command: 'certutil', args: ['-addstore', '-f', 'Root', 'C:\\g\\ca.crt'] } },
-        { id: 'hosts', label: 'update the hosts file', step: hostsWriteStep('win32', 'C:\\g\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts') },
+        { id: 'hosts', label: 'update the hosts file', step: hostsWriteStep('win32', 'C:\\g\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts', H) },
     ];
     const answering = (exitCode: number, stdout = '') => { const plans: Plan[] = []; return { plans, run: async (p: Plan) => { plans.push(p); return { exitCode, stdout }; } }; };
 
@@ -253,7 +265,9 @@ describe('realHostsIo', () => {
         expect(await io.read()).toBe('127.0.0.1 localhost\n');
         const step = await io.stage('127.0.0.1 localhost\n127.0.0.1 tynn.gen\n::1 tynn.gen\n');
         expect(await readFile(join(dir, 'hosts.next'), 'utf8')).toBe('127.0.0.1 localhost\n127.0.0.1 tynn.gen\n::1 tynn.gen\n');
-        expect(step).toEqual({ command: 'cp', args: [join(dir, 'hosts.next'), hostsPath] });
+        // The step carries the hash of what was COMPOSED (Tynn #753), not of whatever the staged file holds later.
+        const composedHash = createHash('sha256').update('127.0.0.1 localhost\n127.0.0.1 tynn.gen\n::1 tynn.gen\n', 'utf8').digest('hex');
+        expect(step).toEqual(hostsWriteStep('linux', join(dir, 'hosts.next'), hostsPath, composedHash));
         // Staged, not written: the hosts file is untouched until the batch copies it.
         expect(await io.read()).toBe('127.0.0.1 localhost\n');
     });

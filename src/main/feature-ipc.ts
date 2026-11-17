@@ -335,7 +335,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         && !await applyDeckFeatureAction({ attention: services.attention, approvals: services.approvals, inbox: services.inbox,
             deckItems: () => services.deckItems(), deliverToAgent: ports.deliverToAgent,
             trustCertificate: () => services.trustCertificate(), deferTrustCertificate: () => services.deferTrustCertificate(),
-            syncHosts: () => services.syncHosts(), ...(ports.mainErrors ? { mainErrors: ports.mainErrors } : {}),
+            syncHosts: () => services.syncHosts(), deferHosts: () => services.deferHosts(), ...(ports.mainErrors ? { mainErrors: ports.mainErrors } : {}),
         }, action)) await applyFeatureControlAction(services, action, next, ports);
     slow(`act:${action.kind}`, actStarted);
     const snapshotStarted = Date.now();

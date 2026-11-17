@@ -119,7 +119,7 @@ describe('what is written', () => {
 });
 
 describe('when it is written', () => {
-    it('nothing at all before boot has loaded the sites; begin() is then ONE sync of the whole set', async () => {
+    it('nothing at all before boot has loaded the sites; begin() is then ONE sync of the whole set — an ask, never a prompt (Tynn #753)', async () => {
         const t = setup('127.0.0.1 localhost\n', { denyPlain: true });
         for (const n of [['a.gen'], ['a.gen', 'b.gen'], ['a.gen', 'b.gen', 'c.gen']]) { t.setNames(n); t.sync.changed(); }
         expect(t.clock.live()).toBe(0);
@@ -127,8 +127,14 @@ describe('when it is written', () => {
         t.sync.begin();
         t.clock.fire();
         await settle();
+        expect(t.prompt.batches).toEqual([]);
+        expect(t.io.calls).toEqual(['read', 'write']);
+        expect(t.sync.deckItems().map((i) => i.title)).toEqual(['Genie needs administrator permission to add a.gen, b.gen and c.gen to your hosts file so your normal browser can open them']);
+        // The person's Approve: one prompt, and the whole set lands.
+        expect(await t.sync.flush()).toEqual({ changed: true, elevated: true });
         expect(t.prompt.batches).toEqual([[HOSTS_STEP_ID]]);
         expect(t.io.content()).toContain('127.0.0.1 c.gen');
+        expect(t.sync.deckItems()).toEqual([]);
     });
 
     it('a change with the SAME configured names (a site started or stopped) does nothing — zero reads, zero writes, zero prompts', async () => {
@@ -137,6 +143,7 @@ describe('when it is written', () => {
         t.sync.begin();
         t.clock.fire();
         await settle();
+        await t.sync.flush();
         const before = { calls: t.io.calls.length, batches: t.prompt.batches.length };
         expect(before.batches).toBe(1);
         // Ten starts and stops: the same set, in either order.
@@ -146,16 +153,20 @@ describe('when it is written', () => {
         await settle();
         expect(t.io.calls.length).toBe(before.calls);
         expect(t.prompt.batches.length).toBe(1);
-        // Positive control in the same run: a NEW name is one write, through one prompt.
+        expect(t.sync.deckItems()).toEqual([]);
+        // Positive control in the same run: a NEW name is one new ask (still no prompt), and the person's Approve one write.
         t.setNames(['docs.gen', 'tynn.gen', 'shop.gen']);
         t.sync.changed();
         t.clock.fire();
         await settle();
+        expect(t.prompt.batches).toEqual([[HOSTS_STEP_ID]]);
+        expect(t.sync.deckItems().map((i) => i.title)).toEqual(['Genie needs administrator permission to add shop.gen to your hosts file so your normal browser can open it']);
+        await t.sync.flush();
         expect(t.prompt.batches).toEqual([[HOSTS_STEP_ID], [HOSTS_STEP_ID]]);
         expect(t.io.content()).toContain('::1 shop.gen');
     });
 
-    it('a burst of N changes is ONE write', async () => {
+    it('a burst of N changes is ONE ask, and the person’s Approve ONE write', async () => {
         const t = setup('127.0.0.1 localhost\n', { denyPlain: true });
         t.sync.begin();
         t.clock.fire();
@@ -166,6 +177,10 @@ describe('when it is written', () => {
         expect(t.clock.live()).toBe(1);
         t.clock.fire();
         await settle();
+        expect(t.io.calls.filter((c) => c === 'stage')).toHaveLength(0);
+        expect(t.prompt.batches).toEqual([]);
+        expect(t.sync.deckItems()).toHaveLength(1);
+        await t.sync.flush();
         expect(t.io.calls.filter((c) => c === 'stage')).toHaveLength(1);
         expect(t.prompt.batches).toEqual([[HOSTS_STEP_ID]]);
         for (const n of names) expect(t.io.content()).toContain(`127.0.0.1 ${n}`);
@@ -194,7 +209,11 @@ describe('when it is written', () => {
         t.sync.begin();
         t.clock.fire();
         await settle();
-        expect(t.results.at(-1)).toMatchObject({ error: 'Request dismissed' });
+        expect(t.prompt.batches).toEqual([]);
+        expect(t.results.at(-1)).toMatchObject({ awaitingApproval: true });
+        // The person's Approve, then No in the OS prompt: said with the block, and the Deck's ask is gone.
+        expect(await t.sync.flush()).toMatchObject({ error: 'Request dismissed' });
+        expect(t.sync.deckItems()).toEqual([]);
         t.sync.changed();
         t.sync.changed();
         expect(t.clock.live()).toBe(0);

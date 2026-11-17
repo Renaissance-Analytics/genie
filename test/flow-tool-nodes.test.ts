@@ -87,6 +87,8 @@ beforeEach(async () => {
         openFile: async (t) => { opened.push({ workspaceId: t.workspaceId, path: t.path }); return { ok: true }; },
         terminals: { list: () => [], open: (o) => { terminals.push({ workspaceId: o.workspaceId, command: o.command }); return { id: 'term_1', pid: 2, shell: 'sh', scrollback: '' }; }, write: () => true, scrollback: () => '', scrollbackCap: 1000 },
         hosting: services,
+        // A trusted workspace, as the person has it (Tynn #753: an untrusted one's sites and services refuse).
+        workspaceTrusted: () => true,
         processes: { book, logs: () => null },
         issueWatch: { forWorkspace: () => issues },
         plugins: { tools: () => [], guard: () => null, run: never },

@@ -279,7 +279,7 @@ describe('delete data and tenancy: an app is not data (H6 × H8)', () => {
 
 describe('a secret never reaches Docker’s argv, the MCP answer or the listing', () => {
     const caller: Caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: A, workspacePath: '/repo/a' };
-    const tools = () => hostingTools({
+    const tools = () => hostingTools({ trusted: () => true, 
         resolveCaller: (id) => (id === 't-a' ? caller : null),
         approve: async () => 'allowed',
         services: {

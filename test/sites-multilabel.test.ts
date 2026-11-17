@@ -100,6 +100,9 @@ describe('S5: a multi-label site reaches every place a name goes', () => {
         const caddyfile = await readFile(fd.caddyfile, 'utf8');
         expect(caddyfile.match(/^https:\/\/\S+ \{$/gm)).toEqual(['https://web.example.gen {', 'https://docs.gen {']);
         expect(caddyfile).toContain('reverse_proxy 127.0.0.1:5173');
+        // Nothing is elevated by a site change (Tynn #753): the block lands when the person approves the Deck's ask.
+        expect(hosts).toBe('127.0.0.1 localhost\n');
+        await services.syncHosts();
         expect(hosts.split('\n').filter((l) => l.startsWith('127.0.0.1 ') && l.endsWith('.gen'))).toEqual(['127.0.0.1 docs.gen', '127.0.0.1 web.example.gen']);
         const sans = await leafSans(caddyfile);
         expect(sans).toEqual(['docs.gen', 'web.example.gen']);

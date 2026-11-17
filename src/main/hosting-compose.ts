@@ -223,7 +223,9 @@ interface FrontDoorController {
     retry(): Promise<FrontDoorStatus>;
     trust(): Promise<{ ok: true } | { ok: false; reason: string }>;
     deferTrust(): void;
-    /** Genie's own Deck items about the front door: the one Trust ask. */
+    /** The person's Not now on the hosts-file ask (Tynn #753). */
+    deferHosts(): void;
+    /** Genie's own Deck items about the front door: the Trust ask and the hosts-file ask. */
     deckItems(): DeckItem[];
     /** Shutdown: nothing more is started or synced. */
     close(): void;
@@ -285,6 +287,7 @@ function startExternalFrontDoor(input: {
         retry: async () => ({ running: false, reason }),
         trust: async () => ({ ok: false, reason }),
         deferTrust: () => {},
+        deferHosts: () => {},
         deckItems: () => [],
         close: () => {},
     });
@@ -370,6 +373,7 @@ function startExternalFrontDoor(input: {
         debounceMs: input.hostsDebounceMs,
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         onResult: notify,
+        now: input.now,
     });
     render();
     sites.onChange(() => { render(); hosts.changed(); });
@@ -491,12 +495,15 @@ function startExternalFrontDoor(input: {
             deferredFor = ca.thumbprint;
             notify();
         },
+        deferHosts: () => hosts.defer(),
         deckItems: () => {
+            // The hosts-file ask (Tynn #753): a site change waits here for the person's Approve, never a prompt of its own.
+            const asks = hosts.deckItems();
             const all = sites.list();
-            if (trusted !== false || all.length === 0) return [];
+            if (trusted !== false || all.length === 0) return asks;
             askedAt ??= input.now();
             const item = trustDeckItem({ trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt });
-            return item ? [item] : [];
+            return item ? [item, ...asks] : asks;
         },
         close: () => {
             closed = true;
@@ -852,6 +859,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         retryFrontDoor: frontDoorCtl.retry,
         trustCertificate: frontDoorCtl.trust,
         deferTrustCertificate: frontDoorCtl.deferTrust,
+        deferHosts: frontDoorCtl.deferHosts,
         routes,
         configuredHosts,
         trustDeckItems: () => frontDoorCtl.deckItems(),

@@ -23,6 +23,8 @@ export interface DeckAnswerPorts {
     readonly trustCertificate?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly deferTrustCertificate?: () => void;
     readonly syncHosts?: () => Promise<HostsSyncResult>;
+    /** The hosts-file ask's Not now (Tynn #753). */
+    readonly deferHosts?: () => void;
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
     /** A rate-limit alert's kept notice (Tynn #748): Dismiss forgets it. */
     readonly limitNotices?: { dismiss(id: string): boolean };
@@ -88,6 +90,10 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if ('error' in r) throw new Error(r.error);
             break;
         }
+        case 'defer-hosts':
+            if (!ports.deferHosts) throw new Error(NEEDS_WINDOW('putting the hosts file off'));
+            ports.deferHosts();
+            break;
         case 'dismiss-limit-alert':
             if (!ports.limitNotices) throw new Error(NEEDS_WINDOW('dismissing a rate-limit alert'));
             if (!ports.limitNotices.dismiss(command.id)) throw new Error(`no rate-limit notice ${command.id}`);

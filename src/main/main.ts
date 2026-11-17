@@ -2792,6 +2792,8 @@ async function boot(): Promise<void> {
             // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235)
             // or the tab on screen, and the site's workspace pulses (genie#1265).
             openInBrowser: agentOpensSite,
+            // …and `sites` / `services` act only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
+            workspaceTrusted: (workspaceId) => !composed.untrustedNow({ workspaceId }),
             // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
             ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines), ...(processScheduler ? { runNow: (id: string) => processScheduler!.runNow(id) } : {}) } } : {}),
             // The agents' `flows` tool: the Flows tab's own store, and the scheduler's Run now (the tool runs only armed flows).

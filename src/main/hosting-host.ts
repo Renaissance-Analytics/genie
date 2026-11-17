@@ -90,6 +90,8 @@ export interface HostingApi {
     trustCertificate(): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** The person's Not now on the Deck's Trust item: not asked again for this CA (Hosting's line stays). */
     deferTrustCertificate(): void;
+    /** The person's Not now on the Deck's hosts-file ask (Tynn #753): put away until the names change. */
+    deferHosts(): void;
     /** `<name>.gen → 127.0.0.1:<port>` for every site that is up — what the front door reads. */
     routes(): GenRoute[];
     /**
@@ -328,6 +330,7 @@ export class HostingService {
             case 'retryFrontDoor': return s.retryFrontDoor();
             case 'trustCertificate': return s.trustCertificate();
             case 'deferTrustCertificate': return s.deferTrustCertificate();
+            case 'deferHosts': return s.deferHosts();
             // The person's yes to a workspace (genie#1519). `engine.hosting` is a local window's only (session-engine-server.ts).
             case 'trust.trust': return s.trust.trust(str(a[0]));
             case 'trust.untrust': return s.trust.untrust(str(a[0]));
@@ -551,6 +554,8 @@ export class HostingReplica implements HostingApi {
     trustCertificate(): Promise<{ ok: true } | { ok: false; reason: string }> { return this.#ask('trustCertificate'); }
     /** Optimistic: the Trust item goes when the host's next dump says so. */
     deferTrustCertificate(): void { void this.#call('deferTrustCertificate', []).catch(() => {}); }
+    /** Optimistic too: the hosts-file ask goes when the host's next dump says so. */
+    deferHosts(): void { void this.#call('deferHosts', []).catch(() => {}); }
     routes(): GenRoute[] { return [...(this.#dump?.routes ?? [])]; }
     configuredHosts(): string[] { return [...(this.#dump?.configuredHosts ?? [])]; }
     trustDeckItems(): DeckItem[] { return [...(this.#dump?.deckItems ?? [])]; }

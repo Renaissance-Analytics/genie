@@ -58,7 +58,7 @@ const recordFile = () => join(runtimeDir(home), 'workspace-trust.json');
 
 async function agentCall(action: string, extra: JsonObject = {}) {
     const caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'acme', workspacePath: join(dir, 'acme') };
-    const tools = hostingTools({ resolveCaller: () => caller, approve: async () => 'allowed', services, openInBrowser: async () => ({ ok: true }) });
+    const tools = hostingTools({ trusted: () => true,  resolveCaller: () => caller, approve: async () => 'allowed', services, openInBrowser: async () => ({ ok: true }) });
     const tool = tools.find((t) => t.definition.name === 'sites')!;
     const r = await tool.handler({ terminalId: 't', action, ...extra }, { server: 'genie', tool: 'sites', headers: {} });
     return { isError: r.isError === true, text: r.text };

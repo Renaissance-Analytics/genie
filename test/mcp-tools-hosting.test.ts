@@ -142,7 +142,7 @@ beforeEach(async () => {
     callers['t-other'] = { agentId: mintAgentId(), agentName: 'vega', workspaceId: 'example-other', workspacePath: join(dir, 'example-other') };
     const toolsAt = performance.now();
     timingLine(attempt, { stage: 'caller-records', elapsedMs: toolsAt - composedAt, totalMs: toolsAt - setupStarted });
-    tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services, openInBrowser: async (url) => { shown.push(url); return { ok: true }; } });
+    tools = hostingTools({ trusted: () => true,  resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services, openInBrowser: async (url) => { shown.push(url); return { ok: true }; } });
     const readyAt = performance.now();
     timingLine(attempt, { stage: 'tool-registrations', elapsedMs: readyAt - toolsAt, totalMs: readyAt - setupStarted });
     timingLine(attempt, { stage: 'hook-ready', elapsedMs: readyAt - setupStarted, totalMs: readyAt - setupStarted });
@@ -521,7 +521,7 @@ describe('sites', () => {
 
         const denied = call('sites', 't-example', { action: 'remove', site: 'site_example' });
         const item = await asked();
-        expect(item.title).toMatch(/^atlas wants to remove a site: example\.gen \(.+\) — stopped and removed from this workspace’s project\.json; the folder and its files are not touched$/);
+        expect(item.title).toMatch(/^atlas wants to remove a site: example\.gen \(.+\) — stopped and removed from this workspace’s project\.json; the folder and its files are not touched\. Genie then asks you in the Deck for administrator permission to update the hosts file, so your normal browser can open the site; nothing is asked of your computer until you approve there$/);
         services.approvals.resolve(item.id, 'deny');
         expect((await denied).isError).toBe(true);
         expect(services.sites.list()).toHaveLength(1);
@@ -620,7 +620,7 @@ describe('sites: status, restart, logs, open, detect, update (S6)', () => {
         const fileBefore = await readFile(join(dir, 'example', 'project.json'), 'utf8');
         const pending = call('sites', 't-example', { action: 'update', site: 'example', name: 'app.example', devCommand: 'npm start -- --port {port}' });
         const item = await asked();
-        expect(item.title).toBe('atlas wants to change a site: example.gen — name example.gen → app.example.gen; command npm run dev -- --port {port} → npm start -- --port {port} — written to this workspace’s project.json and served as changed');
+        expect(item.title).toBe('atlas wants to change a site: example.gen — name example.gen → app.example.gen; command npm run dev -- --port {port} → npm start -- --port {port} — written to this workspace’s project.json and served as changed. Genie then asks you in the Deck for administrator permission to update the hosts file, so your normal browser can open the site; nothing is asked of your computer until you approve there');
         services.approvals.resolve(item.id, 'deny');
         const r = await pending;
         expect(r.isError).toBe(true);
@@ -688,21 +688,26 @@ describe('who is calling, and where', () => {
     });
 
     it('a Genie with no services (doctor mode) says so for both tools; the normal wiring reaches the composition (control)', async () => {
-        const none = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: async () => 'denied', services: null });
+        const none = hostingTools({ trusted: () => true,  resolveCaller: (id) => callers[id] ?? null, approve: async () => 'denied', services: null });
         for (const name of ['services', 'sites'] as const) {
             const r = await call(name, 't-example', { action: 'list' }, none);
             expect(r.isError).toBe(true);
             expect(r.json.error).toMatch(/no services or sites/);
         }
         const never = (() => { throw new Error('not exercised'); }) as never;
-        const wired = allGenieTools(genieToolDeps({
-            inbox: never, attention: never, knowledge: never, settings: never, approve: async () => 'denied', roster: () => [], resolveCaller: (id) => callers[id] ?? null,
+        const parts = {
+            inbox: never, attention: never, knowledge: never, settings: never, approve: async () => 'denied' as const, roster: () => [], resolveCaller: (id: string) => callers[id] ?? null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never, hosting: services,
             plugins: { tools: () => [], guard: () => null, run: never },
-        }));
+        };
+        const wired = allGenieTools(genieToolDeps({ ...parts, workspaceTrusted: () => true }));
         const r = await call('services', 't-example', { action: 'list' }, wired);
         expect(r.isError).toBe(false);
         expect(r.json.services).toEqual([]);
+        // No trust verdict wired is no trust (Tynn #753): fail closed, said in words.
+        const unwired = await call('services', 't-example', { action: 'list' }, allGenieTools(genieToolDeps(parts)));
+        expect(unwired.isError).toBe(true);
+        expect(unwired.json.error).toMatch(/not trusted/);
     });
 
     it('both tools tell an agent that Genie runs everything and never to use docker, and carry a title', () => {
