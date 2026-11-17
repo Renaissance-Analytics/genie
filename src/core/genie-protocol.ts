@@ -46,17 +46,37 @@ Genie is not signed in to Tynn here, so there is no Tynn work tracker. Keep the 
  * Genie's own heading (agent-routers.ts writes `# Workspace rules`): an agent there has nothing but generic files.
  * Headings and blank lines are not rules.
  */
-export function hasProjectRules(_rules: string | null): boolean {
-    return true; // RED stub (#736)
+export function hasProjectRules(rules: string | null): boolean {
+    if (rules === null) return false;
+    return rules.split(/\r?\n/).some((line) => line.trim() !== '' && !/^#{1,6}\s/.test(line.trim()));
 }
 
-/** The orientation an agent gets while the workspace has no rules (Tynn #736, #737). */
+/**
+ * THE ORIENTATION AN AGENT GETS WHILE THE WORKSPACE HAS NO RULES (Tynn #736, #737). It sends the agent to Genie's guide
+ * and offers the Fancy Dev Kit (the owner: "the fancy plugin automatically will be recommended for agents their first
+ * run in Genie"), with the install commands the kit's own README gives, which an agent can run once the person says
+ * yes. It goes on the first sync after RULES.md has rules.
+ */
 function firstRunSection(): string {
-    return ''; // RED stub (#736, #737)
+    return `## First run here
+
+This workspace has no rules yet. Before the first task:
+
+- Read the \`genie\` skill for what you can do here.
+- If the work is an app or a UI, and no \`fancy-ui\` tools are in your list, offer the person the Fancy Dev Kit plugin: ready-made components and app pieces. With their yes, install it. Claude Code: \`claude plugin marketplace add Particle-Academy/fancy-ui-plugin\`, then \`claude plugin install fancy-ui@fancy-ui\`. Codex: \`codex plugin marketplace add Particle-Academy/fancy-ui-codex-plugin\`, then \`codex plugin add fancy-ui@fancy-ui\`.
+- Rules the person gives you go in \`RULES.md\`. This section goes once it has some.
+
+`;
 }
 
-/** Where Genie's own guide is (Tynn #736). */
-const GUIDE = ''; // RED stub (#736)
+/**
+ * WHERE GENIE'S OWN GUIDE IS (Tynn #736: a fresh agent went to a generic ToolSearch, and the owner asked why it "didn't
+ * use the help or use the docs first"). The guide is the `genie` skill and its `genie-*` topics: a session lists skills
+ * with their descriptions, while Genie's MCP tools can arrive deferred, as names only.
+ */
+const GUIDE = `
+The \`genie\` skill is Genie’s guide, with a \`genie-*\` skill per topic. Read it first when you need to know what Genie can do, before you search for tools.
+`;
 
 export function sharedProtocol(tools: readonly ProtocolTool[], tracking: WorkTracking = 'files', firstRun = false): string {
     // NAMES ONLY (the owner, 2026-10-18: no duplicate info in the system prompt chain): each tool's description already

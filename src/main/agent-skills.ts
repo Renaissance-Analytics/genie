@@ -27,7 +27,7 @@ export interface GenieSkill {
 export const GENIE_SKILLS: readonly GenieSkill[] = [
     {
         name: 'genie',
-        description: 'Use whenever you work inside Genie 2 or its `genie` MCP tools are available: what each tool is for.',
+        description: "Genie's guide, to read first (before searching for tools) whenever you work inside Genie 2 or its `genie` MCP tools are available: what each tool is for.",
         body: `# Working in Genie 2
 
 Genie's MCP server (\`genie\`) comes with your session. Its tools:
