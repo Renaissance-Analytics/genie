@@ -81,6 +81,8 @@ export interface TailscaleStatus {
     // Tailscale login link expires, so a kept link is the "this link has expired" page. A sign-in asks `up` for a new one.
     /** How to get out of `state`; null when nothing is wrong (or nothing is known). */
     remedy?: TailscaleRemedy | null;
+    /** Genie's own Install is under way: downloading, checking, or its installer open and Tailscale not there yet (Tynn #748). */
+    installing?: boolean;
 }
 
 /** First IPv4 in a TailscaleIPs[] (the list also carries the IPv6 ULA). */
@@ -394,6 +396,18 @@ function runCli(
     timeoutMs: number,
 ): Promise<{ stdout: string; stderr: string }> {
     return pexecFile(cli, args, { windowsHide: true, timeout: timeoutMs });
+}
+
+/**
+ * RUN THE TAILSCALE CLI, FOUND AT THIS CALL (Tynn #749): its stdout. The host's tailnet listener used a PATH lookup, and
+ * Windows' Tailscale installer adds its folder to the machine's PATH, which a process already running never sees: a
+ * Tailscale installed while Genie ran was looked for in System32 until Genie was shut down and relaunched. The CLI is
+ * looked up where Tailscale installs it ({@link tailscaleCliPath}), at every call.
+ */
+export async function tailscaleCommand(args: string[], timeoutMs: number, deps: Pick<TailscaleCliDeps, 'cliPath' | 'run'> = {}): Promise<string> {
+    const cli = (deps.cliPath ?? tailscaleCliPath)();
+    if (!cli) throw new Error('Tailscale is not installed on this machine.');
+    return (await (deps.run ?? runCli)(cli, args, timeoutMs)).stdout;
 }
 
 const EMPTY = { self: null, peers: [] as TailnetPeer[] };

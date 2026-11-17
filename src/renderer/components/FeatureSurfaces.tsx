@@ -24,7 +24,7 @@ import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
 import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
-import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
+import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -2709,6 +2709,44 @@ function HostUpgradeRow({ host, upgrade, onUpgradeHost }: { host: string; upgrad
 }
 
 /**
+ * TAILSCALE (Tynn #821; Genie 1's tailscale.status / install / up): remote access runs over the tailnet, so where Tailscale
+ * stands, and the one action that moves it on. Main reads Tailscale again when this row opens and when its window regains
+ * focus, and keeps reading on its own while Tailscale is not connected (Tynn #749): installed or signed in from Tailscale's
+ * own window, the row moves on without a relaunch. While Genie's Install is under way it is the same button, busy and
+ * disabled: nothing moves, and a second click opens no second installer (Tynn #748).
+ */
+function TailscaleRow({ tailscale, outcome, host, browse, onAction, button }: { tailscale: NonNullable<RemoteSection['tailscale']>; outcome: string | null; host: string; browse: boolean; onAction: SurfaceProps['onAction']; button: string }) {
+    const askRead = useRef(onAction);
+    askRead.current = onAction;
+    useEffect(() => {
+        const read = (): void => { askRead.current({ kind: 'tailscale.refresh' }); };
+        read();
+        window.addEventListener('focus', read);
+        return () => window.removeEventListener('focus', read);
+    }, []);
+    const installing = tailscale.installing === true;
+    return (
+        <div data-tailscale={tailscale.state} className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="font-medium">Tailscale</span>
+            {tailscale.state === 'running' ? (
+                <>
+                    <span>Connected as <span className="font-mono">{tailscale.self?.dnsName ?? tailscale.self?.hostname ?? host}</span></span>
+                    {browse ? <span className="text-xs text-[var(--fg-3)]">{tailscale.peers.length} {tailscale.peers.length === 1 ? 'device' : 'devices'} on your tailnet</span> : null}
+                </>
+            ) : (
+                <>
+                    <span className="text-[var(--fg-2)]">{tailscale.remedy?.message ?? (tailscale.state === 'needs-login' ? 'This machine is not on your tailnet yet.' : 'Tailscale is not ready.')}</span>
+                    {tailscale.remedy?.command ? <code className="basis-full rounded-md bg-[var(--bg-2)] px-2 py-1 font-mono text-xs">{tailscale.remedy.command}</code> : null}
+                    {tailscale.state === 'absent' ? <Button size="xs" type="button" data-action="tailscale-install" data-busy={installing ? 'true' : undefined} loading={installing} disabled={installing} className={button} onClick={() => onAction({ kind: 'tailscale.install' })}>Install Tailscale</Button> : null}
+                    {tailscale.state === 'needs-login' ? <Button size="xs" type="button" data-action="tailscale-up" className={button} onClick={() => onAction({ kind: 'tailscale.up' })}>Connect</Button> : null}
+                </>
+            )}
+            {outcome ? <span data-tailscale-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{outcome}</span> : null}
+        </div>
+    );
+}
+
+/**
  * THE WINDOWS FIREWALL ROW (Tynn #685; the owner: "If it's already allowed I should see that it is already allowed and I
  * should have a button for clearing that rule"). It draws main's reading of Genie's rule from Windows:
  *  - there and letting the port in: "Allowed", with what Windows reports, and Remove;
@@ -2819,25 +2857,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                     {remote.firewall ? <FirewallRow rule={remote.firewallRule ?? null} enabled={remote.enabled} outcome={remote.firewallOutcome ?? null} onAction={onAction} button={button} /> : null}
                     {/* TAILSCALE (Tynn #821; Genie 1's tailscale.status / install / up): remote access runs over the tailnet, so
                         where Tailscale stands, and the one action that moves it on. */}
-                    {remote.tailscale ? (
-                        <div data-tailscale={remote.tailscale.state} className="flex flex-wrap items-center gap-3 text-sm">
-                            <span className="font-medium">Tailscale</span>
-                            {remote.tailscale.state === 'running' ? (
-                                <>
-                                    <span>Connected as <span className="font-mono">{remote.tailscale.self?.dnsName ?? remote.tailscale.self?.hostname ?? remote.host}</span></span>
-                                    {browse ? <span className="text-xs text-[var(--fg-3)]">{remote.tailscale.peers.length} {remote.tailscale.peers.length === 1 ? 'device' : 'devices'} on your tailnet</span> : null}
-                                </>
-                            ) : (
-                                <>
-                                    <span className="text-[var(--fg-2)]">{remote.tailscale.remedy?.message ?? (remote.tailscale.state === 'needs-login' ? 'This machine is not on your tailnet yet.' : 'Tailscale is not ready.')}</span>
-                                    {remote.tailscale.remedy?.command ? <code className="basis-full rounded-md bg-[var(--bg-2)] px-2 py-1 font-mono text-xs">{remote.tailscale.remedy.command}</code> : null}
-                                    {remote.tailscale.state === 'absent' ? <Button size="xs" type="button" data-action="tailscale-install" className={button} onClick={() => onAction({ kind: 'tailscale.install' })}>Install Tailscale</Button> : null}
-                                    {remote.tailscale.state === 'needs-login' ? <Button size="xs" type="button" data-action="tailscale-up" className={button} onClick={() => onAction({ kind: 'tailscale.up' })}>Connect</Button> : null}
-                                </>
-                            )}
-                            {remote.tailscaleOutcome ? <span data-tailscale-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.tailscaleOutcome}</span> : null}
-                        </div>
-                    ) : null}
+                    {remote.tailscale ? <TailscaleRow tailscale={remote.tailscale} outcome={remote.tailscaleOutcome ?? null} host={remote.host} browse={browse} onAction={onAction} button={button} /> : null}
                     {/* THE TYNN NETWORK (Tynn #836): this machine registered with Tynn as a workstation — what a share, the
                         relay and the Tynn workstations list stand on — or why it is not. */}
                     {remote.tynnWorkstation ? (
