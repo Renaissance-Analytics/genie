@@ -27,6 +27,8 @@ async function rig(connected: boolean, allow = true) {
         probe: () => null, lastRowAt: () => null, reportPlan: () => true,
         hosting: { sites: { list: () => [] }, engines: { list: () => [], choices: () => [], envFor: () => ({ DB_PASSWORD: 'fixture-secret-444' }) }, engineStatuses: async () => [] } as never,
         ...{ serviceExec },
+        // The caller's workspace is a trusted one (Tynn #753: an untrusted one's sites and services refuse).
+        workspaceTrusted: () => true,
         window: { connected: () => connected, call: async (call) => { forwarded.push(call.name); throw new Error('this window runs no tools'); } },
         openFileLater: () => {}, signal: () => {}, endpointFile: join(dir, 'mcp-endpoint.json'), osaDir: join(dir, 'osa'), log: () => {},
     });
