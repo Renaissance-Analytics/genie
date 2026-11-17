@@ -77,7 +77,7 @@ import type { TreeNode } from '../core/files-panel.js';
 import { fromBase64 } from '../core/mobile-wire.js';
 import { deviceAuth, knownHosts, moveRememberedTokens, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
-import type { RelayConnect } from '../core/relay-connect.js';
+import { withAsking, type RelayConnect } from '../core/relay-connect.js';
 import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { shareDoor } from './share-door.js';
@@ -603,7 +603,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         if (leaving.current || companionTicket.current !== null) return;
         reconnectDrone.dropped();
     }, [state?.connected]); // eslint-disable-line react-hooks/exhaustive-deps
-    const shownRelayConnect: RelayConnect = droneHold === 'restarting' ? { kind: 'reconnecting' } : droneHold === 'skew' && skewView ? skewView : relayConnect;
+    // A share-link guest waiting for the machine's person to let it in says so (Tynn #731).
+    const shownRelayConnect: RelayConnect = droneHold === 'restarting' ? { kind: 'reconnecting' } : droneHold === 'skew' && skewView ? skewView : withAsking(relayConnect, state?.pairing);
     return {
         client,
         state,

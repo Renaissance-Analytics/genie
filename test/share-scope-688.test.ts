@@ -242,7 +242,9 @@ const OWNER: PreAuth = { label: 'glenn', isOwner: true, workspaceId: null, reado
 async function admitted(who: PreAuth, drive = true) {
     const c = connectRelay(who);
     c.send({ kind: 'hello', auth: { kind: 'relay' }, label: who.label });
-    const welcome = await c.next();
+    // A guest waits for Allow first (Tynn #731); this fixture's confirm allows at once.
+    let welcome = await c.next();
+    while (welcome.kind === 'pairing') welcome = await c.next();
     expect(welcome).toMatchObject({ kind: 'welcome', isOwner: who.isOwner, workspaceId: who.workspaceId });
     if (drive && !who.readonly) expect(await c.call('baton.take')).toMatchObject({ ok: true });
     return { c, welcome };

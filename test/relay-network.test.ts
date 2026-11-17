@@ -76,7 +76,7 @@ function wireClient(t: ClientTransport) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let id = 0;
     return {
-        hello: async (auth: unknown) => { t.send(JSON.stringify({ kind: 'hello', auth, label: 'laptop' })); return next(); },
+        hello: async (auth: unknown) => { t.send(JSON.stringify({ kind: 'hello', auth, label: 'laptop' })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
         call: async (method: string, ...args: unknown[]) => { t.send(JSON.stringify({ kind: 'call', id: ++id, method, args })); return next(); },
     };
 }

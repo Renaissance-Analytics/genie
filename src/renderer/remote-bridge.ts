@@ -54,7 +54,7 @@ export interface RemoteState {
     /** Minted on a PIN pairing — the client keeps it for next time. */
     readonly token: string | null;
     /** The PIN was right and the host's screen asks "Pair this device?" until `expiresAt` (q_8c07b142); `null` otherwise. */
-    readonly pairing?: { readonly expiresAt: number } | null;
+    readonly pairing?: { readonly expiresAt: number; readonly guest?: true } | null;
     /** The build the host said in its welcome (P10.1e); absent/`null` = it said none. */
     readonly hostBuild?: string | null;
     /** The host runs a Genie older than this client needs (Tynn #651); the link was closed for it. */
@@ -204,7 +204,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 return;
             }
             case 'pairing':
-                setState({ pairing: { expiresAt: m.expiresAt } });
+                setState({ pairing: { expiresAt: m.expiresAt, ...(m.guest === true ? { guest: true as const } : {}) } });
                 return;
             case 'refused': {
                 // A call the host does not know: an older host than this client needs, said as such (Tynn #651).
