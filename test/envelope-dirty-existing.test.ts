@@ -174,6 +174,8 @@ describe('only in a workspace that is trusted and not hibernated (the real hosti
         mkdirSync(join(home, 'runtime'), { recursive: true });
         writeFileSync(join(home, 'runtime', 'workspace-trust.json'), JSON.stringify({ version: 1, carried: [], pendingCarry: [], sites: {}, workspaces: {} }));
         r = await hostingRig({ home, workspaces: (path) => { ws.path = path; return [ws]; } });
+        // Something to trust (a folder that lists nothing to run is trusted as it is): an MCP server the workspace names.
+        writeFileSync(join(r.ws, '.mcp.json'), JSON.stringify({ mcpServers: { theirs: { command: 'node', args: ['theirs.js'] } } }));
         expect(await r.stack.trust.refresh('ws')).toMatchObject({ trusted: false });
         mkdirSync(join(r.ws, '.ai'));
         writeFileSync(join(r.ws, '.gitignore'), 'node_modules/\n');
