@@ -83,7 +83,7 @@ describe('a message’s files hold upload slots only while it is being sent', ()
     it('control: a message with three files sends, and the host receives all three', async () => {
         const remote = await connect();
         await remote.takeBaton();
-        expect(await remote.bridge.prompt('agent_a', 'look', images(1, 2, 3))).toMatchObject({ ok: true });
+        expect(await remote.bridge.prompt('agent_a', 'look', images(1, 2, 3))).toEqual({ ok: true });
         expect(prompted()).toHaveLength(1);
         expect((prompted()[0]!.args[2] as unknown[]).length).toBe(3);
     });
@@ -95,7 +95,7 @@ describe('a message’s files hold upload slots only while it is being sent', ()
         expect(refused).toMatchObject({ ok: false });
         expect(refused.reason).toContain('Pasted image 4.png');
         // The owner removed the extra image and pressed Send again.
-        expect(await remote.bridge.prompt('agent_a', 'one', images(1))).toMatchObject({ ok: true });
+        expect(await remote.bridge.prompt('agent_a', 'one', images(1))).toEqual({ ok: true });
         expect(prompted()).toHaveLength(1);
     });
 
@@ -104,17 +104,17 @@ describe('a message’s files hold upload slots only while it is being sent', ()
         const first = await remote.bridge.prompt('agent_a', 'two', images(1, 2));
         expect(first).toMatchObject({ ok: false });
         await remote.takeBaton();
-        expect(await remote.bridge.prompt('agent_a', 'two', images(1, 2))).toMatchObject({ ok: true });
+        expect(await remote.bridge.prompt('agent_a', 'two', images(1, 2))).toEqual({ ok: true });
         expect(prompted()).toHaveLength(1);
     });
 
     it('an upload into the workspace the host refuses frees its staged bytes', async () => {
         const remote = await connect({ profile: 'mobile' });
         for (let i = 0; i < 3; i++) {
-            expect(await remote.bridge.files.upload('tynn', 'docs', `a${i}.txt`, new Uint8Array([1, 2, 3]))).toMatchObject({ ok: false });
+            expect(await remote.bridge.files.upload!('tynn', 'docs', `a${i}.txt`, new Uint8Array([1, 2, 3]))).toMatchObject({ ok: false });
         }
         await remote.takeBaton();
-        expect(await remote.bridge.files.upload('tynn', 'docs', 'b.txt', new Uint8Array([1, 2, 3]))).toMatchObject({ ok: true });
+        expect(await remote.bridge.files.upload!('tynn', 'docs', 'b.txt', new Uint8Array([1, 2, 3]))).toEqual({ ok: true });
     });
 
     it('two chats sending at once both send: a window sends its staged messages one after another', async () => {
@@ -124,8 +124,8 @@ describe('a message’s files hold upload slots only while it is being sent', ()
             remote.bridge.prompt('agent_a', 'from chat one', images(1, 2)),
             remote.bridge.prompt('agent_a', 'from chat two', images(3, 4)),
         ]);
-        expect(a).toMatchObject({ ok: true });
-        expect(b).toMatchObject({ ok: true });
+        expect(a).toEqual({ ok: true });
+        expect(b).toEqual({ ok: true });
         expect(prompted().map((c) => c.args[1])).toEqual(['from chat one', 'from chat two']);
     });
 });
