@@ -40,6 +40,8 @@ export interface TabViewEvents {
     failed(code: number, description: string, url: string, isMainFrame: boolean): void;
     /** The page asked for a new window (`target=_blank`, `window.open`): never a window — a tab, for a Genie site. */
     openWindow(url: string): void;
+    /** A link off the dev sites, stopped before it loaded (Tynn #741). */
+    external(url: string): void;
 }
 
 /** What the chrome draws from. */
@@ -54,6 +56,8 @@ export interface BrowserSnapshot extends BrowserState {
     readonly sites: readonly string[];
     /** Each site's label: its workspace's name (and the site, where it has several), never an id-like host. */
     readonly siteLabels?: Readonly<Record<string, string>>;
+    /** The host the last address off the dev sites was handed to the person's own browser for (Tynn #741); null: none. */
+    readonly handedOff?: string | null;
 }
 
 export interface GenieBrowserPorts {
@@ -67,6 +71,10 @@ export interface GenieBrowserPorts {
     /** Which store a site's logins are in. A view has one session for its life, so another store is another tab. */
     readonly storeOf?: (url: string) => string | null;
     readonly push: (snapshot: BrowserSnapshot) => void;
+    /** The person's normal browser (Electron's shell.openExternal), for an address that is not a dev site (Tynn #741). */
+    readonly openExternal?: (url: string) => void;
+    /** `localhost` and `127.0.0.1` are dev sites here. False for a window onto another workstation: its loopback is not ours. */
+    readonly loopback?: boolean;
 }
 
 export type BrowserAnswer = { readonly ok: true } | { readonly ok: false; readonly error: string };
@@ -225,6 +233,7 @@ export class GenieBrowser {
                 const nav = normalizeNavUrl(url, new Set(this.#ports.enabledHosts()));
                 if ('url' in nav) this.#openTab(nav.url);
             },
+            external: () => {}, // STUB (Tynn #741 RED)
         };
     }
 

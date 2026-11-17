@@ -357,7 +357,7 @@ export interface FeatureData {
     readonly inbox: InboxSection | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
     /** The Genie Browser: the page it shows (each .gen site at its own https origin), this machine's sites, and its history. */
-    readonly browser: { url: string | null; routes: readonly GenRoute[]; canGoBack: boolean; canGoForward: boolean };
+    readonly browser: { url: string | null; routes: readonly GenRoute[]; canGoBack: boolean; canGoForward: boolean; /** The host the last address off the dev sites opened in the person's browser for (Tynn #741). */ handedOff?: string | null };
     readonly remote: RemoteSection | null;
     readonly integrations: IntegrationsSection | null;
     readonly plugins: PluginsSection | null;

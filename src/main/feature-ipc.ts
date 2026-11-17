@@ -233,6 +233,8 @@ export interface FeatureState {
     tynnMessage?: string | null;
     knowledgeQuery: string;
     browserUrl?: string | null;
+    /** The host the pane's last address off the dev sites was handed to the person's own browser for (Tynn #741). */
+    browserHandedOff?: string | null;
     /** The Genie Browser's history as its view last reported it (main/browser-pane.ts). */
     browserCanGoBack?: boolean;
     browserCanGoForward?: boolean;

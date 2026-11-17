@@ -25,6 +25,8 @@ export type Navigation =
     | { kind: 'site'; host: string; url: string }
     | { kind: 'no-site'; host: string }
     | { kind: 'web'; url: string }
+    /** Not a dev site: it opens in the person's normal browser, never here (Tynn #741). */
+    | { kind: 'external'; url: string }
     | { kind: 'refused'; scheme: string; reason: string };
 
 const WEB_SCHEMES = new Set(['http:', 'https:']);

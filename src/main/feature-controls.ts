@@ -11,6 +11,8 @@ export interface FeatureControlServices {
 export interface FeatureControlPorts extends Pick<FeaturePorts, 'rendererNotice' | 'hangNotice' | 'safeMode' | 'firewall' | 'githubAccount'> {
     readonly tailscale?: Pick<NonNullable<FeaturePorts['tailscale']>, 'install'>;
     readonly githubOpen?: NonNullable<FeaturePorts['githubAccount']>['openPage'];
+    /** The person's normal browser, for an address that is not a dev site (Tynn #741). */
+    readonly openExternal?: (url: string) => Promise<void>;
     readonly browser?: {
         navigate(url: string): Promise<void>;
         back(): void | Promise<void>;

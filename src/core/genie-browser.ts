@@ -49,6 +49,25 @@ export function normalizeNavUrl(input: string, enabledHosts: ReadonlySet<string>
     return { url: `https://${host}${u.pathname}${u.search}${u.hash}` };
 }
 
+/**
+ * DEV SITES ONLY (Tynn #741; the owner, 2026-11-17): Genie's browser opens the workspace's `.gen` sites and this machine's
+ * own dev servers (`localhost`, `127.0.0.1`). Any other web address opens in the person's normal browser instead.
+ */
+export const DEV_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1']);
+
+/** Where an address goes: a page here, the person's own browser, or nowhere (in words). */
+export type BrowserTarget = { readonly url: string } | { readonly external: string } | { readonly error: string };
+
+/** STUB (Tynn #741 RED): the old Genie-sites rule. */
+export function browserTarget(input: string, enabledHosts: ReadonlySet<string>, _options: { readonly loopback?: boolean } = {}): BrowserTarget {
+    return normalizeNavUrl(input, enabledHosts);
+}
+
+/** STUB (Tynn #741 RED): secure-only, as before. */
+export function isAllowedBrowserRequest(url: string): boolean {
+    return isSecureBrowserUrl(url);
+}
+
 /** The first page: the first site served, else `null` (the window shows its empty state, the sites as chips). */
 export function initialGenUrl(enabledGenHosts: readonly string[]): string | null {
     const first = enabledGenHosts[0];
@@ -95,6 +114,8 @@ export type BrowserAction =
     | { readonly kind: 'open'; readonly id: string; readonly url: string; readonly background?: boolean }
     | { readonly kind: 'activate'; readonly id: string }
     | { readonly kind: 'close'; readonly id: string }
+    /** The welcome page: no tab in front, every tab kept (Tynn #740). */
+    | { readonly kind: 'welcome' }
     | { readonly kind: 'loading'; readonly id: string }
     | { readonly kind: 'loaded'; readonly id: string }
     | { readonly kind: 'navigated'; readonly id: string; readonly url: string; readonly title: string | null; readonly canGoBack: boolean; readonly canGoForward: boolean }
@@ -109,6 +130,7 @@ export function browserReduce(state: BrowserState, action: BrowserAction): Brows
         // A background open leaves the person's tab in front; with no tab at all, the new one is the only thing to show.
         return { tabs, active: action.background === true && state.active !== null ? state.active : tab.id };
     }
+    if (action.kind === 'welcome') return state; // STUB (Tynn #740 RED)
     const at = state.tabs.findIndex((t) => t.id === action.id);
     if (at < 0) return state;
     if (action.kind === 'activate') return state.active === action.id ? state : { ...state, active: action.id };
