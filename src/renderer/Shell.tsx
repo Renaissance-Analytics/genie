@@ -52,6 +52,9 @@ import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProje
 import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, KnowledgeSurface, SettingsSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { InboxFlyout } from './components/InboxFlyout.js';
+import { PersonInbox } from './components/PersonInbox.js';
+import { isPersonInbox, PERSON_INBOX, personItems, personUnread } from '../core/person-inbox.js';
+import { UNNAMED_AGENT } from '../core/inbox.js';
 import { EMPTY_FEATURES, type ActOutcome, type FeatureAction, type FeatureData } from './features.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
 import { mayBrowse } from '../core/workstation-role.js';
@@ -567,8 +570,12 @@ export function Shell({
     const agentArtboardWaiting = useArtboardWaiting(agentWorkspace?.id ?? null, panelHost.artboard, panelHost.files);
     const canServe = servable.includes(parsed.surface);
     /** The AgentInbox flyout rides the route (`inbox=`, core/route.ts): open on the threads (`''`), a thread, a message; or closed. */
-    const inboxOpen = parsed.inbox !== undefined && parsed.inbox !== null;
+    // `inbox=you` is the PERSON'S inbox (Tynn #742), not the AgentInbox: the flyout stays closed under it.
+    const personOpen = isPersonInbox(parsed.inbox);
+    const inboxOpen = parsed.inbox !== undefined && parsed.inbox !== null && !personOpen;
     const openInbox = (value: string | null): void => onNavigate(formatRoute({ ...parsed, inbox: value }));
+    /** The mail addressed to the person, from the snapshot the AgentInbox already holds (its unread and recent overlap). */
+    const personMail = features.inbox ? personItems([...features.inbox.unread, ...features.inbox.recent], (p) => features.inbox?.peers.find((x) => x.agentId === p)?.name ?? UNNAMED_AGENT) : [];
 
     /*
      * THE CHAT IS A COLUMN OF THE ROW, beside the page (the owner, 2026-10-19: "the chat still covers up the UX. Chat cannot
@@ -797,6 +804,8 @@ export function Shell({
                     // workspace's popped-out Files panel — the same openers the Agent and Files pages use.
                     onOpenAgentTerminal={onTakeOver}
                     onOpenWorkspaceFiles={onPopOutFiles}
+                    // THE PERSON'S INBOX (Tynn #742): one click from the rail, its unread count on the row.
+                    {...(featureAsk && !scoped ? { personInbox: { unread: features.inbox ? personUnread(features.inbox.unread) : null, open: personOpen, onToggle: () => openInbox(personOpen ? null : PERSON_INBOX) } } : {})}
                 />
                 </ErrorBoundary>
                 {/* "Pair this device?" — on every page, never focused (q_8c07b142). A remote window's snapshot carries none. */}
@@ -1152,6 +1161,20 @@ export function Shell({
                         markAllRead={() => onFeature({ kind: 'inbox.markAllRead' })}
                         deleteThread={(key) => onFeature({ kind: 'inbox.deleteThread', key })}
                         onNavigate={openInbox}
+                    />
+                    </ErrorBoundary>
+                ) : null}
+
+                {/* THE PERSON'S INBOX (Tynn #742): from the left, beside the rail row that opened it; over the page, which stays. */}
+                {featureAsk && !scoped ? (
+                    <ErrorBoundary surface="Inbox" resetKeys={[personOpen]}>
+                    <PersonInbox
+                        open={personOpen}
+                        items={personMail}
+                        onMarkRead={(messageId) => onFeature({ kind: 'inbox.markRead', messageId })}
+                        onMarkAllRead={() => onFeature({ kind: 'inbox.markAllRead' })}
+                        onReply={(threadKey) => openInbox(threadKey)}
+                        onClose={() => openInbox(null)}
                     />
                     </ErrorBoundary>
                 ) : null}
