@@ -454,8 +454,10 @@ function ChatFlyoutBody({
     const onSendRef = useRef(onSend);
     onSendRef.current = onSend;
     // The words back in their chat's composer (core/send-grace.ts `putBackUndone`); only Undo, the person's click, focuses it.
-    const putBack = (chat: string, text: string, focus: boolean): void => putBackUndone(composerRefs.current, chat, text, focus,
-        keeper && chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
+    const putBack = (chat: string, text: string, focus: boolean): void => {
+        putBackUndone(composerRefs.current, chat, text, focus,
+            keeper && chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
+    };
     const putBackRef = useRef(putBack);
     putBackRef.current = putBack;
     const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
@@ -942,7 +944,7 @@ function ChatFlyoutBody({
                             if (holdsSend({ busy, files: picked.length }) && text.trim() !== '') {
                                 grace.hold(chat, text);
                                 // It is drawn at the end of the thread: a reader following there sees it, as a sent one.
-                                if (followRef.current) requestAnimationFrame(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; });
+                                if (followRef.current) setTimeout(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, 0);
                                 return Promise.resolve(undefined);
                             }
                             return submitFromComposer({
