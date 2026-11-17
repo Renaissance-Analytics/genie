@@ -42,7 +42,13 @@ function pilot(preAuth: PreAuth) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let n = 0;
     return {
-        hello: async (auth: object = { kind: 'relay' }) => { pair.client.send(JSON.stringify({ kind: 'hello', auth, label: 'pilot' })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
+        // A guest waits for Allow on this machine (Tynn #731): the person here allows it, as these cases are about what comes after.
+        hello: async (auth: object = { kind: 'relay' }) => {
+            pair.client.send(JSON.stringify({ kind: 'hello', auth, label: 'pilot' }));
+            let m = await next();
+            while (m.kind === 'pairing') { const asked = host.status().pairRequests.at(-1); if (asked) host.answerPair(asked.id, true); m = await next(); }
+            return m;
+        },
         call: async (method: string, ...args: unknown[]) => { pair.client.send(JSON.stringify({ kind: 'call', id: ++n, method, args })); return next(); },
     };
 }
