@@ -437,8 +437,11 @@ export type WireMessage =
     /** `readonly` (Tynn #688): the host's word that this connection may only read; absent from an older host. */
     | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
-    /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
-    | { kind: 'pairing'; host: string; expiresAt: number }
+    /**
+     * The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). `guest`: a
+     * share-link guest waits for the person there to let it in instead (Tynn #731).
+     */
+    | { kind: 'pairing'; host: string; expiresAt: number; guest?: true }
     | { kind: 'call'; id: number; method: RemoteMethod | ControlMethod; args: unknown[] }
     | { kind: 'result'; id: number; ok: true; value: unknown }
     | { kind: 'result'; id: number; ok: false; reason: string }

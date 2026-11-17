@@ -31,11 +31,22 @@ export interface PairRequest {
     readonly replaces: { readonly id: string; readonly label: string } | null;
     readonly raisedAt: number;
     readonly expiresAt: number;
+    /**
+     * A SHARE-LINK GUEST asking to come in (Tynn #731), not a device pairing: what its grant would reach. Absent on a
+     * pairing. Nothing of the connection gets through until Allow.
+     */
+    readonly guest?: GuestReach;
+}
+
+/** What a guest's grant reaches: one workspace (its folder's name) or the whole machine (`null`), and whether read-only. */
+export interface GuestReach {
+    readonly workspace: string | null;
+    readonly readonly: boolean;
 }
 
 /** What the RemoteHost needs of the confirm: ask, and withdraw the question if the device leaves. */
 export interface PairConfirm {
-    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null }): { id: string; expiresAt: number; answer: Promise<PairAnswer> };
+    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null; guest?: GuestReach }): { id: string; expiresAt: number; answer: Promise<PairAnswer> };
     cancel(id: string): void;
 }
 
@@ -70,7 +81,7 @@ export class PairApprovals implements PairConfirm {
         this.#ttlMs = deps.ttlMs ?? PAIR_CONFIRM_MS;
     }
 
-    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null }): { id: string; expiresAt: number; answer: Promise<PairAnswer> } {
+    ask(input: { label: string; from: string; replaces?: { id: string; label: string } | null; guest?: GuestReach }): { id: string; expiresAt: number; answer: Promise<PairAnswer> } {
         const id = `pair_${++this.#next}_${this.#now().toString(36)}`;
         const raisedAt = this.#now();
         const request: PairRequest = { id, label: input.label, from: input.from, host: this.#host, replaces: input.replaces ?? null, raisedAt, expiresAt: raisedAt + this.#ttlMs };
@@ -119,6 +130,21 @@ export class PairApprovals implements PairConfirm {
     #changed(): void {
         for (const l of this.#listeners) l();
     }
+}
+
+/** What the guest is told when it was not let in (Tynn #731). RED STUB: inert. */
+export function guestRefusal(_answer: Exclude<PairAnswer, 'allow'>, _host: string): string {
+    return '';
+}
+
+/** The desktop notification for a guest asking to come in (Tynn #731). RED STUB: inert. */
+export function guestAskNotice(_request: PairRequest): { title: string; body: string } {
+    return { title: '', body: '' };
+}
+
+/** The guest requests not seen before, each once; `seen` keeps only what is still waiting (Tynn #731). RED STUB: inert. */
+export function newGuestAsks(_seen: Set<string>, _requests: readonly PairRequest[]): PairRequest[] {
+    return [];
 }
 
 /** "1:42 left" — a prompt's countdown, never below zero. */
