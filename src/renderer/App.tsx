@@ -31,7 +31,7 @@ import { takeOverTerminalOf } from '../core/take-over-route.js';
 import { chatPickAfter, chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
-import { rewrittenAddress, routeFor, windowBridge } from './window-address.js';
+import { rewrittenAddress, routeFor, windowBridge, windowChromeOf } from './window-address.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -1013,8 +1013,10 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     // A window BOUND to another host reads that host's Genie, and nothing of this machine's while it connects (window-address.ts).
+    // This window's own bridge (its preload): what is the WINDOW's, whichever machine it reads — its buttons (Tynn #726).
+    const ownBridge = bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie));
     const resolvedBridge = windowBridge({ bound: remote.bound, connected: remote.state?.connected === true, remote: remote.client?.bridge ?? null,
-        local: bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)) });
+        local: ownBridge });
     const local = resolvedBridge?.localProtocol;
     const localState = useSyncExternalStore(local?.onState ?? noLocalSubscription, local?.state ?? noLocalState, local?.state ?? noLocalState);
     const localRevision = localState?.revision ?? 0;
@@ -2267,7 +2269,7 @@ function DesktopApp({ bridge }: AppProps) {
             // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
             pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files', initialPath: pickerStart({ workspacePath: workspaceRow?.path ?? null, primaryWorkspace, home: hostHome }) }).then(async (p) => { const paths = Array.isArray(p) ? p : typeof p === 'string' ? [p] : []; await resolvedBridge?.features?.picked?.(paths); return paths; }) : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
-            windowChrome={resolvedBridge?.windowChrome}
+            windowChrome={windowChromeOf({ local: ownBridge })}
             // A refused Take over is said, never a dead click (Tynn #529): a remote window's bridge keeps it under the title bar.
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => {
                 if (!r.ok) { if (!remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); return; }

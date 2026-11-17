@@ -15,8 +15,14 @@ export function windowBridge<B>(input: { bound: string | null; connected: boolea
     return input.bound !== null ? undefined : input.local;
 }
 
-// INERT STUB for the Tynn #726 RED: exported, answers nothing. The GREEN commit replaces it.
-export function windowChromeOf<C>(_input: { local: { readonly windowChrome?: C } | undefined }): C | undefined { return undefined; }
+/**
+ * THE WINDOW'S OWN BUTTONS (Tynn #726): minimize / maximize / close are drawn on THIS window by this machine, whichever
+ * Genie it reads. Taken from the read bridge, a window connected to another machine got the host's, which has none, and
+ * the title bar kept no space for the buttons: the remote badge sat under them.
+ */
+export function windowChromeOf<C>(input: { local: { readonly windowChrome?: C } | undefined }): C | undefined {
+    return input.local?.windowChrome;
+}
 
 /** The window's route from its address: by the context it reads; with none yet, an internal route as it is. */
 export function routeFor(address: string, ctx: AddressContext | null): string {
