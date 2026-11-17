@@ -16,11 +16,13 @@ import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core
 import type { McpRow } from '../../core/agent-mcp.js';
 import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
 import { FidelityDot } from './Dashboard.js';
+import { Flash } from './Flash.js';
+import { ViewHeader } from './ViewHeader.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { ProviderProgramChoice, ProviderStartRefusal, type ProviderProgramChosen } from './ProviderProgramChoice.js';
-import { Breadcrumbs, Button, Checkbox, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
+import { Button, Checkbox, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
 import { accessChoice, accessFor, toggleChosen, type AccessChoice } from '../../core/agent-access.js';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
@@ -513,7 +515,9 @@ function AgentViewBody({
 
     // A tab the agent does not have falls back to its first one, rather than rendering an empty
     // body under a tab strip that does not contain the selected tab.
-    const active = tabs.includes(tab) ? tab : (tabs[0] ?? 'files');
+    const active = tabs.includes(tab) ? tab : (tabs[0] ?? 'changes');
+    // The workspace's Files tab: an agent has no Files tab of its own (the owner, 2026-11-16).
+    const workspaceFiles = workspace ? `genie://workspace/${workspace.id}?files=` : null;
 
     const chatRoute = `genie://agent/${agent.id}?tab=${active}&chat=${agent.id}`;
 
@@ -672,39 +676,26 @@ function AgentViewBody({
 
     return (
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
-            {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
-            <div data-view-header="" className="@container flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
-                {/* THE TITLE PIECES, one cluster that shrinks and clips (the owner's checklist, 2026-10-14: at 1024px with the chat
-                    pinned the header is ~286px, and the crumb squeezed to nothing while the rest spilled past the header). The
-                    path gives way first; then the crumb and the name truncate, keeping a few letters; chip and pill stay whole. */}
-                <div data-header-title="" className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-                {/* THE BREADCRUMB, react-fancy's (the owner, 2026-11-01: menus and crumbs are navigation, not Buttons): back to its
-                    workspace (Tynn #805) by onNavigate — a genie:// address is routed by the app, not followed as a link — then the
-                    agent, the page you are on. Below md react-fancy folds it into a menu that keeps the way back. */}
-                <Breadcrumbs separator={<span className="text-[13px] text-[var(--fg-4)]">/</span>} className="min-w-0 shrink items-center gap-1.5 overflow-hidden">
-                    {workspace ? (
-                        <Breadcrumbs.Item data-crumb={workspace.id} data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
-                            {workspace.name ?? workspace.id}
-                        </Breadcrumbs.Item>
-                    ) : null}
-                    <Breadcrumbs.Item active data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium text-[var(--fg-1)] dark:text-[var(--fg-1)]">{agent.name}</Breadcrumbs.Item>
-                </Breadcrumbs>
-                <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'cool' ? 'cooling' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
-                <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
-                <span className="min-w-0 shrink-[1000] truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
-
-                <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
-                    <span className="size-1.5 rounded-full bg-current" />
-                    {pill.word}
-                    {/* A clock only while a turn runs. On an idle agent it counts up forever
-                        and reads as work in progress. */}
-                    {pill.elapsed ? <span className="font-mono tabular-nums">{pill.elapsed}</span> : null}
-                </span>
-                </div>
-
-                {/* The actions never wrap; in a header narrower than 46rem their words give way to the icon (the name stays in
-                    aria-label and title). */}
-                <div className="ml-auto flex shrink-0 items-center gap-1">
+            {/* ONE HEADER (ViewHeader.tsx; the owner, 2026-11-16): crumbs (back to its workspace, Tynn #805, then the agent),
+                its state (fidelity dot, provider chip, pill), its path, then its actions. */}
+            <ViewHeader
+                crumbs={[
+                    ...(workspace ? [{ label: workspace.name ?? workspace.id, title: `Back to ${workspace.name ?? workspace.id}`, onClick: () => onNavigate(`genie://workspace/${workspace.id}`), attrs: { 'data-crumb': workspace.id, 'data-nav': `genie://workspace/${workspace.id}` } }] : []),
+                    { label: agent.name, attrs: { 'data-agent-name': '' } },
+                ]}
+                path={agent.cwd}
+                status={<>
+                    <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'cool' ? 'cooling' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
+                    <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
+                    <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
+                        <span className="size-1.5 rounded-full bg-current" />
+                        {pill.word}
+                        {/* A clock only while a turn runs. On an idle agent it counts up forever
+                            and reads as work in progress. */}
+                        {pill.elapsed ? <span className="font-mono tabular-nums">{pill.elapsed}</span> : null}
+                    </span>
+                </>}
+                actions={<>
                     {/* START, when it is not running (the owner: there was no way to start the genie agent). */}
                     {actions.start && onStart ? (
                         <Button size="xs" labelClassName="contents" type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} aria-label="Start" className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
@@ -852,8 +843,8 @@ function AgentViewBody({
                             </Dropdown>
                         </>
                     ) : null}
-                </div>
-            </div>
+                </>}
+            />
 
             {ops?.lastOutcome ? (
                 <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p>
@@ -1034,7 +1025,7 @@ function AgentViewBody({
                                     markup={streamMarkup}
                                     loadToolOutput={agentToolOutput}
                                     onChat={() => onNavigate(chatRoute)}
-                                    onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
+                                    onEditPersona={workspaceFiles ? () => onNavigate(workspaceFiles) : undefined}
                                 />
                                 )}
                             </div>
@@ -1073,19 +1064,6 @@ function AgentViewBody({
                             {approval && placement === 'chat' ? <ApprovalMarker where="the chat" /> : null}
                             {approval && placement === 'toast' ? <ApprovalMarker where="the toast at the bottom left" /> : null}
                         </>
-                    ) : null}
-
-                    {/* FILES (§4.3): the workspace's ONE file panel, mounted here for the agent's workspace. */}
-                    {active === 'files' ? (
-                        files && workspace ? (
-                            <div className="min-h-0 flex-1">
-                                <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => {}} onClose={() => onNavigate(`genie://agent/${agent.id}?tab=${tabs[0] ?? 'files'}`)} />
-                            </div>
-                        ) : (
-                            <p data-tab-unavailable="files" className="p-5 text-[13px] text-[var(--fg-3)]">
-                                {workspace ? 'This window has no file host, so the files cannot be shown here.' : `Genie does not know which workspace ${agent.name} belongs to, so its files cannot be shown.`}
-                            </p>
-                        )
                     ) : null}
 
                     {/* CHANGES: the files this agent changed this session (the host's own groups — never a guess), each opening in the panel. */}
@@ -1589,7 +1567,7 @@ function AgentViewBody({
                 {railModeNow === 'strip' ? (
                     <Button variant="ghost" size="xs" type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</Button>
                 ) : null}
-                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
+                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={workspaceFiles} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
                 {ended || termBlock ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
@@ -1685,9 +1663,11 @@ export function IssueWatchSettings({ name, prefs, onSet }: { name: string; prefs
                 <span data-issue-watch-delivery={shown.delivery}>
                     <Select size="xs" list={IW_DELIVERIES.map((d) => ({ value: d.value, label: d.label }))} value={shown.delivery} onValueChange={(v) => send({ delivery: v as IwDelivery, kinds: shown.kinds })} aria-label={`How ${name} hears GitHub`} />
                 </span>
-                {save === null ? null : (
+                {/* "Saved" is a Flash, never a word that shifts the row (the owner, 2026-11-16); a failure keeps Retry here. */}
+                <Flash note={save?.phase === 'saved' ? 'Saved' : null} />
+                {save === null || save.phase === 'saved' ? null : (
                     <span data-iw-save={save.phase} className="inline-flex min-w-0 items-center gap-2 text-[var(--fg-2)]">
-                        {save.phase === 'saving' ? 'Saving…' : save.phase === 'saved' ? 'Saved' : <>{save.reason}<Button size="xs" variant="ghost" onClick={() => send(save.setting)}>Retry</Button></>}
+                        {save.phase === 'saving' ? 'Saving…' : <>{save.reason}<Button size="xs" variant="ghost" onClick={() => send(save.setting)}>Retry</Button></>}
                     </span>
                 )}
             </div>

@@ -57,6 +57,6 @@ describe('the index column', () => {
     });
 
     it('absent on the Files and Changes tabs — the index belongs to the Stream', () => {
-        expect(render({ tab: 'files' })).not.toContain('data-index-column');
+        expect(render({ tab: 'changes' })).not.toContain('data-index-column');
     });
 });

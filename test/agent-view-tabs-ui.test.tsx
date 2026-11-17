@@ -14,19 +14,12 @@ const workspace = { id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' };
 const render = (props: Partial<Parameters<typeof AgentView>[0]>) =>
     renderToStaticMarkup(<AgentView agent={agent} session={null} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} {...props} />);
 
-describe('the Files tab', () => {
-    it("mounts the workspace's file panel for the agent's workspace", () => {
+// REWRITTEN (the owner, 2026-11-16: "the extra files tab in agents view"): files live in the workspace's Files tab.
+describe('no Files tab', () => {
+    it('an old ?tab=files shows the first tab, never a file panel', () => {
         const html = render({ tab: 'files', files: NO_FILES, workspace });
-        expect(html).toContain('data-files-panel="tynn"');
-        expect(html).not.toContain('data-tab-unavailable');
-    });
-
-    it('says so when this window has no files host or the workspace is unknown — a sentence, not a blank', () => {
-        const noHost = render({ tab: 'files', workspace });
-        expect(noHost).toContain('data-tab-unavailable="files"');
-        expect(noHost).not.toContain('data-files-panel');
-        const noWorkspace = render({ tab: 'files', files: NO_FILES });
-        expect(noWorkspace).toContain('data-tab-unavailable="files"');
+        expect(html).not.toContain('data-files-panel');
+        expect(html).not.toContain('data-tab-unavailable="files"');
     });
 });
 

@@ -42,7 +42,7 @@ describe('the agent header', () => {
     it('the title pieces share one cluster that shrinks and clips, so the header never spills', () => {
         const cluster = html.match(/<div data-header-title=""[^>]*class="([^"]*)"/)?.[1]?.split(' ') ?? [];
         for (const c of ['min-w-0', 'flex-1', 'overflow-hidden']) expect(cluster).toContain(c);
-        expect(html).toMatch(/<div data-view-header=""[^>]*class="[^"]*@container/);
+        expect(html).toMatch(/<header data-view-header=""[^>]*class="[^"]*@container/);
     });
 
     it('the crumb and the name truncate but never vanish', () => {
@@ -62,7 +62,7 @@ describe('the agent header', () => {
     });
 
     it('the working-directory path is what gives way: it may shrink to nothing and truncates', () => {
-        const path = html.match(/<span class="([^"]*)" title="C:\/Users\/example[^"]*"/)?.[1]?.split(' ') ?? [];
+        const path = html.match(/<span data-header-path="" class="([^"]*)" title="C:\/Users\/example[^"]*"/)?.[1]?.split(' ') ?? [];
         expect(path).toContain('min-w-0');
         expect(path).toContain('truncate');
     });

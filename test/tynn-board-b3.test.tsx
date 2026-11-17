@@ -249,6 +249,7 @@ describe('the tab', () => {
         expect(failed).toMatch(/data-tynn-op="failed"/);
         expect(failed).toContain('User is not a member of this project.');
         expect(failed).toMatch(/data-tynn-retry=""/);
-        expect(render(v, { op: { action: 'task.unclaim', phase: 'done' } })).toContain('Claim released');
+        // "it worked" is a Flash popover (the owner, 2026-11-16), never a line on the board.
+        expect(render(v, { op: { action: 'task.unclaim', phase: 'done' } })).not.toContain('Claim released');
     });
 });

@@ -129,7 +129,7 @@ describe('the workspace’s agent roster (Genie 1’s Registered / On disk only)
         const atlas = control(busy, 'data-agent="atlas"');
         expect(atlas).toMatchObject({ tag: 'button', fancy: true });
         expect(atlas!.open).toMatch(/\sdisabled=""/);
-        expect(busy).toContain('atlas is registered.');
+        expect(busy).not.toContain('atlas is registered.');
         expect(busy).toContain('acme already has an agent named atlas');
     });
 

@@ -130,8 +130,9 @@ describe('the code prompt: the code, Confirm, its step, then success or the reas
         expect(control(html, 'data-action="confirm-role"')!.open).toMatch(/\sdisabled=""/);
     });
 
-    it('done: says so', () => {
-        expect(form({ kind: 'done', note: 'desk is now a drone' })).toContain('desk is now a drone');
+    // REWRITTEN 2026-11-16: "done" is a Flash popover (test/flash-no-jump.test.tsx), never a line in the form.
+    it('done: no line in the form', () => {
+        expect(form({ kind: 'done', note: 'desk is now a drone' })).not.toContain('desk is now a drone');
     });
 
     it('failed: the reason, and Retry', () => {
