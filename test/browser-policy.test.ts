@@ -32,23 +32,22 @@ describe('what a navigation is', () => {
         expect(new URL((classifyNavigation('https://site-a.gen/x', two) as { url: string }).url).origin).toBe(a!.origin);
     });
 
-    it('control: a URL that is not .gen is loaded exactly as written — nothing about it is changed', () => {
-        for (const url of ['https://example.com/docs?q=1#h', 'http://example.org/', 'http://localhost:5173/', 'http://127.0.0.1:4101/']) {
-            expect(classifyNavigation(url, routes)).toEqual({ kind: 'web', url });
-        }
+    it('control: a URL that is not .gen keeps exactly what was written — loopback loads (`web`), the rest is `external` (Tynn #741)', () => {
+        for (const url of ['http://localhost:5173/', 'http://127.0.0.1:4101/']) expect(classifyNavigation(url, routes)).toEqual({ kind: 'web', url });
+        for (const url of ['https://example.com/docs?q=1#h', 'http://example.org/']) expect(classifyNavigation(url, routes)).toEqual({ kind: 'external', url });
     });
 
     it('a .gen site nobody serves → `no-site`, naming it, so the pane can offer to create it', () => {
         expect(classifyNavigation('http://ghost.gen/', routes)).toEqual({ kind: 'no-site', host: 'ghost.gen' });
     });
 
-    it('ordinary web content → `web`, as written', () => {
-        expect(classifyNavigation('https://example.com/docs', routes)).toEqual({ kind: 'web', url: 'https://example.com/docs' });
+    it('ordinary web content → `external`, as written (the person’s browser); a dev server on loopback → `web` (Tynn #741)', () => {
+        expect(classifyNavigation('https://example.com/docs', routes)).toEqual({ kind: 'external', url: 'https://example.com/docs' });
         expect(classifyNavigation('http://localhost:5173/', routes)).toEqual({ kind: 'web', url: 'http://localhost:5173/' });
     });
 
     it('bare text becomes an https URL or a .gen site; it is never guessed into a file path', () => {
-        expect(classifyNavigation('example.com', routes)).toEqual({ kind: 'web', url: 'https://example.com/' });
+        expect(classifyNavigation('example.com', routes)).toEqual({ kind: 'external', url: 'https://example.com/' });
         expect(classifyNavigation('tynn.gen', routes)).toMatchObject({ kind: 'site', host: 'tynn.gen' });
     });
 

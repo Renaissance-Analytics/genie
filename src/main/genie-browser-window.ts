@@ -1,13 +1,15 @@
 import type { Activation } from '../core/window-activation.js';
-import { browserReduce, devicePreset, DEVICE_PRESETS, EMPTY_BROWSER, initialGenUrl, normalizeNavUrl, type BrowserAction, type BrowserState, type BrowserTab } from '../core/genie-browser.js';
+import { browserReduce, browserTarget, devicePreset, DEVICE_PRESETS, EMPTY_BROWSER, handedOffHost, type BrowserAction, type BrowserState, type BrowserTab, type BrowserTarget } from '../core/genie-browser.js';
 
 /**
  * THE GENIE BROWSER WINDOW'S BRAIN (beta.35 item 36, step 1 — Genie 1's main/testing-browser/index.ts, ported). The
  * window owns its tabs: one view per tab, the active one shown and the rest hidden, sized into the page area the chrome
  * reports by the device preset (Fit fills it; a device is a fixed viewport pinned to its corner, cut to it). Every
- * address — typed, or a page's new window — goes through the Genie-sites rule (core/genie-browser.ts), read at each
- * use, so a site served after the window opened can be visited. A page's new window becomes a tab beside it (Genie 1);
- * anything else it asks to open is not opened. Every change is pushed whole to the chrome.
+ * address — typed, a page's link or its new window — goes through the dev-sites rule (core/genie-browser.ts
+ * `browserTarget`, Tynn #741), read at each use, so a site served after the window opened can be visited. A dev site
+ * opens here (a page's new window as a tab beside it, Genie 1); any other web address opens in the person's own browser,
+ * and the chrome says so in one line. With no tab in front the chrome shows its welcome page (Tynn #740). Every change
+ * is pushed whole to the chrome.
  *
  * The Electron views sit behind {@link TabViewPort}; this file is tested with fakes (test/genie-browser-window.test.ts).
  */
@@ -93,6 +95,7 @@ const ABORTED = -3;
 
 export class GenieBrowser {
     #notice: string | null = null;
+    #handedOff: string | null = null;
     #noticeRestart = false;
     readonly #ports: GenieBrowserPorts;
     readonly #views = new Map<string, TabViewPort>();
@@ -104,18 +107,19 @@ export class GenieBrowser {
         this.#ports = ports;
     }
 
-    /** A new tab on `input`, active — or the rule's refusal, with nothing made. */
+    /** A new tab on `input`, active; off the dev sites, the person's browser; or the rule's refusal, with nothing made. */
     open(input: string): BrowserAnswer {
-        const nav = normalizeNavUrl(input, new Set(this.#ports.enabledHosts()));
+        const nav = this.#target(input);
         if ('error' in nav) return { ok: false, error: nav.error };
+        if ('external' in nav) return this.#handOff(nav.external);
         this.#openTab(nav.url);
         return { ok: true };
     }
 
-    /** +: a new tab on the first Genie site (Genie 1), or why there is none to open. */
+    /** +: the welcome page (Tynn #740), every open tab kept. Never a site the person did not choose. */
     newTab(): BrowserAnswer {
-        const first = initialGenUrl(this.#ports.enabledHosts());
-        return first === null ? { ok: false, error: 'No Genie sites are being served.' } : this.open(first);
+        this.#apply({ kind: 'welcome' });
+        return { ok: true };
     }
 
     /**
@@ -128,8 +132,11 @@ export class GenieBrowser {
      * person has in front stays in front. The person's chip or the Hosting row's Open is `user-gesture` and shows it.
      */
     showSite(input: string, activation: Activation = 'user-gesture'): BrowserAnswer {
-        const nav = normalizeNavUrl(input, new Set(this.#ports.enabledHosts()));
+        // Only a dev site is SHOWN: an agent's open, or Genie's own, never sends the person to their browser unasked.
+        const nav = this.#target(input);
+        if ('external' in nav) return { ok: false, error: `${handedOffHost(nav.external)} is not an enabled tunnel on this host.` };
         if ('error' in nav) return { ok: false, error: nav.error };
+        this.#clearHandOff();
         const host = hostOf(nav.url);
         const onHost = (t: BrowserTab) => host !== null && hostOf(t.url) === host;
         const active = this.#state.tabs.find((t) => t.id === this.#state.active);
@@ -146,8 +153,10 @@ export class GenieBrowser {
     navigate(input: string): BrowserAnswer {
         const active = this.#state.active;
         if (active === null) return this.open(input);
-        const nav = normalizeNavUrl(input, new Set(this.#ports.enabledHosts()));
+        const nav = this.#target(input);
         if ('error' in nav) return { ok: false, error: nav.error };
+        if ('external' in nav) return this.#handOff(nav.external);
+        this.#clearHandOff();
         const current = this.#state.tabs.find((t) => t.id === active);
         if (this.#ports.storeOf && current && this.#ports.storeOf(current.url) !== this.#ports.storeOf(nav.url)) return this.showSite(nav.url);
         this.#views.get(active)?.load(nav.url);
@@ -203,10 +212,31 @@ export class GenieBrowser {
     }
 
     snapshot(): BrowserSnapshot {
-        return { ...this.#state, notice: this.#notice, noticeRestart: this.#noticeRestart, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()], ...(this.#ports.siteLabels ? { siteLabels: this.#ports.siteLabels() } : {}) };
+        return { ...this.#state, notice: this.#notice, noticeRestart: this.#noticeRestart, handedOff: this.#handedOff, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()], ...(this.#ports.siteLabels ? { siteLabels: this.#ports.siteLabels() } : {}) };
+    }
+
+    /** The rule, with this window's sites read now. */
+    #target(input: string): BrowserTarget {
+        return browserTarget(input, new Set(this.#ports.enabledHosts()), { loopback: this.#ports.loopback !== false });
+    }
+
+    /** Off the dev sites: the person's own browser, and the chrome's one line naming where it went. Nothing loads here. */
+    #handOff(url: string): BrowserAnswer {
+        if (!this.#ports.openExternal) return { ok: false, error: `${handedOffHost(url)} is not a dev site; Genie's browser opens dev sites only.` };
+        this.#ports.openExternal(url);
+        this.#handedOff = handedOffHost(url);
+        this.#push();
+        return { ok: true };
+    }
+
+    #clearHandOff(): void {
+        if (this.#handedOff === null) return;
+        this.#handedOff = null;
+        this.#push();
     }
 
     #openTab(url: string, background = false): void {
+        this.#clearHandOff();
         const id = this.#ports.newTabId();
         const view = this.#ports.createView(id, this.#events(id), url);
         this.#views.set(id, view);
@@ -230,10 +260,14 @@ export class GenieBrowser {
                 if (isMainFrame && code !== ABORTED) this.#apply({ kind: 'failed', id, url, description });
             },
             openWindow: (url) => {
-                const nav = normalizeNavUrl(url, new Set(this.#ports.enabledHosts()));
+                const nav = this.#target(url);
                 if ('url' in nav) this.#openTab(nav.url);
+                else if ('external' in nav) this.#handOff(nav.external);
             },
-            external: () => {}, // STUB (Tynn #741 RED)
+            external: (url) => {
+                const nav = this.#target(url);
+                if ('external' in nav) this.#handOff(nav.external);
+            },
         };
     }
 

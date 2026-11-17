@@ -1,5 +1,6 @@
 import { resolveRoute, type GenRoute } from './gen-router.js';
 import { siteOrigin } from './browser-origins.js';
+import { DEV_LOOPBACK_HOSTS } from './genie-browser.js';
 
 export type { GenRoute };
 
@@ -15,7 +16,9 @@ export type { GenRoute };
  *    `.gen` URL is upgraded, and a port is dropped (the front door serves 443). A `.gen` name
  *    nobody serves is `no-site`, so the pane can offer to create it. The front door's own rule
  *    (only loopback targets) is reused, not re-decided.
- * 2. The pane opens WEB content only. `file:`, `javascript:`, `chrome:`, `data:`, `about:` and the
+ * 2. DEV SITES ONLY (Tynn #741): besides the `.gen` sites, this machine's own dev servers (`localhost`, `127.0.0.1`) load
+ *    here (`web`); any other web address is `external`, for the person's own browser, and never loads in the pane.
+ * 3. The pane opens WEB content only. `file:`, `javascript:`, `chrome:`, `data:`, `about:` and the
  *    app's own `genie:` scheme are refused BY NAME — a browser pane that could load `file:///` is a
  *    file reader with a renderer attached, and `genie:` inside a web pane would nest the app in
  *    itself.
@@ -31,13 +34,15 @@ export type Navigation =
 
 const WEB_SCHEMES = new Set(['http:', 'https:']);
 
-/** Bare text (`example.com`, `tynn.gen`, `localhost:5173`) is given a scheme; never a file path. */
+/** Bare text (`example.com`, `shop.gen`, `localhost:5173`) is given a scheme, http for loopback; never a file path. */
 function toUrl(input: string): URL | null {
     const text = input.trim();
     if (text.length === 0) return null;
     try {
-        if (/^[a-z][a-z0-9+.-]*:/i.test(text)) return new URL(text);
-        return new URL(`https://${text}`);
+        // A scheme as written (`https://`, `javascript:`, `data:`…), but `localhost:5173` is a host and a port, not a scheme.
+        if (/^[a-z][a-z0-9+.-]*:(?![0-9])/i.test(text)) return new URL(text);
+        const probe = new URL(`http://${text}`);
+        return DEV_LOOPBACK_HOSTS.has(probe.hostname.toLowerCase()) ? probe : new URL(`https://${text}`);
     } catch {
         return null;
     }
@@ -56,7 +61,7 @@ export function classifyNavigation(input: string, routes: readonly GenRoute[]): 
         return { kind: 'site', host: route.host, url: `${siteOrigin(route.host)}${url.pathname}${url.search}${url.hash}` };
     }
     if (route.kind === 'no-site') return { kind: 'no-site', host: route.host };
-    return { kind: 'web', url: url.toString() };
+    return DEV_LOOPBACK_HOSTS.has(url.hostname.toLowerCase()) ? { kind: 'web', url: url.toString() } : { kind: 'external', url: url.toString() };
 }
 
 /** `genie://browser?url=<encoded>` — the pane's state lives in the URL, so back and deep links work. */

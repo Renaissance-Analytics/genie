@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { browserStorePath, storeRefusal, type BrowserStoreSide } from '../core/browser-store.js';
 import type { SyncedCookie } from '../core/cookie-sync.js';
 import { certificateVerdict, genProxyConfig } from '../core/browser-origins.js';
-import { initialGenUrl, isSecureBrowserUrl, normalizeNavUrl } from '../core/genie-browser.js';
+import { browserTarget, isAllowedBrowserRequest } from '../core/genie-browser.js';
 import { browserWindowOptions, overlayColorsOk, TITLE_BAR_HEIGHT } from '../core/window.js';
 import { genieWindowIcon } from './app-identity.js';
 import { genCertificateVerifier, type PresentedCertificate } from './browser-trust.js';
@@ -22,13 +22,15 @@ import { bringUp, onceShowable, showWhenReady, type Activation, type ActivationL
  *   1200 x 820, its title bar hidden; the chrome (browser.html, its own preload) owns the top, the native buttons drawn
  *   over it on Windows and Linux;
  * - its OWN session: `.gen` routed to Genie's front door (the PAC from core), a `.gen` certificate trusted only when
- *   Genie's CA signed it for that name, and every request a page makes cancelled unless it travels secure (Genie 1).
+ *   Genie's CA signed it for that name, and every request a page makes cancelled unless it travels secure (Genie 1), or
+ *   is a dev server's own http/ws on this machine's loopback (Tynn #741);
  *   Another workstation's window gets an IN-MEMORY session of its own: routed to the door that carries its pages over
  *   the relay (remote-browsers.ts), trusting THAT host's CA, as its answer named it — never this machine's;
  * - a WebContentsView per tab, isolated from Node with NO preload — and NOT sandboxed: a sandboxed child view never
  *   receives its renderer's start-up data and the page draws blank (electron#44897; Genie 1 site-view.ts);
- * - a page's new window goes to the brain (a tab, for a Genie site) and is denied; a link off the Genie sites opens in
- *   the machine's browser instead of loading here.
+ * - DEV SITES ONLY (Tynn #741): a page's new window goes to the brain (a tab, for a dev site) and is denied; a link off
+ *   the dev sites is stopped and handed to the brain, which opens it in the person's browser and says so. A fresh window
+ *   with no address opens on the welcome page, never on a site the person did not pick (Tynn #740).
  */
 
 export interface GenieBrowserWindowOptions {
@@ -64,7 +66,7 @@ export function guardSession(ses: Session, caPem: () => string | null): void {
         callback(last.verify({ hostname: request.hostname, certificatePem: request.certificate.data }));
     });
     ses.webRequest.onBeforeRequest((details, callback) => {
-        callback({ cancel: !isSecureBrowserUrl(details.url) });
+        callback({ cancel: !isAllowedBrowserRequest(details.url) });
     });
 }
 
@@ -252,7 +254,9 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         void routed;
         return { ses, routed: () => sharedSession!.routed };
     };
-    const hostsOf = (key: string): readonly string[] => (key === LOCAL || key.startsWith(SINGLE) ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
+    /** This machine's window (or a panel's single site): its loopback is the person's own dev servers. */
+    const isLocal = (key: string): boolean => key === LOCAL || key.startsWith(SINGLE);
+    const hostsOf = (key: string): readonly string[] => (isLocal(key) ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
 
     const createView = (window: BrowserWindow, key: string, tabId: string, events: TabViewEvents, url: string): TabViewPort => {
         const { ses, routed: routing } = sessionFor(key, url);
@@ -273,16 +277,17 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             events.openWindow(url);
             return { action: 'deny' };
         });
-        // A link off the Genie sites: the machine's browser (http(s) only), never this window.
+        // A link off the dev sites: stopped, and the brain opens it in the person's browser and says so (Tynn #741).
         wc.on('will-navigate', (event, next) => {
             const url = next;
-            if ('url' in normalizeNavUrl(url, new Set(hostsOf(key)))) {
+            const target = browserTarget(url, new Set(hostsOf(key)), { loopback: isLocal(key) });
+            if ('url' in target) {
                 // Another workspace's site: its own tab, with its own login. This view keeps its session for life.
-                if ((key === LOCAL || key.startsWith(SINGLE)) && storeOf(url) !== storeOf(wc.getURL())) { event.preventDefault(); events.openWindow(url); }
+                if (isLocal(key) && storeOf(url) !== storeOf(wc.getURL())) { event.preventDefault(); events.openWindow(url); }
                 return;
             }
             event.preventDefault();
-            if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => {});
+            if ('external' in target) events.external(url);
         });
         return {
             load: (url) => {
@@ -321,6 +326,9 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             createView: (id, events, url) => createView(window, key, id, events, url),
             ...(key === LOCAL || key.startsWith(SINGLE) ? { storeOf } : {}),
             push: (snapshot) => { if (!window.isDestroyed()) window.webContents.send('browser-window:state', snapshot); },
+            // Off the dev sites (Tynn #741): the person's own browser, http(s) only.
+            openExternal: (url) => { if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => {}); },
+            loopback: isLocal(key),
         });
         // The chrome is Genie's page: it never navigates; a link in it opens in the machine's browser.
         window.webContents.setWindowOpenHandler(({ url }) => {
@@ -377,7 +385,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             } else {
                 bringUp(entry!.win, { activation, reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) });
             }
-            const target = address ?? (fresh ? initialGenUrl(hostsOf(key)) : null);
+            // No address: the welcome page (Tynn #740), a fresh window's first view, never the first site served.
+            const target = address ?? null;
             if (target === null) return { ok: true };
             // A site opened from Genie shows its tab when one is open (genie#1196): never a second tab on the same site.
             // Who asked decides the tab too (genie#1265): an agent's site waits in a tab behind the person's.

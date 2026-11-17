@@ -259,6 +259,13 @@ describe('the in-window pane follows the same rule', () => {
         expect(loads).toEqual([]);
     });
 
+    it('a link in the pane off the dev sites is stopped, and an http(s) one opens in the person’s browser (source)', () => {
+        const pane = source('../src/main/electron-browser-view.ts');
+        expect(count(pane, /webContents\.on\('will-navigate'/g)).toBe(1);
+        expect(pane).toMatch(/if \(nav\.kind === 'site' \|\| nav\.kind === 'no-site' \|\| nav\.kind === 'web'\) return;\s*event\.preventDefault\(\);/);
+        expect(pane).toMatch(/shell\.openExternal\(nav\.url\)/);
+    });
+
     it('the pane says where it went, and suggests no product', () => {
         const data = { browser: { url: null, routes, canGoBack: false, canGoForward: false, handedOff: 'example.com' } };
         const html = renderToStaticMarkup(<BrowserSurface data={data as never} onAction={noop} onNavigate={noop} />);

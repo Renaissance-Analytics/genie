@@ -69,6 +69,16 @@ export async function applyFeatureControlAction(services: FeatureControlServices
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());
             if (nav.kind === 'refused') throw new Error(nav.reason);
+            // Off the dev sites (Tynn #741): the person's own browser; the pane stays on its page and names where it went.
+            // The window's openExternal opens https pages only (a sign-in port, main.ts): plain http stays a refusal in words.
+            if (nav.kind === 'external') {
+                const host = new URL(nav.url).hostname;
+                if (!ports.openExternal || !/^https:/i.test(nav.url)) throw new Error(`${host} is not a dev site; Genie's browser opens dev sites only`);
+                await ports.openExternal(nav.url);
+                next.browserHandedOff = host;
+                break;
+            }
+            next.browserHandedOff = null;
             // A site is its own https origin, path kept (core/browser-policy.ts); a name nobody serves is shown at its root.
             next.browserUrl = nav.kind === 'no-site' ? `https://${nav.host}/` : nav.url;
             await ports.browser?.navigate(next.browserUrl);
