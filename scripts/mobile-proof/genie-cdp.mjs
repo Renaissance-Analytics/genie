@@ -44,8 +44,10 @@ export async function genieWindow() {
                     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? 'call failed');
                     return r.result?.value;
                 };
-                // Wait until the preload bridge is there.
-                for (let j = 0; j < 60; j++) { if (await evaluate('typeof window.genie?.features?.act === "function"')) return { evaluate, call, send, close: () => ws.close() }; await sleep(500); }
+                // Wait until the page's bridge is there. Its features are the page's own since P4 family 11, reached as
+                // `window.genieTest` when Genie runs with GENIE_PAGE_PROBE=1 (run.sh); `window.genie` alone has no
+                // `features.act` any more, so waiting for it alone waited forever (Tynn #862's first Azure runs).
+                for (let j = 0; j < 60; j++) { if (await evaluate('typeof (window.genieTest ?? window.genie)?.features?.act === "function"')) return { evaluate, call, send, close: () => ws.close() }; await sleep(500); }
             }
         } catch { /* not up yet */ }
         await sleep(1000);
