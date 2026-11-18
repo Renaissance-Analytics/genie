@@ -1,7 +1,9 @@
 import { Button, Icon, Tabs } from '@particle-academy/react-fancy';
+import type { ReactNode } from 'react';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
 import { TynnLogo } from './TynnLogo.js';
 import { wsStyle } from '../workspace-colors.js';
+import { BAR_ACTION, TopBar } from './TopBar.js';
 
 /**
  * A WORKSPACE'S TAB STRIP (Tynn #282, #805): Dashboard · every agent of the workspace · the tabs you designed · + · Settings — +
@@ -41,7 +43,17 @@ export interface WorkspaceTabsProps {
     readonly color?: string | null | undefined;
     /** Share this workspace through Tynn (Tynn #587): in the strip, so it is there whatever is selected. Absent for a guest. */
     readonly onShare?: (() => void) | undefined;
+    /**
+     * What is selected puts its status, its own views and its actions at the bar's right end (TopBar.tsx): the workspace's
+     * actions, or the agent's state, Stream/Changes/Shells/Settings and Chat/Take over. Absent = nothing there but Share/Plan.
+     */
+    readonly trailing?: ReactNode;
+    /** The selected tab's path (the workspace's folder, the agent's cwd): its tooltip, never a column of the bar. */
+    readonly path?: string | null | undefined;
 }
+
+/** The selected tab's tooltip is the path (the owner: no path column eating space). */
+const pathTitle = (selected: boolean, path: string | null): Record<string, string> => (selected && path ? { title: path } : {});
 
 const STATE_DOT: Record<string, string> = {
     working: 'bg-[var(--accent)]',
@@ -49,7 +61,7 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, storage = false, artboardWaiting = 0, onView, onAdd, onOpenAgent, planToggle, color = null, onShare }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, storage = false, artboardWaiting = 0, onView, onAdd, onOpenAgent, planToggle, color = null, onShare, trailing, path = null }: WorkspaceTabsProps) {
     // Literal classes, dark: included: react-fancy's underline tab carries its own dark: colours, and only a class with the
     // same variant replaces one.
     const underline = color ? 'border-[var(--ws)] dark:border-[var(--ws)]' : 'border-[var(--fg-1)] dark:border-[var(--fg-1)]';
@@ -57,13 +69,23 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
     // moves between tabs with the arrow keys; the route stays the source of truth, so a pick navigates and nothing else.
     const selected = current.kind === 'agent' ? `agent:${current.id}` : current.view;
     const tab = (on: boolean) => `border-b-2 px-3 py-0 text-[12px] font-normal ${on ? `${underline} text-[var(--fg-1)] dark:text-[var(--fg-1)]` : 'border-transparent text-[var(--fg-3)] hover:border-transparent hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]'}`;
+    const tail = (
+        <>
+            {trailing}
+            {onShare ? (
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="share-workspace" aria-label="Share this workspace" title="Share: a link someone opens to reach this workspace over Tynn, control or read-only, for as long as you choose" onClick={onShare} className={BAR_ACTION}>
+                    <Icon name="share-2" size="xs" />
+                </Button>
+            ) : null}
+            {planToggle ? (
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="toggle-plan-column" aria-pressed={planToggle.open ? 'true' : 'false'} aria-label={planToggle.open ? 'Hide the active plan' : 'Show the active plan'} title={planToggle.open ? 'Hide the active plan' : 'Show the active plan'} onClick={planToggle.onToggle} className={`${BAR_ACTION}${planToggle.open ? ' text-[var(--fg-1)]' : ''}`}>
+                    <Icon name={planToggle.open ? 'panel-right-close' : 'panel-right-open'} size="xs" />
+                </Button>
+            ) : null}
+        </>
+    );
     return (
-        <nav
-            data-workspace-tabs=""
-            {...(color ? { 'data-workspace-color': color } : {})}
-            style={wsStyle(color)}
-            className={`flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
-        >
+        <TopBar color={color} style={wsStyle(color)} attrs={{ 'data-workspace-tabs': '', ...(color ? { 'data-workspace-color': color } : {}) }} trailing={trailing || onShare || planToggle ? tail : null}>
             {/* TABS, NOT BUTTONS (the owner, 2026-11-01: "those should not be buttons, it's a menu"). The + stays a Button: it
                 is an action, sitting where the owner put it (just before Settings); the arrow keys skip it. */}
             <Tabs activeTab={selected} onTabChange={(v) => (v.startsWith('agent:') ? onOpenAgent(v.slice('agent:'.length)) : onView(v))} className="flex min-w-0 items-stretch">
@@ -80,7 +102,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                     const on = current.kind === 'agent' && current.id === t.id;
                     const state = agents.find((a) => a.id === t.id)?.state ?? 'idle';
                     return (
-                        <Tabs.Tab key={`agent:${t.id}`} value={`agent:${t.id}`} data-workspace-tab={`agent:${t.id}`} title={`${t.name} · ${state}`} className={`flex shrink-0 items-center gap-1.5 ${tab(on)}`}>
+                        <Tabs.Tab key={`agent:${t.id}`} value={`agent:${t.id}`} data-workspace-tab={`agent:${t.id}`} title={on ? `${t.name} · ${state}${path ? ` · ${path}` : ''}` : `${t.name} · ${state}`} className={`flex shrink-0 items-center gap-1.5 ${tab(on)}`}>
                             <span data-agent-state={state} className={`size-1.5 rounded-full ${STATE_DOT[state] ?? 'bg-[var(--fg-4)]'}`} />
                             {t.name}
                         </Tabs.Tab>
@@ -89,7 +111,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                 const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : t.kind === 'artboard' ? 'artboard' : t.kind === 'storage' ? 'storage' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
-                    <Tabs.Tab key={view} value={view} data-workspace-tab={view} {...(t.kind === 'artboard' && artboardWaiting > 0 ? { 'data-artboard-waiting': 'true' } : {})} className={`shrink-0 ${tab(on)}`}>
+                    <Tabs.Tab key={view} value={view} data-workspace-tab={view} {...pathTitle(on, path)} {...(t.kind === 'artboard' && artboardWaiting > 0 ? { 'data-artboard-waiting': 'true' } : {})} className={`shrink-0 ${tab(on)}`}>
                         {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : t.kind === 'artboard' ? 'ArtBoard' : t.kind === 'storage' ? 'Storage' : 'Settings'}
                         {t.kind === 'artboard' && artboardWaiting > 0 ? <span data-artboard-badge={String(artboardWaiting)} title={`${artboardWaiting} waiting for your verdict`} className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-semibold leading-4 text-[var(--bg-0)]">{artboardWaiting}</span> : null}
                     </Tabs.Tab>
@@ -97,33 +119,6 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
             })}
             </Tabs.List>
             </Tabs>
-            {onShare ? (
-                <Button variant="ghost" size="xs" labelClassName="contents"
-                    type="button"
-                    data-action="share-workspace"
-                    aria-label="Share this workspace"
-                    title="A link someone opens to reach this workspace over Tynn: control or read-only, for as long as you choose"
-                    onClick={onShare}
-                    className="ml-auto flex shrink-0 items-center gap-1.5 px-2 text-[12px] text-[var(--fg-3)] hover:text-[var(--fg-1)]"
-                >
-                    <Icon name="share-2" size="xs" />
-                    Share
-                </Button>
-            ) : null}
-            {planToggle ? (
-                <Button variant="ghost" size="xs" labelClassName="contents"
-                    type="button"
-                    data-action="toggle-plan-column"
-                    aria-pressed={planToggle.open ? 'true' : 'false'}
-                    aria-label={planToggle.open ? 'Hide the active plan' : 'Show the active plan'}
-                    title={planToggle.open ? 'Hide the active plan' : 'Show the active plan'}
-                    onClick={planToggle.onToggle}
-                    className={`${onShare ? '' : 'ml-auto '}flex shrink-0 items-center gap-1.5 px-2 text-[12px] ${planToggle.open ? 'text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}
-                >
-                    <Icon name={planToggle.open ? 'panel-right-close' : 'panel-right-open'} size="xs" />
-                    Plan
-                </Button>
-            ) : null}
-        </nav>
+        </TopBar>
     );
 }
