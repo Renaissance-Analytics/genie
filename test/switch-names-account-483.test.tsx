@@ -27,8 +27,8 @@ describe('the steps name the account to choose', () => {
     it.each(['claude', 'codex'] as const)('%s: "choose <account>" in the steps', (provider) => {
         expect(accountSwitchSteps(provider, ADA).join('\n')).toContain(`choose ${ADA}`);
     });
-    it('CONTROL: with no account named the steps are R2\'s, choosing "the other account"', () => {
-        expect(accountSwitchSteps('claude').join('\n')).toContain('choose the other account');
+    it('CONTROL: with no account named (Use another account, Tynn #850) the steps say to pick or create a different one', () => {
+        expect(accountSwitchSteps('claude').join('\n')).toContain('choose a different account');
         expect(accountSwitchSteps('claude', undefined)).toEqual(accountSwitchSteps('claude'));
     });
 });
