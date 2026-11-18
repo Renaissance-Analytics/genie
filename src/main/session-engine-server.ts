@@ -52,6 +52,8 @@ import type { MarketplaceApi } from '../core/marketplace.js';
 import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
 import { dispatchGapps, GAppSessionOwner } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
+import { fromWireAttachment } from './engine-wire.js';
+import type { Attachment } from '../core/prompt-content.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -741,9 +743,11 @@ export class SessionEngineServer {
             case 'engine.handOff':
                 return host.handOff(id(), str(1), by(2), (args[3] as Parameters<SessionHost['handOff']>[3]) ?? {});
             case 'engine.promptWith': {
-                const wire = Array.isArray(args[2]) ? (args[2] as WireAttachment[]) : [];
-                const attachments = wire.map((a) => ({ name: a.name, type: a.type, bytes: new Uint8Array(Buffer.from(a.b64, 'base64')) }));
-                return host.promptWith(id(), str(1), attachments, by(3));
+                const wire: readonly WireAttachment[] = Array.isArray(args[2]) ? (args[2] as WireAttachment[]) : [];
+                // A saved file crosses as its path (Tynn #829); a malformed one refuses the message, never a made-up path.
+                const attachments = wire.map(fromWireAttachment);
+                if (attachments.some((a) => a === null)) return { ok: false, reason: 'an attachment did not arrive whole; nothing was sent' };
+                return host.promptWith(id(), str(1), attachments as Attachment[], by(3));
             }
             case 'engine.cancel':
                 // Only `interrupt` is an interrupt; anything else, or nothing, is a Stop (Tynn #672 part 3).

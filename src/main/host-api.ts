@@ -17,7 +17,7 @@ import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { HostApi } from './remote-host.js';
 import type { PtyOpened, TerminalOptions } from './terminal-host.js';
 import type { StartForWork as StartForWorkAnswer } from './start-on-demand.js';
-import type { Attachment } from '../core/prompt-content.js';
+import { attachmentKind, type Attachment } from '../core/prompt-content.js';
 import type { BytesResult, FileOpResult, OpenResult } from './files-host.js';
 import type { TreeNode } from '../core/files-panel.js';
 import { droneRefusal, type WorkstationRole } from '../core/workstation-role.js';
@@ -416,16 +416,27 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'prompt': {
                 const r = agent(args[0]);
                 const text = str(args[1]);
+                // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
+                let attachments: Attachment[] | null = null;
+                if (Array.isArray(args[2])) {
+                    attachments = attachmentsOf(args[2]);
+                    if (!r) return { ok: false, reason: 'unknown agent' };
+                    if (attachments === null || attachments.length === 0) return { ok: false, reason: 'an attachment is not a file' };
+                    // ANY FILE (Tynn #829): saved into the agent's workspace on THIS host first — one that is not an image
+                    // or text goes as its path. A refused save is said, and nothing is started or sent.
+                    if (attachments.some((a) => attachmentKind(a) === 'file')) {
+                        if (!deps.saveUploads) return { ok: false, reason: `${attachments.find((a) => attachmentKind(a) === 'file')!.name} was not sent: this host cannot save a file that is not an image or text into a workspace` };
+                        const saved = await deps.saveUploads(r, attachments);
+                        if (!saved.ok) return { ok: false, reason: saved.reason };
+                        attachments = saved.files;
+                    }
+                }
                 // THE FIRST MESSAGE STARTS IT (q_04ce323c), as the composer's does; a refused start is said, nothing sent.
                 if (r && (deps.startForYourMessage || deps.startForWork) && (text.length > 0 || Array.isArray(args[2]))) {
                     const started = deps.startForYourMessage ? await deps.startForYourMessage(r) : await deps.startForWork!(r);
                     if (!started.ok) return { ok: false, reason: started.reason };
                 }
-                // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
-                if (Array.isArray(args[2])) {
-                    const attachments = attachmentsOf(args[2]);
-                    if (!r) return { ok: false, reason: 'unknown agent' };
-                    if (attachments === null || attachments.length === 0) return { ok: false, reason: 'an attachment is not a file' };
+                if (attachments !== null && r) {
                     if (!deps.host.promptWith) return { ok: false, reason: 'this host does not take files in a message' };
                     const sent = await deps.host.promptWith(r.id, text, attachments, 'you');
                     return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };

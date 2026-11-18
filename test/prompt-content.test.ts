@@ -40,7 +40,7 @@ describe('promptContent', () => {
             [[{ name: 'a.txt', type: 'text/plain', bytes: enc('x') }], { image: true, textResource: false }, /a\.txt.*text file/],
             [[{ name: 'blob.bin', type: 'application/octet-stream', bytes: new Uint8Array([0, 1, 2, 0xff]) }], all, /blob\.bin.*not saved into the workspace/],
             [[{ name: 'tool.exe', type: 'application/x-msdownload', bytes: enc('MZ') }], all, /tool\.exe.*executable/],
-            [[{ name: 'huge.png', type: 'image/png', bytes: (() => { const b = new Uint8Array(5 * 1024 * 1024 + 1); b.set(PNG); return b; })() }], all, /huge\.png.*5 MB/],
+            [[{ name: 'huge.png', type: 'image/png', bytes: (() => { const b = new Uint8Array(5 * 1024 * 1024 + 1); b.set(PNG); return b; })() }], all, /huge\.png.*not saved into the workspace/],
             [Array.from({ length: 11 }, (_, i) => ({ name: `f${i}.txt`, type: 'text/plain', bytes: enc('x') })), all, /11 attachments/],
         ];
         const wrong = cases.filter(([files, accepts, why]) => {

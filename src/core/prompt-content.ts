@@ -1,3 +1,4 @@
+import { savedFileNote } from './chat-uploads.js';
 import { attachmentRefusal, isExecutableName } from './inbox.js';
 
 /**
@@ -8,6 +9,9 @@ import { attachmentRefusal, isExecutableName } from './inbox.js';
  *
  * An image is recognised by its BYTES (the format's signature), never by the name or the type the picker reported —
  * a `.png` that is not a PNG would reach the provider as one and fail there, with nothing on screen saying why.
+ *
+ * ANY OTHER FILE IS SENT TOO (Tynn #829): the host saves it into the workspace first (main/chat-uploads.ts), and here it
+ * is a text block telling the agent where it is (`saved`). One that reaches here unsaved is refused, saying so.
  */
 export type PromptBlock =
     | { type: 'text'; text: string }
@@ -32,9 +36,14 @@ export interface Attachment {
 
 export type AttachmentKind = 'image' | 'text' | 'file';
 
-/** STUB (Tynn #829 RED). */
-export function attachmentKind(_a: Attachment): AttachmentKind {
-    return 'text';
+/**
+ * How a file goes to the agent: an `image` inline (by its bytes, at most 5 MB — the Claude API's limit for one), a `text`
+ * file inline, or a `file` the host saves into the workspace and names. A larger image is a file: saved, not refused.
+ */
+export function attachmentKind(a: Attachment): AttachmentKind {
+    if (a.saved) return 'file';
+    if (imageTypeOf(a.bytes) !== null && a.bytes.byteLength <= IMAGE_MAX_BYTES) return 'image';
+    return textOf(a.bytes) !== null ? 'text' : 'file';
 }
 
 /** What the agent's provider takes beyond text (from its driver's declared capabilities). */
@@ -74,20 +83,24 @@ function textOf(bytes: Uint8Array): string | null {
 
 export function promptContent(text: string, attachments: readonly Attachment[], accepts: PromptAccepts, toBase64: (bytes: Uint8Array) => string): PromptContent {
     if (attachments.length === 0) return { ok: true, content: text, names: [] };
-    const refusal = attachmentRefusal(attachments.map((a) => ({ name: a.name, size: a.bytes.byteLength })));
+    const refusal = attachmentRefusal(attachments.map((a) => ({ name: a.name, size: a.saved?.size ?? a.bytes.byteLength })));
     if (refusal) return { ok: false, reason: refusal };
     const blocks: PromptBlock[] = text.trim() === '' ? [] : [{ type: 'text', text }];
     for (const a of attachments) {
         if (isExecutableName(a.name)) return { ok: false, reason: `${a.name} is a natively executable file and is refused` };
-        const image = imageTypeOf(a.bytes);
+        const kind = attachmentKind(a);
+        if (kind === 'file') {
+            if (!a.saved) return { ok: false, reason: `${a.name} is not an image or a text file, and it was not saved into the workspace, so it was not sent` };
+            blocks.push({ type: 'text', text: savedFileNote(a.name, a.saved) });
+            continue;
+        }
+        const image = kind === 'image' ? imageTypeOf(a.bytes) : null;
         if (image) {
-            if (a.bytes.byteLength > IMAGE_MAX_BYTES) return { ok: false, reason: `${a.name} is ${(a.bytes.byteLength / MB).toFixed(1)} MB; an image can be at most 5 MB` };
             if (!accepts.image) return { ok: false, reason: `${a.name}: this agent's provider cannot take an image` };
             blocks.push({ type: 'image', mimeType: image, data: toBase64(a.bytes) });
             continue;
         }
-        const body = textOf(a.bytes);
-        if (body === null) return { ok: false, reason: `${a.name} is neither an image nor a text file, so it cannot be sent to an agent` };
+        const body = textOf(a.bytes) ?? '';
         if (!accepts.textResource) return { ok: false, reason: `${a.name}: this agent's provider cannot take a text file` };
         blocks.push({ type: 'resource', resource: { uri: `attachment://${encodeURIComponent(a.name)}`, mimeType: 'text/plain', text: body } });
     }
