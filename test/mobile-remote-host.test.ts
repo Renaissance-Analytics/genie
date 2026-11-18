@@ -36,19 +36,35 @@ const snapshot = {
 function fakeApi() {
     const calls: Array<{ method: string; args: unknown[] }> = [];
     const listeners = new Set<(channel: string, payload: unknown) => void>();
-    let options: { wantsAgent?: (id: string) => boolean } | undefined;
+    let options: { wantsAgent?: (id: string) => boolean; onAgentsWanted?: (listener: (agentIds: readonly string[]) => void) => () => void } | undefined;
+    /** Agents the host asked to have pushed because they became wanted (Tynn #862). */
+    const requested: string[] = [];
+    const fake = {
+        /** Called inside `agentDetail`, before it answers: what happens on the host while the phone's watch is in flight. */
+        duringDetail: null as ((id: string) => void) | null,
+        /** Answer a "now wanted" request as host-api does: the agent's detail, as it is now. Off = only record it. */
+        answerWanted: false,
+        /** The detail `agentDetail` and a wanted-push read; the rows-pending answer of a first read by default. */
+        current: (id: string): unknown => detailOf(id),
+    };
+    const emit = (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); };
     const api: HostApi = {
         invoke: async (method, args) => {
             calls.push({ method, args });
             if (method === 'snapshot') return snapshot;
-            if (method === 'agentDetail') return detailOf(String(args[0]));
+            if (method === 'agentDetail') { const id = String(args[0]); const answer = fake.current(id); fake.duringDetail?.(id); return answer; }
             return { ok: true };
         },
-        onEvent: (cb, opts) => { listeners.add(cb); options = opts; return () => listeners.delete(cb); },
+        onEvent: (cb, opts) => {
+            listeners.add(cb);
+            options = opts;
+            const off = opts?.onAgentsWanted?.((ids) => { requested.push(...ids); if (fake.answerWanted) for (const id of ids) emit(`agent:${id}`, fake.current(id)); });
+            return () => { listeners.delete(cb); off?.(); };
+        },
         workspaceOfAgent: (id) => snapshot.agents.find((a) => a.id === id)?.workspaceId ?? null,
         workspaceOfTerminal: (id) => ({ term_t: 'tynn' } as Record<string, string>)[id] ?? null,
     };
-    return { api, calls, wants: (id: string) => options?.wantsAgent?.(id) ?? true, emit: (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); } };
+    return { api, calls, fake, requested, wants: (id: string) => options?.wantsAgent?.(id) ?? true, emit };
 }
 
 function client(t: ClientTransport) {
@@ -196,6 +212,42 @@ describe('a phone receives only what a phone shows', () => {
         const desk = connect();
         await desk.hello({ kind: 'token', token: t });
         expect(host.wanted()).toMatchObject({ remote: true, all: true });
+    });
+
+    /*
+     * A PHONE THAT OPENS A CHAT GETS ITS HISTORY (Tynn #862; the owner, 2026-11-18: an agent's messages "didn't appear until
+     * I sent a message"). The watch's own detail read is what starts the ledger's read; the ledger can land before the
+     * watch is recorded, and was dropped (#forPhone: not watching yet). Nothing sent it again until the next change. Once
+     * the watch is recorded, the host asks for the agent as it is now (`onAgentsWanted`), and the phone gets it.
+     */
+    it('the ledger that landed while the phone’s watch was being opened reaches the phone once the watch is recorded (Tynn #862)', async () => {
+        const pending = { agent: { id: 'agent_a', name: 'atlas', provider: 'claude' }, session: { status: 'idle' }, rows: [], rowsPending: true };
+        let whole = false;
+        api.fake.current = (id) => (id === 'agent_a' ? (whole ? detailOf(id) : pending) : null);
+        api.fake.answerWanted = true;
+        // The read asked the engine for the ledger; it lands, and is pushed, before the watch answers.
+        api.fake.duringDetail = (id) => { whole = true; api.emit(`agent:${id}`, detailOf(id)); };
+        const { c: phone } = await pairedPhone('mobile');
+        await phone.drain();
+        const watched = await phone.call('agent.watch', 'agent_a', {});
+        const first = (watched as { value: { seq: number; detail: { rowsPending?: boolean }; rows: { append: Row[] } } }).value;
+        expect(first.detail.rowsPending).toBe(true);
+        expect(first.rows.append).toEqual([]);
+        expect(api.requested).toEqual(['agent_a']);
+        const pushed = await phone.drain();
+        expect(pushed).toHaveLength(1);
+        expect(pushed[0]).toMatchObject({ kind: 'event', channel: 'agent:agent_a', payload: { seq: first.seq + 1, detail: { agent: { name: 'atlas' } }, rows: { append: rows } } });
+    });
+
+    it('a watch already recorded asks for nothing more; a desktop window (which reads every agent) asks for nothing (Tynn #862)', async () => {
+        const { c: phone } = await pairedPhone('mobile');
+        await phone.call('agent.watch', 'agent_a', {});
+        await phone.call('agent.watch', 'agent_a', {});
+        expect(api.requested).toEqual(['agent_a']);
+        const t = (await pairedPhone(null)).token;
+        const desk = connect();
+        await desk.hello({ kind: 'token', token: t });
+        expect(api.requested).toEqual(['agent_a']);
     });
 
     it('a guest phone may not watch an agent outside its workspace', async () => {
