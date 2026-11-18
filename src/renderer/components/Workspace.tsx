@@ -682,6 +682,10 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
 
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
+            {/* THE TRUST STEP COMES FIRST ON THE PAGE, above even the bar (scripts/trust-step-cdp.mjs check 5): nothing of an
+                untrusted workspace is offered before it asks. A terminal that could not open says so beside it. */}
+            {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
+            {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
             {/*
               * THE STRIP (Tynn #282): Agents, the tabs you designed, a small +, Settings — + always just before Settings,
               * Settings always last. Labelled tabs, never a shortcut-only door (§4.0). The + needs somewhere to keep a tab:
@@ -710,8 +714,6 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             </ErrorBoundary>
             {/* EVERYTHING UNDER THE BAR is the view's body: the bar stays put whatever opens below it. */}
             <div data-view-body="" className="flex min-h-0 flex-1 flex-col">
-                {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
-                {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
                     {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.

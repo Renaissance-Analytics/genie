@@ -42,7 +42,7 @@ describe('the agent\'s bar', () => {
         const bar = classOf(/data-top-bar=""/);
         for (const c of ['flex-wrap', 'min-h-8', '@container']) expect(bar).toContain(c);
         const tabs = classOf(/data-bar-tabs=""/);
-        for (const c of ['min-w-[6rem]', 'flex-1', 'overflow-x-auto', 'h-[31px]']) expect(tabs).toContain(c);
+        for (const c of ['min-w-[min(6rem,100%)]', 'flex-1', 'overflow-x-auto', 'h-[31px]']) expect(tabs).toContain(c);
         const end = classOf(/data-bar-trailing=""/);
         for (const c of ['shrink', 'min-w-0', 'max-w-full', 'flex-wrap']) expect(end).toContain(c);
     });

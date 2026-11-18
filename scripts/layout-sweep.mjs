@@ -283,7 +283,9 @@ for (const width of WIDTHS) {
     const r = JSON.parse(await evaluate(BAR_PROBE('workspace')));
     workspaceHeights.set(width, r.height);
     check(r.bar && r.id === 'tynn' && r.selected === 'Dashboard' && (r.title ?? '') !== '' && r.actions >= 3 && r.chips === 0 && r.crumbs === 0, `${width}px — the seeded workspace's ONE bar: its Dashboard tab selected (the path its tooltip), its actions, no repo list, no crumbs`, JSON.stringify({ bar: r.bar, id: r.id, selected: r.selected, title: r.title, actions: r.actions, chips: r.chips, crumbs: r.crumbs }));
-    check(r.height === 32, `${width}px — the workspace bar is one 32px line`, `${r.height}px`);
+    // One 32px line wherever the page is wide enough for it (from 1024px, measured by scripts/one-bar-proof.mjs). At 800px the
+    // pinned chat leaves the page 72px: the bar wraps there by design (TopBar.tsx), and only "nothing spills" is asked.
+    if (width >= 1024) check(r.height === 32, `${width}px — the workspace bar is one 32px line`, `${r.height}px`);
     check(r.wide !== null && r.wide <= 1, `${width}px — the workspace bar fits its column`, r.wide > 1 ? `${r.wide}px wider than its column (bar ${r.barWidth}px)` : '');
     check(r.column !== null && r.column <= 1, `${width}px — the page column does not scroll sideways`, r.column > 1 ? `${r.column}px wider` : '');
 }
