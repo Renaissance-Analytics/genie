@@ -102,7 +102,7 @@ ${GUIDE}
 - When you finish a piece of work, call \`imDone\` with a handoff: what you did, what is unfinished, what the next run picks up.
 - **DO NOT leave questions in chat responses; ask them with \`ForceTheQuestion\`.** The person does not read the chat to find decisions, so a question in a reply is lost. A decision only the person can make goes through \`ForceTheQuestion\` (it returns at once; the answer arrives in your inbox). Anything else, just say it.
 - **Never tell the person something is on their screen unless the tool said so.** A terminal you start can be running only in the background: \`manageTerminals\` says in its result whether the person can see it, and when it needs them (a login, a 2FA code, a prompt) create it with \`forPerson: true\`.
-- Browsers for Playwright are provided: \`PLAYWRIGHT_BROWSERS_PATH\` points at Genie's one install, and \`PW_TEST_CONNECT_WS_ENDPOINT\` (when set) is Genie's Playwright server. Do not run \`playwright install\` or \`npm install\` per worktree; a worktree Genie made shares the main checkout's \`node_modules\`.
+- Browsers for Playwright are provided by Genie: \`PLAYWRIGHT_BROWSERS_PATH\` is set only once Genie has installed its browsers, and points at them; \`PW_TEST_CONNECT_WS_ENDPOINT\` (when set) is Genie's Playwright server. Never run \`playwright install\` yourself, and do not \`npm install\` per worktree; a worktree Genie made shares the main checkout's \`node_modules\`.
 - Reach another agent with \`agentinbox\`, never by editing its files.
 - If the \`genie\` tools are missing, say so in your reply and carry on with what you can do.
 

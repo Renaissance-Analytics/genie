@@ -6,7 +6,7 @@ import type { PhpVersionsFs } from './php-versions.js';
 
 /**
  * WHAT GENIE HANDS A WORKSPACE FOR PLAYWRIGHT (Tynn #604): per workspace, at the moment an agent session or a terminal for it
- * is started. Always the managed browsers path (that is Genie's own environment, `restoreToolchainEnv`); when the workspace
+ * is started. The managed browsers path is Genie's own environment once a set is installed (`applyPlaywrightEnv`); when the workspace
  * uses Playwright, has "Use Genie's Playwright server" on, and Genie has that version's browsers, the server's endpoint too —
  * started now if it is not running. A worktree it finds without a node_modules is linked to its main checkout's, when the
  * lockfiles are identical. Whatever it will not do it says, in `GENIE_PLAYWRIGHT_NOTE`.

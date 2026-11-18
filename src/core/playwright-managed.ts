@@ -45,9 +45,9 @@ export function playwrightEnv(toolchainDir: string): Record<string, string> {
  * browser it records. Until then nothing is pointed at the folder, and Playwright's own default works as before.
  */
 export function managedBrowsersReady(sets: Readonly<Record<string, readonly string[]>>, entries: readonly string[]): boolean {
-    void sets;
-    void entries;
-    return false; // RED: inert stub
+    const browsers = new Set(Object.values(sets).flat());
+    if (browsers.size === 0) return false;
+    return entries.some((entry) => [...browsers].some((b) => entry.startsWith(`${b}-`) || entry.startsWith(`${b}_`)));
 }
 
 export type LockKind = 'package-lock' | 'pnpm' | 'yarn';
