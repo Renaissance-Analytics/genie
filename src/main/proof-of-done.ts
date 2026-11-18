@@ -18,6 +18,16 @@ export const POD_KEY_SECRET: SecretName = 'pod/host-key';
 export const POD_NOTES_REF = 'refs/notes/proof-of-done';
 /** A note that could not be written or pushed is given up on after this long. */
 const RETRY_FOR_MS = 14 * 24 * 60 * 60 * 1000;
+/**
+ * A REFUSAL IS NOT ASKED AGAIN EVERY MINUTE (Tynn #755). Tynn answers every unauthorized request with 404, so a 4xx from
+ * the PoD routes says "not for this credential", not "try again in a minute": the whole conversation waits, from 2 minutes
+ * doubling to 6 hours. A new pairing credential or another person starts it again at once; a 5xx or the network does not
+ * count as a refusal and is tried on the next poll.
+ */
+const REFUSED_FIRST_MS = 2 * 60 * 1000;
+const REFUSED_CAP_MS = 6 * 60 * 60 * 1000;
+const refusal = (status: number): boolean => status >= 400 && status < 500;
+const inWords = (ms: number): string => (ms < 60 * 60 * 1000 ? `${Math.round(ms / 60_000)} min` : `${Number((ms / 3_600_000).toFixed(1))} h`);
 
 /** Hex of the first 16 bytes of SHA-256 of the raw 32-byte public key — Tynn's `key_id`. */
 export function podKeyId(rawPublicKey: Uint8Array): string {
@@ -45,6 +55,8 @@ export interface PodPorts {
     readonly tynn: {
         signedIn(): boolean;
         userId(): string | null;
+        /** Who the pairing credential is (never the secret): a new one, after signing in again, asks again at once. */
+        credentialId?(): string | null;
         request(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<Response>;
     };
     /** The person's Sign / Decline for one HITL claim: `detail` names the task, the score and the commits. */
@@ -67,8 +79,10 @@ const rawPublic = (privateKey: KeyObject): Buffer => Buffer.from(createPublicKey
 export class ProofOfDone {
     readonly #ports: PodPorts;
     #held: Held | null = null;
+    /** The person and credential the key was registered for (`#who`). */
     #registeredFor: string | null = null;
-    #refusedFor: string | null = null;
+    /** Tynn refused this person and credential: nothing is asked until `until` (Tynn #755). */
+    #refused: { readonly who: string; readonly until: number; readonly wait: number } | null = null;
     #told = new Set<string>();
     /** Every claim answered or being answered this run: Tynn's list is asked again each poll. */
     readonly #handled = new Set<string>();
@@ -105,13 +119,21 @@ export class ProofOfDone {
         return this.#held;
     }
 
-    async #register(held: Held, userId: string): Promise<boolean> {
-        if (this.#registeredFor === userId) return true;
-        if (this.#refusedFor === userId) return false;
+    #now(): number { return (this.#ports.now ?? Date.now)(); }
+
+    /** Tynn refused `who`: wait twice as long as last time (from 2 minutes, to 6 hours), and say when it asks again. */
+    #refuse(who: string, line: string): void {
+        const wait = this.#refused?.who === who ? Math.min(this.#refused.wait * 2, REFUSED_CAP_MS) : REFUSED_FIRST_MS;
+        this.#refused = { who, until: this.#now() + wait, wait };
+        this.#say(`${line}; asking again in ${inWords(wait)}`);
+    }
+
+    async #register(held: Held, who: string): Promise<boolean> {
+        if (this.#registeredFor === who) return true;
         const res = await this.#ports.tynn.request('/api/v1/pod/host-keys', { method: 'POST', body: { public_key: held.raw.toString('base64url'), label: this.#ports.label() } });
-        if (res.ok) { this.#registeredFor = userId; this.#say(`host key ${held.keyId} registered with Tynn`); return true; }
-        if (res.status === 422) this.#refusedFor = userId;
-        this.#say(`Tynn did not take the host key (${res.status})`);
+        if (res.ok) { this.#registeredFor = who; this.#refused = null; this.#say(`host key ${held.keyId} registered with Tynn`); return true; }
+        if (refusal(res.status)) this.#refuse(who, `Tynn did not take the host key (${res.status})`);
+        else this.#say(`Tynn did not take the host key (${res.status})`);
         return false;
     }
 
@@ -121,12 +143,23 @@ export class ProofOfDone {
             if (!this.#ports.tynn.signedIn()) return;
             const userId = this.#ports.tynn.userId();
             if (userId === null) return;
+            // The person AND the credential: signing in again (a new pairing) or as someone else asks again at once.
+            const who = `${userId}\u0000${this.#ports.tynn.credentialId?.() ?? ''}`;
+            if (this.#refused !== null) {
+                if (this.#refused.who !== who) this.#refused = null;
+                else if (this.#now() < this.#refused.until) return;
+            }
             const held = await this.#key();
             if (!held) return;
-            if (!(await this.#register(held, userId))) return;
+            if (!(await this.#register(held, who))) return;
             await this.#retryNotes();
             const res = await this.#ports.tynn.request('/api/v1/pod/pending', { method: 'GET' });
-            if (!res.ok) { this.#say(`Tynn did not list the claims waiting (${res.status})`); return; }
+            if (!res.ok) {
+                if (refusal(res.status)) this.#refuse(who, `Tynn did not list the claims waiting (${res.status})`);
+                else this.#say(`Tynn did not list the claims waiting (${res.status})`);
+                return;
+            }
+            this.#refused = null;
             const body = (await res.json().catch(() => null)) as { data?: unknown } | null;
             const items = Array.isArray(body?.data) ? body.data : [];
             for (const raw of items) {

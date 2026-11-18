@@ -1771,7 +1771,7 @@ async function main(): Promise<void> {
         clocks.push(startProofOfDone({
             file: join(home, 'proof-of-done-notes.json'),
             keychain,
-            tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), request: (path, init) => account.request(path, init) },
+            tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), credentialId: () => account.credentialId(), request: (path, init) => account.request(path, init) },
             approve: async (request) => (await approvals.gate(podCaller, 'pod.sign', request.detail)) === 'allowed' ? 'allowed' : 'denied',
             workspaces: () => hostRegistry.listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
             label: () => hostname(),
