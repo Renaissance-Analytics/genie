@@ -113,7 +113,8 @@ describe('an agent’s site never raises the OS prompt: Genie asks in the Deck, 
         const item = hostsAsk(rig);
         expect(item).toBeDefined();
         expect(rig.elevationsAsked).toHaveLength(0);
-        const ports = { attention: {} as never, approvals: {} as never, inbox: {} as never, trustCertificate: () => w.replica.trustCertificate(), syncHosts: () => w.replica.syncHosts(), deferHosts: () => w.replica.deferHosts() } as DeckAnswerPorts;
+        // The host's own Deck (Tynn #861): the answer is resolved against the items Genie's hosting stack holds.
+        const ports = { deckItems: () => rig!.stack.trustDeckItems(), attention: {} as never, approvals: {} as never, inbox: {} as never, trustCertificate: () => w.replica.trustCertificate(), syncHosts: () => w.replica.syncHosts(), deferHosts: () => w.replica.deferHosts() } as DeckAnswerPorts;
         await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, ports);
         await settled(rig);
         expect(rig.elevationsAsked.map((b) => b.map((s) => s.id))).toEqual([[HOSTS_STEP_ID]]);

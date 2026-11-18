@@ -31,7 +31,8 @@ const item = (over: Partial<DeckItem> = {}): DeckItem => ({
 describe('an answer to an out-of-date copy', () => {
     const ports = (current: { id: string; revision?: number } | null) => {
         const answer = vi.fn(async () => {});
-        return { answer, ports: { attention: { answer, lists: { done: async () => true }, pending: () => (current ? [current] : []) }, approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [] } } as never };
+        // The host's Deck holds the question as it is NOW (Tynn #861); the answer brings only the revision it was answered on.
+        return { answer, ports: { deckItems: () => (current ? [item({ revision: current.revision })] : []), attention: { answer, lists: { done: async () => true }, pending: () => (current ? [current] : []) }, approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [] } } as never };
     };
 
     it('is refused, naming the change, and nothing is answered', async () => {

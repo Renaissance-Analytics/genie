@@ -84,6 +84,7 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
             lists: { done: async () => true },
         },
         approvals: { resolve: () => true },
+        deckItems: () => [],
         inbox: { unread: () => [], receive: async () => [] as never, involving: () => [] },
         deliverToAgent: async () => true,
         files: {
@@ -141,8 +142,11 @@ describe('genie-host answers the phone itself', () => {
     });
 
     it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {
-        const api = hostAloneApi(ports(engine(true)));
+        let held: never[] = [];
+        // The host's own Deck holds the question (Tynn #861): the answer is resolved there.
+        const api = hostAloneApi(ports(engine(true), { deckItems: () => held }));
         const item = { id: 'q_1', source: 'agent-question', agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', title: 'Ship it?', blocking: true, priority: 'high', at: 1, answer: { kind: 'inline', options: [{ id: 'yes', label: 'Yes' }] }, forwardedFrom: null };
+        held = [item as never];
         await api.invoke('features.act', [{ kind: 'deck.answer', item, optionId: 'yes' }]);
         expect(calls).toContain('answer q_1 [["yes"]]');
         await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('open Genie on alphar');

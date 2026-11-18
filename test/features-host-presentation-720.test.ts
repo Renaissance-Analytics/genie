@@ -115,6 +115,8 @@ describe('host features present only in the requesting window (Tynn #720)', () =
         it(`the window error action ${option} reaches only the caller error owner`, async () => {
             const error = item({ id: MAIN_ERROR_DECK_PREFIX + 'fixture', source: 'genie', agentId: null,
                 answer: { kind: 'inline', options: ['dismiss', 'retry', 'open-log', 'report'].map(id => ({ id, label: id, tone: 'neutral' as const })) } });
+            // The caller's own window holds its error record (Tynn #861: an answer is resolved against the record held).
+            Object.assign(f.a.mainErrors!, { deckItems: () => [error] });
             await f.answer({ kind: 'deck.answer', item: error, optionId: option });
             expect(f.calls).toEqual([{ owner: CALLER_A.connectionId, effect, value: error.id }]);
         });

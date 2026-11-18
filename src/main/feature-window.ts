@@ -19,6 +19,7 @@ export function featureWindow(door: LocalProtocolDoor, ports: HostFeaturePresent
                     browser(); if (ports.openInBrowser) return ports.openInBrowser(String(args[0])); break;
                 case 'login': if (ports.login) return ports.login(String(args[0])); break;
                 case 'rendererNotice.dismiss': if (ports.rendererNotice) return ports.rendererNotice.dismiss(); break;
+                case 'mainErrors.deckItems': if (ports.mainErrors?.deckItems) return ports.mainErrors.deckItems(); break;
                 case 'mainErrors.dismiss': if (ports.mainErrors) return ports.mainErrors.dismiss(String(args[0])); break;
                 case 'mainErrors.retryHostCopy': if (ports.mainErrors?.retryHostCopy) return ports.mainErrors.retryHostCopy(String(args[0])); break;
                 case 'mainErrors.openLog': if (ports.mainErrors?.openLog) return ports.mainErrors.openLog(typeof args[0] === 'string' ? args[0] : undefined); break;

@@ -1,4 +1,5 @@
 import type { CallContext } from '../core/remote-protocol.js';
+import type { DeckItem } from '../core/deck.js';
 import type { FeatureAction } from '../renderer/features.js';
 import type { HostFeaturePresentation, HostFeatures } from './features-host.js';
 
@@ -57,7 +58,7 @@ export class FeatureCallers {
             openExternal: url => call<void>('openExternal', [url]),
             login: provider => call('login', [provider]),
             rendererNotice: { dismiss: () => call('rendererNotice.dismiss') },
-            mainErrors: { dismiss: id => call<boolean>('mainErrors.dismiss', [id]),
+            mainErrors: { deckItems: () => call<readonly DeckItem[]>('mainErrors.deckItems'), dismiss: id => call<boolean>('mainErrors.dismiss', [id]),
                 retryHostCopy: id => call('mainErrors.retryHostCopy', [id]), openLog: id => call('mainErrors.openLog', [id]), report: id => call('mainErrors.report', [id]) },
             ...(binding.browser ? { browser: { snapshot: () => binding.browser!, navigate: url => call<void>('browser.navigate', [url]),
                 back: () => call<void>('browser.back'), forward: () => call<void>('browser.forward'), reload: () => call<void>('browser.reload') } } : {}),
