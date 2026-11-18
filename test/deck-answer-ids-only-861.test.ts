@@ -130,6 +130,8 @@ function serve(api: HostApi) {
         const client = connectRemote(pair.client, { kind: 'relay' }, 'phone', profile ? { profile } : {});
         closers.push(() => client.close());
         expect(await client.ready).toEqual({ ok: true });
+        // Another device drives with the baton (an answer is a write): taken, as the person's own device would.
+        expect(await client.takeBaton()).toEqual({ ok: true });
         return { client, frames };
     };
     const window = () => {
