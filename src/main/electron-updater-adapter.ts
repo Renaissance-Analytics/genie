@@ -58,10 +58,11 @@ export function createElectronUpdaterPort(autoUpdater: ElectronUpdaterClient, co
             // The version, and which genie-host it carries (Tynn #413, scripts/feed-host-identity.mjs); its notes come from
             // GitHub's releases API (core/update-notes.ts), not the feed's HTML.
             const info = result.updateInfo as typeof result.updateInfo & { genieHostHash?: unknown; genieEngineProtocol?: unknown };
+            // Said only when the feed says it: a feed without them is a full update (core/update-kind.ts).
             return {
                 version: result.updateInfo.version,
-                hostHash: typeof info.genieHostHash === 'string' ? info.genieHostHash : null,
-                engineProtocol: typeof info.genieEngineProtocol === 'number' ? info.genieEngineProtocol : null,
+                ...(typeof info.genieHostHash === 'string' ? { hostHash: info.genieHostHash } : {}),
+                ...(typeof info.genieEngineProtocol === 'number' ? { engineProtocol: info.genieEngineProtocol } : {}),
             };
         },
         async download(onProgress) {

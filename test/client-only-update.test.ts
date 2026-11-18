@@ -169,7 +169,7 @@ describe('the release feed says which host it carries', () => {
         expect(await port.check()).toEqual({ version: '2.0.0-beta.66', hostHash: 'a'.repeat(12), engineProtocol: ENGINE_PROTOCOL });
         // A feed that says nothing of its host is not guessed at.
         const bare = { ...client, checkForUpdates: async () => ({ isUpdateAvailable: true, updateInfo: { version: '2.0.0-beta.66' } }) };
-        expect(await createElectronUpdaterPort(bare as unknown as Parameters<typeof createElectronUpdaterPort>[0], { path: 'unused', readText: async () => '' }).check()).toEqual({ version: '2.0.0-beta.66', hostHash: null, engineProtocol: null });
+        expect(await createElectronUpdaterPort(bare as unknown as Parameters<typeof createElectronUpdaterPort>[0], { path: 'unused', readText: async () => '' }).check()).toEqual({ version: '2.0.0-beta.66' });
     });
 });
 

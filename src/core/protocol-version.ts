@@ -145,7 +145,7 @@ export function catalogCapabilities(definitions: Iterable<{ readonly id: string;
  * missing, bad or newer than its own schema is not believed past the schema; a track that is not one of TRACKS is
  * unknown; capabilities that are not `name@level` are dropped, at most MAX_CAPABILITIES kept. Never throws.
  */
-export function offerOf(frame: { readonly track?: unknown; readonly build?: unknown; readonly schema?: unknown; readonly minSchema?: unknown; readonly capabilities?: unknown }): ProtocolOffer {
+export function offerOf(frame: { readonly protocol?: unknown; readonly track?: unknown; readonly build?: unknown; readonly schema?: unknown; readonly minSchema?: unknown; readonly capabilities?: unknown }): ProtocolOffer {
     const track = typeof frame.track === 'string' && (TRACKS as readonly string[]).includes(frame.track) ? frame.track as Track : null;
     const build = typeof frame.build === 'string' && frame.build.trim() !== '' ? frame.build : null;
     if (!isSchema(frame.schema) || frame.schema === SECURITY_FLOOR_SCHEMA) return { ...LEGACY_OFFER, track, build };

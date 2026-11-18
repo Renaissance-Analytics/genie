@@ -90,7 +90,9 @@ describe('capability names are the ADF catalog’s', () => {
             { id: 'b.client', version: '1.0.0', reach: { side: 'client' } },
             { id: 'c.host', version: '1.0.0', reach: { side: 'host' } },
         ])).toEqual(['a.both@2', 'b.client@1']);
-        expect(catalogCapabilities(genieCatalog().list())).toContain('genie.updater@1');
+        const updater = genieCatalog().list().find((e) => e.id === 'genie.updater')!;
+        expect(updater.reach.side).toBe('both');
+        expect(catalogCapabilities(genieCatalog().list())).toContain(elementCapability(updater));
     });
 
     it('this build’s offer: its track, the wire schema, the fixed window’s floor, its capabilities plus any added once', () => {
