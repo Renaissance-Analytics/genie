@@ -46,7 +46,8 @@ describe('the bar', () => {
         const dead = render({ ops, session: broken });
         expect(dead.split('data-action="restart"').length - 1).toBe(1);
         // The agent's TUI is never called a terminal (Tynn #851): the Broken header offers it as what it is.
-        expect(dead).toMatch(/data-action="open-tui-header"[^>]*>(?:(?!<\/button>).)*Open TUI/);
+        // An icon in the one bar: "Open TUI" is its name (aria-label), its tooltip says what it is for.
+        expect(dead).toMatch(/<button(?=[^>]*data-action="open-tui-header")(?=[^>]*aria-label="Open TUI")[^>]*title="Open the agent’s TUI: diagnostics and logins"/);
         expect(dead).not.toContain('Open terminal');
         expect(dead).not.toContain('data-action="stop-turn"');
         expect(dead).toContain('data-pill="Broken · ACP stream closed · exit 137"');
