@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentId } from '../src/core/identity.js';
 import { relaunchPlan } from '../src/core/upgrade-drain.js';
+import { WINDOW_CALLS } from '../src/main/agent-stores-host.js';
+import { HostRegistryStore } from '../src/main/agent-stores-replica.js';
 import { Registry } from '../src/main/registry.js';
 import { restoreAfterRelaunch } from '../src/main/relaunch-restore.js';
 import { recordShutdown, type ShutdownRecordPorts } from '../src/main/shutdown-record.js';
@@ -201,6 +203,27 @@ describe('Tynn #754: a shutdown inside the restore keeps the agents still waitin
         await settle();
         e.sessions.delete(e.ids.a);
         await recordShutdown(windowRecord(e));
+        expect(await onDisk(e)).toEqual({ running: ['b'], interrupted: [] });
+    });
+});
+
+describe('Tynn #754: the window restores through genie-host (its registry reads and writes the host Store)', () => {
+    it('beginRestore and restoreStarted cross to the host, and a started agent leaves the window list too', async () => {
+        expect(WINDOW_CALLS.registry).toEqual(expect.arrayContaining(['beginRestore', 'restoreStarted']));
+        const e = await saved(['a', 'b']);
+        // The host side: its one Store, answering the window's calls by name, as AgentStoresService does.
+        const window = new Registry(new HostRegistryStore({
+            registryDropped: () => [],
+            call: async (family, method, args) => {
+                expect(family).toBe('registry');
+                expect(WINDOW_CALLS.registry).toContain(method);
+                return structuredClone(await (e.store as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args));
+            },
+        }));
+        await window.load({ name: 'alphar', healthy: true });
+        expect(await window.beginRestore()).toEqual({ running: [e.ids.a, e.ids.b], interrupted: [] });
+        await window.restoreStarted(e.ids.a);
+        expect(window.runningAtQuit()).toEqual([e.ids.b]);
         expect(await onDisk(e)).toEqual({ running: ['b'], interrupted: [] });
     });
 });
