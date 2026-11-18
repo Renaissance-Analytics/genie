@@ -394,5 +394,5 @@ function needsPresentation(action: FeatureAction): boolean {
     return action.kind === 'flows.openEditor' || action.kind === 'flows.newFlow'
         || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss' || action.kind === 'toolchain.login'
         || action.kind === 'integrations.githubOpen' || action.kind === 'tailscale.install'
-        || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && action.item.source === 'genie' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));
+        || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && typeof action.item?.id === 'string' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));
 }

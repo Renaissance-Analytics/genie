@@ -1021,6 +1021,11 @@ export class RemoteHost {
                 const json = JSON.stringify(value);
                 if (json !== undefined && Buffer.byteLength(json) > REMOTE_ATTACHMENT_MAX_BYTES) return ok({ ok: false, reason: 'this image is too large to show on another device' });
             }
+            // AN ACTION'S REPLY TO ANOTHER DEVICE (Tynn #861): as its `features` push is sent, never the whole snapshot raw. A
+            // phone holds no feature state (#forPhone sends it none), so it is told only that the action was done; another
+            // device's window gets the snapshot without pairing requests when it fits, else a revision it reads. Sent raw,
+            // a busy host's snapshot was over the frame cap, and a done answer came back to the phone as "too large".
+            if (method === 'features.act') return ok(this.#actReply(connection, value));
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
@@ -1097,6 +1102,14 @@ export class RemoteHost {
         // A newly watched agent is one the forwarding window must now send (Tynn #662).
         if (first) this.#changed();
         return { seq: opened.state.seq, detail: rest, rows: opened.rows };
+    }
+
+    /** `features.act`'s reply to another device (Tynn #861): a revision for a phone or a snapshot over the cap, else the snapshot as pushed. */
+    #actReply(connection: Connection, value: unknown): unknown {
+        if (connection.profile === 'mobile') return { revision: ++this.#featuresRevision };
+        let answer = withoutPairRequests(value);
+        if (!connection.auth?.isOwner) answer = withoutRemoteSecrets(answer);
+        return Buffer.byteLength(JSON.stringify(answer) ?? '') > REMOTE_FRAME_MAX_BYTES - 4 * 1024 ? { revision: ++this.#featuresRevision } : answer;
     }
 
     /** A phone hears `snapshot`, and `agent:<id>` for an agent it watches as a patch on its window; nothing else. */

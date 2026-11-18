@@ -149,9 +149,15 @@ describe('the Deck’s inline answers reach the stores', () => {
     });
 
     it('a refused resolution rejects with the reason and changes nothing', async () => {
-        const item = services.deckItems();
-        expect(item).toEqual([]);
-        await expect(handleFeatureAction(services, { kind: 'deck.answer', item: { id: 'q_zzz', source: 'agent-question', agentId: null, agentName: null, workspaceId: null, title: 't', blocking: true, priority: 'normal', at: 0, answer: { kind: 'form', fields: 2 }, forwardedFrom: null }, optionId: 'x' }, state())).rejects.toThrow(/full form/);
+        // A real question the host holds (Tynn #861: an answer is resolved against the host's own record): a form, which a
+        // one-click answer cannot answer.
+        const asked = await services.attention.ask({ agentId: ('agent_' + 'z'.repeat(32)) as never, agentName: 'atlas', workspaceId: 'tynn', questions: [{ header: 'A', question: 'A?', options: [{ label: 'x' }, { label: 'w' }] }, { header: 'B', question: 'B?', options: [{ label: 'y' }, { label: 'v' }] }] }, { userActive: true });
+        await expect(handleFeatureAction(services, { kind: 'deck.answer', item: { id: asked.questionId }, optionId: 'x' }, state())).rejects.toThrow(/full form/);
+        expect(services.attention.pending().map((q) => q.id)).toEqual([asked.questionId]);
+    });
+
+    it('an item the host does not hold is refused, whatever the copy sent says', async () => {
+        await expect(handleFeatureAction(services, { kind: 'deck.answer', item: { id: 'q_zzz', source: 'agent-question', agentId: null, agentName: null, workspaceId: null, title: 't', blocking: true, priority: 'normal', at: 0, answer: { kind: 'inline', options: [{ id: 'x', label: 'x' }] }, forwardedFrom: null } as never, optionId: 'x' }, state())).rejects.toThrow(/no longer waiting here/);
     });
 });
 

@@ -95,6 +95,8 @@ export interface HostAlonePorts {
     readonly signedIn?: AgentOpsWiring['signedIn'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
+    /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
+    readonly deckItems: DeckAnswerPorts['deckItems'];
     readonly inbox: DeckAnswerPorts['inbox'] & { involving(id: AgentId, limit: number): readonly InboxMessage[] };
     /** An approval's note, delivered to the agent as your message. */
     readonly deliverToAgent: (agentId: string, text: string) => boolean | Promise<boolean>;
@@ -225,7 +227,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             // The Deck's answer only (the phone's Deck, deck-answer.ts); the phone reads nothing back from it.
             act: async (action: FeatureAction) => {
                 if (action.kind !== 'deck.answer' && action.kind !== 'deck.answerForm') throw new Error(needsWindow(`features.act ${action.kind}`));
-                await answerDeck(action, { attention: ports.attention, approvals: ports.approvals, inbox: ports.inbox, deliverToAgent: ports.deliverToAgent });
+                await answerDeck(action, { deckItems: ports.deckItems, attention: ports.attention, approvals: ports.approvals, inbox: ports.inbox, deliverToAgent: ports.deliverToAgent });
                 return {} as FeatureData;
             },
         },

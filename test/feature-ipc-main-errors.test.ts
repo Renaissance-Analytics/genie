@@ -43,13 +43,15 @@ describe('deck.answer on a recorded main-process error', () => {
         expect(book.deckItems()).toEqual([]);
     });
 
-    it('an item already dismissed is refused with its id; with no book wired the refusal says so', async () => {
+    // Tynn #861: an answer is resolved against the record the host holds. With no book wired nothing holds the item; once
+    // dismissed, the book no longer does. Either way it is refused in words and nothing is dismissed.
+    it('an item already dismissed is refused; with no book wired nothing holds it, and it is refused the same', async () => {
         const book = new MainErrorBook();
         book.record('unhandled-rejection', 'connect ECONNREFUSED genie.example:443');
         const item = book.deckItems()[0]!;
-        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'dismiss' }, state())).rejects.toThrow('the main process’s error record is not wired into this Genie; nothing was dismissed');
+        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'dismiss' }, state())).rejects.toThrow('This is no longer waiting here: it was answered, dismissed or withdrawn. Nothing was sent.');
         expect(book.list()).toHaveLength(1);
         await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'dismiss' }, state(), { mainErrors: book });
-        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'dismiss' }, state(), { mainErrors: book })).rejects.toThrow(`no recorded error ${item.id}`);
+        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'dismiss' }, state(), { mainErrors: book })).rejects.toThrow('This is no longer waiting here: it was answered, dismissed or withdrawn. Nothing was sent.');
     });
 });

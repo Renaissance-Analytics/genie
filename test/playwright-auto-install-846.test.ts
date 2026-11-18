@@ -245,6 +245,8 @@ describe('the Deck answers a failed install', () => {
     it('reach the installer', async () => {
         const did: string[] = [];
         const ports = {
+            // The host's own notices (Tynn #861): the answer is resolved against them.
+            deckItems: () => [item('retry')],
             attention: { answer: async () => true, pending: () => [], lists: { done: () => true } }, approvals: { resolve: () => true }, inbox: { unread: () => [], receive: () => {} },
             playwrightNotices: { retry: async (id: string) => { did.push(`retry ${id}`); return true; }, dismiss: (id: string) => { did.push(`dismiss ${id}`); return true; } },
         } as unknown as DeckAnswerPorts;

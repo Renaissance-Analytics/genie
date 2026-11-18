@@ -151,6 +151,7 @@ import { v1Leftovers } from '../core/v1-reap.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers, type TrayItem } from './tray.js';
 import { needsYouCount } from '../core/deck.js';
+import { deckActionForWire } from '../core/deck-answer-wire.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
@@ -3065,6 +3066,7 @@ async function boot(): Promise<void> {
             back: () => browserPane?.back(), forward: () => browserPane?.forward(), reload: () => browserPane?.reload(),
         },
         mainErrors: {
+            deckItems: () => mainErrors.deckItems(),
             dismiss: (id) => mainErrors.dismiss(id),
             retryHostCopy: (id) => retryHostCopy(mainErrors, id, () => remakeHostCopy()),
             openLog: (id) => {
@@ -3151,7 +3153,8 @@ async function boot(): Promise<void> {
     async function questionAction(action: FeatureAction): Promise<void> {
         const client = agentEngineLink?.client;
         if (!client) throw new Error('Genie’s host is not connected');
-        const reply = await client.call('engine.featureQuestion', [action]);
+        // The question window's answer the same as any client's: the id, the answer, the notes (Tynn #861).
+        const reply = await client.call('engine.featureQuestion', [deckActionForWire(action)]);
         if (!reply.ok) throw new Error(reply.reason);
     }
 

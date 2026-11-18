@@ -9,6 +9,7 @@ import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, TYPING_EVENT, parseMessage,
 import { NO_FILES, type AgentDetail, type CloneOffersReply, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
 import { isFeaturesRevision } from '../core/remote-frame.js';
+import { deckActionForWire } from '../core/deck-answer-wire.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
 import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
@@ -564,7 +565,14 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                     console.warn(`[genie] the feature snapshot could not be read: ${error instanceof Error ? error.message : String(error)}`);
                 });
             }),
-            act: (action) => read<FeatureData>('features.act', action),
+            // An answer carries its item's id, the answer and the note, nothing else of the item (Tynn #861). The host's reply
+            // to another device is never more than a frame can take: a phone, which holds no feature state, is told only
+            // that it was done; a window driving this machine reads the snapshot again when it did not fit (remote-host.ts).
+            act: async (action) => {
+                const result = await read<unknown>('features.act', deckActionForWire(action));
+                if (!isFeaturesRevision(result)) return result as FeatureData;
+                return phone ? (result as unknown as FeatureData) : read<FeatureData>('features.snapshot');
+            },
             // Nothing to place on a screen that is not the host's.
             setBrowserBounds: async () => {},
             // A remote window cannot reach the host's files to attach; it answers nothing picked.
@@ -784,8 +792,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             soundData: (key: string) => decodeJson<string | null>(() => read('features.soundData', key)),
             // P4 (Tynn #560): an action and its result. The limiter holds only a result that came as a blob: an action can take long.
             act: async (action: FeatureAction) => {
-                if (tooLargeForFrame([action])) throw new Error('this is too large to send to Genie in one piece');
-                const result = await read<unknown>('features.act', action);
+                const wire = deckActionForWire(action);
+                if (tooLargeForFrame([wire])) throw new Error('this is too large to send to Genie in one piece');
+                const result = await read<unknown>('features.act', wire);
                 if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as FeatureData;
                 return decodeJson<FeatureData>(async () => result);
             },

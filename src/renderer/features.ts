@@ -9,6 +9,7 @@ import type { ServiceInstance } from '../core/services.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairFinding } from '../core/toolchain-repair.js';
 import type { DeckItem } from '../core/deck.js';
+import type { DeckItemRef } from '../core/deck-answer-wire.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
@@ -587,12 +588,13 @@ export type FeatureAction =
     | { kind: 'toolchain.machinePath'; apply: boolean; consent?: boolean }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent. */
-    | { kind: 'deck.answer'; item: DeckItem; optionId: string; note?: string }
+    /** `item`: the id it answers (core/deck-answer-wire.ts, Tynn #861); the host answers from its own record, never this copy. */
+    | { kind: 'deck.answer'; item: DeckItemRef; optionId: string; note?: string }
     /**
      * A multi-part question answered IN PLACE (§4.5): one array of labels per question and one note per question (a note
      * alone answers its question). `note` is the overall note — '' from the form, which no longer shows one.
      */
-    | { kind: 'deck.answerForm'; item: DeckItem; selections: string[][]; notes: string[]; note: string }
+    | { kind: 'deck.answerForm'; item: DeckItemRef; selections: string[][]; notes: string[]; note: string }
     /**
      * Dismiss an agent's question WITHOUT an answer (Deck or question window): it leaves both, and the agent is told —
      * with the person's notes, one per question as the form holds them ('' where none; absent = no notes).

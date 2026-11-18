@@ -1767,6 +1767,7 @@ async function main(): Promise<void> {
         signedIn: (provider) => providerHealth.signedIn(provider),
         attention: own.attention,
         approvals,
+        deckItems: featureDeckItems,
         inbox: own.inbox,
         deliverToAgent: (agentId, text) => host.deliver(agentId as AgentId, text, 'you'),
         files: {
