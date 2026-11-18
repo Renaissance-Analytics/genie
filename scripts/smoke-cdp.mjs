@@ -400,7 +400,8 @@ if (typeof agentRow === 'string') {
             chipTitle: bar?.querySelector('[data-provider-chip]')?.getAttribute('title') ?? null,
             logo: bar?.querySelector('[data-provider-chip] [data-provider-logo] svg') ? (bar.querySelector('[data-provider-chip] [data-provider-logo]')?.getAttribute('aria-label') ?? '') : null,
             pill: bar?.querySelector('[data-pill]')?.getAttribute('data-pill') ?? null,
-            chords: (bar?.querySelector('[data-action="take-over"]')?.getAttribute('title') ?? '').includes('⌘⇧T') && (bar?.querySelector('[data-action="chat"]')?.getAttribute('title') ?? '').includes('⌘J'),
+            // Chat is not drawn while this agent's chat is the docked one (it would open what is open); otherwise it carries ⌘J.
+            chords: (bar?.querySelector('[data-action="take-over"]')?.getAttribute('title') ?? '').includes('⌘⇧T') && (bar?.querySelector('[data-action="chat"]') ? (bar.querySelector('[data-action="chat"]').getAttribute('title') ?? '').includes('⌘J') : document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') === surface?.getAttribute('data-agent')),
             height: bar ? Math.round(bar.getBoundingClientRect().height) : null,
             columns: document.querySelectorAll('[data-right-column]').length,
         };

@@ -997,6 +997,8 @@ export function Shell({
                                 onNavigate={onNavigate}
                                 onSelect={onSelectRow}
                                 chatSubject={parsed.chat}
+                                // The chat holds the side for good: when it is this agent's, the bar's Chat would open what is open.
+                                chatInView={chatThread?.agentId === agentDetail.agent.id}
                                 onLanes={(next) => {
                                     const value = formatLanes(next);
                                     const base = `genie://agent/${agentDetail.agent.id}?tab=${parsed.tab}`;

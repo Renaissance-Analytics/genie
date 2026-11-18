@@ -34,15 +34,15 @@ describe('the agent\'s bar', () => {
     /*
      * WHAT GIVES WAY (measured in a real window by scripts/one-bar-proof.mjs: at 1600px with the chat pinned the right end
      * squeezed the agent's own tab out of view; at 1024px it spilled 56px): in a bar under 64rem the pulse hides and a running
-     * pill shows its dot and clock (the words its tooltip); the tabs scroll and keep at least 8rem; in a column too narrow
+     * pill shows its dot and clock (the words its tooltip); the tabs scroll and keep at least 6rem; in a column too narrow
      * for both (1024px with the chat pinned leaves the page ~296px) the right end moves to a line of its own and wraps
      * there, rather than spill.
      */
-    it('the tabs scroll and keep 8rem; the right end may shrink, and wraps on a line of its own rather than spill', () => {
+    it('the tabs scroll and keep 6rem; the right end may shrink, and wraps on a line of its own rather than spill', () => {
         const bar = classOf(/data-top-bar=""/);
         for (const c of ['flex-wrap', 'min-h-8', '@container']) expect(bar).toContain(c);
         const tabs = classOf(/data-bar-tabs=""/);
-        for (const c of ['min-w-[8rem]', 'flex-1', 'overflow-x-auto', 'h-[31px]']) expect(tabs).toContain(c);
+        for (const c of ['min-w-[6rem]', 'flex-1', 'overflow-x-auto', 'h-[31px]']) expect(tabs).toContain(c);
         const end = classOf(/data-bar-trailing=""/);
         for (const c of ['shrink', 'min-w-0', 'max-w-full', 'flex-wrap']) expect(end).toContain(c);
     });

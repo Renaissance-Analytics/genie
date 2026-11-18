@@ -729,7 +729,7 @@ function AgentViewBody({
                                             data-tab={t}
                                             aria-label={TAB_LABEL[t]}
                                             title={TAB_LABEL[t]}
-                                            className={`flex h-6 items-center justify-center rounded px-1.5 shadow-none ${
+                                            className={`flex h-6 items-center justify-center rounded px-1 shadow-none ${
                                                 t === active ? 'bg-[var(--bg-0)] text-[var(--fg-1)] dark:bg-[var(--bg-0)] dark:text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)]'
                                             }`}
                                         >
@@ -749,7 +749,7 @@ function AgentViewBody({
                             ) : null}
                             {/* STOP THIS TURN: the TURN ends, the agent keeps running ("Stop agent" is in More). Its slot is kept while
                                 nothing runs, so the icons beside it do not move as turns start and end. */}
-                            {onCancelTurn ? (actions.stop ? <TurnStop iconOnly onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : <span aria-hidden="true" data-stop-slot="" className="size-7 shrink-0" />) : null}
+                            {onCancelTurn ? (actions.stop ? <TurnStop iconOnly onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : <span aria-hidden="true" data-stop-slot="" className="size-6 shrink-0" />) : null}
                     {/* SIGNED OUT (the owner, 2026-10-18): the provider's own login, in a window of its own, with what to do. */}
                     {actions.login && onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"

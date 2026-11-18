@@ -77,6 +77,6 @@ describe('the Files button (the board: `folder-tree` · Files · ⌘B)', () => {
         // and that the JSX asks for it); here its name, the chord on hover, and the bar's icon chrome.
         expect(button).toContain('aria-label="Files"');
         expect(button).toContain('title="Files (⌘B)"');
-        expect(button).toContain('flex size-7 shrink-0 items-center justify-center');
+        expect(button).toContain('flex size-6 shrink-0 items-center justify-center');
     });
 });
