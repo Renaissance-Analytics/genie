@@ -4,7 +4,7 @@ import type { LiveFlow } from '../src/core/flow-pills.js';
 import { TitleBar } from '../src/renderer/components/TitleBar.js';
 
 /**
- * THE OWNER, beta.65 (screenshot: a "LiftPoint parity refresh" pill LEFT of `genie://AlphaR/flows`): "this is awesome but
+ * THE OWNER, beta.65 (screenshot: a running-flow pill LEFT of `genie://AlphaR/flows`): "this is awesome but
  * on the wrong side. these should be on the right side of the view address. Also lets get rid of the search box and just
  * have a small icon button left of the Gapps menu."
  *
