@@ -157,6 +157,7 @@ import { playwrightServerPort } from './playwright-server.js';
 import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { AccountIdentityReader } from './account-identity.js';
+import { headroomArrival, IdentityWatch, identityReadHooks } from './identity-watch.js';
 import { AccountSwitchFlow, type AccountSwitchStart } from './account-switch-host.js';
 import { accountSwitchSignal } from '../core/account-switch.js';
 import { afterSignedIn, LoginHost, statusCommandFor } from './login-host.js';
@@ -1091,14 +1092,15 @@ async function main(): Promise<void> {
     const readingAttribution = new ReadingAttribution();
     let offerReadingNow: ((provider: string, room: Headroom, stamp: ReadingStamp) => void) | null = null;
     let accountsChangedNow: (() => void) | null = null;
-    const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say, {
-        readStart: (provider) => { readingAttribution.readStart(provider, accounts.activeFor(provider).id); },
-        readEnd: (provider) => {
-            const ended = readingAttribution.readEnd(provider, accounts.activeFor(provider).id);
-            if (ended.held) offerReadingNow?.(provider, ended.held.room, ended.held.stamp);
-            if (ended.changed) accountsChangedNow?.();
-        },
-    });
+    // A SIGN-IN DONE OUTSIDE GENIE (Tynn #854, identity-watch.ts): who is signed in is asked again, the provider's own way.
+    const identityWatch = new IdentityWatch({ refresh: (provider) => accountIdentity.refreshProvider(provider), now: () => Date.now() });
+    const accountIdentity = new AccountIdentityReader(accounts, () => realProviderHealthPorts(execFileRunner), say, identityReadHooks({
+        attribution: readingAttribution,
+        activeId: (provider) => accounts.activeFor(provider).id,
+        offer: (provider, room, stamp) => { if (stamp) offerReadingNow?.(provider, room, stamp); },
+        changed: () => { accountsChangedNow?.(); },
+        read: (provider) => { identityWatch.read(provider); },
+    }));
     void accountIdentity.refreshAll();
     const providerHealth = new ProviderHealthBook(async provider => {
         if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
@@ -1365,11 +1367,8 @@ async function main(): Promise<void> {
             },
         },
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
-        onHeadroom: (provider, room, stamp) => {
-            if (!stamp) { offerReading(provider, room, stamp); return; }
-            const shown = readingAttribution.stamp(provider, room, stamp);
-            if (shown) offerReading(provider, room, shown);
-        },
+        // A reading is stamped with whose it is; one after a while with no read of who is signed in asks again first (#854).
+        onHeadroom: headroomArrival({ watch: identityWatch, attribution: readingAttribution, offer: offerReading }),
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);
