@@ -1,4 +1,5 @@
 import { renameOver } from '../core/atomic-rename.js';
+import { chosenVisualLine } from '../core/question-visuals.js';
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -146,6 +147,9 @@ export interface UpdateInput extends QuestionOwner {
     readonly questions: readonly Question[];
     readonly priority?: 'low' | 'normal' | 'high' | 'urgent';
 }
+
+/** Writes a decided question onto the ArtBoard posts it showed (Tynn #835; main/question-visuals.ts recordQuestionOnBoard). */
+export type VisualBoardHook = (workspaceId: string, record: { questionId: string; outcome: 'answered' | 'dismissed'; questions: readonly Question[]; selections: readonly (readonly string[])[] }, at: string) => Promise<void>;
 
 /** How a question left (genie#1204): what a waiting flow branches on. */
 export type QuestionLeft = { readonly kind: 'answered'; readonly answer: Answer } | { readonly kind: 'dismissed'; readonly notes: readonly string[] } | { readonly kind: 'withdrawn' };
@@ -507,7 +511,9 @@ export class AttentionStore {
             const chosen = answer.selections[i] ?? [];
             const own = (answer.notes?.[i] ?? '').trim();
             const picked = chosen.length > 0 ? chosen.join(', ') : own ? '(no option chosen)' : '(no option chosen, no note)';
-            return `- **${question.header}** — ${question.question}\n  → ${picked}${own ? `\n  Note: ${own}` : ''}`;
+            // A chosen option that IS a visual (Tynn #835): which ArtBoard post, at which version, so the agent knows what was picked.
+            const visuals = question.options.filter((o) => o.visual && chosen.includes(o.label)).map((o) => `\n  ${chosenVisualLine(o.visual!)}`).join('');
+            return `- **${question.header}** — ${question.question}\n  → ${picked}${visuals}${own ? `\n  Note: ${own}` : ''}`;
         });
         const overall = answer.note.trim();
         const text = [
@@ -515,6 +521,7 @@ export class AttentionStore {
             ...lines,
             ...(overall ? [`\nNote: ${overall}`] : []),
         ].join('\n');
+        await this.#recordVisuals(q, 'answered', answer.selections);
         await this.#inbox.send({ from: HUMAN, to: q.agentId, text });
     }
 
@@ -533,6 +540,7 @@ export class AttentionStore {
         this.#keep(q, 'dismissed', [], notes, '');
         this.#left(questionId, { kind: 'dismissed', notes });
         await this.#flush();
+        await this.#recordVisuals(q, 'dismissed', []);
         await this.#mailDismissed(q, notes);
     }
 
@@ -547,6 +555,7 @@ export class AttentionStore {
         for (const q of gone) this.#keep(q, 'dismissed', [], [], '');
         for (const q of gone) this.#left(q.id, { kind: 'dismissed', notes: [] });
         await this.#flush();
+        for (const q of gone) await this.#recordVisuals(q, 'dismissed', []);
         for (const q of gone) await this.#mailDismissed(q);
         return gone.length;
     }
@@ -563,6 +572,7 @@ export class AttentionStore {
         for (const q of old) this.#keep(q, 'dismissed', [], [], '');
         for (const q of old) this.#left(q.id, { kind: 'dismissed', notes: [] });
         await this.#flush();
+        for (const q of old) await this.#recordVisuals(q, 'dismissed', []);
         for (const q of old) await this.#mailDismissed(q);
         return old.length;
     }
@@ -751,6 +761,27 @@ export class AttentionStore {
         if (historyChanged && !this.#archiveFailed) await writeJsonAtomic(this.#historyFile, { finished: d.finished, asked: d.asked ?? [] });
         if (mainChanged) await writeJsonAtomic(this.#file, { lists: d.lists, questions: d.questions });
         this.#written = { lists: d.lists, questions: d.questions, finished: d.finished, asked: d.asked };
+    }
+
+    /**
+     * THE ARTBOARD PAPER TRAIL (Tynn #835): a question that showed visuals writes its decision onto each of their posts.
+     * The store knows the question's workspace, not where it is on disk, so the writer is handed in (mcp-tools.ts sets it,
+     * and setting it again replaces it). Absent: nothing is written, and the answer is unaffected.
+     */
+    #visualBoard: VisualBoardHook | null = null;
+
+    useVisualBoard(hook: VisualBoardHook | null): void {
+        this.#visualBoard = hook;
+    }
+
+    async #recordVisuals(q: PendingQuestion, outcome: 'answered' | 'dismissed', selections: readonly (readonly string[])[]): Promise<void> {
+        const hook = this.#visualBoard;
+        if (!hook || !q.questions.some((x) => (x.visuals?.length ?? 0) > 0 || x.options.some((o) => o.visual))) return;
+        // The trail is a record beside the decision, never a condition of it: a board that cannot be written costs the
+        // record, not the answer.
+        try { await hook(q.workspaceId, { questionId: q.id, outcome, questions: q.questions, selections }, this.#now()); } catch (error) {
+            console.warn(`[genie] question ${q.id}: its decision could not be written on the ArtBoard: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     readonly #changeListeners = new Set<() => void>();

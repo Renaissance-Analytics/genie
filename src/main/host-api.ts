@@ -35,6 +35,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
+import { isPromptAction } from '../core/prompt-delivery.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -115,7 +116,7 @@ export interface HostApiDeps {
         prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean | Promise<boolean>;
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
-        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: import('../core/prompt-delivery.js').PromptAction): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;
@@ -452,7 +453,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'resolvePrompt': {
                 const r = agent(args[0]);
                 const action = args[2];
-                if (!r || typeof args[1] !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
+                // Withdraw / Edit a queued message (Tynn #843) cross from a Pilot window exactly as Send / Discard do.
+                if (!r || typeof args[1] !== 'string' || !isPromptAction(action)) return { ok: false, reason: 'Invalid draft action.' };
                 return deps.host.resolvePrompt?.(r.id, args[1], action) ?? { ok: false, reason: 'This host does not support queued drafts.' };
             }
             case 'answerApproval': {

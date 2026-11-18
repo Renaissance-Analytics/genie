@@ -202,3 +202,73 @@ describe('hovering a Comms cell', () => {
         expect(overlay()).toBeNull();
     });
 });
+
+/**
+ * THE SHADOW, DRAWN (owner 2026-11-17: "the shadows are busted ... they don't come together like they should at the contact
+ * points"). The geometry is proven in flight-arcs.test.ts; this proves the board draws THAT path: from the pointer to the
+ * partner's name, no blur filter, no transform that moves it off the contact points, and never wider than the arc.
+ */
+describe('the shadow under each arc', () => {
+    it('is a thin path from the pointer to the partner name, unblurred and unshifted, never wider than its arc', () => {
+        over(cell('kai'), 700, 120);
+        const arcs = [...host.querySelectorAll<SVGGElement>('[data-flight-arc]')];
+        expect(arcs).toHaveLength(2);
+        for (const arc of arcs) {
+            const shadow = arc.querySelector<SVGPathElement>('path[data-arc-shadow]');
+            const main = arc.querySelector<SVGPathElement>('path[data-arc-main]')!;
+            expect(shadow).not.toBeNull();
+            expect(shadow!.getAttribute('filter')).toBeNull();
+            expect(shadow!.getAttribute('transform')).toBeNull();
+            const d = shadow!.getAttribute('d')!;
+            expect(d.startsWith('M600,70 C')).toBe(true);
+            expect(d.split(' ').pop()).toBe(main.getAttribute('d')!.split(' ').pop());
+            expect(d).not.toBe(main.getAttribute('d'));
+            expect(Number(shadow!.getAttribute('stroke-width'))).toBeLessThanOrEqual(Number(main.getAttribute('stroke-width')));
+            expect(Number(shadow!.getAttribute('stroke-opacity'))).toBeLessThanOrEqual(0.3);
+        }
+        // Nothing in the overlay is blurred per frame any more except the dots' small glow.
+        expect(host.querySelectorAll('[data-flight-paths] [filter]').length).toBe(host.querySelectorAll('[data-flight-paths] g[filter]').length);
+        expect(host.querySelector('[data-flight-paths] path[style*="drop-shadow"]')).toBeNull();
+    });
+});
+
+/**
+ * THE SENDER'S COLOUR, DRAWN (owner 2026-11-17: "the coms lines should be colored based on the sending workspace"). kai and
+ * wren work in Tynn (orange), moth in Moic Suite (green): kai's last message to wren is drawn orange, moth's last message to
+ * kai green — the stroke, the dots and the label, each theme through its own variable.
+ */
+describe('arcs in the sending workspace colour', () => {
+    const TYNN = '#ea580c';
+    const MOIC = '#4d7c0f';
+    beforeEach(async () => {
+        const rows = rowsData.map((r) => (r.id === 'moth' ? { ...r, workspaceId: 'moic' } : r)) as AgentRow[];
+        await act(async () => {
+            root.render(<Dashboard rows={rows} workspaces={[{ id: 'tynn', path: '/w/tynn', color: TYNN }, { id: 'moic', path: '/w/moic', color: MOIC }]} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} />);
+        });
+        layOut();
+    });
+
+    it("each arc carries its sender's workspace colour, two workspaces two colours, and stroke, dots and label all read it", () => {
+        over(cell('kai'), 700, 120);
+        const arcs = [...host.querySelectorAll<SVGGElement>('[data-flight-arc]')];
+        const wren = arcs.find((a) => a.dataset.peer === 'wren')!;
+        const moth = arcs.find((a) => a.dataset.peer === 'moth')!;
+        expect(wren.dataset.arcColor).toBe(TYNN);
+        expect(moth.dataset.arcColor).toBe(MOIC);
+        for (const arc of [wren, moth]) {
+            const style = arc.getAttribute('style') ?? '';
+            expect(style).toMatch(/--arc-light:\s*#[0-9a-f]{6}/);
+            expect(style).toMatch(/--arc-dark:\s*#[0-9a-f]{6}/);
+            expect(style).toMatch(/--arc-text-dark:\s*#[0-9a-f]{6}/);
+            for (const dot of arc.querySelectorAll<SVGCircleElement>('[data-arc-dot]')) expect(dot.getAttribute('style')).toContain('var(--arc)');
+            const label = arc.querySelector<SVGTextElement>('[data-arc-label]');
+            if (label) expect(label.getAttribute('style')).toContain('var(--arc-text)');
+        }
+        expect(wren.getAttribute('style')).not.toBe(moth.getAttribute('style'));
+        // The stroke's gradient is painted in the arc's own colour, not the old violet/amber.
+        const svg = overlay()!;
+        const gradientOf = (arc: SVGGElement) => svg.querySelector(`#${CSS.escape(arc.querySelector('path[data-arc-main]')!.getAttribute('stroke')!.slice(5, -1))}`)!;
+        expect(gradientOf(wren).innerHTML).toContain('var(--arc');
+        expect(gradientOf(wren).innerHTML).not.toContain('--warning');
+    });
+});

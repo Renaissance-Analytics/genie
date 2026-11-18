@@ -55,6 +55,8 @@ export interface FlowPorts {
     moveFile?(workspaceId: string, from: string, toFolder: string): Promise<{ from: string; to: string | null }>;
     /** fancy-flow's Wait, for a duration (genie#1204): injected so a test need not wait in real time; a timer otherwise. */
     sleep?(ms: number): Promise<void>;
+    /** Stop this flow's running command (Tynn #833's Stop): its supervised process is killed. Absent = nothing to stop. */
+    stopCommand?(): void;
     /** The run's clock (the runner's `now`): a Wait with no `sleep` is over only when THIS clock says so (genie#1260). */
     now?(): number;
     /** A `@genie/<tool>` step (genie#1204, main/flow-tools.ts): the tool's own handler, called as the flow. */

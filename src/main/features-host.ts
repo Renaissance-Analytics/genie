@@ -85,6 +85,8 @@ export interface HostFeaturesPorts {
     readonly mailRefusal: (address: string) => string | null;
     readonly workspaceIds: () => readonly string[];
     readonly runFlow: (id: string) => Promise<unknown>;
+    /** The person's Stop on a flow's run (Tynn #833). Absent = this host cannot stop runs. */
+    readonly stopFlow?: (id: string) => Promise<{ ok: boolean; reason?: string }>;
     /** Resume now for the provider limit holding this agent's login (Tynn #749). */
     readonly resumeAgentLimit?: (agentId: string) => void;
     readonly refreshPlugins: () => Promise<void>;
@@ -142,7 +144,7 @@ export class HostFeatures {
             settings: ports.settings, knowledge: ports.knowledge, flows: ports.flows, inbox: ports.inbox, attention: ports.attention,
             agentAddresses: () => ports.roster().map(record => ({ address: agentAddress(record, ports.workspaceSlugs?.() ?? new Map()), agentId: record.id, name: record.name })),
             resolveAddress: address => ports.resolveAddress(address), mailRefusal: address => ports.mailRefusal(address),
-            workspaceIds: () => ports.workspaceIds(), flowScheduler: { runNow: id => ports.runFlow(id) },
+            workspaceIds: () => ports.workspaceIds(), flowScheduler: { runNow: id => ports.runFlow(id), ...(ports.stopFlow ? { stopRun: (id: string) => ports.stopFlow!(id) } : {}) },
             ...(ports.resumeAgentLimit ? { resumeAgentLimit: (id: string) => ports.resumeAgentLimit!(id) } : {}),
             pluginsRefresh: () => ports.refreshPlugins(),
         };

@@ -153,6 +153,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             approve: (caller, action, detail, call) => s.approvals.gate(caller, action, detail, call),
             roster: ports.records,
             workspaceSlugs: () => ports.registry.workspaceSlugs(),
+            workspacePath: (id) => workspace(id)?.path ?? null,
             refusalForRecipient: (text) => ports.registry.mailRefusal?.(text) ?? null,
             liveness: (id) => livenessOf(ports.probe(id as AgentId), ports.lastRowAt(id as AgentId)),
             resolveCaller,

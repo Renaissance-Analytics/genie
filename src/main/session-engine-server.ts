@@ -54,6 +54,7 @@ import { dispatchGapps, GAppSessionOwner } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
 import { fromWireAttachment } from './engine-wire.js';
 import type { Attachment } from '../core/prompt-content.js';
+import { isPromptAction } from '../core/prompt-delivery.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -763,7 +764,9 @@ export class SessionEngineServer {
             case 'engine.reportPlan':
                 return host.reportPlan(id(), Array.isArray(args[1]) ? (args[1] as { content: string; status: string }[]) : []);
             case 'engine.resolvePrompt':
-                return host.resolvePrompt(id(), str(1), args[2] === 'send' ? 'send' : 'discard');
+                // Each action as asked (Tynn #843): a Withdraw read as a Discard would drop the message from the thread.
+                if (!isPromptAction(args[2])) return { ok: false, reason: 'Invalid draft action.' };
+                return host.resolvePrompt(id(), str(1), args[2]);
             case 'engine.recordOwed':
                 await host.recordOwed(id(), str(1), by(2));
                 return true;

@@ -1254,7 +1254,7 @@ export class SessionEngineClient {
         return this.#value('engine.reportPlan', [agentId, steps], false);
     }
 
-    resolvePrompt(agentId: AgentId, id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }> {
+    resolvePrompt(agentId: AgentId, id: string, action: import('../core/prompt-delivery.js').PromptAction): Promise<{ ok: true } | { ok: false; reason: string }> {
         return this.#value('engine.resolvePrompt', [agentId, id, action], { ok: false, reason: NOT_CONNECTED });
     }
 
