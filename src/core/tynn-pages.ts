@@ -400,7 +400,7 @@ export interface HomeDashboard {
     readonly storyBreakdown: Readonly<Record<string, number>>;
     readonly sparkline: readonly number[];
     readonly charts: { readonly velocity: ChartData; readonly agentActivity: ChartData };
-    /** The current roadmap only (#848): the active version, then the upcoming ones in roadmap order. */
+    /** The current roadmap only (#848): the active version, then any in review, then the upcoming ones in roadmap order. */
     readonly versions: readonly HomeVersionRef[];
     readonly version: HomeVersion | null;
     readonly comparison: ReadonlyArray<Readonly<Record<string, unknown>> & { readonly id: string; readonly status: string }>;
@@ -463,15 +463,16 @@ export interface HomeVersionRef { readonly id: string; readonly number: string |
 /**
  * Tynn #848: the picker's versions are the current roadmap only. tynn.ai's ProjectHome answers `availableVersions` as
  * every active, accepted and released version, `order` descending, with no filter to ask for less (its web dashboard
- * wants the released ones). Genie keeps the active version(s), then the upcoming (`accepted`) ones in roadmap order,
- * which is that order reversed. Anything else (released, done, archived, draft, review, VIP) is never offered.
+ * wants the released ones). Genie keeps the active version(s), then any in review (still in flight; ProjectHome does not
+ * send them yet), then the upcoming (`accepted`) ones in roadmap order, which is that order reversed. Anything else
+ * (released, done, archived, draft, rejected, VIP) is never offered.
  */
 function roadmapVersions(served: unknown): HomeVersionRef[] {
     const all = rows(served).flatMap((v): HomeVersionRef[] => {
         const id = str(v.id);
         return id === null ? [] : [{ id, number: str(v.number), title: decodeEntities(str(v.title) ?? ''), status: str(v.status) ?? '' }];
     });
-    return [...all.filter((v) => v.status === 'active'), ...all.filter((v) => v.status === 'accepted').reverse()];
+    return [...all.filter((v) => v.status === 'active'), ...all.filter((v) => v.status === 'review'), ...all.filter((v) => v.status === 'accepted').reverse()];
 }
 /** The version the picker shows as chosen: the served one when it is on the roadmap, else none (never a different one). */
 export const pickedVersion = (d: HomeDashboard): string | null => (d.version !== null && d.versions.some((x) => x.id === d.version!.id) ? d.version.id : null);
