@@ -22,6 +22,23 @@ import { startRefusal } from './workspace-ops-host.js';
  * The start uses the host's own environment and the workspace variables the last window handed over; with no window
  * since the host began, a woken agent has the host's environment only.
  */
+/** What the host's wake did for one agent (Tynn #860): started it, found it running, or why it would not. */
+export type HostWake = { readonly ok: true; readonly started: boolean } | { readonly ok: false; readonly reason: string; readonly name?: string };
+
+/** The ports the host's one wake needs. */
+export interface HostWakePorts {
+    readonly host: Pick<SessionHost, 'probe' | 'start'>;
+    readonly registry: Pick<HostRegistry, 'mailParticipantVisible' | 'find' | 'workspace' | 'listAgents'>;
+    readonly settings: Pick<SettingsStore, 'snapshotFor'>;
+    readonly osaDir: string;
+    readonly safeMode?: () => boolean;
+}
+
+/** STUB (Tynn #860 RED). */
+export function hostAgentWake(_p: HostWakePorts): (agentId: string) => Promise<HostWake> {
+    return async () => ({ ok: true, started: false });
+}
+
 export function wireHostMailWake(p: {
     readonly inbox: InboxStore;
     readonly host: SessionHost;

@@ -17,6 +17,8 @@ export interface NudgeOnRosterDeps {
     readonly resolve: (address: string) => Resolution;
     /** The host's delivery, now or when the agent's turn ends; false = it has no session to take it. */
     readonly deliver: (id: AgentId, text: string, from: string) => boolean | Promise<boolean>;
+    /** STUB (Tynn #860 RED): the host's one wake. */
+    readonly wake?: (id: AgentId) => Promise<import('./host-mail-wake.js').HostWake>;
 }
 
 export async function nudgeOnRoster(deps: NudgeOnRosterDeps, address: string, text: string, task: string): Promise<NudgeOutcome> {
