@@ -442,19 +442,26 @@ export function FlowRunOverlay({ flow, run, Viewer = RunCanvas as unknown as Any
                             data-flow-node-outcome={r.outcome}
                             aria-current={selected === r.nodeId ? 'true' : undefined}
                             ref={(el) => { if (el) rowRefs.current.set(r.nodeId, el); else rowRefs.current.delete(r.nodeId); }}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => pick(r.nodeId)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(r.nodeId); } }}
-                            className={`cursor-pointer border-b border-[var(--border-1)] px-3 py-1.5 outline-none hover:bg-[var(--bg-2)] focus-visible:bg-[var(--bg-2)] ${selected === r.nodeId ? 'bg-[var(--bg-2)] shadow-[inset_3px_0_0_var(--primary)]' : ''}`}
+                            className={`border-b border-[var(--border-1)] px-3 py-1.5 ${selected === r.nodeId ? 'bg-[var(--bg-2)] shadow-[inset_3px_0_0_var(--primary)]' : ''}`}
                         >
-                            <div className="flex items-center gap-2">
+                            {/* The step's line is a real button (react-fancy): it picks the step, and its node on the canvas. */}
+                            <Button
+                                variant="ghost"
+                                size="xs"
+                                labelClassName="contents"
+                                type="button"
+                                data-step-pick={r.nodeId}
+                                aria-pressed={selected === r.nodeId}
+                                title={`Show “${nodeName(graph, r.nodeId)}” on the canvas`}
+                                onClick={() => pick(r.nodeId)}
+                                className="flex w-full items-center justify-start gap-2 rounded px-0 py-0 text-left hover:bg-[var(--bg-2)]"
+                            >
                                 <Icon name={kindIcon(kindOf(r.nodeId))} size="xs" className="shrink-0 text-[var(--fg-3)]" />
-                                <span className="min-w-0 flex-1 truncate font-medium" title={nodeName(graph, r.nodeId)}>{nodeName(graph, r.nodeId)}</span>
+                                <span className="min-w-0 flex-1 truncate font-medium">{nodeName(graph, r.nodeId)}</span>
                                 <Badge size="sm" variant="soft" color={OUTCOME_COLOR[r.outcome] ?? 'zinc'} title={OUTCOME_WORDS[r.outcome] ?? r.outcome}><span data-step-outcome="">{r.outcome}</span></Badge>
                                 <span data-step-start={r.startedAt ?? ''} className="w-16 shrink-0 text-right font-mono text-[var(--fg-3)]">{r.startedAt !== null ? clock(r.startedAt) : '—'}</span>
                                 <span data-step-duration="" className="w-20 shrink-0 text-right font-mono text-[var(--fg-2)]">{formatDuration(r.durationMs)}</span>
-                            </div>
+                            </Button>
                             <StepDetail row={r} kind={kindOf(r.nodeId)} config={configOf(r.nodeId)} reason={r.outcome === 'failed' || r.outcome === 'held' ? run.reason : undefined} />
                         </li>
                     ))}
@@ -490,7 +497,7 @@ function StepDetail({ row, kind, config, reason }: { row: RunRow; kind: string; 
         if (output !== undefined && output !== '') {
             parts.push(<pre key="tail" data-step-output="tail" className={block}>{lastLines(output, TAIL_LINES)}</pre>);
             parts.push(
-                <details key="full" data-step-full-log="" className="mt-1" onClick={(e) => e.stopPropagation()}>
+                <details key="full" data-step-full-log="" className="mt-1">
                     <summary className={`cursor-pointer ${muted}`}>Whole output of this run ({output.replace(/\n$/, '').split('\n').length} lines{c?.outputCut ? `; the first ${c.outputCut} characters were not kept` : ''})</summary>
                     <pre data-step-output="full" className={`${block} max-h-96`}>{output}</pre>
                 </details>,

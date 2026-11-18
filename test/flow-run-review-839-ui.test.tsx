@@ -171,7 +171,10 @@ describe('picking a step', () => {
         const seen: Array<Record<string, unknown>> = [];
         act(() => root.render(<FlowRunOverlay flow={flow({ runs: [run] })} run={run} Viewer={stub(seen)} />));
         const row = host.querySelector('[data-flow-node="r"]')!;
-        act(() => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+        // The row's line is a real button (the renderer's real-buttons guard): clicking it picks the step.
+        const pickR = row.querySelector('button[data-step-pick="r"]')!;
+        expect(pickR).not.toBeNull();
+        act(() => { pickR.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
         expect(seen.at(-1)!.selectedNodeId).toBe('r');
         expect(row.getAttribute('aria-current')).toBe('true');
         act(() => { (seen.at(-1)!.onSelectNode as (n: { id: string }) => void)({ id: 'p' }); });
