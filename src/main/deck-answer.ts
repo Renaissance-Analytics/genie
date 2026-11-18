@@ -30,6 +30,8 @@ export interface DeckAnswerPorts {
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
     /** A rate-limit alert's kept notice (Tynn #748): Dismiss forgets it. */
     readonly limitNotices?: { dismiss(id: string): boolean };
+    /** A Playwright install Genie could not finish (Tynn #846): Retry installs it again, Dismiss puts it away. */
+    readonly playwrightNotices?: { retry(id: string): Promise<boolean>; dismiss(id: string): boolean };
     readonly mainErrors?: { dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
 }
 
@@ -116,6 +118,8 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             ports.deferTrustCertificate();
             ports.deferHosts();
             break;
+        case 'playwright-install':
+            break; // RED: inert stub
         case 'dismiss-limit-alert':
             if (!ports.limitNotices) throw new Error(NEEDS_WINDOW('dismissing a rate-limit alert'));
             if (!ports.limitNotices.dismiss(command.id)) throw new Error(`no rate-limit notice ${command.id}`);

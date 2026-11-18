@@ -1467,6 +1467,12 @@ function formatBytes(bytes: number): string {
 }
 
 /** Genie's one Playwright browser install: version, size, Update (Tynn #604). Every workspace and worktree uses it. */
+/** A version typed into the Playwright section, as the install it asks for (Tynn #846): x.y.z's Chromium, or `null`. */
+export function playwrightInstallChosen(text: string): FeatureAction | null {
+    void text;
+    return null; // RED: inert stub
+}
+
 function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { playwright: NonNullable<NonNullable<FeatureData['toolchain']>['playwright']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const newest = playwright.sets[0]?.version ?? null;
     const outdated = playwright.latest !== null && newest !== playwright.latest;

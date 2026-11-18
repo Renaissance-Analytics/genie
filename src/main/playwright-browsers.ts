@@ -33,7 +33,9 @@ export interface PlaywrightBrowsersPorts {
 export interface PlaywrightBrowsersView {
     readonly browsersPath: string;
     readonly totalBytes: number;
-    readonly sets: ReadonlyArray<{ readonly version: string; readonly browsers: readonly string[] }>;
+    readonly sets: ReadonlyArray<{ readonly version: string; readonly browsers: readonly string[]; /** Its browsers are really in the folder (Tynn #846). */ readonly ready: boolean }>;
+    /** The stable channel: what Genie installs when nothing else is asked for (Tynn #846). */
+    readonly stable: string;
     /** The newest Playwright, when the registry answered. */
     readonly latest: string | null;
     readonly optional: readonly string[];
@@ -80,8 +82,8 @@ async function latestPlaywright(ports: PlaywrightBrowsersPorts): Promise<string 
 export async function listPlaywrightBrowsers(ports: PlaywrightBrowsersPorts): Promise<PlaywrightBrowsersView> {
     const dirs = playwrightDirs(ports.toolchainDir);
     const manifest = readManifest(ports);
-    const sets = Object.keys(manifest).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })).map((version) => ({ version, browsers: manifest[version]! }));
-    return { browsersPath: dirs.browsers, totalBytes: ports.fs.size(dirs.browsers), sets, latest: await latestPlaywright(ports), optional: OPTIONAL_BROWSERS };
+    const sets = Object.keys(manifest).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })).map((version) => ({ version, browsers: manifest[version]!, ready: false /* RED: inert stub */ }));
+    return { browsersPath: dirs.browsers, totalBytes: ports.fs.size(dirs.browsers), sets, stable: '' /* RED: inert stub */, latest: await latestPlaywright(ports), optional: OPTIONAL_BROWSERS };
 }
 
 /** The versions Genie has browsers for. */

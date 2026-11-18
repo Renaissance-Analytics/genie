@@ -39,6 +39,8 @@ export type DeckCommand =
     | { kind: 'dismiss-main-error'; id: string }
     /** A rate-limit alert's kept notice (core/limit-alerts.ts): the person has read it. */
     | { kind: 'dismiss-limit-alert'; id: string }
+    /** A Playwright install Genie could not finish (main/playwright-auto.ts, Tynn #846): Retry installs it again, Dismiss puts it away. */
+    | { kind: 'playwright-install'; id: string; retry: boolean }
     /** Open an editable issue draft for an internal error; the diagnostic log stays local (#636). */
     | { kind: 'report-main-error'; id: string }
     /** Try again on the item for a host copy that could not be made (Tynn #693): the copy is made now. */

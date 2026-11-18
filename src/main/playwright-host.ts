@@ -23,6 +23,8 @@ export interface PlaywrightHostDeps {
     readonly fs: Pick<PhpVersionsFs, 'exists' | 'readText' | 'list' | 'mkdirp'>;
     readonly link: WorktreeLinkPorts['link'];
     readonly platform: WorktreeLinkPorts['platform'];
+    /** Genie's installer (main/playwright-auto.ts, Tynn #846): a version a project pins and Genie lacks is installed now. Absent = nothing is installed from here. */
+    readonly installer?: { ensure(version: string): Promise<unknown>; installing(): readonly string[] } | undefined;
 }
 
 export class PlaywrightHost {

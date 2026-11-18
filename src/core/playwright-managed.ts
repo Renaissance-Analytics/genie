@@ -158,3 +158,70 @@ export function worktreeLinkDecision(input: { mainLock: string | null; worktreeL
     if (input.mainLock !== input.worktreeLock) return { link: false, reason: 'the lockfiles differ: the worktree wants other packages than the main checkout has installed' };
     return { link: true };
 }
+
+// ---------------------------------------------------------------- Genie installs what agents need (Tynn #846)
+// The owner, 2026-11-17: "agents need to use what is installed. genie should have been able to install it. I had to click
+// the install button." Genie installs its browsers itself: the STABLE version at launch when it has none, each version a
+// project's lockfile pins, and a version an agent asks for. Only what is unusually large waits for the person.
+
+/**
+ * THE STABLE CHANNEL: the Playwright version Genie installs when nothing else is asked for. Pinned here and raised on
+ * purpose in a release, never read from the registry's newest, so the default does not move under projects.
+ */
+export const PLAYWRIGHT_STABLE = '1.65.1';
+/** The Playwright version a workspace's agents should use: the project's own when Genie has it, else the stable one. */
+export const PLAYWRIGHT_VERSION_ENV = 'GENIE_PLAYWRIGHT_VERSION';
+/** Every version Genie has browsers for, comma-separated. */
+export const PLAYWRIGHT_VERSIONS_ENV = 'GENIE_PLAYWRIGHT_VERSIONS';
+/** `0` (or off/false/no) stops Genie installing browsers by itself: an offline machine, a test machine. Anything else, or unset, is on. */
+export const PLAYWRIGHT_AUTO_INSTALL_ENV = 'GENIE_PLAYWRIGHT_AUTO_INSTALL';
+/** The browsers Genie installs without asking anyone. */
+export const MANAGED_BROWSERS: readonly string[] = ['chromium'];
+/** The browsers Genie also installs, when someone asks for them. */
+export const OPTIONAL_MANAGED_BROWSERS: readonly string[] = ['firefox', 'webkit'];
+/** Past this many sets, one more is unusually large (each is a few hundred MB) and the person is asked first. */
+export const MAX_AUTO_SETS = 6;
+/** A failed install's Deck item: `genie:playwright-install:<version>`. */
+export const PLAYWRIGHT_NOTICE_DECK_PREFIX = 'genie:playwright-install:';
+
+/** `sets.json`: the browsers each version has, and the revision folders Playwright put them in (`--dry-run` says which). */
+export interface BrowserManifest {
+    readonly sets: Readonly<Record<string, readonly string[]>>;
+    readonly folders?: Readonly<Record<string, readonly string[]>> | undefined;
+}
+
+export function autoInstallEnabled(value: string | undefined): boolean {
+    void value;
+    return false; // RED: inert stub
+}
+
+/** The revision folders `playwright install --dry-run` names (`Install location: …/chromium-1194`), by their own names. */
+export function parseInstallLocations(text: string): string[] {
+    void text;
+    return []; // RED: inert stub
+}
+
+/** The recorded versions whose browsers are really in the folder: every recorded revision folder there (or, for a set recorded before folders were, a folder of its browser). */
+export function readyVersions(manifest: BrowserManifest, entries: readonly string[]): string[] {
+    void manifest;
+    void entries;
+    return []; // RED: inert stub
+}
+
+/** What Genie installs at launch: the stable version when it has no set at all, and nothing when it is switched off. */
+export function launchInstall(input: { readonly enabled: boolean; readonly ready: readonly string[] }): string | null {
+    void input;
+    return null; // RED: inert stub
+}
+
+export type InstallAsk =
+    | { readonly kind: 'ready' }
+    | { readonly kind: 'install' }
+    | { readonly kind: 'ask'; readonly reason: string }
+    | { readonly kind: 'refused'; readonly reason: string };
+
+/** A project's or an agent's ask for a version's browsers: there already, installed now, asked of the person first (unusually large), or refused. */
+export function decideInstallAsk(input: { readonly version: string; readonly browsers: readonly string[]; readonly ready: readonly string[]; readonly held: readonly string[] }): InstallAsk {
+    void input;
+    return { kind: 'refused', reason: 'RED: inert stub' };
+}
