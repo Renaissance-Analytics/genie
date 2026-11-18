@@ -507,9 +507,18 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                     data-mobile-panel="chat"
                     data-mobile-scroll
                     onScroll={(e) => { const el = e.currentTarget; following.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight); }}
-                    className={`${SCROLL} relative flex flex-col`}
+                    // A BLOCK scroller, as the desktop chat's (Tynn #862; the owner, 2026-11-18: "the chat can't be scrolled
+                    // on mobile"). It was a flex column: its one child, the log, shrank to the scroller's height (its
+                    // `min-h-full` floor) and `justify-end` pushed whatever did not fit out through the TOP, where no scroll
+                    // reaches — scrollHeight equalled clientHeight. In a block, `min-h-full` is a floor the log grows past,
+                    // downward, into the scroll; a short chat still sits at the bottom.
+                    className={`${SCROLL} relative`}
                 >
-                    {messages.length === 0 ? (
+                    {!thread?.loaded ? (
+                        // Its history is still on its way (Tynn #659 `rowsPending`): loading, never "Nothing yet.", which
+                        // says the agent has no conversation.
+                        <p data-mobile-chat-loading="" aria-busy className="py-4 text-center text-[13px] text-[var(--fg-3)]">Loading the chat…</p>
+                    ) : messages.length === 0 ? (
                         <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
                     ) : (
                         <div data-chat-log="" className="flex min-h-full min-w-0 flex-col justify-end gap-3 px-3 py-3 text-[14px] [overflow-wrap:anywhere]">

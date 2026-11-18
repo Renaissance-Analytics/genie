@@ -55,6 +55,20 @@ import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
 
 /**
+ * WHICH AGENTS' DETAILS A LISTENER WANTS (genie#1346, Tynn #662, Tynn #862).
+ *  - `wantsAgent`: whether an agent's detail is wanted now. A change to one nobody wants is not even built — so it is
+ *    LOST for anyone who comes to want it later.
+ *  - `onAgentsWanted`: what makes up for that. The host registers a listener; the side that knows the wants calls it with
+ *    the agents that just became wanted, and the host pushes each one's detail as it is now. A phone opening a chat is
+ *    the case (Tynn #862): its watch's own detail read starts the ledger's read, and the ledger can land before the
+ *    watch is wanted — dropped, and nothing sent it again until the agent next changed (the person's own send).
+ */
+export interface AgentEventOptions {
+    readonly wantsAgent?: (agentId: string) => boolean;
+    readonly onAgentsWanted?: (listener: (agentIds: readonly string[]) => void) => () => void;
+}
+
+/**
  * The most one kept image's reply may be, as JSON, for another device (Tynn #642): 512 KB, so it fits one frame. This
  * machine's window has no such cap (it takes the image as a blob, up to the 5 MB a sent image can be).
  */
@@ -91,8 +105,9 @@ export interface HostApi {
     /**
      * Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`.
      * `wantsAgent`: whether anyone listening wants an agent's detail now — one nobody wants is not built (genie#1346).
+     * `onAgentsWanted`: told when agents BECOME wanted, the host pushes each one's detail as it is now (Tynn #862).
      */
-    onEvent(listener: (channel: string, payload: unknown) => void, options?: { wantsAgent?: (agentId: string) => boolean }): () => void;
+    onEvent(listener: (channel: string, payload: unknown) => void, options?: AgentEventOptions): () => void;
     workspaceOfAgent(agentId: string): string | null;
     /** The workspace a terminal is in — what decides whether a guest receives its output. Absent = a guest receives none. */
     workspaceOfTerminal?(terminalId: string): string | null;
@@ -274,6 +289,8 @@ export class RemoteHost {
      * no one — main at 78–98 % of a core for seconds on the owner's machine with many agents.
      */
     #stopListening: (() => void) | null = null;
+    /** The host API's listeners for agents that became wanted (Tynn #862, `AgentEventOptions.onAgentsWanted`). */
+    readonly #agentsWanted = new Set<(agentIds: readonly string[]) => void>();
     /** Take over tickets not yet presented (Tynn #529 part A): by ticket, the window that asked and its terminal. */
     readonly #tickets = new Map<string, { parentId: string; terminalId: string; started: boolean; expiresAt: number; cancel: () => void }>();
     readonly #schedule: (ms: number, fn: () => void) => () => void;
@@ -306,7 +323,14 @@ export class RemoteHost {
     /** Someone is connected and known: hear the host API (once, however many connect). */
     #listen(): void {
         if (![...this.#connections.values()].some((connection) => connection.auth !== null)) return;
-        this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), { wantsAgent: (agentId) => this.#wantsAgent(agentId) });
+        this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), {
+            wantsAgent: (agentId) => this.#wantsAgent(agentId),
+            // Tynn #862: told when a phone's watch is recorded, the host API pushes that agent as it is now.
+            onAgentsWanted: (listener) => {
+                this.#agentsWanted.add(listener);
+                return () => { this.#agentsWanted.delete(listener); };
+            },
+        });
     }
 
     /** What this host's connections want of the events now (Tynn #662): said in genie-host's status to the window that feeds them. */
@@ -1101,6 +1125,15 @@ export class RemoteHost {
         if (!this.#stopListening) this.#listen();
         // A newly watched agent is one the forwarding window must now send (Tynn #662).
         if (first) this.#changed();
+        // And what changed while the watch was being opened (Tynn #862): the detail read above is what starts the ledger's
+        // read, and a ledger that landed before this watch was recorded was dropped (`#forPhone`: not watching yet).
+        // The host API pushes the agent as it is now — on the next turn, so it reaches the phone AFTER this answer (its
+        // first push may go at once, and a phone holds no window and no listener for the agent before the answer lands),
+        // as a patch on that window. A watch gone by then (unwatched, or the connection closed) asks for nothing.
+        if (first) this.#schedule(0, () => {
+            if (!this.#connections.has(connection.id) || !connection.watching.has(agentId)) return;
+            for (const wanted of [...this.#agentsWanted]) wanted([agentId]);
+        });
         return { seq: opened.state.seq, detail: rest, rows: opened.rows };
     }
 

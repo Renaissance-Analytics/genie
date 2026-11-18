@@ -26,7 +26,8 @@ import { homedir } from 'node:os';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright-core';
-import { answerPairOnDesktop, genieWindow } from './genie-cdp.mjs';
+import { answerPairOnDesktop, genieWindow } from './genie-cdp.mjs';
+
 // The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
 
@@ -41,7 +42,10 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const note = (name, detail) => { checks.push({ name, note: true, detail }); console.log(`NOTE ${name} — ${detail}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const act = (g, action) => g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action);
+/** A step that may not hang the run silently (Tynn #862: the first Azure run sat 25 min with nothing said). */
+const step = (name) => console.log(`--- ${new Date().toISOString().slice(11, 19)} ${name}`);
+const within = (ms, what, p) => Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what}: no answer in ${ms / 1000} s`)), ms))]);
+const act = (g, action) => within(60_000, `features.act ${action.kind}`, g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action));
 
 /** Where the target is on screen, the viewport, the document's own scroll, and the scroller's computed style (if any). */
 const measure = (page, target) => page.evaluate((sel) => {
@@ -239,7 +243,55 @@ async function proveScreen(page, cdp, profile, screen, target) {
     note(`${profile} ${screen}: a pull at the top`, (await page.evaluate(() => window.__stillHere === true)) ? 'absorbed, no reload' : 'the page RELOADED');
 }
 
+/**
+ * THE CHAT, AS THE OWNER MET IT (Tynn #862: "the chat can't be scrolled on mobile"). It opens pinned to its newest message
+ * with the oldest above the fold (the control: there is something to scroll back to); swiping DOWN with real touch input
+ * moves it and reaches the oldest; and while the person reads up there, a new reply does not pull them back down.
+ * Before the fix the scroller's scrollHeight equalled its clientHeight: the oldest rows were cut off above, unreachable.
+ */
+async function proveChat(page, cdp, profile) {
+    const vp = page.viewportSize();
+    const at = () => page.evaluate(() => {
+        const sc = document.querySelector('[data-mobile-panel="chat"]');
+        const rows = document.querySelectorAll('[data-chat-message]');
+        const first = rows[0]?.getBoundingClientRect() ?? null;
+        const last = rows[rows.length - 1]?.getBoundingClientRect() ?? null;
+        const box = sc ? sc.getBoundingClientRect() : null;
+        return { count: rows.length, firstTop: first?.top ?? null, lastBottom: last?.bottom ?? null, boxTop: box?.top ?? null, boxBottom: box?.bottom ?? null,
+            scrollTop: sc?.scrollTop ?? null, scrollHeight: sc?.scrollHeight ?? null, clientHeight: sc?.clientHeight ?? null, display: sc ? getComputedStyle(sc).display : null };
+    });
+    await sleep(800);
+    const open = await at();
+    await page.screenshot({ path: join(OUT, `${profile}-chat-a-opened.png`) });
+    note(`${profile} chat (Tynn #862): opened`, JSON.stringify(open));
+    check(`${profile} chat: the scroller has more than its height to scroll (scrollHeight > clientHeight)`, open.scrollHeight > open.clientHeight + 50, `scrollHeight ${open.scrollHeight}, clientHeight ${open.clientHeight}, display ${open.display}`);
+    check(`${profile} chat: it opens on its newest message`, open.lastBottom !== null && open.lastBottom <= open.boxBottom + 2, `last row bottom ${open.lastBottom?.toFixed(0)} vs scroller bottom ${open.boxBottom?.toFixed(0)}`);
+    const above = open.firstTop !== null && open.firstTop < open.boxTop - 50;
+    check(`${profile} chat: control — its oldest message starts above the screen, so there is something to scroll back to`, above, `first row top ${open.firstTop?.toFixed(0)} vs scroller top ${open.boxTop?.toFixed(0)}`);
+    if (!above || PROVEN.length === 0) return;
+    await swipe(cdp, PROVEN[0], vp.width, vp.height, true);
+    const one = await at();
+    await page.screenshot({ path: join(OUT, `${profile}-chat-b-one-swipe-down.png`) });
+    check(`${profile} chat: one touch swipe down scrolls back through it`, one.firstTop - open.firstTop > 100, `oldest row moved down ${(one.firstTop - open.firstTop).toFixed(0)} px; scrollTop ${open.scrollTop} → ${one.scrollTop}`);
+    let last = one, swipes = 0;
+    while (last.firstTop < last.boxTop - 1 && swipes < 40) { await swipe(cdp, PROVEN[0], vp.width, vp.height, true); swipes += 1; last = await at(); }
+    await page.screenshot({ path: join(OUT, `${profile}-chat-c-oldest.png`) });
+    check(`${profile} chat: swiping reaches its oldest message`, last.firstTop >= last.boxTop - 1, `oldest row top ${last.firstTop?.toFixed(0)} vs scroller top ${last.boxTop?.toFixed(0)} after ${swipes} more swipes; scrollTop ${last.scrollTop}`);
+    // Reading up there, a reply comes (the stub answers every message): the view stays where the person is.
+    const reading = last.scrollTop;
+    const n = last.count;
+    await page.evaluate(() => { const t = document.querySelector('textarea[name="text"]'); if (t) t.blur(); });
+    await page.fill('textarea[name="text"]', `One more from the ${profile}, sent while reading the top.`);
+    await page.tap('[data-action="send-prompt"]');
+    await page.waitForFunction((k) => document.querySelectorAll('[data-chat-message]').length >= k + 2, n, { timeout: 30_000 }).catch(() => {});
+    await sleep(1500);
+    const after = await at();
+    await page.screenshot({ path: join(OUT, `${profile}-chat-d-reply-while-reading.png`) });
+    check(`${profile} chat: a reply while reading the top leaves the view where it was (it follows only from the bottom)`, after.count >= n + 2 && Math.abs(after.scrollTop - reading) < 40, `rows ${n} → ${after.count}; scrollTop ${reading} → ${after.scrollTop}`);
+}
+
 async function runProfile(g, profile, device) {
+    step(`${profile}: pairing`);
     let remote = await act(g, { kind: 'remote.issuePin' });
     const pin = remote.pin?.code;
     check(`${profile}: a PIN is issued`, /^\d{6}$/.test(pin ?? ''));
@@ -280,7 +332,9 @@ async function runProfile(g, profile, device) {
         if (await page.locator('[data-action="start-agent"]').count()) await page.tap('[data-action="start-agent"]');
         await page.waitForSelector('[data-mobile-composer]', { timeout: 60_000 });
         for (let i = 0; i < 10; i++) {
-            const tall = await page.evaluate(() => { const rows = document.querySelectorAll('[data-chat-message]'); const r = rows[rows.length - 1]; return r ? r.getBoundingClientRect().bottom > window.innerHeight : false; });
+            // Taller than a screen and a half (Tynn #862: the chat follows its newest row, so that row never sits below
+            // the fold; what grows is what the scroller holds).
+            const tall = await page.evaluate(() => { const s = document.querySelector('[data-mobile-panel="chat"]'); const rows = document.querySelectorAll('[data-chat-message]'); const r = rows[0]; return s && r ? s.scrollHeight > s.clientHeight * 1.5 || r.getBoundingClientRect().top < -window.innerHeight / 2 : false; });
             if (tall) break;
             const n = await page.locator('[data-chat-message]').count();
             await page.fill('textarea[name="text"]', `Message ${i + 1} from the ${profile}: keep going with the plan, and tell me what is next.`);
@@ -288,10 +342,14 @@ async function runProfile(g, profile, device) {
             await page.waitForFunction((k) => document.querySelectorAll('[data-chat-message]').length >= k + 2, n, { timeout: 30_000 }).catch(() => {});
             await sleep(1500);
         }
-        // The chat opens at its top (it does not follow the newest message — listed for the owner); the oldest rows are
-        // on screen, the newest below: scroll to them.
+        // OPENED AGAIN, NOTHING SENT (Tynn #862; the owner, 2026-11-18: its messages "didn't appear until I sent a
+        // message"): a fresh page's watch shows the history on its own.
         await page.reload();
-        await page.waitForSelector('[data-chat-message]', { timeout: 30_000 });
+        const opened = Date.now();
+        const appeared = await page.waitForSelector('[data-chat-message]', { timeout: 30_000 }).then(() => true, () => false);
+        check(`${profile} chat: opened again, its messages show with nothing sent`, appeared, `${appeared ? 'shown' : 'NOT shown'} ${Date.now() - opened} ms after the reload`);
+        await proveChat(page, cdp, profile);
+        // Also from its top: the newest row below the fold, reached by swiping (the shared screen proof).
         await page.evaluate(() => { const s = document.querySelector('[data-mobile-panel="chat"]'); if (s) s.scrollTop = 0; });
         await proveScreen(page, cdp, profile, 'chat', '[data-chat-message]');
         const composer = await page.evaluate(() => { const t = document.querySelector('textarea[name="text"]'); return t ? t.getBoundingClientRect().bottom <= window.innerHeight : false; });
@@ -332,9 +390,13 @@ async function runProfile(g, profile, device) {
 }
 
 async function main() {
-    const g = await genieWindow();
+    step('waiting for Genie’s window on CDP 9222');
+    const g = await within(300_000, 'Genie’s window (CDP 9222, its preload bridge)', genieWindow());
+    step('Genie’s window answered; turning remote access on');
     let remote = await act(g, { kind: 'settings.set', key: 'remote_access', value: true });
-    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)'); }
+    step(`remote access set: ${JSON.stringify({ url: remote?.url ?? null, unavailable: remote?.unavailable ?? null })}`);
+    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await within(30_000, 'features.snapshot', g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)')); }
+    step(`remote access: ${JSON.stringify({ url: remote?.url ?? null, unavailable: remote?.unavailable ?? null })}`);
     check('remote access listens on the tailnet name', remote.url === `wss://${DNS}:7421/genie`, `url=${remote.url}`);
     for (const [profile, name] of [['iphone13', 'iPhone 13'], ['pixel7', 'Pixel 7']]) {
         try { await runProfile(g, profile, devices[name]); } catch (error) {

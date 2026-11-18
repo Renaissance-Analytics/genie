@@ -115,6 +115,8 @@ require('fs').writeFileSync(process.env.HOME + '/.genie/runtime/remote-devices.j
 fi
 
 echo "=== launch Genie (claude → the chat stub, codex → the codex stub)"
+# The drives reach the page's own bridge as window.genieTest (P4 family 11): main exposes it only with this set.
+export GENIE_PAGE_PROBE=1
 export GENIE2_CLAUDE_BINARY="$TREE/scripts/mobile-proof/stub-claude-chat.mjs"
 export GENIE2_CODEX_BINARY="$TREE/scripts/stub-codex.mjs"
 chmod +x "$GENIE2_CLAUDE_BINARY" "$GENIE2_CODEX_BINARY"

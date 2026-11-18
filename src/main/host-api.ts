@@ -806,6 +806,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             const wants = options?.wantsAgent ?? (() => true);
             const agents = new Coalescer<string>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: (agentId) => { if (wants(agentId)) listener(`agent:${agentId}`, deps.detailFor(agentId)); }, schedule: deps.schedule ?? realSchedule, now: deps.now ?? (() => Date.now()) });
             const offs = [
+                // An agent that BECAME wanted is pushed as it is now (Tynn #862): a change to it before then was not built
+                // (`wants`), so a phone opening a chat never got the ledger that landed while its watch was opening.
+                options?.onAgentsWanted?.((agentIds) => { for (const agentId of agentIds) agents.request(agentId); }) ?? (() => {}),
                 // This machine's own windows on their own channel: inline when it fits a frame, else a revision (Tynn #564).
                 deps.subscribeSnapshot((s) => { listener('snapshot', s); listener(LOCAL_EVENTS.snapshot, s); }),
                 deps.host.subscribe((agentId) => agents.request(agentId)),
