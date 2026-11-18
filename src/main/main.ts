@@ -2902,7 +2902,8 @@ async function boot(): Promise<void> {
         pushFeatures();
     }
     // RESTORE AFTER A RELAUNCH OR UPGRADE (§7.6): only with the ONE setting on; starts spaced three seconds apart; what the
-    // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
+    // user stopped was not running at quit, so it is not in the list. Each agent leaves the saved list once its start went
+    // through (Tynn #754), so a crash mid-restore starts nobody twice and a shutdown mid-restore loses nobody waiting.
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
     // SAFE MODE (Tynn #386): genie-host said so before ready; then nobody is started or resumed and both lists are KEPT.
@@ -2923,9 +2924,16 @@ async function boot(): Promise<void> {
         schedule: (fn, ms) => { setTimeout(fn, ms); },
         start: async (agentId, resume) => {
             const record = registry?.find(agentId as AgentId);
-            if (!record || !host) return;
+            if (!record) return;
+            if (!host) throw new Error('no agent host');
             const engine = host;
-            await engine.start(record, cwdFor(record));
+            // A refused start (Genie shutting down, a previous run still stopping) did not start: the agent stays saved for
+            // the next launch (Tynn #754), and a mid-turn one's prompt is still kept as owed for its Restart (genie#1238).
+            const started = await engine.start(record, cwdFor(record));
+            if (!started.ok) {
+                if (resume) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+                throw new Error(started.reason);
+            }
             // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
             // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
             if (resume && !(await engine.prompt(record.id, RESUME_AFTER_RESTART, 'genie'))) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');

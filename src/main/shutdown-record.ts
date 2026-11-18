@@ -27,12 +27,20 @@ export interface ShutdownRecordPorts {
  * (`was_running`, set on start, cleared by the person's stop: main/terminal/ipc.ts:843 and :2019 at v0.7.0-beta.342;
  * main/agents/revival.ts:9-13), and a restore it could not start kept that intent for the next launch (ipc.ts:1193-1197).
  */
-export function recordShutdown(ports: ShutdownRecordPorts): Promise<unknown> {
-    // Read at once, synchronously, so it is taken before anything that follows can stop a session.
+export async function recordShutdown(ports: ShutdownRecordPorts): Promise<unknown> {
+    // A RESTORE STILL IN FLIGHT (Tynn #754): the saved agents not yet started come back too, and the mid-turn ones among
+    // them are still resumed. Read BEFORE the sessions: an agent whose start lands in between leaves the saved list only
+    // after it has a session, so it is in one or the other. The owner's beta.63 -> beta.64 upgrade drained again inside
+    // the restore and recorded only the 6 agents already started; 25 were lost.
+    const pending = ports.pending ? await ports.pending() : { running: [], interrupted: [] };
+    // Then the sessions at once, synchronously, so they are taken before anything that follows can stop a session.
     const sessions = ports.agents().map((a) => ({ id: a.id as AgentId, probe: ports.probe(a.id as AgentId) }));
-    const comeBack = sessions.filter((a) => a.probe !== null).map((a) => a.id);
+    const waiting = new Set<string>([...pending.running, ...pending.interrupted]);
+    const comeBack = sessions.filter((a) => a.probe !== null || waiting.has(a.id)).map((a) => a.id);
     // MID-TURN = a turn in flight (`inTurn`), never `working`: a session only started reads `working` too (genie#1248).
-    const midTurn = midTurnAgents(sessions.map((a) => ({ id: a.id, inTurn: a.probe?.inTurn ?? null }))) as AgentId[];
+    const live = new Set(midTurnAgents(sessions.map((a) => ({ id: a.id, inTurn: a.probe?.inTurn ?? null }))));
+    const resumeOwed = new Set<string>(pending.interrupted);
+    const midTurn = sessions.filter((a) => live.has(a.id) || resumeOwed.has(a.id)).map((a) => a.id);
     return Promise.all([ports.markRunningAtQuit(comeBack), ports.markInterruptedAtQuit(midTurn)]);
 }
 

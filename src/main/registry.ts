@@ -229,23 +229,33 @@ export class Registry {
         await this.#store.writeInterruptedAtQuit(this.#interruptedAtQuit);
     }
 
-    /** STUB (Tynn #754 RED): the old take-and-clear. */
+    /**
+     * THE RESTORE BEGINS (Tynn #754): the agents the last shutdown recorded, READ and kept on disk. Each leaves the lists
+     * only when its start went through (`restoreStarted`), so a shutdown inside the restore still records the agents
+     * waiting to start. A crash mid-restore starts nobody twice: a started agent is already off the lists.
+     */
     async beginRestore(): Promise<{ running: readonly AgentId[]; interrupted: readonly AgentId[] }> {
         const { running, interrupted } = await this.#store.beginRestore();
-        const known = (ids: readonly string[]) => ids.filter((id): id is AgentId => this.#agents.some((a) => a.id === id));
-        this.#runningAtQuit = [];
-        this.#interruptedAtQuit = [];
-        return { running: known(running), interrupted: known(interrupted) };
-    }
-
-    /** STUB (Tynn #754 RED). */
-    async restoreStarted(id: AgentId): Promise<void> {
-        await this.#store.restoreStarted(id);
-    }
-
-    /** STUB (Tynn #754 RED): the in-memory lists. */
-    async pendingRestore(): Promise<{ running: readonly AgentId[]; interrupted: readonly AgentId[] }> {
+        this.#runningAtQuit = this.#known(running);
+        this.#interruptedAtQuit = this.#known(interrupted);
         return { running: this.#runningAtQuit, interrupted: this.#interruptedAtQuit };
+    }
+
+    /** An agent's restore start went through: it leaves the saved lists (unless a shutdown has recorded since). */
+    async restoreStarted(id: AgentId): Promise<void> {
+        if (!(await this.#store.restoreStarted(id))) return;
+        this.#runningAtQuit = this.#runningAtQuit.filter((x) => x !== id);
+        this.#interruptedAtQuit = this.#interruptedAtQuit.filter((x) => x !== id);
+    }
+
+    /** The saved agents a restore has not started yet, as on disk now: what a shutdown record keeps (Tynn #754). */
+    async pendingRestore(): Promise<{ running: readonly AgentId[]; interrupted: readonly AgentId[] }> {
+        const [running, interrupted] = await Promise.all([this.#store.readRunningAtQuit(), this.#store.readInterruptedAtQuit()]);
+        return { running: this.#known(running), interrupted: this.#known(interrupted) };
+    }
+
+    #known(ids: readonly string[]): AgentId[] {
+        return ids.filter((id): id is AgentId => this.#agents.some((a) => a.id === id));
     }
 
     setProbe(probe: SessionProbe): void {

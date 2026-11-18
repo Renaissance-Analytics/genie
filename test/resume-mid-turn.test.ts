@@ -58,7 +58,7 @@ describe('the record', () => {
     beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-midturn-')); });
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-    it('persists the interrupted across a reload, filters unknown ids, and is cleared once taken', async () => {
+    it('persists the interrupted across a reload, filters unknown ids, and is KEPT until the agent's restore start went through (Tynn #754)', async () => {
         const registry = new Registry(new Store(dir));
         await registry.load({ name: 'ws', healthy: true });
         await registry.addWorkspace({ id: 'tynn', path: '/w/tynn' });
@@ -66,7 +66,9 @@ describe('the record', () => {
         await registry.markInterruptedAtQuit([a.id, 'agent_never_existed' as never]);
         const again = new Registry(new Store(dir));
         await again.load({ name: 'ws', healthy: true });
-        expect(await again.takeInterruptedAtQuit()).toEqual([a.id]);
-        expect(await again.takeInterruptedAtQuit()).toEqual([]);
+        expect((await again.beginRestore()).interrupted).toEqual([a.id]);
+        expect((await again.beginRestore()).interrupted).toEqual([a.id]);
+        await again.restoreStarted(a.id);
+        expect((await again.beginRestore()).interrupted).toEqual([]);
     });
 });
