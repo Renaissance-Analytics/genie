@@ -66,8 +66,8 @@ describe('the search box is a small icon button left of GApps', () => {
         const gapps = html.indexOf('data-feature="GApps"');
         expect(palette).toBeGreaterThan(-1);
         expect(gapps).toBeGreaterThan(palette);
-        // Exactly one button opens between the search button's own tag and GApps': the search button itself.
-        const between = html.slice(html.lastIndexOf('<button', palette), gapps);
+        // From the search button's own tag up to GApps' own tag, exactly one button opens: the search button itself.
+        const between = html.slice(html.lastIndexOf('<button', palette), html.lastIndexOf('<button', gapps));
         expect([...between.matchAll(/<button\b/g)]).toHaveLength(1);
         const own = tag(html, 'data-palette="true"');
         expect(own).toMatch(/\bsize-6\b/);
