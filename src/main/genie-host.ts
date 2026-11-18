@@ -226,6 +226,7 @@ import { supervisorFailureWords } from '../core/supervisor-failure.js';
 import { setProviderChoiceFile } from './provider-choice.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
+import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
 
 /**
  * GENIE-HOST — the per-user host process (the host split, phase 1: `.ai/plans/genie-2-host-split-2026-10-31.md`).
@@ -1701,6 +1702,8 @@ async function main(): Promise<void> {
         registry: phoneRegistry,
         engine: () => host,
         cwdFor: phoneCwd,
+        // ANY FILE IN A MESSAGE (Tynn #829), with no window connected: saved into the agent's workspace on this host.
+        saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(hostRegistry.workspace(record.workspaceId), hostUntrustedNow(record)), files, now: new Date() }),
         startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
