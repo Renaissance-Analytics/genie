@@ -91,7 +91,7 @@ describe('connecting a cloud account', () => {
         const book = cloudAccountBook(join(dir, 'cloud-accounts.json'), keychain);
         expect(await book.connect(account({ id: 'acc-aws-1', provider: 'aws', authKind: 'provider-login' }))).toEqual({ ok: true });
         expect(store.size).toBe(0);
-        expect(book.list()[0].authKind).toBe('provider-login');
+        expect(book.list()[0]?.authKind).toBe('provider-login');
     });
 
     it('a stored account survives a restart (a new book on the same file)', async () => {

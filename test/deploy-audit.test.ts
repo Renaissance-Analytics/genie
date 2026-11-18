@@ -73,8 +73,8 @@ describe('the log', () => {
         await audit.append(record({ action: 'apply-step' }));
         const lines = readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { prev: string; hash: string; action: string });
         expect(lines.map((l) => l.action)).toEqual(['plan', 'approve', 'apply-step']);
-        expect(lines[1].prev).toBe(lines[0].hash);
-        expect(lines[2].prev).toBe(lines[1].hash);
+        expect(lines[1]?.prev).toBe(lines[0]?.hash);
+        expect(lines[2]?.prev).toBe(lines[1]?.hash);
         expect(await audit.verify()).toEqual({ ok: true, records: 3 });
     });
 
@@ -91,7 +91,7 @@ describe('the log', () => {
         const audit = new DeployAudit(file, { knownSecrets: () => [], now: () => 9 });
         for (const action of ['plan', 'approve', 'apply-step', 'apply-step']) await audit.append(record({ action }));
         const lines = readFileSync(file, 'utf8').trim().split('\n');
-        lines[1] = lines[1].replace('"approve"', '"reject"');
+        lines[1] = (lines[1] ?? "").replace('"approve"', '"reject"');
         writeFileSync(file, `${lines.join('\n')}\n`);
         const verdict = await audit.verify();
         expect(verdict.ok).toBe(false);
