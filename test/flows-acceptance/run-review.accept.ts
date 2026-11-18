@@ -27,7 +27,14 @@ describe('a run records each step for its review', () => {
         expect(step(run, 'c')!.command.output).toContain('found 3');
         expect(step(run, 'b')!.route).toMatchObject({ port: 'true' });
         expect(step(run, 'b')!.route.condition).toContain('{{ $json.exitCode }}');
-        expect(step(run, 'p')).toMatchObject({ prompt: { agent: AGENT, text: 'look at found 3', reply: 'atlas did: look at found 3' } });
+        // The prompt recorded is EXACTLY the text the agent's live session received (templated from the command's output),
+        // and the reply is the agent's answer to it.
+        const prompt = step(run, 'p')!.prompt as { agent: string; text: string; reply?: string; deliveredAt?: string };
+        expect(prompt.agent).toBe(AGENT);
+        expect(g.sessions.prompts.map((x) => x.text)).toEqual([prompt.text]);
+        expect(prompt.text).toMatch(/^look at [\s\S]*found 3/);
+        expect(prompt.reply).toBe(`atlas did: ${prompt.text}`);
+        expect(typeof prompt.deliveredAt).toBe('string');
         for (const s of ['c', 'b', 'p']) expect(Date.parse(step(run, s)!.endedAt)).toBeGreaterThanOrEqual(Date.parse(step(run, s)!.startedAt));
         expect(step(run, 'n')?.startedAt).toBeUndefined();
     });
