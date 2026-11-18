@@ -18,7 +18,7 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-restore-'));
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 describe('runningAtQuit', () => {
-    it('is empty by default, persists what was marked across a reload, filters unknown ids, and is KEPT until the agent's restore start went through (Tynn #754)', async () => {
+    it('is empty by default, persists what was marked across a reload, filters unknown ids, and is KEPT until the restore start of the agent went through (Tynn #754)', async () => {
         const registry = new Registry(new Store(dir));
         await registry.load({ name: 'alphar', healthy: true });
         await registry.addWorkspace({ id: 'tynn', path: '/w/tynn' });

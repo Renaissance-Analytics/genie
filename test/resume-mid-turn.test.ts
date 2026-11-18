@@ -58,7 +58,7 @@ describe('the record', () => {
     beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-midturn-')); });
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-    it('persists the interrupted across a reload, filters unknown ids, and is KEPT until the agent's restore start went through (Tynn #754)', async () => {
+    it('persists the interrupted across a reload, filters unknown ids, and is KEPT until the restore start of the agent went through (Tynn #754)', async () => {
         const registry = new Registry(new Store(dir));
         await registry.load({ name: 'ws', healthy: true });
         await registry.addWorkspace({ id: 'tynn', path: '/w/tynn' });
