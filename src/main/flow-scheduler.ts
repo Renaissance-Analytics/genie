@@ -2,7 +2,7 @@ import { nextCronAfter } from '../core/cron.js';
 import { matchesFileTrigger, type FileAddedProps, type FileTriggerConfig } from '../core/file-trigger.js';
 import type { NodeOutcome } from '../core/flow-canvas.js';
 import type { RunObserver, RunResume } from './flow-runner.js';
-import type { FlowRunStepDetail } from '../core/flow-run-review.js';
+import { mergeStep, type FlowRunStepDetail } from '../core/flow-run-review.js';
 import type { Actor, FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule } from './flow-store.js';
 
 /**
@@ -227,10 +227,10 @@ export class FlowScheduler {
      * The PERSON's Run now: one run of the flow, armed or not, recorded as `manual`. Answers the run as
      * recorded — `held` when the flow's previous run is still going. Throws for a flow that does not exist.
      */
-    async runNow(flowId: string, _by: Actor = { kind: 'user' }): Promise<FlowRun> {
+    async runNow(flowId: string, by: Actor = { kind: 'user' }): Promise<FlowRun> {
         const flow = this.#deps.store.get(flowId);
         if (!flow) throw new Error(`no flow ${flowId}`);
-        const run = await this.#start(flow, this.#deps.store.schedules(flow.id)[0] ?? null, 'manual');
+        const run = await this.#start(flow, this.#deps.store.schedules(flow.id)[0] ?? null, 'manual', by);
         if (!run) throw new Error(`flow ${flowId} was removed while it ran`);
         return run;
     }
@@ -279,7 +279,8 @@ export class FlowScheduler {
         });
     }
 
-    #start(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger']): Promise<FlowRun | null> {
+    #start(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], by?: Actor): Promise<FlowRun | null> {
+        const startedBy = by ? { startedBy: by } : {};
         const startedAt = this.#deps.now();
         const file = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
         if (this.#running.has(flow.id)) {
@@ -287,20 +288,20 @@ export class FlowScheduler {
             const inFlightNodes = Object.values(this.#deps.store.get(flow.id)?.inFlight?.nodes ?? {});
             const queued = inFlightNodes.includes('queued');
             const paused = inFlightNodes.includes('paused');
-            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: paused ? `the previous run of "${flow.name}" is paused at its agent's provider limit and goes on when it resets; this fire was not stacked behind it` : queued ? `the previous run of "${flow.name}" is still queued behind its agent's current turn; this fire was not stacked behind it` : `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
+            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: paused ? `the previous run of "${flow.name}" is paused at its agent's provider limit and goes on when it resets; this fire was not stacked behind it` : queued ? `the previous run of "${flow.name}" is still queued behind its agent's current turn; this fire was not stacked behind it` : `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file, ...startedBy });
             this.#records.add(held);
             const done = (): void => { this.#records.delete(held); };
             held.then(done, done);
             return held;
         }
-        const run = this.#execute(flow, trigger, kind, startedAt).finally(() => {
+        const run = this.#execute(flow, trigger, kind, startedAt, undefined, by).finally(() => {
             if (this.#running.get(flow.id) === run) this.#running.delete(flow.id);
         });
         this.#running.set(flow.id, run);
         return run;
     }
 
-    async #execute(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], startedAt: number, resume?: RunResume): Promise<FlowRun | null> {
+    async #execute(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], startedAt: number, resume?: RunResume, by?: Actor): Promise<FlowRun | null> {
         let result: { outcome: RunOutcome; reason?: string; steps?: readonly FlowRunStep[]; stoppedBy?: string };
         // THE RUN'S STOP (Tynn #833): what `stopRun` aborts, and who pressed it.
         const own = { controller: new AbortController(), by: null as string | null };
@@ -310,6 +311,7 @@ export class FlowScheduler {
         // recorded at the next launch rather than lost — and the Log nodes' lines.
         let nodes: Record<string, NodeOutcome> = {};
         const log: string[] = [];
+        const timeline = new Map<string, FlowRunStepDetail>();
         const outputs: Record<string, unknown> = { ...(resume?.outputs ?? {}) };
         const entry = trigger?.nodeId;
         const at = new Date(startedAt).toISOString();
@@ -323,6 +325,8 @@ export class FlowScheduler {
             paused: (info) => { pause = info; },
             output: (nodeId, value) => { outputs[nodeId] = value; },
             log: (_nodeId, line) => { log.push(line); },
+            // Tynn #839: what each step did, folded as it goes, recorded with the run.
+            step: (nodeId, patch) => { timeline.set(nodeId, mergeStep(timeline.get(nodeId) ?? { nodeId }, patch)); },
         };
         try {
             // Answering nothing means it ran (a run port with nothing to say about its outcome).
@@ -333,7 +337,7 @@ export class FlowScheduler {
         } finally {
             if (this.#controls.get(flow.id) === own) this.#controls.delete(flow.id);
         }
-        return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...fileOf, nodes, log, ...(resume ? { resumed: true } : {}) });
+        return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...fileOf, nodes, log, timeline: [...timeline.values()], ...(by ? { startedBy: by } : {}), ...(resume ? { resumed: true } : {}) });
     }
 
     #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean; stoppedBy?: string; timeline?: readonly FlowRunStepDetail[]; startedBy?: Actor }): Promise<FlowRun | null> {

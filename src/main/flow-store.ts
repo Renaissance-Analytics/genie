@@ -1,6 +1,6 @@
 import type { FileAddedProps } from '../core/file-trigger.js';
 import { safeToRerun, type NodeOutcome } from '../core/flow-canvas.js';
-import type { FlowRunStepDetail } from '../core/flow-run-review.js';
+import { boundStepDetail, type FlowRunStepDetail } from '../core/flow-run-review.js';
 import type { V1FlowPlan } from '../core/v1-flows.js';
 import { stepLabel } from '../core/flow-reach.js';
 import { randomUUID } from 'node:crypto';
@@ -345,6 +345,9 @@ export class FlowStore {
             ...(run.log !== undefined && run.log.length > 0 ? { log: run.log.slice(-RUN_LOG_LIMIT) } : {}),
             ...(run.resumed === true ? { resumed: true as const } : {}),
             ...(run.outcome === 'stopped' && run.stoppedBy !== undefined ? { stoppedBy: run.stoppedBy } : {}),
+            // Tynn #839: each step as it went, bounded (a command keeps its output's tail; the process keeps the whole log).
+            ...(run.timeline !== undefined && run.timeline.length > 0 ? { timeline: run.timeline.map(boundStepDetail) } : {}),
+            ...(run.startedBy !== undefined ? { startedBy: run.startedBy } : {}),
         };
         // The run has ended, so it is no longer in flight — in the same write.
         const { inFlight: _done, ...rest } = flow;

@@ -1,6 +1,6 @@
-import { Button } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon } from '@particle-academy/react-fancy';
 import { Flash } from './Flash.js';
-import { FlowEditor, FlowViewer, getNodeKind, type FlowEditorApi, type FlowGraph } from '@particle-academy/fancy-flow';
+import { FlowCanvas, FlowEditor, buildNodeTypes, getNodeKind, type FlowEditorApi, type FlowGraph } from '@particle-academy/fancy-flow';
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
     canonicalKind,
@@ -16,6 +16,7 @@ import {
     type FlowProblem,
 } from '../../core/flow-canvas.js';
 import { flowEditorPanes, flowPaneLabel, type FlowPaneName } from '../../core/flow-editor-layout.js';
+import { NOT_RECORDED, formatDuration, runCanvasGraph, runHeader, runRows, type RunRow } from '../../core/flow-run-review.js';
 import { stepLabel } from '../../core/flow-reach.js';
 import { SCHEDULE_PRESETS, nextRunWords } from '../../core/flow-schedule.js';
 import type { FlowRecord, FlowRun } from '../../main/flow-store.js';
@@ -61,7 +62,7 @@ export interface FlowEditorWindowProps {
     readonly onSaved?: (flowId: string) => void;
 }
 
-export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data, workspaces, act, Editor = FlowEditor as unknown as AnyComponent, Viewer = FlowViewer as unknown as AnyComponent, now = Date.now(), onSaved }: FlowEditorWindowProps) {
+export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data, workspaces, act, Editor = FlowEditor as unknown as AnyComponent, Viewer = RunCanvas as unknown as AnyComponent, now = Date.now(), onSaved }: FlowEditorWindowProps) {
     const flows = data.flows?.flows ?? null;
     // GENIE'S TOOLS AS STEPS (genie#1204): their kinds arrive in the snapshot and are registered BEFORE any graph is read
     // or the canvas mounts — a canvas that mounted first would draw them as bare boxes (Genie 1's lesson,
@@ -190,7 +191,17 @@ export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data
             ) : null}
             <div ref={shell} className="min-h-0 flex-1">
                 {run !== null && flow ? (
-                    <FlowRunOverlay flow={flow} run={run} Viewer={Viewer} />
+                    <FlowRunOverlay
+                        key={`${viewing}:${run.at}`}
+                        flow={flow}
+                        run={run}
+                        Viewer={Viewer}
+                        onRerun={flowId !== null ? () => { void act({ kind: 'flows.runNow', flowId }).catch((error: unknown) => setNote(error instanceof Error ? error.message : String(error))); } : undefined}
+                        // Stop (Tynn #833): the run going now ends; recorded "stopped by you".
+                        onStop={flowId !== null ? () => { void act({ kind: 'flows.stop', flowId }).catch((error: unknown) => setNote(error instanceof Error ? error.message : String(error))); } : undefined}
+                        onPrevious={viewing !== null && viewing > 0 ? () => setViewing(viewing - 1) : undefined}
+                        onNext={viewing !== null && viewing < runs.length - 1 ? () => setViewing(viewing + 1) : undefined}
+                    />
                 ) : (
                     <Editor
                         value={value}
@@ -273,11 +284,33 @@ export function ScheduleInspector({ cron, now, onCron }: { cron: string; now: nu
 
 const OUTCOME_WORDS: Record<string, string> = { ran: 'ran', failed: 'failed', held: 'held back', skipped: 'skipped (its branch was not taken)', 'not reached': 'not reached', stopped: 'stopped (by you, an agent, or Genie quitting)', running: 'running', queued: 'queued behind the agent’s current turn', paused: 'paused at the agent’s provider limit', delivered: 'delivered to the agent', waiting: 'waiting: kept for the agent’s next run' };
 
-/**
- * A RUN ON THE CANVAS, READ-ONLY (genie#1204 item 6; Genie 1's FlowManagerFlyout drew the last run's statuses on
- * `<FlowViewer>`, "read-only by construction"). The flow's own graph, each node marked with what it did in that run, and
- * the same outcomes listed in words beneath it.
- */
+type BadgeColor = 'green' | 'red' | 'amber' | 'sky' | 'violet' | 'zinc';
+const OUTCOME_COLOR: Record<string, BadgeColor> = { ran: 'green', delivered: 'sky', failed: 'red', stopped: 'red', held: 'amber', paused: 'amber', queued: 'amber', running: 'sky', waiting: 'violet', skipped: 'zinc', 'not reached': 'zinc' };
+
+/** Each step's kind as an icon (lucide names, through react-fancy's Icon). */
+function kindIcon(kind: string): string {
+    if (kind === '@particle-academy/schedule_trigger') return 'clock';
+    if (/trigger$/.test(kind)) return 'play';
+    if (kind === 'genie/file_added') return 'file-plus';
+    if (kind === 'genie/terminal_run') return 'terminal';
+    if (kind === 'genie/agent_prompt') return 'message-square';
+    if (kind === 'genie/knowledge_add') return 'brain';
+    if (kind === 'genie/file_move') return 'folder-input';
+    if (/branch$/.test(kind)) return 'git-branch';
+    if (/switch_case$/.test(kind)) return 'git-fork';
+    if (/log$/.test(kind)) return 'scroll-text';
+    if (/wait$/.test(kind)) return 'timer';
+    return 'circle';
+}
+
+const clock = (iso: string): string => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+};
+const lastLines = (text: string, n: number): string => text.replace(/\n$/, '').split('\n').slice(-n).join('\n');
+/** How many of a command's last lines a row shows before "Whole output". */
+const TAIL_LINES = 8;
+
 export interface FlowRunOverlayProps {
     readonly flow: FlowRecord;
     readonly run: FlowRun;
@@ -292,34 +325,206 @@ export interface FlowRunOverlayProps {
     readonly onNext?: () => void;
 }
 
-/** THE RUN'S CANVAS (Tynn #839): fancy-flow's FlowCanvas at the height its box measures, never `100%` of nothing. */
-export function RunCanvas(props: { graph: FlowGraph; statuses?: unknown; selectedNodeId?: string | null; onSelectNode?: (node: { id: string }) => void; Canvas?: AnyComponent }) {
-    return <FlowViewer graph={props.graph} height="100%" />;
-}
-
-export function FlowRunOverlay({ flow, run, Viewer = FlowViewer as unknown as AnyComponent }: FlowRunOverlayProps) {
-    const graph = useMemo(() => documentToGraph(flow.document), [flow.document]);
-    const nodes = run.nodes ?? {};
-    const listed = graph.nodes.filter((n) => nodes[n.id] !== undefined);
+/**
+ * THE RUN'S CANVAS (Tynn #839): fancy-flow's FlowCanvas — React Flow underneath — at the PIXEL height its box measures.
+ * The blank canvas the owner saw was FlowViewer handed `height="100%"` inside a box with no height of its own: React Flow
+ * drew into zero pixels. FlowViewer's canvas also ignores its `statuses` and selection (fancy-flow 0.81), so the run's
+ * colours and the picked step are put on the nodes themselves (`runCanvasGraph`) and drawn here. Read-only: nothing drags,
+ * connects or deletes; a click picks a step.
+ */
+export function RunCanvas({ graph, selectedNodeId = null, onSelectNode, Canvas = FlowCanvas as unknown as AnyComponent }: { graph: FlowGraph; statuses?: unknown; selectedNodeId?: string | null; onSelectNode?: (node: { id: string }) => void; Canvas?: AnyComponent }) {
+    const box = useRef<HTMLDivElement | null>(null);
+    // Before the first measure (and in a test's static render) a sane height; the box's own as soon as it has one.
+    const [height, setHeight] = useState(360);
+    useEffect(() => {
+        const el = box.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const take = (h: number) => { if (h > 0) setHeight(Math.round(h)); };
+        take(el.getBoundingClientRect().height);
+        const ro = new ResizeObserver((entries) => take(entries[0]?.contentRect.height ?? 0));
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+    const nodeTypes = useMemo(() => buildNodeTypes(), []);
+    const nodes = useMemo(() => graph.nodes.map((n) => ({ ...n, selected: n.id === selectedNodeId })), [graph.nodes, selectedNodeId]);
     return (
-        <div data-flow-run-overlay className="flex h-full min-h-0 flex-col">
-            <p className="shrink-0 px-4 py-1 text-xs text-[var(--fg-2)]">
-                {new Date(run.at).toLocaleString()} · {run.trigger === 'manual' ? 'run now' : run.trigger === 'file' ? `when ${run.file ?? 'a file'} was added` : 'on schedule'} · {run.outcome}
-                {run.reason ? <> — {run.reason}</> : null}
-            </p>
-            <div className="min-h-0 flex-1">
-                <Viewer graph={graph} statuses={viewerStatuses(nodes)} height="100%" zoomOnWheel showMinimap={graph.nodes.length > 12} />
-            </div>
-            {listed.length > 0 ? (
-                <ol className="max-h-40 shrink-0 overflow-auto border-t border-[var(--border-1)] px-4 py-1 text-xs">
-                    {listed.map((n) => (
-                        <li key={n.id} data-flow-node={n.id} data-flow-node-outcome={nodes[n.id]}>{nodeName(graph, n.id)}: {OUTCOME_WORDS[nodes[n.id]!] ?? nodes[n.id]}</li>
-                    ))}
-                </ol>
-            ) : null}
-            {run.log && run.log.length > 0 ? (
-                <pre data-flow-run-log className="max-h-32 shrink-0 overflow-auto border-t border-[var(--border-1)] px-4 py-1 font-mono text-xs">{run.log.join('\n')}</pre>
-            ) : null}
+        <div ref={box} data-run-canvas className="h-full min-h-0 w-full overflow-hidden">
+            <Canvas
+                nodes={nodes}
+                edges={graph.edges}
+                nodeTypes={nodeTypes}
+                height={height}
+                fitView
+                showControls
+                showMinimap={graph.nodes.length > 12}
+                zoomOnWheel
+                nodesDraggable={false}
+                nodesConnectable={false}
+                nodesFocusable={Boolean(onSelectNode)}
+                edgesFocusable={false}
+                elementsSelectable={Boolean(onSelectNode)}
+                deleteKeyCode={null}
+                selectionKeyCode={null}
+                multiSelectionKeyCode={null}
+                connectOnClick={false}
+                onNodeClick={onSelectNode ? (_event: unknown, node: { id: string }) => onSelectNode(node) : undefined}
+            />
         </div>
     );
+}
+
+/**
+ * REVIEWING A RUN (Tynn #839; genie#1204 item 6 drew the run on the canvas; the owner, 2026-11-17: "reviewing flow runs
+ * needs to give me more info than this. and why waste so much space?"). The window's whole body:
+ *
+ * - a HEADER: what started it, started → finished, how long, how it ended, who pressed it; Re-run, Stop (a run going
+ *   now), and the run before and after, to compare runs one click apart;
+ * - the flow DRAWN AS THE RUN (`RunCanvas`): each node coloured by its outcome, the path it took highlighted;
+ * - the STEP TIMELINE beside it: each step's kind, outcome, start and duration, and what it did — a command's exit code
+ *   and output (its last lines; the whole on expand; the process that keeps the log), a prompt's recipient, exact text,
+ *   delivery and reply, a branch's condition and the way it went, an error in full.
+ *
+ * Picking a step on either side picks it on the other. A run recorded before #839 says "not recorded" for what it lacks.
+ */
+export function FlowRunOverlay({ flow, run, Viewer = RunCanvas as unknown as AnyComponent, onRerun, onStop, onPrevious, onNext }: FlowRunOverlayProps) {
+    const graph = useMemo(() => documentToGraph(flow.document), [flow.document]);
+    const [selected, setSelected] = useState<string | null>(null);
+    const drawn = useMemo(() => runCanvasGraph(graph as unknown as { nodes: Array<{ id: string; data?: unknown }>; edges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null }> }, run, selected) as unknown as FlowGraph, [graph, run, selected]);
+    const rows = useMemo(() => runRows(graph.nodes.map((n) => n.id), run), [graph, run]);
+    const header = runHeader(run);
+    const rowRefs = useRef(new Map<string, HTMLLIElement>());
+    useEffect(() => {
+        const el = selected !== null ? rowRefs.current.get(selected) : undefined;
+        if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+    }, [selected]);
+    const pick = (id: string) => setSelected((c) => (c === id ? null : id));
+    const kindOf = (id: string) => {
+        const n = graph.nodes.find((x) => x.id === id);
+        return canonicalKind(String(((n?.data ?? {}) as { kind?: string }).kind ?? n?.type ?? ''));
+    };
+    const configOf = (id: string) => (((graph.nodes.find((x) => x.id === id)?.data ?? {}) as { config?: Record<string, unknown> }).config ?? {});
+
+    return (
+        <div data-flow-run-overlay className="flex h-full min-h-0 flex-col">
+            <div data-run-header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-1)] px-4 py-1.5 text-xs">
+                <Badge size="sm" variant="soft" color={OUTCOME_COLOR[header.outcome] ?? 'zinc'}><span data-run-status="">{header.outcome}</span></Badge>
+                <span className="text-[var(--fg-3)]">Started by <span data-run-trigger="" className="text-[var(--fg-1)]">{header.trigger}</span></span>
+                <span className="text-[var(--fg-3)]">Who <span data-run-started-by="" className="text-[var(--fg-1)]">{header.startedBy}</span></span>
+                <span className="text-[var(--fg-3)]">
+                    <span data-run-started={header.startedAt} className="text-[var(--fg-1)]">{new Date(header.startedAt).toLocaleString()}</span>
+                    {' → '}
+                    <span data-run-finished={header.endedAt} className="text-[var(--fg-1)]">{clock(header.endedAt)}</span>
+                </span>
+                <span className="text-[var(--fg-3)]">Took <span data-run-duration="" className="font-mono text-[var(--fg-1)]">{formatDuration(header.durationMs)}</span></span>
+                {run.stoppedBy ? <span className="text-[var(--fg-3)]">Stopped by <span data-run-stopped-by="" className="text-[var(--fg-1)]">{run.stoppedBy}</span></span> : null}
+                {run.resumed ? <span className="text-[var(--fg-3)]">Resumed after Genie restarted</span> : null}
+                <span className="ml-auto flex items-center gap-1.5">
+                    {flow.inFlight ? (
+                        <Button size="xs" type="button" data-run-stop="" disabled={!onStop} title={onStop ? 'Stop the run going now' : 'Stopping a run is not in this build yet'} onClick={() => onStop?.()}>
+                            <Icon name="square" size="xs" /> Stop the run going now
+                        </Button>
+                    ) : null}
+                    <Button size="xs" type="button" data-run-previous="" disabled={!onPrevious} title="The run before this one" onClick={() => onPrevious?.()}><Icon name="chevron-left" size="xs" /> Earlier</Button>
+                    <Button size="xs" type="button" data-run-next="" disabled={!onNext} title="The run after this one" onClick={() => onNext?.()}>Later <Icon name="chevron-right" size="xs" /></Button>
+                    <Button size="xs" type="button" data-run-rerun="" disabled={!onRerun} title="Run the saved flow again now" onClick={() => onRerun?.()}><Icon name="rotate-cw" size="xs" /> Run again</Button>
+                </span>
+                {header.reason ? <p data-run-reason="" className="basis-full text-[var(--danger)]">{header.reason}</p> : null}
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(180px,45%)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(380px,42%)] lg:grid-rows-1">
+                <div className="min-h-0 min-w-0">
+                    <Viewer graph={drawn} statuses={viewerStatuses(run.nodes ?? {})} selectedNodeId={selected} onSelectNode={(n: { id: string }) => setSelected(n.id)} />
+                </div>
+                <ol data-run-timeline className="min-h-0 overflow-auto border-t border-[var(--border-1)] text-xs lg:border-l lg:border-t-0">
+                    {rows.map((r) => (
+                        <li
+                            key={r.nodeId}
+                            data-flow-node={r.nodeId}
+                            data-flow-node-outcome={r.outcome}
+                            aria-current={selected === r.nodeId ? 'true' : undefined}
+                            ref={(el) => { if (el) rowRefs.current.set(r.nodeId, el); else rowRefs.current.delete(r.nodeId); }}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => pick(r.nodeId)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(r.nodeId); } }}
+                            className={`cursor-pointer border-b border-[var(--border-1)] px-3 py-1.5 outline-none hover:bg-[var(--bg-2)] focus-visible:bg-[var(--bg-2)] ${selected === r.nodeId ? 'bg-[var(--bg-2)] shadow-[inset_3px_0_0_var(--primary)]' : ''}`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <Icon name={kindIcon(kindOf(r.nodeId))} size="xs" className="shrink-0 text-[var(--fg-3)]" />
+                                <span className="min-w-0 flex-1 truncate font-medium" title={nodeName(graph, r.nodeId)}>{nodeName(graph, r.nodeId)}</span>
+                                <Badge size="sm" variant="soft" color={OUTCOME_COLOR[r.outcome] ?? 'zinc'} title={OUTCOME_WORDS[r.outcome] ?? r.outcome}><span data-step-outcome="">{r.outcome}</span></Badge>
+                                <span data-step-start={r.startedAt ?? ''} className="w-16 shrink-0 text-right font-mono text-[var(--fg-3)]">{r.startedAt !== null ? clock(r.startedAt) : '—'}</span>
+                                <span data-step-duration="" className="w-20 shrink-0 text-right font-mono text-[var(--fg-2)]">{formatDuration(r.durationMs)}</span>
+                            </div>
+                            <StepDetail row={r} kind={kindOf(r.nodeId)} config={configOf(r.nodeId)} reason={r.outcome === 'failed' || r.outcome === 'held' ? run.reason : undefined} />
+                        </li>
+                    ))}
+                    {run.log && run.log.length > 0 ? (
+                        <li className="px-3 py-1.5">
+                            <span className="text-[var(--fg-3)]">Log lines</span>
+                            <pre data-flow-run-log className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono">{run.log.join('\n')}</pre>
+                        </li>
+                    ) : null}
+                </ol>
+            </div>
+        </div>
+    );
+}
+
+/** What one step did, by its kind (Tynn #839); what an older run lacks says "not recorded". */
+function StepDetail({ row, kind, config, reason }: { row: RunRow; kind: string; config: Record<string, unknown>; reason: string | undefined }) {
+    const d = row.detail;
+    const error = d?.error ?? reason;
+    const muted = 'text-[var(--fg-3)]';
+    const block = 'mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-[var(--bg-2)] px-2 py-1 font-mono';
+    const reached = row.outcome !== 'skipped' && row.outcome !== 'not reached';
+    const parts: React.ReactNode[] = [];
+    if (kind === 'genie/terminal_run' && reached) {
+        const c = d?.command;
+        const output = c?.output;
+        parts.push(
+            <div key="cmd" className="flex flex-wrap gap-x-3">
+                <span className={muted}>Command <code data-step-command="" className="text-[var(--fg-1)]">{c?.command ?? String(config.command ?? NOT_RECORDED)}</code></span>
+                <span className={muted}>Exit code <span data-step-exit="" className={`font-mono ${c?.exitCode !== undefined && c.exitCode !== 0 ? 'text-[var(--danger)]' : 'text-[var(--fg-1)]'}`}>{c?.exitCode ?? NOT_RECORDED}</span></span>
+            </div>,
+        );
+        if (output !== undefined && output !== '') {
+            parts.push(<pre key="tail" data-step-output="tail" className={block}>{lastLines(output, TAIL_LINES)}</pre>);
+            parts.push(
+                <details key="full" data-step-full-log="" className="mt-1" onClick={(e) => e.stopPropagation()}>
+                    <summary className={`cursor-pointer ${muted}`}>Whole output of this run ({output.replace(/\n$/, '').split('\n').length} lines{c?.outputCut ? `; the first ${c.outputCut} characters were not kept` : ''})</summary>
+                    <pre data-step-output="full" className={`${block} max-h-96`}>{output}</pre>
+                </details>,
+            );
+        } else {
+            parts.push(<p key="noout" className={muted}>Output: {output === '' ? 'none' : NOT_RECORDED}</p>);
+        }
+        parts.push(<p key="proc" className={muted}>Every run’s output is kept as process <code data-step-process="" className="text-[var(--fg-1)]">{c?.processId ?? NOT_RECORDED}</code> (Hosting → Processes)</p>);
+    }
+    if (kind === 'genie/agent_prompt' && reached) {
+        const p = d?.prompt;
+        parts.push(
+            <div key="to" className="flex flex-wrap gap-x-3">
+                <span className={muted}>To <span data-step-recipient="" className="text-[var(--fg-1)]">{p?.agent ?? String(config.agent ?? NOT_RECORDED)}</span></span>
+                <span className={muted}>Delivered <span data-step-delivered={p?.deliveredAt ?? ''} className="text-[var(--fg-1)]">{p?.deliveredAt ? `${clock(p.deliveredAt)}${p.delivery ? ` (${p.delivery})` : ''}` : NOT_RECORDED}</span></span>
+            </div>,
+        );
+        parts.push(<div key="sent"><span className={muted}>Prompt sent</span><pre data-step-prompt="" className={block}>{p?.text ?? NOT_RECORDED}</pre></div>);
+        parts.push(
+            p?.reply !== undefined
+                ? <div key="reply"><span className={muted}>Reply</span><pre data-step-reply="" className={block}>{p.reply}</pre></div>
+                : <p key="reply" className={muted}>Reply: {d && config.waitForReply !== true ? 'the step did not wait for one (it is in the agent’s chat)' : NOT_RECORDED}</p>,
+        );
+    }
+    if (reached && (d?.route || /(branch|switch_case)$/.test(kind))) {
+        const route = d?.route;
+        const why = route === undefined ? '' : route.port === 'true' ? ' (the condition held)' : route.port === 'false' ? ' (the condition did not hold)' : '';
+        parts.push(
+            <p key="route" className={muted}>
+                Condition <code className="text-[var(--fg-1)]">{route?.condition ?? NOT_RECORDED}</code>{' → went '}
+                <span data-step-route="" className="font-medium text-[var(--fg-1)]">{route?.port ?? NOT_RECORDED}</span>{why}
+            </p>,
+        );
+    }
+    if (error) parts.push(<p key="err" data-step-error="" className="mt-1 whitespace-pre-wrap text-[var(--danger)]">{error}</p>);
+    return parts.length > 0 ? <div className="mt-1 pl-5">{parts}</div> : null;
 }
