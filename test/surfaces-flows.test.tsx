@@ -70,8 +70,8 @@ describe('a flow row', () => {
         expect(row).toMatch(/run now/);
         expect(row).toMatch(/on schedule/);
         expect(row).toMatch(/held back/);
-        // The history does not change the row's actions.
-        expect(buttonsOf(row)).toEqual(['nightly report', 'Run now', 'Disarm', 'Open', 'Delete']);
+        // The history does not change the row's actions; each run in it has its Review (Tynn #860), newest first.
+        expect(buttonsOf(row)).toEqual(['nightly report', 'Run now', 'Disarm', 'Open', 'Delete', 'Review', 'Review', 'Review']);
     });
 
     // Changed 2026-10-21 (the owner, 2026-10-21, of the GitHub card's "Carried over from Genie 1": "this is not needed … it should be the same"): no migration labels in the product. A flow brought over from Genie 1 reads exactly
