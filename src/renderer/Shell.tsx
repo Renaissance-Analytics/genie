@@ -260,8 +260,6 @@ export interface ShellProps {
     /** Workspaces whose file panel is in its own window (§4.3): the dock holds a bar, not the panel. */
     filesPopped?: readonly string[] | undefined;
     onPopOutFiles?: ((workspaceId: string) => void) | undefined;
-    /** A workspace's terminals view in a NEW window (Tynn #706): the Dashboard's windows column. Absent = that entry is disabled. */
-    onPopOutTerminals?: ((workspaceId: string) => void) | undefined;
     onBringBackFiles?: ((workspaceId: string) => void) | undefined;
     /** An agent is writing a file you have dirty (§4.3): the ask, and its lifting. */
     onPauseAgent?: ((agent: string, path: string) => void) | undefined;
@@ -442,7 +440,6 @@ export function Shell({
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
-    onPopOutTerminals,
     onBringBackFiles,
     onPauseAgent,
     onResumeAgent,
@@ -888,7 +885,9 @@ export function Shell({
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
                             // The windows column (Tynn #706): new windows, never a navigation; a share window offers its own workspace only.
-                            onOpenTerminalWindow={onPopOutTerminals}
+                            // Open window → Terminal (Tynn #706, #851): a SHELL in the row's workspace, the sidebar button's and the
+                            // workspace header's opener — not a second Genie window on an empty Terminals view (the owner's screenshot).
+                            onOpenTerminalWindow={onOpenScratchTerminal && !readOnly ? onOpenScratchTerminal : undefined}
                             onOpenFilesWindow={onPopOutFiles}
                             scopeWorkspaceId={scoped?.workspaceId}
                             faults={workspaceFaults}

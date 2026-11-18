@@ -42,7 +42,9 @@ describe('the menu entries are data, and the scope is a rule', () => {
     });
 });
 
-describe('the Terminal window is the workspace’s terminals view', () => {
+// The Terminals-view route (main still serves it); the Dashboard's Terminal entry opens a workspace SHELL instead (Tynn #851,
+// test/agent-terminal-button-851.test.tsx), never a second Genie window on this view.
+describe('terminalsWindowRoute: the workspace’s terminals view', () => {
     it('its route parses to that workspace on its terminals view', () => {
         const parsed = parseRoute(terminalsWindowRoute('tynn'));
         expect(parsed).toMatchObject({ surface: 'workspace', workspaceId: 'tynn', view: 'terminals' });
@@ -116,7 +118,7 @@ describe('the row menu (happy-dom)', () => {
         expect(items().map((i) => i.textContent!.trim())).toEqual(['Terminal', 'Files']);
     });
 
-    it('Terminal opens the row’s workspace terminals window and the current window goes nowhere', () => {
+    it('Terminal opens a terminal window for the row’s workspace and the current window goes nowhere', () => {
         mount();
         click(trigger('a_fancy'));
         click(items()[0]);
@@ -185,7 +187,7 @@ describe('the Shell hands the Dashboard its window openers', () => {
     const menuButtons = (html: string) => [...html.matchAll(/<button\b[^>]*data-windows-menu[^>]*>/g)].map((m) => m[0]);
 
     it('with openers the buttons are live; without them they are disabled (control)', () => {
-        const live = menuButtons(render({ onPopOutFiles: () => {}, onPopOutTerminals: () => {} }));
+        const live = menuButtons(render({ onPopOutFiles: () => {}, onOpenScratchTerminal: async () => ({ ok: true as const }) }));
         expect(live).toHaveLength(2);
         // `disabled` as an attribute, not as the `disabled:` utility inside a class.
         const isDisabled = (b: string) => /\sdisabled(=|\s|>)/.test(b);
@@ -196,7 +198,7 @@ describe('the Shell hands the Dashboard its window openers', () => {
     });
 
     it('a workspace-share window never reaches the Dashboard, so it offers no menu', () => {
-        const html = render({ windowScope: { kind: 'workspace', workspaceId: 'tynn', readonly: false }, onPopOutFiles: () => {}, onPopOutTerminals: () => {} });
+        const html = render({ windowScope: { kind: 'workspace', workspaceId: 'tynn', readonly: false }, onPopOutFiles: () => {}, onOpenScratchTerminal: async () => ({ ok: true as const }) });
         expect(menuButtons(html)).toEqual([]);
     });
 });
