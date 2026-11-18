@@ -90,6 +90,7 @@ describe('a relay link whose first ticket fails', () => {
         const lines: string[] = [];
         const statuses: RelayHostStatus[] = [];
         const host = startRelayHost({
+            signedInHere: () => 'user_1',
             ports: {
                 ticket: async () => { asks += 1; if (asks === 1) throw new Error('Tynn could not be reached (offline)'); return { ticket: 't1', relayEndpoint: 'wss://relay.example.com' }; },
                 keys: async () => [],
@@ -116,6 +117,7 @@ describe('a relay link whose first ticket fails', () => {
     it('stop() ends the retrying: no ticket is asked for after it', async () => {
         let asks = 0;
         const host = startRelayHost({
+            signedInHere: () => 'user_1',
             ports: { ticket: async () => { asks += 1; throw new Error('Tynn could not be reached (offline)'); }, keys: async () => [], introspect: async () => false },
             socket: fakeRelay(() => 'ws_me').socket,
             workstationId: 'ws_me',

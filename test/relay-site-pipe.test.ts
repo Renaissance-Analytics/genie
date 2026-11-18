@@ -112,6 +112,7 @@ beforeEach(async () => {
         relayUrl: 'wss://relay.example.com',
         workstationId: WS_ID,
         hello: async () => buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: 'fp', sign: (d) => sign(null, d, hostKey.privateKey) }),
+        signedInHere: () => 'user_1',
         validateGrant: async (token) => verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID }),
         reconnect: { minMs: 0, maxMs: 0 },
         popTimeoutMs: 1_000,

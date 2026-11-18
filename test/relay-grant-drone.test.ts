@@ -1,6 +1,9 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { principalOf, verifyMemberGrant, type TynnJwk } from '../src/main/relay-grant.js';
+import { principalOf as principalOn, verifyMemberGrant, type HostGrant, type TynnJwk } from '../src/main/relay-grant.js';
+
+/** The host here is signed in as the grants' own subject, so Tynn's `owner` is this machine's owner (Tynn #757). */
+const principalOf = (g: HostGrant) => principalOn(g, 'u1');
 
 /**
  * A DRONE ACCEPTS ONLY ITS OWNER'S OWN PAIRED MACHINES, AND SHARE LINKS (genie#1278 W5; the owner, 2026-10-27: Drones

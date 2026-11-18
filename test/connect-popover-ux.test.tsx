@@ -16,8 +16,8 @@ import { control } from './helpers/control-markup.js';
  */
 
 const LIST = { ok: true as const, workstations: [
-    { id: 'ws_found', name: 'Foundation-Workstation', active: true, connectable: true, local: true, source: 'owner', role: 'drone' as const },
-    { id: 'ws_aion', name: 'Aionima', active: true, connectable: true, local: true, source: 'owner', role: 'pilot' as const },
+    { id: 'ws_found', name: 'Foundation-Workstation', active: true, connectable: true, local: true, source: 'owner', mine: true, role: 'drone' as const },
+    { id: 'ws_aion', name: 'Aionima', active: true, connectable: true, local: true, source: 'owner', mine: true, role: 'pilot' as const },
 ] };
 const row = (html: string, id: string) => { const at = html.slice(html.indexOf(`data-tynn-workstation-row="${id}"`)); return at.slice(0, at.indexOf('</li>')); };
 const setRole = async () => ({ ok: true as const, role: 'drone' as const });

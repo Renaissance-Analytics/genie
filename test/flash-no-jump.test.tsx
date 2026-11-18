@@ -52,7 +52,7 @@ describe('Flash', () => {
 });
 
 describe('opening a workstation', () => {
-    const list = { ok: true as const, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner' }] };
+    const list = { ok: true as const, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner', mine: true }] };
 
     it('adds no line under its row; a popover says it opened, then goes', async () => {
         act(() => root.render(<ConnectMenu workstations={list} onOpenWorkstation={() => Promise.resolve()} onOpenSurface={() => {}} />));

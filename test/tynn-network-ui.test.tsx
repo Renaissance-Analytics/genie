@@ -85,7 +85,7 @@ describe('Connect lists your Tynn workstations', () => {
             <ConnectRemote
                 {...base}
                 tynnWorkstations={{ ok: true, workstations: [
-                    { id: 'ws_cloud', name: 'cloud box', active: true, connectable: true, local: false, source: 'owner' },
+                    { id: 'ws_cloud', name: 'cloud box', active: true, connectable: true, local: false, source: 'owner', mine: true },
                     { id: 'ws_pat', name: 'Pat’s laptop', active: true, connectable: false, local: true, source: null },
                 ] }}
                 onOpenWorkstation={() => {}}
