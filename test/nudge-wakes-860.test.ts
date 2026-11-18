@@ -66,7 +66,7 @@ async function rig(options: { asleep?: boolean; cap?: string; safeMode?: boolean
         wake,
     }, address, text, 'stoic ticket watch');
     cleanups.push(async () => { start.mockRestore(); host.stopAll(); await host.settled(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); await rm(ws, { recursive: true, force: true }); });
-    return { host, stoic, other, start, nudge };
+    return { host, stoic, other, start, nudge, wake };
 }
 
 const running = (host: SessionHost, id: string) => host.probe(id as AgentId)?.running === true;
@@ -103,6 +103,12 @@ describe('a scheduled nudge wakes its agent (Tynn #860)', () => {
     it('a hibernating workspace: refused, nothing started', async () => {
         const r = await rig({ asleep: true });
         expect(await r.nudge('stoic@moic-suite', 'check the ticket queue')).toEqual({ ok: false, reason: expect.stringMatching(/hibernat/) });
+        expect(r.start).not.toHaveBeenCalled();
+    });
+
+    it('the host\'s wake itself refuses an agent in a hibernating workspace, by id (written after; the break probe proves it)', async () => {
+        const r = await rig({ asleep: true });
+        expect(await r.wake(r.stoic.id)).toEqual({ ok: false, reason: expect.stringMatching(/hibernating/) });
         expect(r.start).not.toHaveBeenCalled();
     });
 
