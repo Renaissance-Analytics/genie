@@ -58,6 +58,8 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
     const [drafts, setDrafts] = useState<QuestionDrafts>({});
     const [existing, setExisting] = useState<{ id: string; set: ReadonlySet<string> | null } | null>(null);
     const [drawer, setDrawer] = useState<(Drawer & { id: string }) | null>(null);
+    // The drawer filling the window (core/preview-full.ts): it belongs to the file open, so another file or none puts it back.
+    const [drawerFull, setDrawerFull] = useState<{ id: string; path: string } | null>(null);
     useEffect(() => {
         const receive = (v: View) => {
             setView(v);
@@ -125,6 +127,7 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
     };
     const closeFile = () => {
         setDrawer(null);
+        setDrawerFull(null);
         void bridge.drawer?.(false);
     };
     return (
@@ -137,6 +140,8 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
             existing={existing !== null && existing.id === shown ? existing.set : null}
             drawer={open}
             visuals={visuals !== null && visuals.key === visualKey && visualKey !== '' ? { posts: visuals.posts, ...(visuals.error ? { error: visuals.error } : {}) } : null}
+            drawerFull={open !== null && drawerFull !== null && drawerFull.id === open.id && drawerFull.path === open.path}
+            onDrawerFull={(full) => setDrawerFull(full && open ? { id: open.id, path: open.path } : null)}
             onOpenInFiles={(path) => { if (shown) void bridge.openInFiles?.(shown, path); }}
             {...(bridge.file ? { onOpenFile: openFile, onCloseFile: closeFile } : {})}
             onPick={(id) => {
