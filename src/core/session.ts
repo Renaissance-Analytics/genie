@@ -965,6 +965,11 @@ export class AgentSession {
     }
 
     /** Why the last turn failed, in the provider's own words, or `null`. */
+    /** The last turn its provider stopped, explained and counted (Tynn #859); `null` = none. */
+    get providerStop(): { readonly code: string; readonly words: string; readonly count: number } | null {
+        return null;
+    }
+
     get failure(): string | null {
         return this.#failure;
     }

@@ -130,6 +130,8 @@ export function waitingStepLabel(step: string): string {
 }
 
 
+export type ProviderStopView = { readonly code: string; readonly words: string; readonly count: number };
+
 export interface ChatContext {
     text: string;
     tone: 'ok' | 'warn' | 'bad' | 'muted' | 'cool';
@@ -137,6 +139,8 @@ export interface ChatContext {
     title?: string;
     /** `Working · Plan n/m`: the plan's open items, listed when the line is hovered (Tynn #703). Absent = no plan to list. */
     planView?: ChatPlanView;
+    /** A turn its PROVIDER stopped (Tynn #859): the stop in words and how many times it has stopped for that reason. */
+    stop?: ProviderStopView;
 }
 
 export interface ChatThreadView {
