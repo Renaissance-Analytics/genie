@@ -121,7 +121,7 @@ import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain } from './host-keychain.js';
-import { startProofOfDone } from './proof-of-done-host.js';
+import { podApproval, startProofOfDone } from './proof-of-done-host.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
@@ -1809,7 +1809,8 @@ async function main(): Promise<void> {
             file: join(home, 'proof-of-done-notes.json'),
             keychain,
             tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), credentialId: () => account.credentialId(), request: (path, init) => account.request(path, init) },
-            approve: async (request) => (await approvals.gate(podCaller, 'pod.sign', request.detail)) === 'allowed' ? 'allowed' : 'denied',
+            // Its signal withdraws the card when Tynn stops listing the claim as waiting (Tynn #858).
+            approve: podApproval(approvals, podCaller),
             workspaces: () => hostRegistry.listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
             label: () => hostname(),
             log: say,

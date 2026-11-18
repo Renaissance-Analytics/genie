@@ -27,6 +27,8 @@ const RETRY_FOR_MS = 14 * 24 * 60 * 60 * 1000;
 const REFUSED_FIRST_MS = 2 * 60 * 1000;
 const REFUSED_CAP_MS = 6 * 60 * 60 * 1000;
 const refusal = (status: number): boolean => status >= 400 && status < 500;
+/** Why a parked Sign is taken off the Deck (Tynn #858): the approval queue records it as the reason. */
+export const POD_WITHDRAWN = 'Tynn no longer lists this claim as waiting';
 const inWords = (ms: number): string => (ms < 60 * 60 * 1000 ? `${Math.round(ms / 60_000)} min` : `${Number((ms / 3_600_000).toFixed(1))} h`);
 
 /** Hex of the first 16 bytes of SHA-256 of the raw 32-byte public key — Tynn's `key_id`. */
@@ -59,8 +61,11 @@ export interface PodPorts {
         credentialId?(): string | null;
         request(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<Response>;
     };
-    /** The person's Sign / Decline for one HITL claim: `detail` names the task, the score and the commits. */
-    approve(request: { readonly id: string; readonly detail: string }): Promise<'allowed' | 'denied'>;
+    /**
+     * The person's Sign / Decline for one HITL claim: `detail` names the task, the score and the commits. `signal` aborts
+     * (reason `POD_WITHDRAWN`) when Tynn stops listing the claim as waiting (Tynn #858): the ask leaves the Deck unanswered.
+     */
+    approve(request: { readonly id: string; readonly detail: string; readonly signal: AbortSignal }): Promise<'allowed' | 'denied'>;
     workspaces(): readonly { readonly id: string; readonly path: string }[];
     git(cwd: string, args: readonly string[]): Promise<GitResult>;
     /** What is still owed to git, kept across restarts. */
@@ -87,6 +92,8 @@ export class ProofOfDone {
     /** Every claim answered or being answered this run: Tynn's list is asked again each poll. */
     readonly #handled = new Set<string>();
     readonly #inFlight = new Set<Promise<void>>();
+    /** Each HITL claim waiting on the person, by id: what a poll that no longer lists it withdraws (Tynn #858). */
+    readonly #asking = new Map<string, AbortController>();
     #retrying = false;
 
     constructor(ports: PodPorts) {
@@ -162,6 +169,7 @@ export class ProofOfDone {
             this.#refused = null;
             const body = (await res.json().catch(() => null)) as { data?: unknown } | null;
             const items = Array.isArray(body?.data) ? body.data : [];
+            this.#withdraw(new Set(items.map((raw) => (raw as { id?: unknown } | null)?.id).filter((id): id is string => typeof id === 'string')));
             for (const raw of items) {
                 const item = raw as { id?: unknown; approval?: unknown; host_key_id?: unknown; claim?: unknown; claim_hash?: unknown };
                 if (typeof item.id !== 'string' || item.host_key_id !== held.keyId || this.#handled.has(item.id)) continue;
@@ -179,6 +187,21 @@ export class ProofOfDone {
         }
     }
 
+    /**
+     * A SIGN NOBODY CAN GIVE IS NOT ASKED FOR (Tynn #858). Only after a poll Tynn answered: each HITL ask whose claim is no
+     * longer among `waiting` (superseded, signed elsewhere, withdrawn) is aborted, so its card leaves the Deck with no
+     * answer and the claim is never signed. A failed poll never gets here, so it withdraws nothing.
+     */
+    #withdraw(waiting: ReadonlySet<string>): void {
+        for (const [id, asking] of this.#asking) {
+            if (waiting.has(id)) continue;
+            this.#asking.delete(id);
+            // Not answered: should Tynn list it again, it is asked again.
+            this.#handled.delete(id);
+            asking.abort(POD_WITHDRAWN);
+        }
+    }
+
     /** Everything started so far has finished (a claim waiting on the person included). */
     async idle(): Promise<void> {
         while (this.#inFlight.size > 0) await Promise.all([...this.#inFlight]);
@@ -192,7 +215,13 @@ export class ProofOfDone {
         if (given.length !== 32 || !given.equals(expected)) { this.#say(`claim ${id} refused: its hash is not the SHA-256 of its claim`); return; }
 
         if (item.approval === 'hitl') {
-            const verdict = await this.#ports.approve({ id, detail: describe(item.claim) });
+            const asking = new AbortController();
+            this.#asking.set(id, asking);
+            let verdict: 'allowed' | 'denied';
+            try { verdict = await this.#ports.approve({ id, detail: describe(item.claim), signal: asking.signal }); }
+            finally { if (this.#asking.get(id) === asking) this.#asking.delete(id); }
+            // Withdrawn while it waited: whatever the ask answered after that, Tynn is no longer waiting for this claim.
+            if (asking.signal.aborted) { this.#say(`claim ${id} withdrawn: Tynn no longer lists it as waiting`); return; }
             if (verdict !== 'allowed') { this.#say(`claim ${id} not signed: the person declined`); return; }
         } else if (item.approval !== 'agent') {
             this.#say(`claim ${id} refused: unknown approval`);
