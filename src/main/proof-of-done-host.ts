@@ -2,6 +2,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { gitExecFile } from './git-exec.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { ProofOfDone, type PendingNote, type PodPorts } from './proof-of-done.js';
+import type { ApprovalQueue } from './approval-queue.js';
+import type { Caller } from './mcp-tools.js';
 
 /**
  * PROOF-OF-DONE ON THE HOST (Tynn #742): the real git, the file of what git is still owed, and the clock. The signing key is
@@ -34,6 +36,14 @@ export function noteFile(file: string): PodPorts['retry'] {
         },
         save: (notes) => writeFile(file, JSON.stringify(notes), 'utf8'),
     };
+}
+
+/**
+ * THE PERSON'S SIGN, ON THE DECK: a HITL claim parks as a `pod.sign` approval. Its signal is the claim's: when Tynn stops
+ * listing the claim (Tynn #858) the approval leaves the Deck, recorded as cancelled with that reason, and is never signed.
+ */
+export function podApproval(approvals: Pick<ApprovalQueue, 'gate'>, caller: Caller): PodPorts['approve'] {
+    return async (request) => ((await approvals.gate(caller, 'pod.sign', request.detail, { signal: request.signal })) === 'allowed' ? 'allowed' : 'denied');
 }
 
 export interface ProofOfDoneHostOptions extends Omit<PodPorts, 'git' | 'retry'> {
