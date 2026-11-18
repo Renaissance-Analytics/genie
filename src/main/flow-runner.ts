@@ -75,7 +75,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         if (graph.nodes.length === 0) return { outcome: 'failed', reason: 'the flow has no steps to run' };
         // A port that holds a step back says so; the engine sees an ordinary failure and stops the run there.
         const step: { held: string | null } = { held: null };
-        // What became of each Prompt an agent step's prompt, by node (Tynn #826): a step that did not wait for the reply
+        // What became of each agent prompt, by its node (Tynn #826): a step that did not wait for the reply
         // reads `delivered` (handed over or accepted) or `waiting` (kept for the agent's next run), not `ran`.
         const delivered = new Map<string, NodeOutcome>();
         // The step paused at its agent's provider limit (Tynn #749), while it is: the run keeps its place and its inputs.
@@ -525,8 +525,8 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
                     HELD_FLOW_PROMPTS.set(key, { promptId: handed.id, supersede: () => { superseded = true; recheck(); } });
                     replacing?.supersede();
                     said('accepted', replacing !== null
-                        ? `accepted: ${name}'s provider holds the prompt until its current turn ends, then it goes; it replaced the prompt this flow handed earlier, which had not gone yet`
-                        : `accepted: ${name}'s provider holds the prompt until its current turn ends, then it goes`);
+                        ? `accepted: ${name}'s provider holds the prompt, and it goes when its current turn ends; it replaced the prompt this flow handed earlier, which had not gone yet`
+                        : `accepted: ${name}'s provider holds the prompt, and it goes when its current turn ends`);
                 }
             } else {
                 const answer = deps.sessions.prompt(id, text, deps.by);

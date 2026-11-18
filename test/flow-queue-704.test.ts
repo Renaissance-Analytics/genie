@@ -88,7 +88,7 @@ describe('waitForReply on a BUSY Codex agent: held for the turn end, its own tur
         await tick();
         expect(s.prompts).toEqual([]);
         expect(s.queue).toHaveLength(1);
-        expect(notes).toEqual([expect.stringMatching(/^accepted: .*holds the prompt until its current turn ends/)]);
+        expect(notes).toEqual([expect.stringMatching(/^accepted: .*holds the prompt, and it goes when its current turn ends/)]);
         s.endTurn('the earlier turn, not ours');
         await tick();
         expect(s.prompts).toEqual([['check the queue', 'flow "nightly report"']]);

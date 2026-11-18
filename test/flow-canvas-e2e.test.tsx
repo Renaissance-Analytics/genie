@@ -129,7 +129,7 @@ describe('each trigger, end to end', () => {
     it('RUN NOW (manual): the agent is REACHED, its reply comes back into the run, and the next step uses it', async () => {
         const id = await saveAndArm('standup', onCanvas([
             n('t', 'manual_trigger'),
-            n('a', 'genie/agent_prompt', { agent: 'atlas@ws-example', prompt: 'post the standup' }, 240),
+            n('a', 'genie/agent_prompt', { agent: 'atlas@ws-example', prompt: 'post the standup', waitForReply: true }, 240),
             n('k', 'genie/knowledge_add', { workspace: 'ws-example', title: 'Standup', body: '{{in.reply}}' }, 480),
         ], [e('t', 'a'), e('a', 'k')]));
         expect(await services.flowScheduler.runNow(id)).toMatchObject({ trigger: 'manual', outcome: 'ran', nodes: { t: 'ran', a: 'ran', k: 'ran' } });

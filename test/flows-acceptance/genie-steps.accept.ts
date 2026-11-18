@@ -21,7 +21,7 @@ describe('Prompt an agent', () => {
         const g = genie();
         const id = await save(g, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post the standup', waitForReply: true }, 300), log('l', 'reply: {{ $json.reply }}')], [edge('t', 'p'), edge('p', 'l')]);
         const run = await runNow(g, id);
-        expect(run).toMatchObject({ outcome: 'ran', nodes: { p: 'ran', l: 'ran' }, log: ['reply: atlas did: post the standup'] });
+        expect(run).toMatchObject({ outcome: 'ran', nodes: { p: 'ran', l: 'ran' }, log: ['delivered to atlas', 'reply: atlas did: post the standup'] });
         expect(g.sessions.prompts).toEqual([{ agentId: 'agent_atlas', text: 'post the standup', by: 'flow "standup"' }]);
     });
 
@@ -29,7 +29,7 @@ describe('Prompt an agent', () => {
         const g = genie();
         const id = await save(g, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post the standup' }, 300), log('l', 'delivery: {{ $json.delivery }}')], [edge('t', 'p'), edge('p', 'l')]);
         g.sessions.mode = 'never-ends';
-        expect(await runNow(g, id)).toMatchObject({ outcome: 'ran', nodes: { p: 'delivered', l: 'ran' }, log: ['delivery: delivered'] });
+        expect(await runNow(g, id)).toMatchObject({ outcome: 'ran', nodes: { p: 'delivered', l: 'ran' }, log: ['delivered to atlas', 'delivery: delivered'] });
         expect(g.sessions.prompts).toEqual([{ agentId: 'agent_atlas', text: 'post the standup', by: 'flow "standup"' }]);
     });
 

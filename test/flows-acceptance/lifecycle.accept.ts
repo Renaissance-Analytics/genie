@@ -42,7 +42,7 @@ describe('the run overlay: each node’s outcome, as the canvas draws it', () =>
         const id = await save(g, 'held', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'go' }, 300), log('l', 'after')], [edge('t', 'p'), edge('p', 'l')]);
         // A busy agent behind a port that cannot hand it a message mid-turn (Tynn #826: Genie's own ports can).
         g.sessions.mode = 'busy';
-        g.sessions.deliver = undefined;
+        delete g.sessions.deliver;
         const run = await runNow(g, id);
         expect(run.nodes).toEqual({ t: 'ran', p: 'held', l: 'not reached' });
         expect(viewerStatuses(run.nodes!)).toEqual({ t: 'ok', p: 'running', l: 'pending' });
@@ -296,7 +296,8 @@ describe('Genie 1’s flows, brought over at launch', () => {
             // The watcher, armed and run on Genie 2: exit 10 wakes the agent with the script's output, then remembers it.
             await g.services.flows.arm(watch.id, { kind: 'user' });
             const run = await runNow(g, watch.id);
-            expect(run).toMatchObject({ outcome: 'ran', nodes: { run1: 'ran', br1: 'ran', msg1: 'ran', k1: 'ran' } });
+            // Genie 1's `agentinbox send` was done once the message was handed over; so is the step it became (Tynn #826).
+            expect(run).toMatchObject({ outcome: 'ran', nodes: { run1: 'ran', br1: 'ran', msg1: 'delivered', k1: 'ran' } });
             expect(g.sessions.prompts).toHaveLength(1);
             expect(g.sessions.prompts[0]!.text).toContain('reports: 3');
             expect(g.services.knowledge.list({ scopes: [{ kind: 'workspace', id: WS }], limit: 10 }).nodes.map((k) => k.title)).toContain(`woke ${AGENT}`);

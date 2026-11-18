@@ -141,7 +141,7 @@ describe('a busy agent gets the prompt MID-TURN, and the step does not wait for 
         const { asked, said, timer } = ask(a.port);
         expect(await settledState(asked)).toEqual({ state: 'resolved', value: '' });
         expect(a.held.map((q) => q.text)).toEqual(['tell']);
-        expect(said).toEqual([['accepted', expect.stringMatching(/when (its|that) turn ends/)]]);
+        expect(said).toEqual([['accepted', expect.stringMatching(/goes when its current turn ends/)]]);
         expect(timer.armed()).toBe(0);
         a.endTurn('earlier work');
         expect(a.turns).toEqual([['tell', BY]]);
