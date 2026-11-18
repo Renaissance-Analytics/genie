@@ -1,4 +1,5 @@
 import { Button, ContentRenderer } from '@particle-academy/react-fancy';
+import { OptionVisual, QuestionGallery } from './QuestionVisuals.js';
 import { genieClipboardWriter } from '../clipboard.js';
 import { CONTAINED_PROSE } from '../prose-contain.js';
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
@@ -110,6 +111,8 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                     <div data-question-text={i} className="min-w-0 [overflow-wrap:anywhere]">
                         <ContentRenderer clipboardWriter={genieClipboardWriter} value={q.question} format="markdown" lineSpacing={1.6} className={`font-sans text-[13px] text-[var(--fg-1)] ${CONTAINED_PROSE}`} />
                     </div>
+                    {/* What the agent attached to look at while deciding (Tynn #835): the ArtBoard's own previews, with full screen. */}
+                    <QuestionGallery question={q} index={i} />
                     {/* OPTIONS AS CARDS (Tynn #646): one column, every card as wide as the question; the title bold on its own line,
                         broken only between words; the description under it, muted. A radio (one choice) or a check (several)
                         fills when picked, with the accent border and background; a hover is a light tint, never the picked look.
@@ -146,6 +149,8 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                                         <span data-option-title="" className="block break-normal text-[13px] font-semibold leading-snug">{o.label}</span>
                                         {o.description ? <span data-option-description="" className="block break-normal text-[12px] leading-snug text-[var(--fg-3)]">{o.description}</span> : null}
+                                        {/* Pick a mockup (Tynn #835): an option that IS a visual shows it; the card is still the choice. */}
+                                        {o.visual ? <OptionVisual visual={o.visual} /> : null}
                                     </span>
                                 </Button>
                             );

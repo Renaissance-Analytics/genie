@@ -6,6 +6,7 @@ import { genieWindowIcon } from './app-identity.js';
 import { askWindowBounds } from '../core/question-drawer.js';
 import { existingFiles, questionFileInside, readQuestionFile } from './question-files.js';
 import { onceShowable } from '../core/window-activation.js';
+import type { DeckItem } from '../core/deck.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW — the Electron half of `question-window.ts`. Genie 1's window, carried over (genie
@@ -18,7 +19,7 @@ import { onceShowable } from '../core/window-activation.js';
 const WIDTH = 560;
 const HEIGHT = 520;
 
-export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null; workspacePath?: (workspaceId: string) => string | null; openInFiles?: (workspaceId: string, path: string) => void }): (onClosed: () => void) => QuestionWindowPort {
+export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null; workspacePath?: (workspaceId: string) => string | null; openInFiles?: (workspaceId: string, path: string) => void; visuals?: (item: DeckItem) => Promise<{ posts: readonly unknown[] }> }): (onClosed: () => void) => QuestionWindowPort {
     // The page's calls, registered once: what to show (asked on load), an answer, Later, Dismiss — an answer and a
     // Dismiss name the question they are for (any question in the window's queue, in any order) — a pick from the
     // queue, and the draft being written (kept in main, so a closed window loses nothing).
@@ -82,6 +83,19 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         // The Files panel takes a workspace-relative path, forward slashes.
         input.openInFiles?.(item.workspaceId, relative(root, inside).replace(/\\/g, '/'));
         return true;
+    });
+    // A QUESTION'S VISUALS (Tynn #835): the question is looked up in what this window holds — never taken from the page — and
+    // its ArtBoard posts read from ITS workspace, or, for another machine's question, through the window driving it.
+    ipcMain.handle('question:visuals', async (_e, rawId: unknown) => {
+        const id = idOf(rawId);
+        const held = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
+        const item = held.find((q) => q.id === id);
+        if (!item || !input.visuals) return { ok: false, reason: 'Genie does not know this question' };
+        try {
+            return { ok: true, posts: (await input.visuals(item)).posts };
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
     });
     // The window WIDENS for the drawer and back (Genie 1's askWindowBounds): the width it had before is what it returns to.
     let current: BrowserWindow | null = null;

@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('genieQuestion', {
     file: (id: string, path: string) => ipcRenderer.invoke('question:file', id, path),
     openInFiles: (id: string, path: string) => ipcRenderer.invoke('question:open-in-files', id, path),
     drawer: (open: boolean) => ipcRenderer.invoke('question:drawer', open),
+    visuals: (id: string) => ipcRenderer.invoke('question:visuals', id),
     onShow: (listener: (view: unknown) => void) => {
         const handler = (_e: unknown, view: unknown) => listener(view);
         ipcRenderer.on('question:show', handler);

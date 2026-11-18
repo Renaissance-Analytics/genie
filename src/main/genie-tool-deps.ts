@@ -49,6 +49,8 @@ export interface GenieToolParts {
     readonly thumbsUp: (caller: Caller, reason: string) => void;
     /** IssueWatch (Tynn #806): what is open on GitHub for a workspace, as last heard from Tynn. Absent = none (doctor mode). */
     readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer>; recheckSignIn?(): void };
+    /** A workspace's folder (the registry's): where a decided question writes on the ArtBoard (Tynn #835). Absent = where its agent was seen. */
+    readonly workspacePath?: (workspaceId: string) => string | null;
     /** openFileForUser (genie#922): the caller's workspace and the path relative to it — main opens Genie's file panel there. */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     /** The `plan` tool: the caller's plan into its own session (`SessionHost.reportPlan`); `false` = no running session. */
@@ -109,6 +111,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             thumbsUp: p.thumbsUp,
             dnd: () => ({ on: values().do_not_disturb === true, reply: String(values().dnd_reply ?? '') }),
             ...(p.issueWatch ? { issueWatch: p.issueWatch } : {}),
+            ...(p.workspacePath ? { workspacePath: p.workspacePath } : {}),
         },
         more: {
             knowledge: p.knowledge,

@@ -139,6 +139,7 @@ import { featureWindow } from './feature-window.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
 import { RemoteQuestions } from './remote-questions.js';
+import { readQuestionVisuals } from './question-visuals.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
 import { thisMachineWorkstationIds } from './this-machine.js';
@@ -3097,7 +3098,14 @@ async function boot(): Promise<void> {
     });
     questionWindow = new QuestionWindow({
         items: () => [...composed.deckItems(), ...remoteQuestions.items()],
-        open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null, openInFiles: (workspaceId, path) => { revealMainWindow('question: Open in Files'); showToPerson({ activation: 'user-gesture', route: `genie://workspace/${encodeURIComponent(workspaceId)}?files=${encodeURIComponent(path)}`, reason: 'question: Open in Files' }); } }),
+        open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null,
+            // A question's visuals (Tynn #835): another machine's through the window driving it; this machine's from its workspace's board.
+            visuals: async (item) => {
+                if (remoteQuestions.owns(item.id)) return remoteQuestions.visuals(item);
+                const root = item.workspaceId ? registry?.workspace(item.workspaceId)?.path ?? null : null;
+                if (root === null) throw new Error('Genie does not know this question’s workspace');
+                return readQuestionVisuals(root, item.answer.kind === 'form' ? item.answer.questions ?? [] : []);
+            }, openInFiles: (workspaceId, path) => { revealMainWindow('question: Open in Files'); showToPerson({ activation: 'user-gesture', route: `genie://workspace/${encodeURIComponent(workspaceId)}?files=${encodeURIComponent(path)}`, reason: 'question: Open in Files' }); } }),
         answer: async (item, selections, notes) => {
             if (remoteQuestions.owns(item.id)) return remoteQuestions.act(item, { kind: 'deck.answerForm', selections, notes });
             await questionAction({ kind: 'deck.answerForm', item, selections, notes, note: '' });
