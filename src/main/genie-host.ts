@@ -1102,6 +1102,8 @@ async function main(): Promise<void> {
         read: (provider) => { identityWatch.read(provider); },
     }));
     void accountIdentity.refreshAll();
+    // The idle backstop (#854): a provider whose identity was not read for five minutes is read again; checked every minute.
+    setInterval(() => { identityWatch.tick(); }, 60_000).unref();
     const providerHealth = new ProviderHealthBook(async provider => {
         if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
         const health = await checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.activeFor(provider));
