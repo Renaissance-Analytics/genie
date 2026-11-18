@@ -172,7 +172,7 @@ import { tellDesignLoginRan } from '../core/design-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
-import { sharedWindowsHelper } from './private-credentials.js';
+import { restrictPrivateDirectories, sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
 import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
@@ -218,7 +218,7 @@ import { ChatDraftStore } from './chat-draft-store.js';
 import { readV1Settings } from './v1-settings.js';
 import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
-import { wireHostMailWake } from './host-mail-wake.js';
+import { hostAgentWake, wireHostMailWake } from './host-mail-wake.js';
 import { wireHostPlanKeepalive, type HostPlanKeepalive } from './host-plan-keepalive.js';
 import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
 import { TYNN_ISSUES_FEED } from './tynn-issues-live.js';
@@ -1908,7 +1908,12 @@ async function main(): Promise<void> {
             };
             // Each kept process's output, kept past this Genie (Tynn #860): a row "stopped by restart" still has its log.
             let opened: ProcessBook | null = null;
-            const keptLogs = await KeptProcessLogs.open(join(runtime, 'process-logs'), { supervisor: processSupervisor, owns: (id) => opened?.owns(id) ?? false });
+            const keptLogs = await KeptProcessLogs.open(join(runtime, 'process-logs'), {
+                supervisor: processSupervisor,
+                owns: (id) => opened?.owns(id) ?? false,
+                // Owner-only on Windows too: the credential ACL on the folder, once (process output can hold a secret).
+                ...(process.platform === 'win32' ? { restrictDir: (dir: string) => restrictPrivateDirectories([dir]) } : {}),
+            });
             const processBook = await ProcessBook.open(home, {
                 ...deps,
                 logs: keptLogs,
@@ -1918,6 +1923,8 @@ async function main(): Promise<void> {
             opened = processBook;
             // Written before the host goes ("Shut down everything" stops the clocks): the last output is not left pending.
             clocks.push({ stop: () => { void keptLogs.flush(); } });
+            // A nudge wakes its agent through the host's one wake, as mail does (the owner's decision, Tynn #860).
+            const nudgeWake = hostAgentWake({ host, registry: hostRegistry, settings, osaDir: osaHome, safeMode: safeNow });
             const scheduler = new ProcessScheduler({
                 ...deps,
                 book: processBook,
@@ -1925,6 +1932,7 @@ async function main(): Promise<void> {
                 nudge: (address, text, from) => nudgeOnRoster({
                     resolve: (a) => resolveOnRoster(a, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
                     deliver: (id, t, by) => host.deliver(id as AgentId, t, by),
+                    wake: nudgeWake,
                 }, address, text, from),
                 now: Date.now,
                 schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },

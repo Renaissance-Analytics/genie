@@ -71,12 +71,17 @@ describe('a kept log is a bounded tail: lines AND bytes', () => {
         expect(Buffer.byteLength(logs.read('p1')!.text, 'utf8')).toBeLessThanOrEqual(KEPT_LOG_MAX_BYTES);
     });
 
-    it('one enormous line with no newline is bounded by bytes too', async () => {
+    it('one long line (within the tail\'s character bound, over the byte bound) is cut to its end, within the bytes', async () => {
         const logs = await KeptProcessLogs.open(dir, { supervisor: sup, owns: () => true, ...now });
         sup.start(spec('p1'));
-        sup.print('p1', '€'.repeat(400_000));
+        // 100 000 three-byte characters: 300 000 bytes. (A line past the tail's CHARACTER bound is dropped whole by the
+        // tail itself, which would make this vacuous — the first RED run showed exactly that, so the line is sized here.)
+        sup.print('p1', `${'€'.repeat(100_000)}END`);
         await logs.flush();
-        expect(Buffer.byteLength((await keptFile('p1')).text, 'utf8')).toBeLessThanOrEqual(KEPT_LOG_MAX_BYTES);
+        const kept = await keptFile('p1');
+        expect(Buffer.byteLength(kept.text, 'utf8')).toBeLessThanOrEqual(KEPT_LOG_MAX_BYTES);
+        expect(kept.text.endsWith('€END')).toBe(true);
+        expect(kept.text.length).toBeGreaterThan(50_000);
     });
 
     it('across restarts the joined log stays within the bound', async () => {
@@ -123,6 +128,15 @@ describe('a kept log lives only in its folder, owner-only, and goes with its pro
         await expect(stat(resolve(dir, '..', '..', 'escaped.json'))).rejects.toThrow();
         // Read back by the next Genie under the same id.
         expect((await KeptProcessLogs.open(dir, { supervisor: fakeSupervisor(), owns: () => true, ...now })).read(id)!.text).toBe('x');
+    });
+
+    it('a folder that cannot be made private keeps nothing on disk: the output stays in memory (written after; the break probe proves it)', async () => {
+        const logs = await KeptProcessLogs.open(dir, { supervisor: sup, owns: () => true, ...now, restrictDir: async () => { throw new Error('ACL refused'); } });
+        sup.start(spec('p1'));
+        sup.print('p1', 'token=abc\n');
+        await logs.flush();
+        expect(await readdir(dir)).toEqual([]);
+        expect(logs.read('p1')!.text).toBe('token=abc');
     });
 
     it('genie-host keeps them under its runtime folder (runtimeDir), never a workspace', () => {

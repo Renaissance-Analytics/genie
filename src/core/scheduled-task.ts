@@ -40,9 +40,17 @@ export interface ScheduledRun {
 /** How many runs a scheduled task keeps. */
 export const KEPT_RUNS = 20;
 
+/** The longest `sent` or `reason` a kept run holds (Tynn #860 review): a nudge's text or an error can be long, or hold a secret. */
+export const KEPT_TEXT_MAX = 2_000;
+
+const capped = (text: string | undefined): string | undefined => (text === undefined || text.length <= KEPT_TEXT_MAX ? text : `${text.slice(0, KEPT_TEXT_MAX)}…`);
+
 /** The schedule with this run kept: newest first, at most KEPT_RUNS; the last run's time and outcome follow it. */
 export function withRun(schedule: ProcessSchedule, run: ScheduledRun): ProcessSchedule {
-    return { ...schedule, lastRunAt: run.at, lastRunStatus: run.status, runs: [run, ...(schedule.runs ?? [])].slice(0, KEPT_RUNS) };
+    const sent = capped(run.sent);
+    const reason = capped(run.reason);
+    const kept: ScheduledRun = { at: run.at, endedAt: run.endedAt, status: run.status, ...(reason === undefined ? {} : { reason }), ...(sent === undefined ? {} : { sent }) };
+    return { ...schedule, lastRunAt: run.at, lastRunStatus: run.status, runs: [kept, ...(schedule.runs ?? [])].slice(0, KEPT_RUNS) };
 }
 
 /** Why the LAST run failed or was skipped, or null (it went fine, never ran, or was recorded before Tynn #860). */
@@ -129,6 +137,3 @@ export const PROCESS_SCHEDULE_PRESETS: ReadonlyArray<{ value: string; label: str
     { value: '0 3 1 * *', label: 'Monthly, the 1st at 03:00' },
     { value: 'custom', label: 'Custom expression…' },
 ];
-
-/** STUB (Tynn #860 review RED). */
-export const KEPT_TEXT_MAX = 2_000;
