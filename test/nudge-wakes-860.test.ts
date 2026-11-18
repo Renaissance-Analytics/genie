@@ -61,6 +61,7 @@ async function rig(options: { asleep?: boolean; cap?: string; safeMode?: boolean
     const wake = hostAgentWake({ host, registry, settings, osaDir: dir, safeMode: () => options.safeMode === true });
     const nudge = (address: string, text: string) => nudgeOnRoster({
         resolve: (a) => resolveAddress(a, registry.listAgents(), registry.workspaceSlugs()),
+        unreachable: (a) => registry.mailRefusal(a),
         deliver: (id, t, by) => host.deliver(id, t, by),
         wake,
     }, address, text, 'stoic ticket watch');
@@ -121,6 +122,7 @@ describe('a scheduled nudge wakes its agent (Tynn #860)', () => {
         const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
         const nudge = host.slice(host.indexOf('nudge: (address, text, from) => nudgeOnRoster('), host.indexOf('}, address, text, from),'));
         expect(nudge).toMatch(/wake: \w+/);
+        expect(nudge).toMatch(/unreachable: \(a\) => hostRegistry\.mailRefusal\(a\)/);
         expect(host).toMatch(/const \w+ = hostAgentWake\(\{[^}]*safeMode: safeNow/);
     });
 });

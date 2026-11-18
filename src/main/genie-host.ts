@@ -1931,6 +1931,8 @@ async function main(): Promise<void> {
                 // A nudge reaches its agent by its address, on the host's roster, at its turn's end; a miss says which (Tynn #860).
                 nudge: (address, text, from) => nudgeOnRoster({
                     resolve: (a) => resolveOnRoster(a, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
+                    // An agent whose workspace is hibernated is not on the roster: said as mail says it.
+                    unreachable: (a) => hostRegistry.mailRefusal(a),
                     deliver: (id, t, by) => host.deliver(id as AgentId, t, by),
                     wake: nudgeWake,
                 }, address, text, from),

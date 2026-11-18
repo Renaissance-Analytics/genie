@@ -16,6 +16,8 @@ import type { NudgeOutcome } from './process-scheduler.js';
 
 export interface NudgeOnRosterDeps {
     readonly resolve: (address: string) => Resolution;
+    /** Why an address that names no reachable agent cannot be reached, when the roster knows (a hibernated workspace's agent). */
+    readonly unreachable?: (address: string) => string | null;
     /** The host's delivery, now or when the agent's turn ends; false = it has no session to take it. */
     readonly deliver: (id: AgentId, text: string, from: string) => boolean | Promise<boolean>;
     /**
@@ -28,7 +30,7 @@ export interface NudgeOnRosterDeps {
 
 export async function nudgeOnRoster(deps: NudgeOnRosterDeps, address: string, text: string, task: string): Promise<NudgeOutcome> {
     const found = deps.resolve(address);
-    if (found.kind === 'none') return { ok: false, reason: `no agent answers to "${address}" on this machine` };
+    if (found.kind === 'none') return { ok: false, reason: deps.unreachable?.(address) ?? `no agent answers to "${address}" on this machine` };
     if (found.kind === 'human') return { ok: false, reason: `"${address}" is the person, not an agent` };
     if (found.kind === 'ambiguous') return { ok: false, reason: `"${address}" names more than one agent (${found.forms.join(', ')}); use the full address` };
     try {
