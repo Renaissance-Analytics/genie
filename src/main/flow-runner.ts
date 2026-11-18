@@ -5,7 +5,7 @@ import { stepLabel } from '../core/flow-reach.js';
 import type { Resolution } from '../core/inbox.js';
 import { genieExecutors, type FlowPorts, type PromptDelivery, type PromptHooks, type PromptOptions } from './flow-executors.js';
 import { importFlowDocument } from './flow-kinds.js';
-import type { RunResult } from './flow-scheduler.js';
+import type { RunControl, RunResult } from './flow-scheduler.js';
 import type { FileFired, FlowRecord, FlowRunStep, Schedule } from './flow-store.js';
 import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
 
@@ -61,9 +61,14 @@ export interface RunResume {
 }
 
 /** The scheduler's `run`: one run of a flow, answering its outcome. Never throws. */
-export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume) => Promise<RunResult> {
+/** A step let go because its run was STOPPED (Tynn #833). Never a failure: the run is recorded stopped. */
+class StoppedRun extends Error {
+    override readonly name = 'StoppedRun';
+}
+
+export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume, control?: RunControl) => Promise<RunResult> {
     const now = deps.now ?? Date.now;
-    return async (flow, trigger, observer, resume) => {
+    return async (flow, trigger, observer, resume, control) => {
         if (deps.asleep(flow.workspaceId)) {
             return { outcome: 'held', reason: `its workspace ${flow.workspaceId} is hibernated; nothing runs there until it is woken` };
         }
@@ -86,6 +91,23 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                 throw error;
             });
         const base = deps.ports(flow);
+        /*
+         * STOP (Tynn #833): the engine's own abort is looked at only BETWEEN steps, so the step a run is on is let go here —
+         * every step races the stop — and the flow's command is killed (its supervised process stopped). Nothing after it
+         * runs; the run answers `stopped`.
+         */
+        const signal = control?.signal;
+        const stopped = new Promise<never>((_, reject) => {
+            if (!signal) return;
+            const stop = (): void => {
+                try { base.stopCommand?.(); } catch { /* the step is let go below either way */ }
+                reject(new StoppedRun('the run was stopped'));
+            };
+            if (signal.aborted) stop();
+            else signal.addEventListener('abort', stop, { once: true });
+        });
+        stopped.catch(() => {});
+        const isStopped = (): boolean => signal?.aborted === true;
         const ports: FlowPorts = {
             // What became of the prompt is the run's log (Tynn #826): delivered mid-turn, accepted for the turn's end, kept.
             promptAgent: (address, text, hooks, options) => watch(base.promptAgent(address, text, {
@@ -125,7 +147,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             if (!base) continue;
             const prompts = canonicalKind(def?.name ?? declared) === 'genie/agent_prompt';
             const wrapped: NodeExecutor = async (ctx) => {
-                const value = await base(ctx);
+                const value = signal ? await Promise.race([base(ctx), stopped]) : await base(ctx);
                 if (prompts) {
                     const how = (value as { delivery?: unknown } | null)?.delivery;
                     if (how === 'delivered' || how === 'accepted') delivered.set(ctx.node.id, 'delivered');
@@ -152,6 +174,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                 const status = statuses.get(n.id);
                 const o: NodeOutcome = status === 'done' ? (delivered.get(n.id) ?? 'ran')
                     : skipped.has(n.id) ? 'skipped'
+                    : final && isStopped() && (status === 'error' || status === 'running') ? 'stopped'
                     : status === 'error' ? (step.held !== null ? 'held' : 'failed')
                     : status === 'running' ? (final ? (step.held !== null ? 'held' : 'failed') : paused !== null ? 'paused' : 'running')
                     : 'not reached';
@@ -175,12 +198,18 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                     const outcome: FlowRunStep['outcome'] = status === 'done' ? 'ran' : status === 'error' || status === 'running' ? (step.held !== null ? 'held' : 'failed') : 'not reached';
                     return { nodeId: id, label: stepLabel(data), outcome };
                 });
+        const stoppedResult = (): RunResult => {
+            const by = control?.stoppedBy() ?? 'you';
+            return finish({ outcome: 'stopped', reason: by === 'you' ? 'stopped by you' : `stopped by ${by}`, stoppedBy: by });
+        };
         try {
-            const result = await runFlow(graph, executors as never, onEvent as never, { ...entry, run: `${flow.id}:${firedAt}`, ...(resume ? { resumeOutputs: { ...resume.outputs } } : {}) });
+            const result = await runFlow(graph, executors as never, onEvent as never, { ...entry, run: `${flow.id}:${firedAt}`, ...(resume ? { resumeOutputs: { ...resume.outputs } } : {}), ...(signal ? { signal } : {}) });
+            if (isStopped()) return stoppedResult();
             if (result.ok) return finish({ outcome: 'ran' });
             if (step.held !== null) return finish({ outcome: 'held', reason: step.held, steps: stepsOf() });
             return finish({ outcome: 'failed', reason: result.error ?? 'the run failed and the engine gave no reason', steps: stepsOf() });
         } catch (error) {
+            if (isStopped()) return stoppedResult();
             if (step.held !== null) return finish({ outcome: 'held', reason: step.held, steps: stepsOf() });
             return finish({ outcome: 'failed', reason: error instanceof Error ? error.message : String(error), steps: stepsOf() });
         }

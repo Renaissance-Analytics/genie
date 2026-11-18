@@ -109,6 +109,8 @@ export class FlowScheduler {
     #next: Planned | null = null;
     /** The flows with a run in flight, each with that run. */
     readonly #running = new Map<string, Promise<FlowRun | null>>();
+    /** Each run in flight's Stop (Tynn #833): its abort, and who stopped it. */
+    readonly #controls = new Map<string, { controller: AbortController; by: string | null }>();
     /** Records being written outside a run (a held one): `settled()` waits for these too (genie#1351). */
     readonly #records = new Set<Promise<unknown>>();
     /** Each flow's latest slot the timer fired: never planned for that flow again (genie#1363). */
@@ -123,9 +125,20 @@ export class FlowScheduler {
     }
 
     /** A QUIT: the timer is cancelled and nothing plans one again. Runs in flight are left to `settled()`. */
-    /** STOP A RUN (Tynn #833). Stub. */
-    async stopRun(_flowId: string, _by: Actor): Promise<StopAnswer> {
-        return { ok: false, reason: 'no run of this flow is going (not running)' };
+    /**
+     * STOP A RUN (Tynn #833; the owner: "I should be able to stop a flow"). The run in flight is aborted: the runner ends
+     * the step it is on at once (its command killed), nothing after it runs, and it is recorded `stopped` by `by`. Who may
+     * stop it is the caller's to decide (the person always; an agent its own flow, or the person's with their approval).
+     * Answers at once; the run's record follows. A run already stopped, or none going, answers so and does nothing.
+     */
+    async stopRun(flowId: string, by: Actor): Promise<StopAnswer> {
+        const control = this.#controls.get(flowId);
+        if (!control || !this.#running.has(flowId) || control.controller.signal.aborted) {
+            return { ok: false, reason: 'no run of this flow is going (not running); nothing was stopped' };
+        }
+        control.by = by.kind === 'user' ? 'you' : by.name;
+        control.controller.abort();
+        return { ok: true };
     }
 
     stop(): void {
@@ -287,7 +300,11 @@ export class FlowScheduler {
     }
 
     async #execute(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], startedAt: number, resume?: RunResume): Promise<FlowRun | null> {
-        let result: { outcome: RunOutcome; reason?: string; steps?: readonly FlowRunStep[] };
+        let result: { outcome: RunOutcome; reason?: string; steps?: readonly FlowRunStep[]; stoppedBy?: string };
+        // THE RUN'S STOP (Tynn #833): what `stopRun` aborts, and who pressed it.
+        const own = { controller: new AbortController(), by: null as string | null };
+        this.#controls.set(flow.id, own);
+        const control: RunControl = { signal: own.controller.signal, stoppedBy: () => own.by };
         // genie#1204: every node's outcome as the run goes — kept on disk while it is in flight, so a quit mid-run is
         // recorded at the next launch rather than lost — and the Log nodes' lines.
         let nodes: Record<string, NodeOutcome> = {};
@@ -308,15 +325,17 @@ export class FlowScheduler {
         };
         try {
             // Answering nothing means it ran (a run port with nothing to say about its outcome).
-            const answered = (await this.#deps.run(flow, trigger, observer, resume)) as RunResult | undefined;
+            const answered = (await this.#deps.run(flow, trigger, observer, resume, control)) as RunResult | undefined;
             result = answered ?? { outcome: 'ran' };
         } catch (error) {
             result = { outcome: 'failed', reason: error instanceof Error ? error.message : String(error) };
+        } finally {
+            if (this.#controls.get(flow.id) === own) this.#controls.delete(flow.id);
         }
         return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...fileOf, nodes, log, ...(resume ? { resumed: true } : {}) });
     }
 
-    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean }): Promise<FlowRun | null> {
+    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean; stoppedBy?: string }): Promise<FlowRun | null> {
         return this.#deps.store.recordRun(flowId, run);
     }
 }

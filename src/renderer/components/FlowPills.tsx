@@ -16,9 +16,26 @@ export interface FlowPillsProps {
     readonly onStop?: ((flowId: string) => void) | undefined;
 }
 
-/** THE PILL'S STOP (Tynn #833). Stub. */
-export function StopFlowButton(_props: { pill: FlowPill; onStop: (flowId: string) => void }) {
-    return null;
+/**
+ * THE PILL'S STOP (Tynn #833; the owner: "I should be able to stop a flow"): beside a running or paused pill, it ends that
+ * run now. Its own button, so a Stop never opens the flow. Nothing for a run that has already ended.
+ */
+export function StopFlowButton({ pill, onStop }: { pill: FlowPill; onStop: (flowId: string) => void }) {
+    if (pill.state !== 'running' && pill.state !== 'paused') return null;
+    return (
+        <Button
+            variant="ghost"
+            size="xs"
+            type="button"
+            data-flow-stop={pill.flowId}
+            aria-label={`Stop ${pill.name}`}
+            title={`Stop ${pill.name}`}
+            onClick={(event: { stopPropagation(): void }) => { event.stopPropagation(); onStop(pill.flowId); }}
+            className="[-webkit-app-region:no-drag] flex size-5 shrink-0 items-center justify-center rounded-full text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--danger)]"
+        >
+            <Icon name="square" size="xs" />
+        </Button>
+    );
 }
 
 const STATE_WORDS: Record<FlowPill['state'], string> = { running: 'running', paused: 'paused at its limit', failed: 'failed', held: 'held' };
@@ -70,14 +87,19 @@ function useNarrow(): boolean {
  * THE HEADER'S RUNNING FLOWS (Tynn #707): a pill per running flow, a failed or held end for a few seconds, and the rest
  * as "+N" with a list. Nothing running draws nothing.
  */
-export function FlowPills({ live, ended, now, workspaceId, onOpen }: FlowPillsProps) {
+export function FlowPills({ live, ended, now, workspaceId, onOpen, onStop }: FlowPillsProps) {
     const [open, setOpen] = useState(false);
     const narrow = useNarrow();
     const { shown, more } = flowPills({ live, ended, now, workspaceId, max: narrow ? NARROW_PILLS_SHOWN : PILLS_SHOWN });
     if (shown.length === 0) return null;
     return (
         <div data-flow-pills="" role="group" aria-label="Running flows" className="[-webkit-app-region:no-drag] flex shrink-0 items-center gap-1">
-            {shown.map((p) => <Pill key={p.flowId} pill={p} onOpen={onOpen} />)}
+            {shown.map((p) => (
+                <span key={p.flowId} className="flex min-w-0 items-center gap-0.5">
+                    <Pill pill={p} onOpen={onOpen} />
+                    {onStop ? <StopFlowButton pill={p} onStop={onStop} /> : null}
+                </span>
+            ))}
             {more.length > 0 ? (
                 <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
                     <Popover.Trigger>
@@ -86,7 +108,12 @@ export function FlowPills({ live, ended, now, workspaceId, onOpen }: FlowPillsPr
                         </Button>
                     </Popover.Trigger>
                     <Popover.Content role="dialog" aria-label="More running flows" className="flex w-56 flex-col gap-1 border-[var(--border-1)] bg-[var(--surface-raised)] p-2 text-[var(--fg-1)]">
-                        {more.map((p) => <Pill key={p.flowId} pill={p} onOpen={(id) => { setOpen(false); onOpen(id); }} row />)}
+                        {more.map((p) => (
+                            <span key={p.flowId} className="flex items-center gap-1">
+                                <Pill pill={p} onOpen={(id) => { setOpen(false); onOpen(id); }} row />
+                                {onStop ? <StopFlowButton pill={p} onStop={onStop} /> : null}
+                            </span>
+                        ))}
                     </Popover.Content>
                 </Popover>
             ) : null}

@@ -686,7 +686,7 @@ export function Shell({
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk && !scoped ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
-                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); } } : undefined}
+                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); }, onStop: (flowId) => { void onFeature({ kind: 'flows.stop', flowId }); } } : undefined}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || scoped || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}

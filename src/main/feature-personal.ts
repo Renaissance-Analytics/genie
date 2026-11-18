@@ -25,7 +25,7 @@ export interface PersonalFeatureServices {
     readonly settings: Pick<SettingsStore, 'snapshot' | 'get' | 'set' | 'reset'>;
     readonly knowledge: MaybeAsync<Pick<KnowledgeStore, 'summaries' | 'search' | 'add'>>;
     readonly flows: FlowsApi;
-    readonly flowScheduler: { runNow(id: string): Promise<unknown> };
+    readonly flowScheduler: { runNow(id: string): Promise<unknown>; stopRun?(id: string, by: { kind: 'user' }): Promise<{ ok: boolean; reason?: string }> };
     /** Lift the provider-limit hold on an agent's login at once (Tynn #749's Resume now); absent = this host cannot. */
     resumeAgentLimit?(agentId: string): void;
     readonly inbox: Pick<InboxStore, 'all' | 'unread' | 'involving' | 'send' | 'receive' | 'attachmentForPerson' | 'deleteThread'>;
@@ -189,6 +189,13 @@ export async function applyPersonalFeatureAction(services: PersonalFeatureServic
             // and the store's change pushes the snapshot that shows it.
             if (!services.flows.get(action.flowId)) throw new Error(`no flow ${action.flowId}`);
             void services.flowScheduler.runNow(action.flowId).catch((error: unknown) => console.error(`[flows] run now: ${error instanceof Error ? error.message : String(error)}`));
+            break;
+        }
+        case 'flows.stop': {
+            // The person's Stop (Tynn #833): the run ends now, recorded stopped by you. One that ended meanwhile is left be.
+            if (!services.flows.get(action.flowId)) throw new Error(`no flow ${action.flowId}`);
+            if (!services.flowScheduler.stopRun) throw new Error('this Genie cannot stop a flow from here');
+            await services.flowScheduler.stopRun(action.flowId, { kind: 'user' });
             break;
         }
         case 'flows.resumeLimit': {
