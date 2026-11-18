@@ -205,8 +205,11 @@ describe('Stop in the title bar\'s pill and the Flows view (Tynn #833)', () => {
     it('a run the person stopped reads "stopped by you"; CONTROL: one Genie\'s quit stopped still reads "stopped by quit"', () => {
         const run = (over: Record<string, unknown>) => ({ at: '2026-11-01T00:00:00.000Z', endedAt: '2026-11-01T00:00:01.000Z', trigger: 'manual' as const, outcome: 'stopped' as const, ...over });
         const html = (r: Record<string, unknown>) => renderToStaticMarkup(createElement(FlowRow, { flow: view({ runs: [run(r) as never] }) as never, workspaces: [], now: NOW, confirming: null, onAction: () => {}, onAsk: () => {} }));
-        expect(html({ stoppedBy: 'you', reason: 'stopped by you' })).toContain('stopped by you');
+        // The row prints the run's reason too, so the reason here never carries the words the LABEL is judged by.
+        expect(html({ stoppedBy: 'you', reason: 'the person pressed Stop' })).toContain('stopped by you');
+        expect(html({ stoppedBy: 'atlas', reason: 'an agent pressed Stop' })).toContain('stopped by atlas');
         expect(html({ reason: 'Genie quit while this run was going' })).toContain('stopped by quit');
+        expect(html({ reason: 'Genie quit while this run was going' })).not.toContain('stopped by you');
     });
 });
 
@@ -221,12 +224,13 @@ describe('an agent\'s Stop: its own flow, or the person\'s with the person\'s ap
         const own = await store.create({ workspaceId: 'ws', name: 'atlas\'s own', by: { kind: 'agent', id: agentId, name: 'atlas' }, document: doc([n('t', 'manual_trigger')], []) });
         const stops: Array<[string, unknown]> = [];
         const asked: Array<[string, string]> = [];
+        const verdict: 'allowed' | 'denied' = options.approve === 'allowed' ? 'allowed' : 'denied';
         const tool = flowTools({
             resolveCaller: () => caller,
             flows: {
                 store, runNow: async () => { throw new Error('not here'); },
                 stopRun: async (id, by) => { stops.push([id, by]); return { ok: true }; },
-                ...(options.approve === 'absent' ? {} : { approve: async (_c: Caller, action: string, detail: string) => { asked.push([action, detail]); return options.approve ?? 'denied'; } }),
+                ...(options.approve === 'absent' ? {} : { approve: async (_c: Caller, action: string, detail: string) => { asked.push([action, detail]); return verdict; } }),
             },
         }).find((t) => t.definition.name === 'flows')!;
         const stop = async (id: string) => { const r = await tool.handler({ action: 'stop', id, terminalId: 'term-1' }, { server: 'genie', tool: 'flows', headers: {} }); return { ...r, json: JSON.parse(r.text) as Record<string, unknown> }; };
