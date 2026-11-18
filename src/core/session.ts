@@ -1227,21 +1227,6 @@ export class AgentSession {
         return this.#afterTurn.map((p) => p.id);
     }
 
-    /**
-     * A FLOW'S PROMPT FOR A BUSY AGENT (Tynn #704): held in this queue — the one typed messages and mail wait in, kept in
-     * the thread, so it survives a restart as they do — and sent as its OWN turn when the current one ends, never folded
-     * into it (`deliver` would hand a Claude run the prompt mid-turn, where it can no longer be replaced). `replacing`:
-     * the prompt an earlier fire left waiting, dropped first so one waits, never two. Answers the id it waits under.
-     */
-    queueForTurnEnd(text: string, by: string | null, replacing: string | null = null): string {
-        if (!this.running) throw new Error('session is not running');
-        if (replacing !== null && this.hasQueuedPrompt(replacing)) this.discardPrompt(replacing);
-        const id = this.#queuePrompt(text, by, null, {});
-        // A turn that ended since the caller looked: it goes now.
-        if (!this.#inTurn) this.#flushAfterTurn();
-        return id;
-    }
-
     hasQueuedPrompt(id: string): boolean {
         return this.#afterTurn.some((p) => p.id === id);
     }

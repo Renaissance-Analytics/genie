@@ -17,19 +17,28 @@ const log = (id: string, message: string, x = 600) => node(id, '@particle-academ
 const command = (id: string, cmd: string, extra: Record<string, unknown> = {}) => node(id, 'genie/terminal_run', { workspace: WS, command: cmd, ...extra }, 300);
 
 describe('Prompt an agent', () => {
-    kindCase('genie/agent_prompt', 'reaches the agent’s live session, from the flow by name, waits for its turn, and hands on the reply', genie, async () => {
+    kindCase('genie/agent_prompt', 'reaches the agent’s live session, from the flow by name, waits for its turn when asked, and hands on the reply', genie, async () => {
         const g = genie();
-        const id = await save(g, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post the standup' }, 300), log('l', 'reply: {{ $json.reply }}')], [edge('t', 'p'), edge('p', 'l')]);
+        const id = await save(g, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post the standup', waitForReply: true }, 300), log('l', 'reply: {{ $json.reply }}')], [edge('t', 'p'), edge('p', 'l')]);
         const run = await runNow(g, id);
         expect(run).toMatchObject({ outcome: 'ran', nodes: { p: 'ran', l: 'ran' }, log: ['reply: atlas did: post the standup'] });
         expect(g.sessions.prompts).toEqual([{ agentId: 'agent_atlas', text: 'post the standup', by: 'flow "standup"' }]);
     });
 
-    it('an agent mid-turn is HELD, never prompted inside another turn', async () => {
+    it('by default the step is done once the agent has the prompt: delivered, the turn not waited for (Tynn #826)', async () => {
+        const g = genie();
+        const id = await save(g, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post the standup' }, 300), log('l', 'delivery: {{ $json.delivery }}')], [edge('t', 'p'), edge('p', 'l')]);
+        g.sessions.mode = 'never-ends';
+        expect(await runNow(g, id)).toMatchObject({ outcome: 'ran', nodes: { p: 'delivered', l: 'ran' }, log: ['delivery: delivered'] });
+        expect(g.sessions.prompts).toEqual([{ agentId: 'agent_atlas', text: 'post the standup', by: 'flow "standup"' }]);
+    });
+
+    it('an agent mid-turn gets the prompt MID-TURN: the step reads delivered and the run ran, never failed or held (Tynn #826)', async () => {
         const g = genie();
         const id = await save(g, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post it' }, 300), log('l', 'after')], [edge('t', 'p'), edge('p', 'l')]);
         g.sessions.mode = 'busy';
-        expect(await runNow(g, id)).toMatchObject({ outcome: 'held', reason: 'atlas is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn', nodes: { p: 'held', l: 'not reached' } });
+        expect(await runNow(g, id)).toMatchObject({ outcome: 'ran', nodes: { p: 'delivered', l: 'ran' } });
+        expect(g.sessions.midTurn).toEqual([{ agentId: 'agent_atlas', text: 'post it', by: 'flow "standup"' }]);
         expect(g.sessions.prompts).toEqual([]);
     });
 });

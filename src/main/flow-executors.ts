@@ -11,7 +11,8 @@ import type { MemoryClass, Scope } from './knowledge-store.js';
  * no pty and no store, and in production the ports are the session host, the supervisor and the
  * knowledge store. Three kinds to start, each namespaced `genie/…`:
  *
- * - `genie/agent_prompt`  — prompt an agent (by inbox address) and wait for its reply.
+ * - `genie/agent_prompt`  — prompt an agent (by inbox address): handed over, mid-turn where the provider reads one, and
+ *                           done then (Tynn #826); `waitForReply` waits for the agent's reply and hands it on.
  * - `genie/terminal_run`  — run a command in a workspace terminal; a non-zero exit FAILS the node
  *                           unless `allowFailure`, because a pipeline that shrugs at a failing step
  *                           reports success it did not earn.
@@ -21,19 +22,31 @@ import type { MemoryClass, Scope } from './knowledge-store.js';
  * missing path renders EMPTY — never the literal braces, which an agent would read as instructions.
  */
 
-/** What a prompt for a busy agent tells its run as it goes (Tynn #704): it was queued, and then its turn began. */
+/**
+ * WHAT BECAME OF A FLOW'S PROMPT once the step is done with it (Tynn #826): `delivered` = the agent has it (a new turn, or
+ * folded into the running one); `accepted` = its provider holds it for the end of the running turn (Codex); `waiting` = no
+ * run could take it (stopped, not started, Genie restarting), so it is KEPT in the agent's thread and goes when it next runs.
+ */
+export type PromptDelivery = 'delivered' | 'accepted' | 'waiting';
+
+/** How a step prompts (Tynn #826): `waitForReply` = the step waits for the agent's turn to end and hands on its reply. */
+export interface PromptOptions {
+    readonly waitForReply?: boolean;
+}
+
+/** What a prompt tells its run as it goes: paused at a provider limit (Tynn #749), and what became of it (Tynn #826). */
 export interface PromptHooks {
-    queued?(note: string): void;
-    started?(): void;
     /**
      * The step is PAUSED at the agent's provider limit (Tynn #749), or `null` when it is going again: when it resumes (`null` = no
      * time is stated), and whose agent it waits on. Not a failure: the run keeps its place and its inputs.
      */
     paused?(info: { resumesAtMs: number | null; agentId: string; agent: string } | null): void;
+    /** What became of the prompt (Tynn #826), with the words the run's log shows. */
+    delivered?(how: PromptDelivery, note: string): void;
 }
 
 export interface FlowPorts {
-    promptAgent(address: string, text: string, hooks?: PromptHooks): Promise<string>;
+    promptAgent(address: string, text: string, hooks?: PromptHooks, options?: PromptOptions): Promise<string>;
     /** This agent's folder skills are off, so a value in its prompt must not name one back in. */
     escapesPromptValues?(address: string): boolean;
     runCommand(workspaceId: string, command: string, cwd: string | undefined): Promise<{ exitCode: number; output: string }>;
@@ -146,8 +159,12 @@ export function genieExecutors(ports: FlowPorts): ExecutorRegistry {
             if (!agent) ctx.abort('genie/agent_prompt needs an agent address in its config');
             const raw = config['prompt'];
             const prompt = typeof raw === 'string' ? renderTemplate(raw, inputs, ports.escapesPromptValues?.(agent) ? spaceSkillNames : undefined) : '';
-            const reply = await ports.promptAgent(agent, prompt);
-            return { reply, agent };
+            const wait = config.waitForReply === true;
+            let how = null as PromptDelivery | null;
+            const reply = await ports.promptAgent(agent, prompt, { delivered: (h) => { how = h; } }, { waitForReply: wait });
+            // `delivery`: what became of the prompt — `replied` when the step waited and the reply came (Tynn #826).
+            const delivery = how === 'waiting' ? 'waiting' : wait ? 'replied' : (how ?? 'delivered');
+            return { reply, agent, delivery };
         },
         'genie/terminal_run': async (ctx) => {
             const config = configOf(ctx);

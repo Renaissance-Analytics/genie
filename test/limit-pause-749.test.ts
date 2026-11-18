@@ -3,7 +3,8 @@ import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { NodeOutcome } from '../src/core/flow-canvas.js';
 import type { Resolution } from '../src/core/inbox.js';
 import type { FlowPorts } from '../src/main/flow-executors.js';
-import { agentPrompter, createFlowRunner, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { createFlowRunner, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 import type { FlowRecord } from '../src/main/flow-store.js';
 
 /**
@@ -120,7 +121,7 @@ const delivered = () => new Promise<void>((r) => setTimeout(r, 0));
 const HOUR = 60 * 60_000;
 
 const prompterOf = (port: AgentSessionsPort, timer: ReturnType<typeof handTimer>) =>
-    agentPrompter({ sessions: port, resolve, agent: (id) => ({ name: id.replace('agent_', ''), workspaceId: 'ws' }), asleep: () => false, by: 'flow "nightly"', after: timer.after });
+    waitingPrompter({ sessions: port, resolve, agent: (id) => ({ name: id.replace('agent_', ''), workspaceId: 'ws' }), asleep: () => false, by: 'flow "nightly"', after: timer.after });
 
 describe('#749 a flow step whose agent hits the provider limit mid-turn', () => {
     it('is NOT finished by the limit: the cut turn is not the step\'s answer, so the step keeps waiting', async () => {

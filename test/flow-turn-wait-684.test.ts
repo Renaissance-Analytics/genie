@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Resolution } from '../src/core/inbox.js';
-import { FLOW_TURN_MAX_MS, FLOW_TURN_QUIET_MS, agentPrompter, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { FLOW_TURN_MAX_MS, FLOW_TURN_QUIET_MS, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 
 /**
  * A FLOW NEVER WAITS FOR EVER ON AN AGENT'S TURN (Tynn #684, genie#721).
@@ -74,7 +75,7 @@ async function settledState(p: Promise<unknown>): Promise<{ state: 'pending' } |
 const delivered = () => new Promise<void>((r) => setTimeout(r, 0));
 
 const prompter = (port: AgentSessionsPort, timer: ReturnType<typeof handTimer>) =>
-    agentPrompter({ sessions: port, resolve, agent: () => ({ name: 'scout', workspaceId: 'ws' }), asleep: () => false, by: 'flow "hourly round"', after: timer.after });
+    waitingPrompter({ sessions: port, resolve, agent: () => ({ name: 'scout', workspaceId: 'ws' }), asleep: () => false, by: 'flow "hourly round"', after: timer.after });
 
 describe('the bound', () => {
     it('is a quiet half hour, within two hours at most: longer than a turn that is working, shorter than a day of held runs', () => {

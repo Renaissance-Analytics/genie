@@ -7,7 +7,8 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
 import { AgentSession, type DriverEvents, type SessionDriverFactory, type TurnOutcomeLike } from '../src/core/session.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
-import { agentPrompter, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 
 /**
  * A TURN WHOSE PROVIDER ENDED IT ENDS IN GENIE TOO (Tynn #684, genie#721).
@@ -96,7 +97,7 @@ function open() {
         prompt: (_agentId, text, by) => { session.deliver(text, by); return true; },
         subscribe: (listener) => { const l = () => listener(id); listeners.add(l); return () => { listeners.delete(l); }; },
     };
-    const prompter = agentPrompter({ sessions: port, resolve: () => ({ kind: 'one', id }), agent: () => ({ name: 'scout', workspaceId: 'ws' }), asleep: () => false, by: FLOW });
+    const prompter = waitingPrompter({ sessions: port, resolve: () => ({ kind: 'one', id }), agent: () => ({ name: 'scout', workspaceId: 'ws' }), asleep: () => false, by: FLOW });
     return { session, d, markers, finished, ledger, prompter };
 }
 

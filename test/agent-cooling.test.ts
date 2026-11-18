@@ -10,7 +10,8 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import { workingAgents } from '../src/core/rail-indicators.js';
 import { agentRowFor } from '../src/core/roster.js';
 import { COOLING_MS, type DriverEvents, type SessionDriverFactory, type TurnOutcomeLike } from '../src/core/session.js';
-import { agentPrompter, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -200,7 +201,7 @@ describe('Cooling changes nothing the agent can do', () => {
             prompt: (id, text, by) => host.prompt(id as AgentId, text, by),
             subscribe: (listener) => host.subscribe((agentId) => listener(agentId)),
         };
-        const prompt = agentPrompter({ sessions, resolve: () => ({ kind: 'one', id: r.id }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
+        const prompt = waitingPrompter({ sessions, resolve: () => ({ kind: 'one', id: r.id }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
         let answer: string | null = null;
         const replied = prompt('claude:atlas', 'check the queue').then((a) => { answer = a; return a; });
         // Not held back as busy: the provider has it now.

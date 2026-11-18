@@ -96,11 +96,13 @@ export function nodeCommand(script: string): string {
 
 /**
  * The live agent sessions a `genie/agent_prompt` reaches (main wires the session host). `reply` answers each prompt with a
- * turn that ends; `never-ends` leaves the turn working (a quit mid-turn); `busy` is mid-turn before the prompt.
+ * turn that ends; `never-ends` leaves the turn working (a quit mid-turn); `busy` is mid-turn before the prompt, and takes a
+ * message INSIDE that turn as Claude does (`deliver`, Tynn #826): kept in `midTurn`, never a turn of its own.
  */
 export class FakeSessions implements AgentSessionsPort {
     mode: 'reply' | 'never-ends' | 'busy' = 'reply';
     readonly prompts: Array<{ agentId: string; text: string; by: string }> = [];
+    readonly midTurn: Array<{ agentId: string; text: string; by: string }> = [];
     readonly #turn = new Map<string, string>();
     readonly #rows = new Map<string, Array<{ event: unknown }>>();
     readonly #listeners = new Set<(agentId: string) => void>();
@@ -124,6 +126,14 @@ export class FakeSessions implements AgentSessionsPort {
         }
         return true;
     }
+    /** Absent (set `undefined`) = a port that cannot hand a message over mid-turn: a busy agent then holds the prompt back. */
+    deliver: AgentSessionsPort['deliver'] = (id, text, by) => {
+        if (!this.agents.includes(id)) return null;
+        if (this.session(id)?.turnState !== 'working') { this.prompt(id, text, by); return { id: null }; }
+        this.midTurn.push({ agentId: id, text, by });
+        this.#push(id, { kind: 'message', speaker: 'peer', peerName: by, text });
+        return { id: null };
+    };
     subscribe(listener: (agentId: string) => void) { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
     #push(id: string, event: unknown) { this.#rows.set(id, [...this.rows(id), { event }]); }
 }

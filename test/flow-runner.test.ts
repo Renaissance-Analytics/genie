@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { Resolution } from '../src/core/inbox.js';
 import type { FlowPorts } from '../src/main/flow-executors.js';
-import { HeldBack, agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { HeldBack, createFlowRunner, supervisedCommand, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 import { FlowScheduler } from '../src/main/flow-scheduler.js';
 import { FlowStore, type FlowRecord } from '../src/main/flow-store.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
@@ -254,7 +255,7 @@ describe('genie/agent_prompt on a live agent — held back while it is busy, nev
     const resolveAddress = (text: string): Resolution =>
         text === 'claude:atlas' ? { kind: 'one', id: 'agent_atlas' as never } : text === 'claude:sleepy' ? { kind: 'one', id: 'agent_sleepy' as never } : text === 'claude:twin' ? { kind: 'ambiguous', forms: ['ws-a:claude:twin', 'ws-b:claude:twin'] } : { kind: 'none' };
     const prompter = (sessions: AgentSessionsPort) =>
-        agentPrompter({ sessions, resolve: resolveAddress, agent: (id) => roster[id] ?? null, asleep: (ws) => ws === 'ws-sleepy', by: 'flow "nightly report"' });
+        waitingPrompter({ sessions, resolve: resolveAddress, agent: (id) => roster[id] ?? null, asleep: (ws) => ws === 'ws-sleepy', by: 'flow "nightly report"' });
 
     it('an IDLE agent is prompted once, as the flow, and the reply is what it said in that turn', async () => {
         const s = fakeSessions({ agent_atlas: { running: true, turnState: 'idle', pendingApproval: null } });

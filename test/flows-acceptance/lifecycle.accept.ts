@@ -40,7 +40,9 @@ describe('the run overlay: each node’s outcome, as the canvas draws it', () =>
     it('a run HELD back: the held step, and the canvas draws it as still running', async () => {
         const g = genie();
         const id = await save(g, 'held', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'go' }, 300), log('l', 'after')], [edge('t', 'p'), edge('p', 'l')]);
+        // A busy agent behind a port that cannot hand it a message mid-turn (Tynn #826: Genie's own ports can).
         g.sessions.mode = 'busy';
+        g.sessions.deliver = undefined;
         const run = await runNow(g, id);
         expect(run.nodes).toEqual({ t: 'ran', p: 'held', l: 'not reached' });
         expect(viewerStatuses(run.nodes!)).toEqual({ t: 'ok', p: 'running', l: 'pending' });
@@ -101,7 +103,8 @@ describe('Genie quits in the middle of a run', () => {
             const sessions = new FakeSessions(['agent_atlas']);
             sessions.mode = 'never-ends';
             const first = await startGenie({ sessions }, dir);
-            const id = await save(first, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post it' }, 300), log('l', 'after')], [edge('t', 'p'), edge('p', 'l')]);
+            // Waiting for the reply (Tynn #826: the step's option), so the run is still on this step when Genie quits.
+            const id = await save(first, 'standup', [manual, node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'post it', waitForReply: true }, 300), log('l', 'after')], [edge('t', 'p'), edge('p', 'l')]);
             void runNow(first, id).catch(() => {});
             await expect.poll(() => sessions.prompts.length, { timeout: 10_000 }).toBe(1);
             await expect.poll(() => first.services.flows.get(id)!.inFlight?.nodes.p, { timeout: 10_000 }).toBe('running');
