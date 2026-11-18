@@ -141,9 +141,11 @@ describe('the host takes a queued message back (resolvePrompt withdraw / edit)',
         // The same moment: the withdraw runs INSIDE the provider's hand-off of that very message.
         s.hook.onPrompt = (content) => { if (content === 'oops') raced = s.host.withdrawQueued(s.record.id, oops, 'withdraw'); };
         s.end();
-        expect(raced).not.toBeNull();
-        expect(raced!.ok).toBe(false);
-        expect(raced!.ok ? '' : raced!.reason).toMatch(/too late.*already has it/i);
+        // Assigned inside the driver's callback: TS cannot see it, so it is read back through its declared type.
+        const lost = raced as ReturnType<SessionHost['withdrawQueued']> | null;
+        expect(lost).not.toBeNull();
+        expect(lost!.ok).toBe(false);
+        expect(lost!.ok ? '' : lost!.reason).toMatch(/too late.*already has it/i);
         expect(s.deliveries(oops)).toEqual(['sent']);
         s.hook.onPrompt = null;
         s.end();
