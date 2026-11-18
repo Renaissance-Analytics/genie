@@ -58,6 +58,7 @@ export function playwrightTools(deps: PlaywrightToolDeps): Registration[] {
             const action = typeof args.action === 'string' ? args.action : '';
             if (action === 'status') return ok({ ...deps.port.status(caller.workspaceId) });
             if (action !== 'install') return err('action is status or install');
+            if (deps.trusted?.(caller.workspaceId) === false) return err('this workspace is not trusted yet: Genie installs nothing for it until the person trusts it; nothing was installed');
             const version = typeof args.version === 'string' ? args.version.trim() : '';
             const asked = Array.isArray(args.browsers) ? args.browsers.filter((b): b is string => typeof b === 'string') : [];
             const browsers = asked.length > 0 ? asked : MANAGED_BROWSERS;

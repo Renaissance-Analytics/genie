@@ -52,22 +52,38 @@ export function managedBrowsersReady(sets: Readonly<Record<string, readonly stri
 
 export type LockKind = 'package-lock' | 'pnpm' | 'yarn';
 
-/** The `@playwright/test` version a project's lockfile pins, or `null` when it does not use Playwright (or the file cannot be read). */
+/**
+ * WHAT A PLAYWRIGHT VERSION IS: `x.y.z`, digits only, and nothing else (Tynn #846 review). Every path that installs goes
+ * through this: the lockfile parser, the installer's `ensure`, `installPlaywrightBrowsers`. A version comes from a
+ * workspace's lockfile, i.e. from whatever repository was cloned, and on Windows npm runs through cmd.exe: a string like
+ * `1.2.3 && calc` must never get as far as a command line.
+ */
+export function isPlaywrightVersion(value: unknown): value is string {
+    return typeof value === 'string' && /^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(value);
+}
+
+const versionOrNull = (value: unknown): string | null => (isPlaywrightVersion(value) ? value : null);
+
+/**
+ * The `@playwright/test` version a project's lockfile pins, or `null` when it does not use Playwright, the file cannot be
+ * read, or what it says is not an `x.y.z` (the WHOLE value is read and checked, never a prefix of it).
+ */
 export function parseLockedPlaywright(lockText: string, kind: LockKind): string | null {
     if (kind === 'package-lock') {
         try {
-            const lock = JSON.parse(lockText) as { packages?: Record<string, { version?: string }>; dependencies?: Record<string, { version?: string }> };
-            return lock.packages?.['node_modules/@playwright/test']?.version ?? lock.dependencies?.['@playwright/test']?.version ?? null;
+            const lock = JSON.parse(lockText) as { packages?: Record<string, { version?: unknown }>; dependencies?: Record<string, { version?: unknown }> };
+            return versionOrNull(lock.packages?.['node_modules/@playwright/test']?.version ?? lock.dependencies?.['@playwright/test']?.version);
         } catch {
             return null;
         }
     }
     if (kind === 'pnpm') {
-        const m = /'?@playwright\/test'?:\s*\r?\n\s+specifier:[^\r\n]*\r?\n\s+version:\s*'?([0-9][^\s('\r\n]*)/.exec(lockText);
-        return m ? m[1]! : null;
+        const m = /'?@playwright\/test'?:[ \t]*\r?\n[ \t]+specifier:[^\r\n]*\r?\n[ \t]+version:[ \t]*'?([^'\r\n]*)/.exec(lockText);
+        // pnpm may add a peer suffix, `1.62.1(…)`: only a suffix right after a whole x.y.z is dropped, then the rest is checked.
+        return m ? versionOrNull(m[1]!.trim().replace(/^(\d+\.\d+\.\d+)\([^)]*\)$/, '$1')) : null;
     }
-    const y = /"?@playwright\/test@[^\r\n]*:\s*\r?\n\s+version:?\s*"?([0-9][^"\s\r\n]*)/.exec(lockText);
-    return y ? y[1]! : null;
+    const y = /"?@playwright\/test@[^\r\n]*:[ \t]*\r?\n[ \t]+version:?[ \t]*"?([^"\r\n]*)/.exec(lockText);
+    return y ? versionOrNull(y[1]!.trim()) : null;
 }
 
 export type BrowserSetResolution =
@@ -222,7 +238,7 @@ export type InstallAsk =
 
 /** A project's or an agent's ask for a version's browsers: there already, installed now, asked of the person first (unusually large), or refused. */
 export function decideInstallAsk(input: { readonly version: string; readonly browsers: readonly string[]; readonly ready: readonly string[]; readonly held: readonly string[] }): InstallAsk {
-    if (!/^\d+\.\d+\.\d+$/.test(input.version)) return { kind: 'refused', reason: `${input.version} is not a Playwright version (x.y.z, as your @playwright/test is)` };
+    if (!isPlaywrightVersion(input.version)) return { kind: 'refused', reason: `${input.version} is not a Playwright version (x.y.z, as your @playwright/test is)` };
     const known = [...MANAGED_BROWSERS, ...OPTIONAL_MANAGED_BROWSERS];
     const unknown = input.browsers.filter((b) => !known.includes(b));
     if (unknown.length > 0) return { kind: 'refused', reason: `Genie installs Playwright's ${known.join(', ')}; not ${unknown.join(', ')}` };

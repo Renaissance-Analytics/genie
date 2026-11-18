@@ -182,6 +182,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             playwright: {
                 resolveCaller: p.resolveCaller,
                 port: p.playwright,
+                trusted: p.workspaceTrusted ?? (() => false),
                 approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
             },
         } : {}),

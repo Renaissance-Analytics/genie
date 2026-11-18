@@ -1,5 +1,5 @@
 import type { DeckItem } from '../core/deck.js';
-import { MANAGED_BROWSERS, PLAYWRIGHT_NOTICE_DECK_PREFIX, PLAYWRIGHT_STABLE, launchInstall, playwrightDirs } from '../core/playwright-managed.js';
+import { MANAGED_BROWSERS, OPTIONAL_MANAGED_BROWSERS, PLAYWRIGHT_NOTICE_DECK_PREFIX, PLAYWRIGHT_STABLE, isPlaywrightVersion, launchInstall, playwrightDirs } from '../core/playwright-managed.js';
 import { projectPlaywrightVersion, readManifest, readyOnDisk, type PlaywrightInstallOutcome } from './playwright-browsers.js';
 import type { PlaywrightToolPort } from './mcp-tools-playwright.js';
 import type { PhpVersionsFs } from './php-versions.js';
@@ -62,6 +62,10 @@ export class PlaywrightInstaller {
 
     /** Install a version's browsers now, or wait for the install of it already running. */
     ensure(version: string, browsers: readonly string[] = MANAGED_BROWSERS): Promise<PlaywrightInstallOutcome> {
+        // However it was asked (a lockfile, an agent, a retry): only x.y.z and Playwright's own browsers, refused before anything is queued.
+        if (!isPlaywrightVersion(version)) return Promise.resolve({ kind: 'refused', reason: `${JSON.stringify(version)} is not a Playwright version (x.y.z)` });
+        const unknown = browsers.filter((b) => !MANAGED_BROWSERS.includes(b) && !OPTIONAL_MANAGED_BROWSERS.includes(b));
+        if (unknown.length > 0) return Promise.resolve({ kind: 'refused', reason: `Genie installs Playwright's ${[...MANAGED_BROWSERS, ...OPTIONAL_MANAGED_BROWSERS].join(', ')}; not ${unknown.join(', ')}` });
         const key = `${version}|${[...browsers].sort().join(',')}`;
         const running = this.#running.get(key);
         if (running) return running.done;

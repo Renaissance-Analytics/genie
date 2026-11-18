@@ -54,6 +54,8 @@ export class PlaywrightHost {
         const set = resolveBrowserSet(client, installed);
         if (set.kind === 'missing') {
             // The version this project pins: Genie installs it NOW, by itself (Tynn #846). Nobody is asked to do anything.
+            // Not until the person trusts the workspace (Tynn #846 review): opening a folder installs nothing on its say-so.
+            if (this.#deps.trusted?.(workspaceId) === false) return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie installs its browsers once you trust this workspace; until then, nothing is installed for it.` };
             if (this.#deps.installer?.ensure(client)) return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie is installing Playwright ${client}'s browsers now, by itself; they are there in a few minutes (the playwright tool's status says when). Do not run playwright install.` };
             return { ...base, [PLAYWRIGHT_NOTE_ENV]: set.note };
         }

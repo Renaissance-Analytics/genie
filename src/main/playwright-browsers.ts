@@ -1,6 +1,6 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { MANAGED_BROWSERS, OPTIONAL_MANAGED_BROWSERS, PLAYWRIGHT_STABLE, parseInstallLocations, planBrowserInstall, playwrightDirs, parseLockedPlaywright, readyVersions, resolveBrowserSet, worktreeLinkDecision, type BrowserManifest, type BrowserSetResolution, type LockKind } from '../core/playwright-managed.js';
+import { MANAGED_BROWSERS, OPTIONAL_MANAGED_BROWSERS, PLAYWRIGHT_STABLE, isPlaywrightVersion, parseInstallLocations, planBrowserInstall, playwrightDirs, parseLockedPlaywright, readyVersions, resolveBrowserSet, worktreeLinkDecision, type BrowserManifest, type BrowserSetResolution, type LockKind } from '../core/playwright-managed.js';
 import { platformArgv, type Platform } from '../core/toolchain.js';
 import { nodePhpVersionsFs, type PhpVersionsFs } from './php-versions.js';
 import type { CommandRunner } from './toolchain-prober.js';
@@ -124,7 +124,8 @@ export async function installPlaywrightBrowsers(version: string | null, browsers
     const wanted = browsers.length > 0 ? browsers : DEFAULT_BROWSERS;
     if (!wanted.every((b) => DEFAULT_BROWSERS.includes(b) || OPTIONAL_BROWSERS.includes(b))) return { kind: 'refused', reason: `Playwright's browsers Genie installs are ${[...DEFAULT_BROWSERS, ...OPTIONAL_BROWSERS].join(', ')}` };
     const target = version ?? PLAYWRIGHT_STABLE;
-    if (!VERSION.test(target)) return { kind: 'refused', reason: `${target} is not a Playwright version` };
+    // Before ANY command is built (npm runs through cmd.exe on Windows): only x.y.z (Tynn #846 review).
+    if (!isPlaywrightVersion(target)) return { kind: 'refused', reason: `${JSON.stringify(target)} is not a Playwright version (x.y.z)` };
     const dirs = playwrightDirs(ports.toolchainDir);
     const { sets: manifest, folders } = readBrowserManifest(ports);
     // What the manifest records counts only while it is really on disk: a set whose folders are gone is downloaded again.

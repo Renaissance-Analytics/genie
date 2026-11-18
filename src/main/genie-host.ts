@@ -1290,6 +1290,8 @@ async function main(): Promise<void> {
         platform: process.platform as 'win32' | 'linux' | 'darwin',
         link: (target, path, kind) => { symlinkSync(target, path, kind); },
         installer: { ensure: (version) => (playwrightInstaller.byItself() ? playwrightInstaller.ensure(version) : null), installing: () => playwrightInstaller.installing() },
+        // A workspace not yet trusted triggers no install (Tynn #846 review): the verdict as last read, as `sites`/`services` read it.
+        trusted: (workspaceId) => !hostUntrustedNow({ workspaceId }),
     });
     const playwrightSweep = setInterval(() => { void playwrightHost.server.sweep().catch(() => {}); }, 60_000);
     playwrightSweep.unref();
