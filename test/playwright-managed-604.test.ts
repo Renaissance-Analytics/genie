@@ -29,10 +29,15 @@ describe('the managed browsers path', () => {
         expect(playwrightEnv(TC)).toEqual({ [PLAYWRIGHT_BROWSERS_ENV]: join(TC, 'playwright', 'browsers') });
     });
 
-    it('is applied to Genie’s own environment before anything is spawned, so terminals, processes and sites inherit it', () => {
+    it('is applied to Genie’s own environment before anything is spawned, once a managed set is there, so terminals, processes and sites inherit it', () => {
         const env = new Map<string, string>();
         const port: EnvPort = { get: (n) => env.get(n), set: (n, v) => void env.set(n, v) };
-        const fs: ToolchainFs = { exists: () => false, readText: () => null, writeText: () => {}, mkdirp: () => {}, remove: () => {} };
+        const dirs = playwrightDirs(TC);
+        // Only with a set really installed (test/playwright-env-only-when-installed-604.test.ts holds the rule for no set).
+        const fs: ToolchainFs = {
+            exists: () => false, readText: (p) => (p === dirs.manifest ? JSON.stringify({ sets: { '1.65.1': ['chromium'] } }) : null),
+            writeText: () => {}, mkdirp: () => {}, remove: () => {}, list: (d) => (d === dirs.browsers ? ['chromium-1194'] : []),
+        };
         restoreToolchainEnv({ platform: 'linux', env: port, fs, dataDir: TC });
         expect(env.get('PLAYWRIGHT_BROWSERS_PATH')).toBe(join(TC, 'playwright', 'browsers'));
     });

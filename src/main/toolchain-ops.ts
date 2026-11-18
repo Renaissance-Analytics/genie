@@ -44,12 +44,16 @@ export interface ToolchainFs {
     writeText(path: string, content: string): void;
     mkdirp(dir: string): void;
     remove(path: string): void;
+    /** Entry names in a directory; `[]` when it does not exist. Absent = nothing can be listed. */
+    list?(dir: string): string[];
 }
 
 /** The environment Genie's own children inherit (`process.env` in the app). */
 export interface EnvPort {
     get(name: string): string | undefined;
     set(name: string, value: string): void;
+    /** Remove a variable. Absent = it cannot be removed. */
+    unset?(name: string): void;
 }
 
 export interface ToolchainOpsPorts {
@@ -471,6 +475,17 @@ export function restoreToolchainEnv(ports: Pick<ToolchainOpsPorts, 'platform' | 
 }
 
 /** What a site's php-cgi worker is given on top of the pty host's environment: Genie's ini directory, when there is one. */
+/**
+ * PLAYWRIGHT_BROWSERS_PATH for everything Genie starts (Tynn #604): Genie's folder ONLY when a managed browser set is really
+ * there. Otherwise a person's own value is left alone, and a value pointing at Genie's (still empty) folder is removed, so
+ * Playwright's own default location works as it did before Genie managed any browsers. `true` when the variable now points
+ * at Genie's set.
+ */
+export function applyPlaywrightEnv(ports: { readonly env: EnvPort; readonly fs: Pick<ToolchainFs, 'readText' | 'list'>; readonly dataDir: string }): boolean {
+    void ports;
+    return false; // RED: inert stub
+}
+
 export function phpWorkerEnv(env: EnvPort): Record<string, string> {
     const dir = env.get('PHP_INI_SCAN_DIR');
     return dir ? { PHP_INI_SCAN_DIR: dir } : {};
