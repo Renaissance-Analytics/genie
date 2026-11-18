@@ -11,6 +11,7 @@ import { ageLabel, type DeckItem } from '../../core/deck.js';
 import { activeQuestion, type QuestionDraft, type QuestionDrafts } from '../../core/question-drafts.js';
 import { resetScrollOnQuestionChange } from '../../core/question-scroll.js';
 import { QuestionForm } from './QuestionForm.js';
+import { QuestionVisualsContext } from './QuestionVisuals.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 
 /**
@@ -142,7 +143,7 @@ function MediaBody({ path, media, onOpenInFiles }: { path: string; media: Questi
  */
 const DRAG = { WebkitAppRegion: 'drag' } as CSSProperties;
 
-export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile, onOpenInFiles }: QuestionAppProps) {
+export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile, onOpenInFiles, visuals = null }: QuestionAppProps) {
     // ESC IS LATER (Tynn #759; Genie 1's "PARK, never kill"): the question stays in Pending Questions with its draft;
     // Dismiss, which tells the agent, is never a key. Re-bound every render so it acts on the question now shown.
     useEffect(() => {
@@ -175,6 +176,8 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
         shownRef.current = shownId;
     }, [shownId]);
     if (!view || !item) return <div data-question-window="empty" className="h-screen bg-[var(--bg-0)]" />;
+    // The shown question's visuals (Tynn #835), by post id, for the form's gallery and option cards.
+    const visualPosts = visuals ? new Map(visuals.posts.map((p) => [p.id, p])) : null;
     const parked = new Set(view.parked ?? []);
     // A draft written for an earlier revision of the question is not this form's: an updated question starts clean.
     const kept = drafts?.[item.id] ?? view.drafts?.[item.id];
@@ -195,6 +198,8 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                 <QuestionFiles item={item} existing={existing} open={drawer?.path ?? null} {...(onOpenFile ? { onOpen: onOpenFile } : {})} />
                 {/* Keyed by the question AND its revision: another question, or this one updated by its agent, is another form.
                     Its draft comes back from the window's drafts (by question id), so returning to it loses nothing. */}
+                {visuals?.error ? <p role="alert" data-question-visuals-error="" className="mb-2 text-[12px] text-[var(--warning)]">The visuals could not be loaded: {visuals.error}</p> : null}
+                <QuestionVisualsContext.Provider value={visualPosts}>
                 <QuestionForm
                     key={`${item.id}:${item.revision ?? 0}`}
                     item={item}
@@ -208,6 +213,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                     {...(draft ? { initial: draft } : {})}
                     onDraft={(d) => onDraft?.(item.id, { ...d, revision: item.revision ?? 0 })}
                 />
+                </QuestionVisualsContext.Provider>
             </main>
             {/* GENIE 1'S FILE DRAWER: the file the question names, beside it (the window widens for it, question-drawer.ts). */}
             {drawer ? (

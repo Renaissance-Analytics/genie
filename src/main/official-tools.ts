@@ -2,7 +2,7 @@ import { Agent as SlideAgent } from '@particle-academy/dark-slide';
 import { Agent as SheetAgent } from '@particle-academy/holy-sheet';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { BOARD_DIR, BOARD_INDEX, addPost, addReply, artboardItemRoute, nextVersionNumber, parseBoard, postStatus, trailOf, versionFile, type BoardPost, type PostKind } from '../core/artboard.js';
+import { BOARD_DIR, BOARD_INDEX, addPost, addReply, artboardItemRoute, nextVersionNumber, parseBoard, postStatus, questionOutcomeWords, trailOf, versionFile, type BoardPost, type PostKind } from '../core/artboard.js';
 import { bridgeAccess, type PluginManifest } from '../core/plugins.js';
 import type { RunResult } from './plugin-runner.js';
 
@@ -143,6 +143,7 @@ async function readTrail(input: OfficialToolInput, args: Args): Promise<RunResul
         const who = 'by' in e && e.by ? ` ${e.by}` : '';
         if (e.kind === 'version') return `- v${e.version} posted${who} ${e.at}${e.note ? `: ${e.note}` : ''}`;
         if (e.kind === 'verdict') return `- v${e.version} ${e.verdict}${who} ${e.at}${e.comment ? `: ${e.comment}` : ' (no comment)'}`;
+        if (e.kind === 'question') return `- v${e.version} ${questionOutcomeWords(e.outcome)} in question ${e.questionId} (${e.header})${who} ${e.at}${e.answer ? `: answered "${e.answer}"` : ''}`;
         return `- v${e.version} reply${who} ${e.at}: ${e.text}`;
     });
     const last = trail.lastVerdict ? `Last verdict: ${trail.lastVerdict.verdict} on version ${trail.lastVerdict.version}${trail.lastVerdict.comment ? ` — "${trail.lastVerdict.comment}"` : ' with no comment'}.` : 'Nobody has decided anything yet.';

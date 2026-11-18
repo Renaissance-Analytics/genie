@@ -1,4 +1,4 @@
-import type { QuestionVisual } from './question-visuals.js';
+import { QUESTION_VISUAL_LIMITS, isQuestionVisual, visualsOfQuestion, type QuestionVisual } from './question-visuals.js';
 import { createHash } from 'node:crypto';
 
 /**
@@ -105,7 +105,13 @@ export function validateQuestions(questions: readonly Question[]): string | null
             const vernacular = actorVernacular(o.label);
             if (vernacular) return `${q.header}: ${vernacular}`;
         }
+        // VISUALS (core/question-visuals.ts): what is stored is a reference to an ArtBoard post, well-formed, and few.
+        const shown = visualsOfQuestion(q);
+        if (shown.length > QUESTION_VISUAL_LIMITS.perQuestion) return `${q.header}: a question carries at most ${QUESTION_VISUAL_LIMITS.perQuestion} visuals; got ${shown.length}`;
+        if ((q.visuals !== undefined && !Array.isArray(q.visuals)) || !shown.every(isQuestionVisual)) return `${q.header}: a visual is not a well-formed ArtBoard reference`;
     }
+    const all = questions.reduce((n, q) => n + visualsOfQuestion(q).length, 0);
+    if (all > QUESTION_VISUAL_LIMITS.perAsk) return `one question carries at most ${QUESTION_VISUAL_LIMITS.perAsk} visuals in all; got ${all}`;
     return null;
 }
 
@@ -121,6 +127,9 @@ export function questionKey(agentId: string, questions: readonly Question[]): st
         question: q.question,
         options: q.options.map((o) => o.label),
         multiSelect: q.multiSelect === true,
+        // Which posts it shows (not their version: a re-ask posts its files again as a new version of the same post, and is
+        // still the same question). The same words over other mockups are another question.
+        ...(visualsOfQuestion(q).length > 0 ? { visuals: q.options.map((o) => o.visual?.postId ?? null).concat((q.visuals ?? []).map((v) => v.postId)) } : {}),
     }));
     return createHash('sha256').update(JSON.stringify([agentId, shape])).digest('hex');
 }

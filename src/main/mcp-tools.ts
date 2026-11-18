@@ -1,4 +1,5 @@
 import type { Liveness } from '../core/liveness.js';
+import { prepareQuestionVisuals, recordQuestionOnBoard } from './question-visuals.js';
 import { callerFrom } from './mcp-callers.js';
 import type { JsonObject, McpToolResult, ToolDefinition } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
@@ -117,7 +118,12 @@ export interface GenieToolsDeps {
     readonly dnd?: () => { on: boolean; reply: string };
     /** IssueWatch (Tynn #806): what is open on GitHub for a workspace, as Genie last heard it from Tynn. Absent = no IssueWatch. */
     readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer>; /** Ask Tynn again whether this Genie is signed in (an agent found it signed out). */ recheckSignIn?(): void };
+    /** A workspace's folder (the registry's), for the ArtBoard a decided question writes to (Tynn #835). Absent = the folder an asking agent was seen in. */
+    readonly workspacePath?: (workspaceId: string) => string | null;
 }
+
+/** Each workspace's folder as its asking agents were seen in it: the trail's fallback when no registry is handed in. */
+const seenRoots = new Map<string, string>();
 
 /**
  * The `terminalId` argument, mirrored into the `Mcp-Param-terminalId` header. The spec's `x-mcp-header` is the header
@@ -212,6 +218,16 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
         }),
     };
 
+    // THE ARTBOARD PAPER TRAIL (Tynn #835): a decided question writes its decision onto the posts it showed. Set on the
+    // store, replacing any earlier one, so building the tools again never writes a decision twice.
+    // In the window the store is genie-host's (window-tools.ts hostOnly: any use throws); the host's own build sets it there.
+    try {
+        deps.attention.useVisualBoard?.(async (workspaceId, record, at) => {
+            const root = deps.workspacePath?.(workspaceId) ?? seenRoots.get(workspaceId) ?? null;
+            if (root) await recordQuestionOnBoard(root, record, at);
+        });
+    } catch { /* not this process's store */ }
+
     const forceTheQuestion: Registration = {
         definition: builtinToolDefinition(FORCE_THE_QUESTION_TOOL),
         /*
@@ -223,7 +239,14 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
          */
         handler: withCaller(async (caller, args) => {
             const action = str(args.action) ?? 'ask';
-            const questions = Array.isArray(args.questions) ? (args.questions as unknown as Question[]) : [];
+            seenRoots.set(caller.workspaceId, caller.workspacePath);
+            // VISUALS (Tynn #835): what the agent named becomes ArtBoard posts of its own workspace before the store sees
+            // the questions; a refused visual refuses the call, with nothing posted.
+            const prepared = Array.isArray(args.questions) && action !== 'cancel'
+                ? await prepareQuestionVisuals(caller, args.questions as unknown[], () => new Date().toISOString())
+                : { ok: true as const, questions: [] as Question[] };
+            if (!prepared.ok) return err(prepared.reason);
+            const questions = prepared.questions;
             const priority = str(args.priority) as 'low' | 'normal' | 'high' | 'urgent' | undefined;
             const owner = { agentId: caller.agentId, workspaceId: caller.workspaceId };
             if (action === 'cancel' || action === 'update') {
@@ -392,9 +415,19 @@ export const IM_DONE_TOOL: BuiltinTool = declareBuiltinTool(
     },
     'I’m done'
 );
+/** One visual on a question or an option (core/question-visuals.ts): exactly one of artboard, image or html. */
+const QUESTION_VISUAL_SCHEMA: JsonObject = {
+    type: 'object',
+    properties: {
+        artboard: { type: 'string', description: 'The id of a post on your workspace\'s ArtBoard (what ai.genie.artboard.post returned).' },
+        image: { type: 'string', description: 'A .png, .jpg, .gif, .webp or .svg in your workspace (relative to it); posted to the ArtBoard.' },
+        html: { type: 'string', description: 'An .html mockup in your workspace (relative to it); sanitised and posted to the ArtBoard.' },
+        title: { type: 'string', maxLength: 80 },
+    },
+};
 export const FORCE_THE_QUESTION_TOOL: BuiltinTool = declareBuiltinTool(
     'ForceTheQuestion',
-    'Ask the user 1–4 questions (2–4 options each, free text always offered). Returns immediately with a questionId — KEEP IT; the answer arrives through `agentinbox receive`. Never blocks. A repeat of the same question is rejoined, not duplicated. Name the actor in options the user reads: "Agent: …" / "You: …". Your own pending question can be changed: action "update" with questionId and the new questions (and priority) replaces it in place, keeping its place in the queue; action "cancel" with questionId withdraws it — the person is not asked any more and nothing is mailed. If the person dismisses it instead, your inbox says so.',
+    'Ask the user 1–4 questions (2–4 options each, free text always offered). Returns immediately with a questionId — KEEP IT; the answer arrives through `agentinbox receive`. Never blocks. A repeat of the same question is rejoined, not duplicated. Name the actor in options the user reads: "Agent: …" / "You: …". Your own pending question can be changed: action "update" with questionId and the new questions (and priority) replaces it in place, keeping its place in the queue; action "cancel" with questionId withdraws it — the person is not asked any more and nothing is mailed. If the person dismisses it instead, your inbox says so. VISUALS: a question can show what you MADE while the person decides — `visuals` (up to 6) on a question, or `visual` on an option to make the choice a pick of a mockup. Each is { artboard: "<post id from ai.genie.artboard.post>" }, { image: "<path to a .png/.jpg/.gif/.webp/.svg in your workspace>" } or { html: "<path to an .html mockup in your workspace>" }, with an optional title; files are posted to your workspace\'s ArtBoard (HTML sanitised; images up to 4 MB, pages up to 512 KB; 12 visuals per ask), the window shows them in a gallery with full screen, the answer names the visual chosen, and each post keeps the decision on its ArtBoard trail. Only your own workspace\'s posts and files.',
     {
         type: 'object',
         properties: {
@@ -412,11 +445,12 @@ export const FORCE_THE_QUESTION_TOOL: BuiltinTool = declareBuiltinTool(
                         header: { type: 'string', maxLength: 12 },
                         question: { type: 'string', description: 'Markdown.' },
                         multiSelect: { type: 'boolean' },
+                        visuals: { type: 'array', maxItems: 6, items: QUESTION_VISUAL_SCHEMA, description: 'What the person looks at while deciding: ArtBoard posts, images or HTML mockups of your workspace.' },
                         options: {
                             type: 'array',
                             minItems: 2,
                             maxItems: 4,
-                            items: { type: 'object', properties: { label: { type: 'string' }, description: { type: 'string' } }, required: ['label'] },
+                            items: { type: 'object', properties: { label: { type: 'string' }, description: { type: 'string' }, visual: { ...QUESTION_VISUAL_SCHEMA, description: 'This option IS this visual (pick a mockup): the answer names it.' } }, required: ['label'] },
                         },
                     },
                     required: ['header', 'question', 'options'],
