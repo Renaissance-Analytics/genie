@@ -34,7 +34,7 @@ const ops = (list = [repo('api'), repo('web'), repo('docs'), repo('cli')]): Work
     repos: { list, onAdd: () => {}, onRemove: () => {}, onOpen: () => {}, onRemoveLock: () => {} },
 });
 const agentTabs = [{ id: 'a1', name: 'atlas', state: 'working' }];
-const wsEl = (o: WorkspaceOpsProps = ops()) => <Workspace view="home" workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} ops={o} onTogglePanel={() => {}} agentTabs={agentTabs} onOpenScratchTerminal={() => {}} />;
+const wsEl = (o: WorkspaceOpsProps = ops()) => <Workspace view="home" workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} ops={o} onTogglePanel={() => {}} agentTabs={agentTabs} onOpenScratchTerminal={async () => ({ ok: true as const })} />;
 /** The agent's page as Shell composes it: the workspace's strip handed to the agent view as its bar. */
 const strip = (trailing: ReactNode, path?: string) => (
     <WorkspaceTabs designed={{ tabs: [] }} agents={agentTabs} current={{ kind: 'agent', id: 'a1' }} canDesign hasSettings onView={() => {}} onAdd={() => {}} onOpenAgent={() => {}} trailing={trailing} {...(path ? { path } : {})} />
