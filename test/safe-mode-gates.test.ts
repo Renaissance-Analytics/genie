@@ -51,8 +51,8 @@ function relaunchRig(safe: boolean) {
     let swept = 0;
     const done = restoreAfterRelaunch({
         safeMode: () => safe,
-        takeRunningAtQuit: async () => { taken.push('running'); return ['agent_idle']; },
-        takeInterruptedAtQuit: async () => { taken.push('interrupted'); return ['agent_mid_turn']; },
+        pending: async () => { taken.push('running', 'interrupted'); return { running: ['agent_idle'], interrupted: ['agent_mid_turn'] }; },
+        started: async () => {},
         beforeStart: async () => { swept += 1; },
         schedule: (fn) => { timers.push(fn); },
         start: async (agentId, resume) => { started.push([agentId, resume]); },

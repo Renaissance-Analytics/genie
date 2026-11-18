@@ -411,6 +411,8 @@ export function updaterHelperEnv(env: NodeJS.ProcessEnv, genieHome: string): Nod
 export function hostDrainAgents(input: {
     agents: () => readonly { id: string; name: string }[];
     probe: (id: AgentId) => { running: boolean; turnState: string; inTurn?: boolean | undefined } | null;
+    /** The saved agents a restore has not started yet (Tynn #754): the record keeps them. */
+    readPending?: () => Promise<{ readonly running: readonly string[]; readonly interrupted: readonly string[] }>;
     writeRunningAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     writeInterruptedAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     stopAll: (onLeft?: (left: number) => void) => Promise<void>;
@@ -429,6 +431,7 @@ export function hostDrainAgents(input: {
             record: () => recordShutdown({
                 agents: input.agents,
                 probe: input.probe,
+                ...(input.readPending ? { pending: input.readPending } : {}),
                 markRunningAtQuit: input.writeRunningAtQuit,
                 markInterruptedAtQuit: input.writeInterruptedAtQuit,
             }),

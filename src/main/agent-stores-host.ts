@@ -76,7 +76,7 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
     approvals: ['resolve', 'gate'],
     settings: ['set', 'setFor', 'resetFor', 'reset'],
     drafts: ['all', 'save', 'putFile', 'readFile', 'release', 'prune'],
-    registry: ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'writeWorkspaces', 'writeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit'],
+    registry: ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'beginRestore', 'restoreStarted', 'writeWorkspaces', 'writeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit'],
 };
 
 export class AgentStoresService {
