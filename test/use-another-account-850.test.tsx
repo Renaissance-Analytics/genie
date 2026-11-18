@@ -54,7 +54,7 @@ describe('the header popover', () => {
         expect(another[0]!.tagName).toBe('BUTTON');
         expect(another[0]!.textContent).toContain('Use another account');
         click(another[0]!);
-        expect(onSwitchAccount.mock.calls).toEqual([['claude', undefined]]);
+        expect(onSwitchAccount.mock.calls.map(([p, choose]) => [p, choose ?? null])).toEqual([['claude', null]]);
     });
     it('it stays there beside Switch when there are other known accounts too', () => {
         const B = `account_${'b'.repeat(32)}`;
@@ -78,7 +78,7 @@ describe('Settings → Providers → Accounts', () => {
             expect(another).toHaveLength(1);
             click(another[0]!);
         }
-        expect(onSwitch.mock.calls).toEqual([['claude', undefined], ['codex', undefined]]);
+        expect(onSwitch.mock.calls.map(([p, choose]) => [p, choose ?? null])).toEqual([['claude', null], ['codex', null]]);
     });
     it('both are react-fancy Buttons with an icon (source guard)', () => {
         for (const file of ['src/renderer/components/AccountsChip.tsx', 'src/renderer/components/AccountsSettings.tsx']) {

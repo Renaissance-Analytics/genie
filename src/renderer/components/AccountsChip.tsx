@@ -13,7 +13,8 @@ import { ProviderLogo, providerName } from './ProviderLogo.js';
  * of the provider uses (Tynn #751/#753), with its tightest window. Its popover lists every known account: its name, its plan
  * (or "unknown"), one bar per window with the share left and the local reset time ("unknown" for a window not reported,
  * "Refreshed" past its reset), and, on every account but the signed-in one, one click to switch: the provider's own login, in
- * its one home (S9). A standing switch offer (S8) leads the popover and marks the chip. Every action is a react-fancy Button.
+ * its one home (S9). Below them, always, "Use another account" (Tynn #850): the same login naming no account, for one Genie
+ * does not know yet. A standing switch offer (S8) leads the popover and marks the chip. Every action is a react-fancy Button.
  */
 export interface AccountsChipProps {
     readonly view: ProviderAccountsView;
@@ -101,6 +102,9 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                         </Callout>
                     ) : null}
                     {view.accounts.map((a) => <AccountSection key={a.id} account={a} now={now} onSwitch={() => switchTo(chooseWords(a))} />)}
+                    {/* USE ANOTHER ACCOUNT (Tynn #850): always here, even with one known account. The provider's own login,
+                        naming no account: the person picks or creates a different one, and Genie reads who it is afterwards. */}
+                    <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" className="self-start" onClick={() => switchTo()}>Use another account</Button>
                     {design && provider === 'claude' ? <DesignAuthRow design={design} onSignIn={onDesignSignIn} /> : null}
                 </div>
             </Popover.Content>
