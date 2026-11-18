@@ -223,7 +223,7 @@ export function originLabel(o: TrashOrigin): string {
         case 'path': return o.rel;
         case 'worktree': return o.branch ? `${o.rel} (worktree, ${o.branch})` : `${o.rel} (worktree)`;
         case 'chat-file': return `chat: ${o.agentId}, ${o.attachmentId}`;
-        case 'artboard': return '';
+        case 'artboard': return `ArtBoard: ${o.label}`;
         default: return o.name;
     }
 }

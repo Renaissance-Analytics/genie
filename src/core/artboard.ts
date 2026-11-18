@@ -433,34 +433,51 @@ export const BOARD_HISTORY = 'history.jsonl';
 export type ClearScope = 'decided' | 'all' | 'everything';
 export const CLEAR_SCOPES: readonly ClearScope[] = ['decided', 'all', 'everything'];
 
-/** PURE. The items a Clear of this scope takes, in the board's order. */
-export function clearSelection<T extends { id: string; review?: unknown; pinned?: boolean | undefined }>(_posts: readonly T[], _scope: ClearScope): T[] {
-    return [];
+/**
+ * PURE. The items a Clear of this scope takes, in the board's order. `decided`: every decided item; `all`: every item, the
+ * waiting ones too; both leave what the person PINNED (it was kept on purpose). `everything` takes the pinned as well.
+ */
+export function clearSelection<T extends { id: string; review?: unknown; pinned?: boolean | undefined }>(posts: readonly T[], scope: ClearScope): T[] {
+    if (scope === 'everything') return [...posts];
+    return posts.filter((p) => p.pinned !== true && (scope === 'all' || p.review !== undefined));
 }
+
+const CLEAR_LABEL: Record<ClearScope, string> = { decided: 'Clear decided', all: 'Clear all', everything: 'Clear all, pinned too' };
+const itemCount = (n: number) => `${n} item${n === 1 ? '' : 's'}`;
 
 /** The Clear menu's entries: each scope, its words and how many items it would take. */
-export function clearChoices(_posts: readonly { id: string; review?: unknown; pinned?: boolean | undefined }[]): { scope: ClearScope; label: string; count: number }[] {
-    return [];
+export function clearChoices(posts: readonly { id: string; review?: unknown; pinned?: boolean | undefined }[]): { scope: ClearScope; label: string; count: number }[] {
+    return CLEAR_SCOPES.map((scope) => ({ scope, label: CLEAR_LABEL[scope], count: clearSelection(posts, scope).length }));
 }
 
-/** The confirmation a Clear asks first. */
-export function clearPrompt(_scope: ClearScope, _count: number): { title: string; body: string; confirmLabel: string } {
-    return { title: '', body: '', confirmLabel: '' };
+/** The confirmation a Clear asks first: the count, where the items go, and what happens to the waiting and the pinned. */
+export function clearPrompt(scope: ClearScope, count: number): { title: string; body: string; confirmLabel: string } {
+    const where = 'They move to this workspace’s .trash with their whole trail, and can be put back with Undo or from the Storage tab.';
+    const waiting = scope === 'decided' ? '' : ' A waiting item is closed without a verdict, and the agent that posted it is told.';
+    const pinned = scope === 'everything' ? ' Pinned items go too.' : ' Pinned items stay.';
+    return { title: `Clear ${itemCount(count)}?`, body: `${where}${waiting}${pinned}`, confirmLabel: `Clear ${count}` };
 }
+
+/** How long the Undo toast stays: a few seconds. After that the items are still in .trash, for the Storage tab. */
+export const UNDO_MS = 8000;
 
 /** The toast after a clear or a delete, which offers Undo. */
-export function clearedToast(_count: number): { title: string; actionLabel: string; duration: number } {
-    return { title: '', actionLabel: '', duration: 0 };
+export function clearedToast(count: number): { title: string; actionLabel: string; duration: number } {
+    return { title: `Cleared ${itemCount(count)}`, actionLabel: 'Undo', duration: UNDO_MS };
 }
 
-/** What the posting agent is told when its waiting item is cleared without a verdict. */
-export function clearedMessage(_post: Pick<BoardPost, 'id' | 'title'>): string {
-    return '';
+/**
+ * What the posting agent is told when its waiting item is cleared without a verdict: delivered the way a verdict is, so an
+ * agent waiting on it stops waiting. It names the post (an agent may have several in flight) and what to do if it still
+ * needs a decision.
+ */
+export function clearedMessage(post: Pick<BoardPost, 'id' | 'title'>): string {
+    return `ArtBoard — "${post.title}" was cleared from the board without a verdict. Nothing was decided on it, so do not wait for one. If you still need a decision, post it again with the same id (\`${post.id}\`).`;
 }
 
 /** What it is told when Undo or a restore puts that item back, waiting again. */
-export function restoredMessage(_post: Pick<BoardPost, 'id' | 'title'>): string {
-    return '';
+export function restoredMessage(post: Pick<BoardPost, 'id' | 'title'>): string {
+    return `ArtBoard — "${post.title}" (\`${post.id}\`) is back on the board and waiting for a verdict again: the earlier clear was undone.`;
 }
 
 /** The link that opens the workspace on its ArtBoard tab, on one item — what a question or notification about a post carries. */

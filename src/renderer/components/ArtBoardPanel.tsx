@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Button, Card, ContentRenderer, Modal, Textarea } from '@particle-academy/react-fancy';
-import { timelineOf, visiblePosts, type BoardFilter, type ClearScope, type DisplayPost, type DisplayVersion } from '../../core/artboard.js';
+import { Badge, Button, Card, ContentRenderer, Dropdown, Modal, Textarea, Toast, useToast } from '@particle-academy/react-fancy';
+import { clearChoices, clearedToast, clearPrompt, timelineOf, visiblePosts, type BoardFilter, type ClearScope, type DisplayPost, type DisplayVersion } from '../../core/artboard.js';
 import type { GenieBridge } from '../bridge.js';
 import { genieClipboardWriter } from '../clipboard.js';
 
@@ -142,7 +142,41 @@ function Trail({ post, open }: { readonly post: DisplayPost; readonly open: bool
     );
 }
 
-function PostCard({ post: p, focused, busy, onReview, onPin, onFull, initialCompare }: { readonly post: DisplayPost; readonly focused: boolean; readonly busy: boolean; readonly onReview: ArtBoardViewProps['onReview']; readonly onPin: ArtBoardViewProps['onPin']; readonly onFull: () => void; readonly initialCompare: boolean }) {
+/**
+ * THE CLEAR MENU (genie#847): Clear decided, Clear all, Clear all with the pinned too — each with how many items it takes, and
+ * a confirmation that names the count before anything moves. Disabled while the board is empty or a clear is running.
+ */
+function ClearMenu({ posts, disabled, onClear }: { readonly posts: readonly DisplayPost[]; readonly disabled: boolean; readonly onClear: (scope: ClearScope) => void }) {
+    const choices = clearChoices(posts);
+    const [asking, setAsking] = useState<{ scope: ClearScope; count: number } | null>(null);
+    const prompt = asking ? clearPrompt(asking.scope, asking.count) : null;
+    return (
+        <>
+            <Dropdown placement="bottom-end">
+                <Dropdown.Trigger>
+                    <Button type="button" size="xs" variant="ghost" icon="trash-2" data-action="artboard-clear" aria-label="Clear the board" title="Clear the board: decided items, all items, or pinned ones too" disabled={disabled || posts.length === 0}>Clear</Button>
+                </Dropdown.Trigger>
+                <Dropdown.Items>
+                    {choices.map((c) => (
+                        <Dropdown.Item key={c.scope} {...(c.scope === 'everything' ? { danger: true } : {})} disabled={c.count === 0} onClick={() => setAsking({ scope: c.scope, count: c.count })}>
+                            <span data-artboard-clear-choice={c.scope} className="flex w-full items-center gap-3 whitespace-nowrap">{c.label}<span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{c.count}</span></span>
+                        </Dropdown.Item>
+                    ))}
+                </Dropdown.Items>
+            </Dropdown>
+            <Modal open={asking !== null} onClose={() => setAsking(null)} size="sm">
+                <Modal.Header>{prompt?.title ?? ''}</Modal.Header>
+                <Modal.Body><p data-artboard-clear-confirm="" className="text-sm">{prompt?.body ?? ''}</p></Modal.Body>
+                <Modal.Footer>
+                    <Button type="button" onClick={() => setAsking(null)}>Cancel</Button>
+                    <Button type="button" color="red" data-artboard-clear-yes="" onClick={() => { const a = asking; setAsking(null); if (a) onClear(a.scope); }}>{prompt?.confirmLabel ?? 'Clear'}</Button>
+                </Modal.Footer>
+            </Modal>
+        </>
+    );
+}
+
+function PostCard({ post: p, focused, busy, onReview, onPin, onDelete, onFull, initialCompare }: { readonly post: DisplayPost; readonly focused: boolean; readonly busy: boolean; readonly onReview: ArtBoardViewProps['onReview']; readonly onPin: ArtBoardViewProps['onPin']; readonly onDelete: ArtBoardViewProps['onDelete']; readonly onFull: () => void; readonly initialCompare: boolean }) {
     const versions = p.versions ?? [];
     const latest = versions[versions.length - 1]?.n ?? 1;
     const [comment, setComment] = useState('');
@@ -168,6 +202,9 @@ function PostCard({ post: p, focused, busy, onReview, onPin, onFull, initialComp
                         <Button size="xs" variant={p.pinned ? 'default' : 'ghost'} icon="pin" data-action="artboard-pin" aria-pressed={p.pinned ? 'true' : 'false'} aria-label={p.pinned ? `Unpin ${p.title}` : `Pin ${p.title} to keep it in view after a verdict`} title={p.pinned ? 'Pinned: stays in view after a verdict. Click to unpin.' : 'Pin: keep it in view after a verdict'} onClick={() => onPin(p.id, !p.pinned)}>{p.pinned ? 'Pinned' : 'Pin'}</Button>
                     ) : null}
                     <Button size="xs" variant="ghost" icon="maximize-2" data-action="artboard-full" aria-label={`Open ${p.title} full size`} title="Open full size" onClick={onFull} />
+                    {onDelete ? (
+                        <Button size="xs" variant="ghost" icon="trash-2" data-action="artboard-delete" aria-label={`Delete ${p.title}`} title="Delete: move it to .trash with its trail (Undo puts it back)" disabled={busy} onClick={() => onDelete(p.id)} />
+                    ) : null}
                 </div>
                 {p.note && versions.length <= 1 ? <p className="text-xs text-[var(--fg-2)]">{p.note}</p> : null}
                 {versions.length > 1 ? (
@@ -217,7 +254,7 @@ function PostCard({ post: p, focused, busy, onReview, onPin, onFull, initialComp
     );
 }
 
-export function ArtBoardView({ posts, error, onReview, onPin, busy = null, focusId = null, initialFilter = 'waiting', initialCompare = null }: ArtBoardViewProps) {
+export function ArtBoardView({ posts, error, onReview, onPin, onClear, onDelete, busy = null, focusId = null, initialFilter = 'waiting', initialCompare = null }: ArtBoardViewProps) {
     const [filter, setFilter] = useState<BoardFilter>(initialFilter);
     const [fullId, setFullId] = useState<string | null>(null);
     const full = fullId ? posts.find((p) => p.id === fullId) ?? null : null;
@@ -225,18 +262,22 @@ export function ArtBoardView({ posts, error, onReview, onPin, busy = null, focus
     const counts: Record<BoardFilter, number> = { waiting: visiblePosts(posts, 'waiting').length, decided: visiblePosts(posts, 'decided').length, all: posts.length };
     return (
         <section data-artboard="" className="flex h-full min-h-0 flex-1 flex-col overflow-auto p-3 text-[13px] [container-type:size]">
+            {/* The header is always there, empty board or not, so a clear that takes the last item does not move the panel (genie#847). */}
+            <div data-artboard-header="" className="mb-3 flex shrink-0 items-center gap-1">
+                <div data-artboard-filters="" role="group" aria-label="Show" className="flex items-center gap-1">
+                    {FILTERS.map((f) => (
+                        <Button key={f.id} size="xs" variant={filter === f.id ? 'default' : 'ghost'} data-artboard-filter={f.id} aria-pressed={filter === f.id ? 'true' : 'false'} onClick={() => setFilter(f.id)}>
+                            {f.label} <span className="ml-1 font-mono text-[11px] text-[var(--fg-4)]">{counts[f.id]}</span>
+                        </Button>
+                    ))}
+                </div>
+                {onClear ? <div className="ml-auto"><ClearMenu posts={posts} disabled={busy !== null} onClear={onClear} /></div> : null}
+            </div>
             {error ? <p data-artboard-error="" className="mb-2 text-xs text-[var(--warning)]">{error}</p> : null}
             {posts.length === 0 ? (
                 <p className="text-[var(--fg-3)]">Nothing on the board yet. When an agent posts a mockup, a page, an image or a document (artboard.post), it shows here, and everything decided about it is kept.</p>
             ) : (
                 <>
-                    <div data-artboard-filters="" role="group" aria-label="Show" className="mb-3 flex shrink-0 items-center gap-1">
-                        {FILTERS.map((f) => (
-                            <Button key={f.id} size="xs" variant={filter === f.id ? 'default' : 'ghost'} data-artboard-filter={f.id} aria-pressed={filter === f.id ? 'true' : 'false'} onClick={() => setFilter(f.id)}>
-                                {f.label} <span className="ml-1 font-mono text-[11px] text-[var(--fg-4)]">{counts[f.id]}</span>
-                            </Button>
-                        ))}
-                    </div>
                     {shown.length === 0 ? (
                         <p data-artboard-none="" className="text-[var(--fg-3)]">
                             {filter === 'waiting' ? `Nothing is waiting for you. ${counts.decided} decided item${counts.decided === 1 ? ' is' : 's are'} under Decided and All; pin one to keep it here.` : 'Nothing decided yet.'}
@@ -244,7 +285,7 @@ export function ArtBoardView({ posts, error, onReview, onPin, busy = null, focus
                     ) : (
                         <div data-artboard-grid="" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,36rem),1fr))] items-start gap-3">
                             {shown.map((p) => (
-                                <PostCard key={p.id} post={p} focused={p.id === focusId} busy={busy === p.id} onReview={onReview} onPin={onPin} onFull={() => setFullId(p.id)} initialCompare={initialCompare === p.id} />
+                                <PostCard key={p.id} post={p} focused={p.id === focusId} busy={busy === p.id} onReview={onReview} onPin={onPin} onDelete={onDelete} onFull={() => setFullId(p.id)} initialCompare={initialCompare === p.id} />
                             ))}
                         </div>
                     )}
@@ -266,7 +307,15 @@ export function ArtBoardView({ posts, error, onReview, onPin, busy = null, focus
 
 type BoardBridge = NonNullable<GenieBridge['artboard']>;
 
-export function ArtBoardPanel({ workspaceId, artboard, files, focusId = null }: { workspaceId: string; artboard: BoardBridge | undefined; files?: Pick<GenieBridge['files'], 'subscribe'> | undefined; focusId?: string | null | undefined }) {
+type ArtBoardPanelProps = { workspaceId: string; artboard: BoardBridge | undefined; files?: Pick<GenieBridge['files'], 'subscribe'> | undefined; focusId?: string | null | undefined };
+
+/** The board with its own toasts: the Undo after a clear or a delete (genie#847). */
+export function ArtBoardPanel(props: ArtBoardPanelProps) {
+    return <Toast.Provider position="bottom-end" maxToasts={2}><ArtBoardPanelBody {...props} /></Toast.Provider>;
+}
+
+function ArtBoardPanelBody({ workspaceId, artboard, files, focusId = null }: ArtBoardPanelProps) {
+    const { toast } = useToast();
     const [posts, setPosts] = useState<readonly DisplayPost[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
@@ -288,6 +337,22 @@ export function ArtBoardPanel({ workspaceId, artboard, files, focusId = null }: 
         setBusy(id);
         void artboard.review(workspaceId, id, verdict, comment).then((r) => { if (!r.ok) setError(r.error); read(); }).finally(() => setBusy(null));
     };
+    // Undo puts the .trash entry the clear answered with back on the board (the Storage tab's Restore, #697).
+    const undo = (trashId: string) => {
+        void artboard.review(workspaceId, trashId, 'restore', '').then((r) => { setError(r.ok ? null : r.error); read(); }, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    };
+    // A clear or a delete, then a toast offering Undo for a few seconds; the items stay in .trash after it goes.
+    const clear = (busyKey: string, postId: string, verdict: 'delete' | 'clear-decided' | 'clear-all' | 'clear-everything') => {
+        setBusy(busyKey);
+        void artboard.review(workspaceId, postId, verdict, '').then((r) => {
+            if (!r.ok) setError(r.error);
+            else if (r.cleared && r.trashId) {
+                const trashId = r.trashId, t = clearedToast(r.cleared);
+                toast({ title: t.title, duration: t.duration, variant: 'success', action: { label: t.actionLabel, onClick: () => undo(trashId) } });
+            }
+            read();
+        }, (e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(null));
+    };
     return (
         <ArtBoardView
             posts={posts}
@@ -296,6 +361,8 @@ export function ArtBoardPanel({ workspaceId, artboard, files, focusId = null }: 
             focusId={focusId}
             onReview={(id, verdict, comment) => act(id, verdict, comment)}
             onPin={(id, pinned) => act(id, pinned ? 'pin' : 'unpin', '')}
+            onClear={(scope) => clear('*clear', '', scope === 'decided' ? 'clear-decided' : scope === 'all' ? 'clear-all' : 'clear-everything')}
+            onDelete={(id) => clear(id, id, 'delete')}
         />
     );
 }

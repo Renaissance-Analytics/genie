@@ -10,6 +10,8 @@ import { sizeOf as defaultSizeOf, type DirSize } from './dir-size.js';
 import { gitExecFile } from './git-exec.js';
 import { GitDidNotAnswer, withinGitLimit } from './git-ports.js';
 import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
+import { restoreArtboardPayload } from './artboard-trash.js';
+import { TRASH_ID, TRASH_PAYLOAD, TRASH_RECORD, trashFolder } from './trash-entry.js';
 
 /**
  * A WORKSPACE'S STORAGE, ON THE HOST (Tynn #697): measure it by category, move reclaimable clutter into the workspace's
@@ -48,15 +50,12 @@ export interface StoragePorts {
     readonly sizeOf?: (path: string) => Promise<DirSize>;
 }
 
-const RECORD = 'genie-trash.json';
-const PAYLOAD = 'item';
-const TRASH_ID = /^genie-\d+-[0-9a-f]{6}$/;
+const RECORD = TRASH_RECORD;
+const PAYLOAD = TRASH_PAYLOAD;
 /** How deep, and how many folders, the artifact search looks at. */
 const ARTIFACT_DEPTH = 6;
 const ARTIFACT_DIRS = 20_000;
 const WALKS_AT_ONCE = 4;
-
-const LINKED_TRASH = 'This workspace’s .trash is a link, not a folder: Genie will not use it.';
 
 const toSlash = (p: string): string => p.split(sep).join('/');
 
@@ -208,18 +207,8 @@ export class WorkspaceStorage {
     }
 
     /** `.trash` as a folder; `null` when absent; refused when it is anything else (a link would leave the workspace). */
-    async #trashDir(rootReal: string, create: boolean): Promise<{ ok: true; dir: string | null } | { ok: false; reason: string }> {
-        const dir = join(rootReal, '.trash');
-        try {
-            const s = await lstat(dir);
-            if (s.isSymbolicLink()) return { ok: false, reason: LINKED_TRASH };
-            if (!s.isDirectory()) return { ok: false, reason: 'This workspace’s .trash is a file, not a folder.' };
-            return { ok: true, dir };
-        } catch {
-            if (!create) return { ok: true, dir: null };
-            await mkdir(dir, { recursive: true });
-            return { ok: true, dir };
-        }
+    #trashDir(rootReal: string, create: boolean): Promise<{ ok: true; dir: string | null } | { ok: false; reason: string }> {
+        return trashFolder(rootReal, create);
     }
 
     /**
@@ -426,6 +415,10 @@ export class WorkspaceStorage {
                 if (await exists(o.path)) return taken(o.path);
                 await mkdir(dirname(o.path), { recursive: true });
                 await move(payload, o.path);
+            } else if (o.kind === 'artboard') {
+                // Items cleared off the ArtBoard (genie#847): back onto .artboard/index.json, their files back beside it.
+                const back = await restoreArtboardPayload(rootReal, payload);
+                if (!back.ok) return back;
             } else {
                 return cannot;
             }
@@ -433,7 +426,7 @@ export class WorkspaceStorage {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
         await rm(entry, { recursive: true, force: true });
-        return { ok: true, label: o.kind === 'chat-file' ? `${o.agentId}: ${o.attachmentId}` : o.rel };
+        return { ok: true, label: o.kind === 'chat-file' ? `${o.agentId}: ${o.attachmentId}` : o.kind === 'artboard' ? `ArtBoard: ${o.label}` : o.rel };
     }
 
     /**
@@ -479,11 +472,17 @@ async function realFoldersOnTheWay(rootReal: string, rel: string): Promise<boole
     return true;
 }
 
+/** A Genie .trash entry's record (its origin), or `null` when it has none Genie wrote. */
+export async function readTrashRecord(entry: string): Promise<{ movedAt: number; origin: TrashOrigin } | null> {
+    return readRecord(entry);
+}
+
 async function readRecord(entry: string): Promise<{ movedAt: number; origin: TrashOrigin } | null> {
     try {
-        const r = JSON.parse(await readFile(join(entry, RECORD), 'utf8')) as { version?: unknown; movedAt?: unknown; origin?: { kind?: unknown } };
+        const r = JSON.parse(await readFile(join(entry, RECORD), 'utf8')) as { version?: unknown; movedAt?: unknown; origin?: { kind?: unknown; ids?: unknown; label?: unknown } };
         if (r.version !== 1 || typeof r.movedAt !== 'number' || !r.origin || typeof r.origin.kind !== 'string') return null;
-        if (!['path', 'worktree', 'chat-file'].includes(r.origin.kind)) return null;
+        if (!['path', 'worktree', 'chat-file', 'artboard'].includes(r.origin.kind)) return null;
+        if (r.origin.kind === 'artboard' && (!Array.isArray(r.origin.ids) || !r.origin.ids.every((id) => typeof id === 'string') || typeof r.origin.label !== 'string')) return null;
         return { movedAt: r.movedAt, origin: r.origin as TrashOrigin };
     } catch {
         return null;
