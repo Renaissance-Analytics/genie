@@ -47,13 +47,15 @@ export type CatalogLookup = (id: string) => ElementDefinition | null;
  * a new agent, their workspace's tabs, mail as them, their lists: items there put work in front of the person, the
  * coordinator's ruling of 2026-11-08, starting conservative), and the ones that wait on the person's approval (a
  * terminal, a service, a site, a background process, a page). `plan`, `flows`, `mail` and `thumbsUp` too: an agent's own
- * records and voice, held back the same way until the owner rules otherwise. `grantable: false` in Genie's catalog
+ * records and voice, held back the same way until the owner rules otherwise. `playwright` (Tynn #846): its install can
+ * wait on the person's approval (another browser, a seventh set). `grantable: false` in Genie's catalog
  * (main/genie-catalog.ts).
  */
 export const PERSON_ONLY_TOOLS: ReadonlySet<string> = new Set([
     'ForceTheQuestion', 'imDone', 'createAgent', 'workspaceTabs', 'agentinbox', 'lists',
     'manageTerminals', 'services', 'sites', 'processes', 'pages',
     'plan', 'flows', 'mail', 'thumbsUp',
+    'playwright',
 ]);
 
 /** Why an app may never be granted this element, or null: `grantable: false`, or gated by the person's approval. */
