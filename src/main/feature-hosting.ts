@@ -4,6 +4,7 @@ import type { FeatureAction, FeatureData, HostedSite, ServiceAdding } from '../r
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import type { HostingApi } from './hosting-host.js';
 import type { HostedProcess } from './process-book.js';
+import { ROW_LOG_LINES } from '../core/output-tail.js';
 import type { SitePin } from './php-versions.js';
 import {
     createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs,
@@ -23,8 +24,8 @@ export type HostingFeaturePorts = Pick<FeaturePorts, 'processes' | 'processSched
     readonly toolchain?: Pick<NonNullable<FeaturePorts['toolchain']>, 'php'>;
 };
 
-/** How much of a process's log rides each snapshot: the end of it. All of it is the agents' `processes logs`. */
-export const ROW_LOG_LINES = 40;
+/** How much of a process's log rides each snapshot: the end of it (core/output-tail.ts). All of it is the Log button's. */
+export { ROW_LOG_LINES } from '../core/output-tail.js';
 
 /** Each site with the end of its processes' output — the same read as the agents' `sites logs` (hosting-actions.ts). */
 function sitesWithLogs(services: HostingFeatureServices): HostedSite[] {
@@ -36,9 +37,18 @@ function sitesWithLogs(services: HostingFeatureServices): HostedSite[] {
 
 function withLogTails(services: HostingFeatureServices, rows: readonly HostedProcess[]): HostedProcess[] {
     return rows.map((row) => {
+        // A row this Genie never ran keeps what the book put on it: the output earlier Genies kept (Tynn #860).
         const log = services.supervisor.readLog(row.id, ROW_LOG_LINES);
         return log && log.lines > 0 ? { ...row, log } : row;
     });
+}
+
+/** The process log the person opened (Tynn #860): read whole from the host at every snapshot, so it follows the output. */
+async function openProcessLog(state: FeatureState, ports: HostingFeaturePorts): Promise<Record<string, never> | { processLog: NonNullable<NonNullable<FeatureData['hosting']>['processLog']> }> {
+    const id = state.processLogOpen ?? null;
+    if (id === null || !ports.processes) return {};
+    const log = await ports.processes.log(id);
+    return { processLog: { processId: id, ...(log ?? { text: '', lines: 0, dropped: 0 }) } };
 }
 
 /**
@@ -91,7 +101,7 @@ export async function hostingFeatureSnapshot(services: HostingFeatureServices, s
     return {
         trust: services.trustSteps(),
         // Stopped kept processes remain listed, with the supervisor's bounded output tail.
-        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list().filter((p) => services.workspaceVisible(p.workspaceId)) : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
+        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list().filter((p) => services.workspaceVisible(p.workspaceId)) : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems(), ...(await openProcessLog(state, ports)) },
         // The first status read is real; a later slow read uses the last answer until its change invalidates it.
         services: { instances: await timed('engines', () => engineStatusesWithin(services, ports)), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false, ...(state.browserHandedOff ? { handedOff: state.browserHandedOff } : {}) },
@@ -211,7 +221,15 @@ export async function applyHostingFeatureAction(services: HostingFeatureServices
             if (!ports.processes?.owns(action.processId)) throw new Error(`no background process ${action.processId} that you keep`);
             await ports.processes.start(action.processId);
             break;
+        case 'hosting.openProcessLog':
+            // Tynn #860: any process in the list, kept or a site's; its whole log rides the snapshot until it is closed.
+            next.processLogOpen = action.processId;
+            break;
+        case 'hosting.closeProcessLog':
+            next.processLogOpen = null;
+            break;
         case 'hosting.removeProcess':
+            if (state.processLogOpen === action.processId) next.processLogOpen = null;
             // A site's process goes with its site; only one the person keeps is removed here.
             if (!ports.processes?.owns(action.processId)) throw new Error(`no background process ${action.processId} that you keep; a site's process is removed with its site`);
             await ports.processes.remove(action.processId);

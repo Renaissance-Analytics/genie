@@ -87,6 +87,8 @@ import { withElements } from '../core/workspace-elements.js';
 import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
+import { KeptProcessLogs } from './kept-process-logs.js';
+import { nudgeOnRoster } from './scheduled-nudge.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from './engine-launch.js';
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
@@ -170,7 +172,7 @@ import { tellDesignLoginRan } from '../core/design-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
-import { sharedWindowsHelper } from './private-credentials.js';
+import { restrictPrivateDirectories, sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
 import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
@@ -216,7 +218,7 @@ import { ChatDraftStore } from './chat-draft-store.js';
 import { readV1Settings } from './v1-settings.js';
 import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
-import { wireHostMailWake } from './host-mail-wake.js';
+import { hostAgentWake, wireHostMailWake } from './host-mail-wake.js';
 import { wireHostPlanKeepalive, type HostPlanKeepalive } from './host-plan-keepalive.js';
 import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
 import { TYNN_ISSUES_FEED } from './tynn-issues-live.js';
@@ -1905,19 +1907,36 @@ async function main(): Promise<void> {
                 // Safe mode: the restore starts no kept process, and no scheduled task is armed.
                 safeMode: safeNow,
             };
+            // Each kept process's output, kept past this Genie (Tynn #860): a row "stopped by restart" still has its log.
+            let opened: ProcessBook | null = null;
+            const keptLogs = await KeptProcessLogs.open(join(runtime, 'process-logs'), {
+                supervisor: processSupervisor,
+                owns: (id) => opened?.owns(id) ?? false,
+                // Owner-only on Windows too: the credential ACL on the folder, once (process output can hold a secret).
+                ...(process.platform === 'win32' ? { restrictDir: (dir: string) => restrictPrivateDirectories([dir]) } : {}),
+            });
             const processBook = await ProcessBook.open(home, {
                 ...deps,
+                logs: keptLogs,
                 limit: (workspaceId) => limitOf(settings.snapshotFor(workspaceId), 'processes'),
                 v1: { database: databasePath, workspaces: () => hostRegistry.listWorkspaces(), roster: () => hostRegistry.listAgents() },
             });
+            opened = processBook;
+            // Written before the host goes ("Shut down everything" stops the clocks): the last output is not left pending.
+            clocks.push({ stop: () => { void keptLogs.flush(); } });
+            // A nudge wakes its agent through the host's one wake, as mail does (the owner's decision, Tynn #860).
+            const nudgeWake = hostAgentWake({ host, registry: hostRegistry, settings, osaDir: osaHome, safeMode: safeNow });
             const scheduler = new ProcessScheduler({
                 ...deps,
                 book: processBook,
-                // A nudge reaches its agent by its address, on the host's roster, at its turn's end.
-                nudge: (address, text, from) => {
-                    const found = resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs());
-                    return found.kind === 'one' ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
-                },
+                // A nudge reaches its agent by its address, on the host's roster, at its turn's end; a miss says which (Tynn #860).
+                nudge: (address, text, from) => nudgeOnRoster({
+                    resolve: (a) => resolveOnRoster(a, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
+                    // An agent whose workspace is hibernated is not on the roster: said as mail says it.
+                    unreachable: (a) => hostRegistry.mailRefusal(a),
+                    deliver: (id, t, by) => host.deliver(id as AgentId, t, by),
+                    wake: nudgeWake,
+                }, address, text, from),
                 now: Date.now,
                 schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
             });
@@ -2021,7 +2040,8 @@ async function main(): Promise<void> {
         forwardedCalls,
         // THE AGENTS' `playwright` (Tynn #846): what Genie has, and asking it for a version.
         playwright: playwrightToolPort({ toolchainDir: playwrightToolchain, fs: nodePhpVersionsFs(), installer: playwrightInstaller, workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null }),
-        processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
+        // `logs` reads a kept process's output from before a restart too (Tynn #860); a site's server, the supervisor's tail.
+        processes: { book: hostBook, logs: (id, lines) => processBookNow?.log(id, lines) ?? processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
         terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), onData: (listener) => terminalHost.onData((id, data) => listener(id, data)), scrollbackCap: 1_000_000 },
         // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.
         terminalEnv: (workspaceId) => {

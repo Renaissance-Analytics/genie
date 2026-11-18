@@ -207,7 +207,8 @@ export async function applyPersonalFeatureAction(services: PersonalFeatureServic
         }
         case 'flows.openEditor':
             if (!ports.openFlowEditor) throw new Error('this Genie has no flow editor window');
-            await ports.openFlowEditor(`genie://flow/${encodeURIComponent(action.flowId)}`);
+            // Tynn #860: a run's Review opens the flow on that run.
+            await ports.openFlowEditor(`genie://flow/${encodeURIComponent(action.flowId)}${typeof action.run === 'number' ? `?run=${action.run}` : ''}`);
             break;
         case 'flows.newFlow':
             if (!ports.openFlowEditor) throw new Error('this Genie has no flow editor window');

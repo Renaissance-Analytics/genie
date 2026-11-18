@@ -275,6 +275,8 @@ export interface FeatureState {
     serviceAdding?: ServiceAdding | null;
     /** The engine log the person opened in the Services tab (H6), until they hide it. */
     serviceLogs?: ServiceLogs | null;
+    /** The process whose log the person opened in Hosting → Processes (Tynn #860), until they close it. */
+    processLogOpen?: string | null;
     serviceUpdating?: NonNullable<FeatureData['services']>['updating'];
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;

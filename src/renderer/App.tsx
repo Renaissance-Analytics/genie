@@ -2061,6 +2061,7 @@ function DesktopApp({ bridge }: AppProps) {
             <FlowEditorWindow
                 flowId={parsed.flowId}
                 workspaceId={parsed.workspaceId}
+                run={parsed.run ?? null}
                 hibernated={flowWorkspaceId !== null && hiddenWorkspaceIds.has(flowWorkspaceId)}
                 data={features}
                 workspaces={snapshot.workspaces ?? []}

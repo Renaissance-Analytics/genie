@@ -1,5 +1,5 @@
 import { nextCronAfter } from '../core/cron.js';
-import type { LastRunStatus } from '../core/scheduled-task.js';
+import type { LastRunStatus, ScheduledRun } from '../core/scheduled-task.js';
 import type { KeptProcess, ProcessBook } from './process-book.js';
 import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
 
@@ -18,9 +18,15 @@ import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
  *   waits for the agent's turn to end, never landing inside one (Genie 1 delivered through AgentInbox's idle gate). The
  *   outcome is whether it could be delivered.
  * - **Run now** runs a task once, enabled or paused (Genie 1's run-now) — not in a sleeping workspace.
+ * - **Every run is kept with what happened** (Tynn #860; the owner: "I have scheduled jobs failing but no idea why"): its
+ *   start and end, its outcome, the REASON in the words of whatever refused it (no such agent, not running, an exit code,
+ *   the error), and for a nudge the text it handed over. The book keeps the last few (core/scheduled-task.ts `withRun`).
  */
 
 export type RunNowResult = 'started' | 'ok' | 'failed' | 'skipped' | 'held';
+
+/** What a nudge came to (Tynn #860): delivered, or why not. */
+export type NudgeOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
 export interface ProcessSchedulerDeps {
     readonly book: Pick<ProcessBook, 'scheduledTasks' | 'recordScheduledRun' | 'onChange'>;
@@ -33,7 +39,7 @@ export interface ProcessSchedulerDeps {
     readonly appEnv?: (process: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => Readonly<Record<string, string>>;
     readonly asleep: (workspaceId: string) => boolean;
     /** Deliver `text` to the agent at `address`, from the task named `from` — now, or when its turn ends. False = nowhere to deliver. */
-    readonly nudge: (address: string, text: string, from: string) => boolean | Promise<boolean>;
+    readonly nudge: (address: string, text: string, from: string) => boolean | NudgeOutcome | Promise<boolean | NudgeOutcome>;
     readonly now: () => number;
     readonly schedule: (fn: () => void, ms: number) => () => void;
     /** SAFE MODE (Tynn #386): while on, no scheduled task is armed or fired; Run now is the person's and still runs. */
@@ -122,7 +128,7 @@ export class ProcessScheduler {
         const schedule = p.schedule!;
         const live = this.#deps.supervisor.status(p.id);
         if (this.#inFlight.has(p.id) || live?.state === 'running' || live?.state === 'restarting') {
-            await this.#record(p.id, at, 'skipped');
+            await this.#record(p.id, { at, endedAt: at, status: 'skipped', reason: 'its previous run was still running, so this one did not start' });
             return 'skipped';
         }
         if (schedule.kind === 'agent-nudge') {
@@ -132,10 +138,19 @@ export class ProcessScheduler {
             const nudged = new Promise<void>((r) => { finishNudge = r; });
             this.#inFlight.set(p.id, { at, done: nudged, finish: finishNudge });
             try {
-                let ok = false;
-                try { ok = await this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
-                await this.#record(p.id, at, ok ? 'ok' : 'failed');
-                return ok ? 'ok' : 'failed';
+                const prompt = schedule.prompt ?? '';
+                let outcome: NudgeOutcome;
+                try {
+                    const answer = await this.#deps.nudge(schedule.agent ?? '', prompt, p.name);
+                    outcome = answer === true ? { ok: true } : answer === false ? { ok: false, reason: `${schedule.agent ?? 'the agent'} could not take it (Genie had nowhere to deliver it)` } : answer;
+                } catch (error) {
+                    outcome = { ok: false, reason: `the delivery failed: ${error instanceof Error ? error.message : String(error)}` };
+                }
+                const ended = this.#deps.now();
+                await this.#record(p.id, outcome.ok
+                    ? { at, endedAt: ended, status: 'ok', sent: prompt }
+                    : { at, endedAt: ended, status: 'failed', reason: outcome.reason, sent: prompt });
+                return outcome.ok ? 'ok' : 'failed';
             } finally {
                 this.#inFlight.delete(p.id);
                 finishNudge();
@@ -150,7 +165,7 @@ export class ProcessScheduler {
         } catch (error) {
             this.#inFlight.delete(p.id);
             finish();
-            await this.#record(p.id, at, 'failed');
+            await this.#record(p.id, { at, endedAt: this.#deps.now(), status: 'failed', reason: `it could not start: ${error instanceof Error ? error.message : String(error)}` });
             throw error;
         }
         return 'started';
@@ -162,12 +177,16 @@ export class ProcessScheduler {
         if (s.state !== 'exited' && s.state !== 'failed' && s.state !== 'stopped') return;
         this.#inFlight.delete(s.id);
         const status: LastRunStatus = s.state === 'exited' && s.exitCode === 0 ? 'ok' : 'failed';
-        void this.#record(s.id, run.at, status).finally(() => run.finish());
+        const reason = status === 'ok' ? null
+            : s.state === 'stopped' ? 'it was stopped before it finished'
+            : s.state === 'failed' ? (s.reason ?? 'it failed to run')
+            : `exited with code ${s.exitCode ?? 'unknown'}`;
+        void this.#record(s.id, { at: run.at, endedAt: this.#deps.now(), status, ...(reason === null ? {} : { reason }) }).finally(() => run.finish());
     }
 
     /** Every outcome write is tracked until it has landed, so `settled()` covers it whichever path started it. */
-    #record(id: string, at: number, status: LastRunStatus): Promise<void> {
-        const write: Promise<void> = this.#deps.book.recordScheduledRun(id, at, status).catch(() => {}).finally(() => { this.#recording.delete(write); });
+    #record(id: string, run: ScheduledRun): Promise<void> {
+        const write: Promise<void> = this.#deps.book.recordScheduledRun(id, run).catch(() => {}).finally(() => { this.#recording.delete(write); });
         this.#recording.add(write);
         return write;
     }

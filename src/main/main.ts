@@ -1,3 +1,4 @@
+import { sameFlowWindow } from '../core/route.js';
 import { browserSiteLabels } from '../core/browser-sites.js';
 import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
@@ -946,7 +947,13 @@ function openTerminalsWindow(route: string, activation: Activation): void {
 function openFlowEditorWindow(route: string, activation: Activation): void {
     const request = { activation, reason: `flow editor ${route}`, ledger: activationLedger, label: 'flow' };
     for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
+        if (w.isDestroyed()) continue;
+        const url = w.webContents.getURL();
+        if (!url.endsWith(`#${route}`) && !sameFlowWindow(url, route)) continue;
+        // The flow is open already (Tynn #860): a link to one of its runs moves THAT window to the run, never a second window.
+        if (!url.endsWith(`#${route}`) && route.includes('?run=')) void w.webContents.executeJavaScript(`window.location.replace(${JSON.stringify(`#${route}`)})`).catch(() => {});
+        bringUp(w, request);
+        return;
     }
     const win = new BrowserWindow({
         width: 1280,

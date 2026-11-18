@@ -37,7 +37,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Daily at 03:00');
         expect(row).toMatch(/Next run: in 1 hr/);
         expect(row).toMatch(/Last run: Failed 1 hr ago/);
-        expect(names(row)).toEqual(['Run now', 'More actions']);
+        expect(names(row)).toEqual(['Run now', 'More actions', 'Log']);
     });
 
     it('a paused one says so and offers Enable schedule', () => {
@@ -45,7 +45,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Paused — not firing');
         expect(row).toContain('Next run: Not scheduled');
         expect(row).toContain('Last run: Never run');
-        expect(names(row)).toEqual(['Run now', 'More actions']);
+        expect(names(row)).toEqual(['Run now', 'More actions', 'Log']);
     });
 
     it('a nudge shows whom it prompts and with what, and no command', () => {
@@ -57,7 +57,7 @@ describe('a scheduled task in Processes', () => {
     it('CONTROL: a process kept running is not scheduled — Stop, with Restart in the menu', () => {
         const row = rowOf(renderToStaticMarkup(<ProcessesPanel processes={[queue]} workspaces={workspaces} onAction={() => {}} now={NOW} />), 'p4');
         expect(row).not.toContain('scheduled');
-        expect(names(row)).toEqual(['Stop', 'More actions']);
+        expect(names(row)).toEqual(['Stop', 'More actions', 'Log']);
     });
 
     it('its buttons send Run now, Pause / Enable schedule', () => {
