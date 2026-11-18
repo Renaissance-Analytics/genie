@@ -463,6 +463,8 @@ describe('a phone that opens a chat gets its history (Tynn #862)', () => {
     it('only an agent the wants GAINED is pushed: a status that names it again, or names nothing new, sends nothing; one that drops and re-adds it sends it again', async () => {
         const r = await rig();
         r.setLedger([{ id: 'r1' }]);
+        // genie-host's first status, before any phone watches.
+        r.wants([]);
         r.wants(['agent_a']);
         expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a']);
         r.wants(['agent_a']);
@@ -470,6 +472,14 @@ describe('a phone that opens a chat gets its history (Tynn #862)', () => {
         r.wants([]);
         r.wants(['agent_a']);
         expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a', 'agent:agent_a']);
+        r.off();
+    });
+
+    it('a status that did not say what it wants (the window’s first, or an older host’s) forwarded everything: nothing was dropped, so its first wants push nothing extra', async () => {
+        const r = await rig();
+        r.setLedger([{ id: 'r1' }]);
+        r.wants(['agent_a']);
+        expect(r.sent).toEqual([]);
         r.off();
     });
 
