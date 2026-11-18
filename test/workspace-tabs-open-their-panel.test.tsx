@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { addressOf, routeOfAddress, type AddressContext } from '../src/core/address.js';
 import { issueWatchPanelView, parseIssueWatchEntry } from '../src/core/issue-watch.js';
 import { formatRoute, parseRoute, type Route } from '../src/core/route.js';
+import type { TynnTabHost } from '../src/core/tynn-pages.js';
 import { workspaceViewRoute } from '../src/core/workspace-tabs.js';
 import { NO_FILES, NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Workspace.js';
@@ -41,6 +42,13 @@ const settingsOps: WorkspaceOpsProps = {
 };
 /** A linked workspace's GitHub view, built as main builds it: live, nothing open. */
 const issueWatch = issueWatchPanelView({ state: 'live', linked: true, entry: parseIssueWatchEntry({ projectId: 'p1', items: [], feedbackItems: [] })! }, []);
+/**
+ * The Tynn tab's host, answering every read with a refusal, as a host does when Tynn cannot be reached: the tab draws its
+ * words, and nothing throws after the test ends (an empty `{}` host made TynnBoardPanel call a missing host.read, an
+ * unhandled rejection that failed the unit row though every test passed).
+ */
+const refused = { ok: false as const, state: 'error' as const, reason: 'Tynn is not reachable in this test' };
+const tynnBoard: TynnTabHost = { read: async () => refused, act: async () => refused, page: async () => refused };
 const board = { pluginId: 'ai.genie.artboard', pluginName: 'ArtBoard', id: 'board', title: 'ArtBoard', fancyComponent: { export: 'ArtBoardPanel' as const }, props: {} };
 
 /** Every tab value the strip draws with everything on (an agent, a designed tab, Tynn, GitHub, Storage); not the + nor the agent. */
@@ -136,7 +144,7 @@ describe('every tab, through the address, opens a non-empty panel', () => {
                 pluginPanels={[board]}
                 agentTabs={[{ id: 'a1', name: 'atlas', state: 'idle' }]}
                 issueWatch={issueWatch}
-                tynnBoard={{} as never}
+                tynnBoard={tynnBoard}
                 storage={null}
                 onStorageAction={() => {}}
             />,
