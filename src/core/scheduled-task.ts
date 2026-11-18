@@ -129,3 +129,6 @@ export const PROCESS_SCHEDULE_PRESETS: ReadonlyArray<{ value: string; label: str
     { value: '0 3 1 * *', label: 'Monthly, the 1st at 03:00' },
     { value: 'custom', label: 'Custom expression…' },
 ];
+
+/** STUB (Tynn #860 review RED). */
+export const KEPT_TEXT_MAX = 2_000;

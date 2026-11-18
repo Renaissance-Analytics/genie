@@ -34,6 +34,9 @@ export interface KeptProcessLogsDeps {
 /** How long after output its write waits, so a chatty process is written about once a second, not per line. */
 export const OUTPUT_WRITE_DELAY_MS = 1_000;
 
+/** STUB (Tynn #860 review RED). */
+export const KEPT_LOG_MAX_BYTES = 256_000;
+
 interface KeptFile {
     readonly text: string;
     readonly lines: number;
