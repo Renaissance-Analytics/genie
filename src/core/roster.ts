@@ -37,6 +37,11 @@ import { isSleeping } from './agent-status.js';
  */
 export interface LiveSession {
     /**
+     * The last turn its PROVIDER stopped (Tynn #859): the code verbatim, what it means and what to do
+     * (core/provider-stops.ts), and how many times this session has stopped for that reason. Absent / `null` = none.
+     */
+    providerStop?: { readonly code: string; readonly words: string; readonly count: number } | null | undefined;
+    /**
      * The provider login's rate-limit gate as this agent sees it (Tynn #793/#794): `open`, or paused until a reset,
      * retrying on a stated backoff, or waiting for the person. Absent = not reported (an older snapshot).
      */

@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { SLEEPING_AFTER_IDLE_MS } from './agent-status.js';
 import { redockReorientation } from './redock.js';
 import { providerProblemWords } from './claude-cli-version.js';
+import { explainProviderStop, providerStopNote } from './provider-stops.js';
 
 /**
  * ONE RUNNING AGENT.
@@ -158,8 +159,11 @@ export interface TurnOutcomeLike {
      * Why a failed turn failed, in the provider's own words (prism-acp 0.18, Tynn #791): Claude's assistant `error`,
      * codex's `codexErrorInfo`, verbatim as `reason`, sorted into a `kind`. `rate_limit` is a turn the limit ended.
      */
-    readonly failure?: { readonly reason: string; readonly kind: string; readonly resetsAtMs?: number };
+    readonly failure?: { readonly reason: string; readonly kind: string; readonly resetsAtMs?: number; readonly message?: string };
 }
+
+/** How a turn can end that is the provider's stop without being an error (ACP `stopReason`; Tynn #859). */
+const PROVIDER_STOP_REASONS: ReadonlySet<string> = new Set(['refusal', 'max_tokens', 'max_turn_requests']);
 
 /** ACP's permission request, as the driver hands it over. Both fields are open records. */
 export interface PermissionRequestLike {
@@ -498,6 +502,13 @@ export class AgentSession {
      */
     #marked = 0;
     #lastTurnEnd: 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null = null;
+    /**
+     * PROVIDER STOPS (Tynn #859): how many times this session's provider stopped a turn for each reason, the stop that
+     * ended the last turn (explained, counted), and the one line the next turn starts with so the agent changes approach.
+     */
+    #stopCounts = new Map<string, number>();
+    #providerStop: { readonly code: string; readonly words: string; readonly count: number } | null = null;
+    #stopNote: string | null = null;
     /** The provider said this login is not signed in (prism-acp `failure.kind: 'auth'`): a login fixes it, not a restart. */
     #signedOut = false;
     /** The provider refused the ACCOUNT (billing, on hold, subscription access off — core/account-pause.ts): nothing here fixes it. */
@@ -962,6 +973,11 @@ export class AgentSession {
     /** How the last turn ended — a reply, stopped by someone, failed, or held by a rate limit — `null` before any has. */
     get lastTurnEnd(): 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null {
         return this.#lastTurnEnd;
+    }
+
+    /** The last turn its provider stopped, explained and counted (Tynn #859); `null` = none. */
+    get providerStop(): { readonly code: string; readonly words: string; readonly count: number } | null {
+        return this.#providerStop;
     }
 
     /** Why the last turn failed, in the provider's own words, or `null`. */
@@ -1790,7 +1806,9 @@ export class AgentSession {
         const redock = redockAt === null ? null : redockReorientation(redockAt);
         // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
         const rateWarning = this.#rateWarningPending && !command ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
-        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
+        // The provider's last stop, named, goes FIRST (Tynn #859): one line, only on the next turn that opens.
+        const stopNote = this.#inTurn || command ? null : this.#stopNote;
+        const above = `${stopNote ? `${stopNote}\n\n---\n\n` : ''}${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn || command ? null : this.#heldForNextWork;
@@ -1803,6 +1821,7 @@ export class AgentSession {
             this.#options.onRedockSent?.(redockAt);
         }
         if (!command) this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
+        if (stopNote !== null) this.#stopNote = null;
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;
@@ -2478,6 +2497,26 @@ export class AgentSession {
         }
         this.#limitThisTurn = false;
         if (stoppedAtLimit && !byLimit) this.#sayStoppedAtLimit();
+        /*
+         * STOPPED BY ITS PROVIDER (Tynn #859): a failure with the provider's own code that no branch below turns into a
+         * hold, a sign-out or a paused account (Codex's `cyberPolicy`), or a turn the provider ended without an error
+         * (`refusal`, `max_tokens`, `max_turn_requests`, which used to read as an ordinary finish). Explained, counted
+         * per reason, and named to the agent at the top of its next turn.
+         */
+        const stopCode = failed && !byLimit && !byOverload && paused === null && !bySignOut && outcome.failure?.reason
+            ? outcome.failure.reason
+            : !crashed && outcome.stopReason !== null && PROVIDER_STOP_REASONS.has(outcome.stopReason) ? outcome.stopReason : null;
+        if (stopCode !== null) {
+            const count = (this.#stopCounts.get(stopCode) ?? 0) + 1;
+            this.#stopCounts.set(stopCode, count);
+            const stop = explainProviderStop(stopCode, outcome.failure?.message ?? null);
+            this.#providerStop = { code: stopCode, words: stop.words, count };
+            this.#stopNote = providerStopNote(stop, count);
+            // A failed turn's stop is on the red stop line; one that ended without an error has no line, so it is said here.
+            if (!crashed) void this.#emitRow({ kind: 'notice', level: 'warning', message: `Stopped by the provider (${stopCode}${count > 1 ? `, ${count} times this session` : ''}): ${stop.words}` });
+        } else {
+            this.#providerStop = null;
+        }
         if (byLimit) {
             // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
             // Broken; the agent waits for the limit to reset and is resumed then.

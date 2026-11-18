@@ -1030,8 +1030,9 @@ function AgentViewBody({
                                     <div className="flex items-center gap-2 font-mono text-[12px] text-[var(--danger)]">
                                         <Icon name="circle-alert" size="xs" />
                                         <span>{session.failure.reason}</span>
+                                        {session.providerStop?.code === session.failure.reason && session.providerStop.count > 1 ? <span data-stream-stop-count="">{session.providerStop.count} times</span> : null}
                                     </div>
-                                    <p className="mt-1 text-[var(--fg-3)]">The turn did not finish. The last tool call has no result.</p>
+                                    <p className="mt-1 text-[var(--fg-3)]">{session.providerStop?.code === session.failure.reason ? session.providerStop.words : 'The turn did not finish. The last tool call has no result.'}</p>
                                 </div>
                             ) : null}
 
