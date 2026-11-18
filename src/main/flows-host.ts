@@ -1,3 +1,4 @@
+import type { StopAnswer } from './flow-scheduler.js';
 import type { Actor, ArmResult, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 import type { FlowScheduler } from './flow-scheduler.js';
 import { schedulesIn } from './flow-store.js';
@@ -16,12 +17,12 @@ export interface FlowsDump {
 
 export type FlowsEvent = { readonly kind: 'dump'; readonly dump: FlowsDump } | { readonly kind: 'run'; readonly flowId: string; readonly run: FlowRun };
 
-const WINDOW_CALLS = new Set(['create', 'update', 'arm', 'disarm', 'remove', 'runNow']);
+const WINDOW_CALLS = new Set(['create', 'update', 'arm', 'disarm', 'remove', 'runNow', 'stopRun']);
 
 /** The flows as a window, compose and the `flows` tool use them: the store itself, or the host's through the replica. */
 export type FlowsApi = Pick<FlowsReplica, 'get' | 'list' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove' | 'onChange' | 'onRun'>;
 /** The scheduler as a window uses it: run one now, and how many are running (the Deck's signal). */
-export type FlowSchedulerApi = Pick<FlowsReplica, 'runNow' | 'inFlightCount'>;
+export type FlowSchedulerApi = Pick<FlowsReplica, 'runNow' | 'inFlightCount' | 'stopRun'>;
 
 export class FlowsService {
     #store: FlowStore | null = null;
@@ -54,10 +55,18 @@ export class FlowsService {
         if (!WINDOW_CALLS.has(method)) throw new Error(`a window cannot call flows.${method}`);
         if (!this.#store || !this.#scheduler) throw new Error('the flows are still opening; try again in a moment');
         if (method === 'runNow') return this.#scheduler.runNow(String(args[0]));
+        // A window is the PERSON's (Tynn #833): its Stop is theirs, whatever it says.
+        if (method === 'stopRun') return this.#scheduler.stopRun(String(args[0]), { kind: 'user' });
         if (method === 'arm' || method === 'disarm' || method === 'remove') {
             if (!this.#store.get(String(args[0]))) throw new Error(`no flow ${String(args[0])}`);
         }
         return (this.#store as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!(...args);
+    }
+
+    /** Stop a run as `by` — the host's own callers (the agents' `flows` tool decides who may, Tynn #833). */
+    async stopRun(id: string, by: Actor): Promise<StopAnswer> {
+        if (!this.#scheduler) return { ok: false, reason: 'the flows are still opening; nothing was stopped' };
+        return this.#scheduler.stopRun(id, by);
     }
 
     #emit(event: FlowsEvent): void {
@@ -99,6 +108,8 @@ export class FlowsReplica {
     async disarm(id: string, by: Actor): Promise<FlowRecord> { return (await this.#call('disarm', [id, by])) as FlowRecord; }
     async remove(id: string): Promise<boolean> { return (await this.#call('remove', [id])) as boolean; }
     async runNow(id: string): Promise<FlowRun> { return (await this.#call('runNow', [id])) as FlowRun; }
+    /** The person's Stop on the flow's run in flight (Tynn #833): a window's call is always the person's. */
+    async stopRun(id: string, _by: Actor = { kind: 'user' }): Promise<StopAnswer> { return (await this.#call('stopRun', [id])) as StopAnswer; }
 
     onChange(listener: () => void): () => void {
         this.#changeListeners.add(listener);

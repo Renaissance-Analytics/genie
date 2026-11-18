@@ -64,7 +64,7 @@ const VERBS: Record<string, string> = {
 };
 
 /** Actions an agent's autonomy never approves for it: each waits for the person — unless a switch below answers it. */
-export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click'];
+export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click', 'flows.stop'];
 
 /**
  * A PERMISSION SWITCH THE PERSON TURNED ON IS THEIR ANSWER (genie#1294; the owner, 2026-10-27: an agent with "May manage

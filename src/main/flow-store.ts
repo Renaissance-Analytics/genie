@@ -56,7 +56,7 @@ export interface FileFired {
     readonly file: FileAddedProps;
 }
 
-/** `stopped` = Genie quit while it ran (genie#1204): recorded at the next launch, at the step it was on — never lost. */
+/** `stopped` = Genie quit while it ran (genie#1204): recorded at the next launch, at the step it was on — never lost; or a person or an agent STOPPED it (Tynn #833, `stoppedBy`). */
 export type RunOutcome = 'ran' | 'failed' | 'held' | 'stopped';
 
 /** One step of a run that stopped (genie#1204): which node, in words, and how far it got. */
@@ -87,6 +87,8 @@ export interface FlowRun {
     readonly log?: readonly string[];
     /** A run Genie quit under, resumed at the next launch from the step it had reached (genie#1204). */
     readonly resumed?: true;
+    /** A run a person or an agent STOPPED (Tynn #833): `you`, or the agent's name. Absent on a run Genie's quit stopped. */
+    readonly stoppedBy?: string;
 }
 
 /** A run in flight, kept on disk as it goes (genie#1204 (e)): if Genie quits under it, the next launch records it `stopped`. */
@@ -319,7 +321,7 @@ export class FlowStore {
     }
 
     /** Record one run as it ended; the history keeps the last `RUN_HISTORY_LIMIT`. Returns the run, or null for a flow removed meanwhile. */
-    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean }): Promise<FlowRun | null> {
+    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean; stoppedBy?: string }): Promise<FlowRun | null> {
         const flow = this.get(id);
         if (!flow) return null;
         const entry: FlowRun = {
@@ -333,6 +335,7 @@ export class FlowStore {
             ...(run.nodes !== undefined && Object.keys(run.nodes).length > 0 ? { nodes: run.nodes } : {}),
             ...(run.log !== undefined && run.log.length > 0 ? { log: run.log.slice(-RUN_LOG_LIMIT) } : {}),
             ...(run.resumed === true ? { resumed: true as const } : {}),
+            ...(run.outcome === 'stopped' && run.stoppedBy !== undefined ? { stoppedBy: run.stoppedBy } : {}),
         };
         // The run has ended, so it is no longer in flight — in the same write.
         const { inFlight: _done, ...rest } = flow;

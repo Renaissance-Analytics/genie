@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { AGENT, edge, kindCase, node, nodeCommand, runNow, save, useGenie, WS, type Genie } from './harness.js';
+import { handleFeatureAction } from '../../src/main/feature-ipc.js';
+import { AGENT, edge, kindCase, nextRun, node, nodeCommand, runNow, save, useGenie, WS, type Genie } from './harness.js';
 
 /**
  * GENIE'S OWN STEPS: Prompt an agent, Run a command, Add knowledge, Move a file — each run by Genie's runner through the
@@ -45,6 +46,20 @@ describe('Prompt an agent', () => {
 
 describe('Run a command', () => {
     const supervisorLog = (g: Genie, flowId: string) => g.services.supervisor.log(`flow-run:${flowId}`) ?? '';
+
+    it('Stop (the person, Tynn #833) while the command runs: its process is KILLED, the run is recorded stopped by you, nothing after it runs', async () => {
+        const g = genie();
+        const id = await save(g, 'forever', [manual, command('c', nodeCommand('setInterval(() => {}, 1000)')), log('l', 'after')], [edge('t', 'c'), edge('c', 'l')]);
+        const recorded = nextRun(g, id);
+        await handleFeatureAction(g.services, { kind: 'flows.runNow', flowId: id });
+        await expect.poll(() => g.services.supervisor.status(`flow-run:${id}`)?.state, { timeout: 10_000 }).toBe('running');
+        await handleFeatureAction(g.services, { kind: 'flows.stop', flowId: id });
+        const run = await recorded;
+        expect(run).toMatchObject({ outcome: 'stopped', stoppedBy: 'you', nodes: { t: 'ran', c: 'stopped', l: 'not reached' } });
+        expect(g.services.supervisor.status(`flow-run:${id}`)?.state).toBe('stopped');
+        expect(g.services.flows.get(id)!.inFlight).toBeUndefined();
+        await g.services.flowScheduler.settled();
+    });
 
     kindCase('genie/terminal_run', 'runs as a supervised process in the workspace; its output is KEPT and handed on with exit code 0', genie, async () => {
         const g = genie();
