@@ -426,6 +426,43 @@ export function trailOf(post: BoardPost) {
     };
 }
 
+/** The board's log, beside its index: one JSON line per item cleared or put back. */
+export const BOARD_HISTORY = 'history.jsonl';
+
+/** What a Clear takes off the board (genie#847). Pinned items stay, except for `everything`. */
+export type ClearScope = 'decided' | 'all' | 'everything';
+export const CLEAR_SCOPES: readonly ClearScope[] = ['decided', 'all', 'everything'];
+
+/** PURE. The items a Clear of this scope takes, in the board's order. */
+export function clearSelection<T extends { id: string; review?: unknown; pinned?: boolean | undefined }>(_posts: readonly T[], _scope: ClearScope): T[] {
+    return [];
+}
+
+/** The Clear menu's entries: each scope, its words and how many items it would take. */
+export function clearChoices(_posts: readonly { id: string; review?: unknown; pinned?: boolean | undefined }[]): { scope: ClearScope; label: string; count: number }[] {
+    return [];
+}
+
+/** The confirmation a Clear asks first. */
+export function clearPrompt(_scope: ClearScope, _count: number): { title: string; body: string; confirmLabel: string } {
+    return { title: '', body: '', confirmLabel: '' };
+}
+
+/** The toast after a clear or a delete, which offers Undo. */
+export function clearedToast(_count: number): { title: string; actionLabel: string; duration: number } {
+    return { title: '', actionLabel: '', duration: 0 };
+}
+
+/** What the posting agent is told when its waiting item is cleared without a verdict. */
+export function clearedMessage(_post: Pick<BoardPost, 'id' | 'title'>): string {
+    return '';
+}
+
+/** What it is told when Undo or a restore puts that item back, waiting again. */
+export function restoredMessage(_post: Pick<BoardPost, 'id' | 'title'>): string {
+    return '';
+}
+
 /** The link that opens the workspace on its ArtBoard tab, on one item — what a question or notification about a post carries. */
 export function artboardItemRoute(workspaceId: string, postId: string): string {
     const base = parseRoute(`genie://workspace/${encodeURIComponent(workspaceId)}`);

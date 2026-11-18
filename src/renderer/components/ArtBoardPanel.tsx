@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Button, Card, ContentRenderer, Modal, Textarea } from '@particle-academy/react-fancy';
-import { timelineOf, visiblePosts, type BoardFilter, type DisplayPost, type DisplayVersion } from '../../core/artboard.js';
+import { timelineOf, visiblePosts, type BoardFilter, type ClearScope, type DisplayPost, type DisplayVersion } from '../../core/artboard.js';
 import type { GenieBridge } from '../bridge.js';
 import { genieClipboardWriter } from '../clipboard.js';
 
@@ -106,6 +106,10 @@ export interface ArtBoardViewProps {
     readonly onReview: (postId: string, verdict: 'approved' | 'rejected', comment: string) => void;
     /** Keep an item in the default view after its verdict, or let it hide. Absent = no pin is offered (a board that cannot keep one). */
     readonly onPin?: ((postId: string, pinned: boolean) => void) | undefined;
+    /** Clear the board, after the person confirmed (genie#847). Absent = no Clear menu (a board that cannot clear). */
+    readonly onClear?: ((scope: ClearScope) => void) | undefined;
+    /** Take one item off the board into .trash (genie#847). Absent = no Delete on the cards. */
+    readonly onDelete?: ((postId: string) => void) | undefined;
     readonly busy?: string | null | undefined;
     /** The item a link points at: shown, and scrolled to, whatever its status. */
     readonly focusId?: string | null | undefined;

@@ -627,7 +627,12 @@ export interface GenieBridge {
     } | undefined;
     artboard?: {
         read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
-        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
+        /**
+         * The person's action on the board: a verdict, a pin, or (genie#847) `delete` one item, `clear-decided` / `clear-all` /
+         * `clear-everything` (postId ''), or `restore` a cleared entry (postId = its .trash id). A clear answers with how many
+         * items it moved and the .trash entry that holds them, for Undo.
+         */
+        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin' | 'delete' | 'clear-decided' | 'clear-all' | 'clear-everything' | 'restore', comment: string): Promise<{ ok: true; delivered: boolean; cleared?: number; trashId?: string | null } | { ok: false; error: string }>;
     } | undefined;
 
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */

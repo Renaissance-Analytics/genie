@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { BOARD_DIR, BOARD_INDEX, applyVerdict, isTextKind, parseBoard, resolveBoard, setPinned, verdictMessage, versionsOf, wantsVerdict, type ResolvedBoard, type Review } from '../core/artboard.js';
+import { BOARD_DIR, BOARD_INDEX, applyVerdict, type ClearScope, isTextKind, parseBoard, resolveBoard, setPinned, verdictMessage, versionsOf, wantsVerdict, type ResolvedBoard, type Review } from '../core/artboard.js';
 import { beginArtboardBuildTiming } from './artboard-build-timing.js';
 
 /**
@@ -42,7 +42,7 @@ export interface ReviewDeps {
     readonly now: () => string;
 }
 
-export type ReviewResult = { ok: true; delivered: boolean } | { ok: false; error: string };
+export type ReviewResult = { ok: true; delivered: boolean; cleared?: number; trashId?: string | null } | { ok: false; error: string };
 
 export async function reviewArtBoardPost(root: string, postId: string, review: { verdict: Review['verdict']; comment?: string | undefined }, deps: ReviewDeps): Promise<ReviewResult> {
     const board = await boardPosts(root);
@@ -68,4 +68,19 @@ export async function pinArtBoardPost(root: string, postId: string, pinned: bool
     if (!board.some((p) => p.id === postId)) return { ok: false, error: 'That post is no longer on the board.' };
     await writeFile(join(root, BOARD_DIR, BOARD_INDEX), JSON.stringify({ posts: setPinned(board, postId, pinned) }, null, 2));
     return { ok: true, delivered: false };
+}
+
+/** A clear, a delete or a restore: how many items it moved and the .trash entry that holds them (genie#847). */
+export type ClearResult = { ok: true; delivered: boolean; cleared: number; trashId: string | null } | { ok: false; error: string };
+
+/**
+ * CLEAR THE BOARD (genie#847). Takes the items of a scope, or one item, off the board into the workspace's .trash.
+ */
+export async function clearArtBoard(_root: string, _pick: { scope: ClearScope } | { postId: string }, _deps: ReviewDeps): Promise<ClearResult> {
+    return { ok: true, delivered: false, cleared: 0, trashId: null };
+}
+
+/** UNDO A CLEAR (genie#847): put an ArtBoard .trash entry back on the board. */
+export async function restoreArtBoard(_root: string, _trashId: string, _deps: ReviewDeps): Promise<ClearResult> {
+    return { ok: false, error: 'not built' };
 }
