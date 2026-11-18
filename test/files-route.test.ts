@@ -31,7 +31,9 @@ describe('the route', () => {
 describe('the row tray\'s Files door uses the board\'s key', () => {
     it('opens the workspace with its file panel', () => {
         const row = { id: 'kai', name: 'kai', provider: 'claude', workspaceId: 'tynn', fidelity: 'declared', state: 'idle', duration: null, ask: null, reason: null, fixes: [], step: null, target: null, activity: null, delivery: null, collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null } as AgentRow;
-        expect(trayOf(row).doors.find((d) => d.door === 'files')!.route).toBe('genie://workspace/tynn?files=');
+        // Tynn #857: the terminal door has no route, so the door is narrowed to one that navigates.
+        const files = trayOf(row).doors.find((d) => d.door === 'files');
+        expect(files && 'route' in files ? files.route : null).toBe('genie://workspace/tynn?files=');
     });
 });
 

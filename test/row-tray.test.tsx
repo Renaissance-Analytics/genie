@@ -28,7 +28,8 @@ const full = row({
 });
 const doors = [
     { door: 'agent', label: 'Open agent →', route: 'genie://agent/kai' },
-    { door: 'terminal', label: 'Terminal →', route: 'genie://workspace/tynn' },
+    // Tynn #857: no route. The terminal door opens a shell in the workspace (the row's terminal opener); it never navigates.
+    { door: 'terminal', label: 'Terminal →' },
     { door: 'files', label: 'Files →', route: 'genie://workspace/tynn?files=' },
 ];
 
