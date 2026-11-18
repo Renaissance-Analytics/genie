@@ -2908,8 +2908,9 @@ async function boot(): Promise<void> {
     // SAFE MODE (Tynn #386): genie-host said so before ready; then nobody is started or resumed and both lists are KEPT.
     void restoreAfterRelaunch({
         safeMode: windowSafeNow,
-        takeRunningAtQuit: () => registry!.takeRunningAtQuit(),
-        takeInterruptedAtQuit: () => registry!.takeInterruptedAtQuit(),
+        pending: () => registry!.beginRestore(),
+        started: (agentId) => registry!.restoreStarted(agentId as AgentId),
+        name: (agentId) => registry?.find(agentId as AgentId)?.name ?? agentId,
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
@@ -3388,6 +3389,7 @@ function recordShutdownNow(): Promise<unknown> {
     return recordShutdown({
         agents: () => reg.snapshot().agents,
         probe: (id) => live.probe(id),
+        pending: () => reg.pendingRestore(),
         markRunningAtQuit: (ids) => reg.markRunningAtQuit(ids),
         markInterruptedAtQuit: (ids) => reg.markInterruptedAtQuit(ids),
     });

@@ -8,8 +8,12 @@ import { relaunchPlan } from '../core/upgrade-drain.js';
 export interface RelaunchRestorePorts {
     /** genie-host's safe mode (Tynn #386). */
     readonly safeMode: () => boolean;
-    readonly takeRunningAtQuit: () => Promise<readonly string[]>;
-    readonly takeInterruptedAtQuit: () => Promise<readonly string[]>;
+    /** The lists the last shutdown recorded, read for this restore (Tynn #754). */
+    readonly pending: () => Promise<{ readonly running: readonly string[]; readonly interrupted: readonly string[] }>;
+    /** An agent's start went through: it leaves the saved lists (Tynn #754). */
+    readonly started: (agentId: string) => Promise<void>;
+    /** An agent's name, for the log. */
+    readonly name?: (agentId: string) => string;
     /** Before any start: a provider a previous Genie left on an agent's session is ended (Tynn #796). */
     readonly beforeStart?: () => Promise<void>;
     readonly schedule: (fn: () => void, ms: number) => void;
@@ -26,7 +30,7 @@ export async function restoreAfterRelaunch(p: RelaunchRestorePorts): Promise<'he
         p.log?.('safe mode: the agents running at quit, and those cut off mid-turn, are kept and not started');
         return 'held';
     }
-    const [running, interrupted] = await Promise.all([p.takeRunningAtQuit(), p.takeInterruptedAtQuit()]);
+    const { running, interrupted } = await p.pending();
     await p.beforeStart?.();
     for (const { agentId, at, resume } of relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted })) {
         p.schedule(() => { void p.start(agentId, resume); }, at);

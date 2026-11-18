@@ -332,6 +332,16 @@ export class Store {
         await writeJsonAtomic(this.interruptedAtQuitFile, ids);
     }
 
+    /** STUB (Tynn #754 RED): still takes and clears both lists. */
+    async beginRestore(): Promise<{ running: readonly string[]; interrupted: readonly string[] }> {
+        const [running, interrupted] = await Promise.all([this.readRunningAtQuit(), this.readInterruptedAtQuit()]);
+        await Promise.all([this.writeRunningAtQuit([]), this.writeInterruptedAtQuit([])]);
+        return { running, interrupted };
+    }
+
+    /** STUB (Tynn #754 RED): does nothing. */
+    async restoreStarted(_id: string): Promise<void> {}
+
     async readWorkspaces(): Promise<readonly WorkspaceRecord[]> {
         const raw = await readJson<unknown[]>(this.workspacesFile, []);
         return raw.filter(

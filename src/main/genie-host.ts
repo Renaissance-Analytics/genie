@@ -786,6 +786,10 @@ async function main(): Promise<void> {
                 }),
                 force: () => agentShutdown.force(),
                 release: () => agentShutdown.release(),
+                readPending: async () => {
+                    const [running, interrupted] = await Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]);
+                    return { running, interrupted };
+                },
                 writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
                 writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
                 stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },

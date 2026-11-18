@@ -6,6 +6,8 @@ export interface ShutdownRecordPorts {
     agents(): readonly { id: string }[];
     /** The agent's session in the host, or `null` when it has none: never started, or stopped. */
     probe(id: AgentId): { running: boolean; turnState: string; inTurn?: boolean | undefined } | null;
+    /** The restore still in flight: the saved agents not yet started (Tynn #754). */
+    pending?(): Promise<{ readonly running: readonly string[]; readonly interrupted: readonly string[] }>;
     markRunningAtQuit(ids: readonly AgentId[]): Promise<void>;
     markInterruptedAtQuit(ids: readonly AgentId[]): Promise<void>;
 }

@@ -355,6 +355,8 @@ export class HostRegistryStore {
     async readAgents(): Promise<readonly AgentRecord[]> { return (await this.#call('registry', 'readAgents', [])) as AgentRecord[]; }
     async readRunningAtQuit(): Promise<readonly string[]> { return (await this.#call('registry', 'readRunningAtQuit', [])) as string[]; }
     async readInterruptedAtQuit(): Promise<readonly string[]> { return (await this.#call('registry', 'readInterruptedAtQuit', [])) as string[]; }
+    async beginRestore(): Promise<{ running: readonly string[]; interrupted: readonly string[] }> { return (await this.#call('registry', 'beginRestore', [])) as { running: string[]; interrupted: string[] }; }
+    async restoreStarted(id: string): Promise<void> { await this.#call('registry', 'restoreStarted', [id]); }
     async writeWorkspaces(workspaces: readonly WorkspaceRecord[]): Promise<void> { await this.#call('registry', 'writeWorkspaces', [workspaces]); }
     async writeAgents(records: readonly AgentRecord[]): Promise<void> { await this.#call('registry', 'writeAgents', [records]); }
     async writeRunningAtQuit(ids: readonly string[]): Promise<void> { await this.#call('registry', 'writeRunningAtQuit', [ids]); }

@@ -12,7 +12,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host, and the emergency
  * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
  */
-export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
+export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'beginRestore' | 'restoreStarted' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
@@ -229,20 +229,23 @@ export class Registry {
         await this.#store.writeInterruptedAtQuit(this.#interruptedAtQuit);
     }
 
-    /** Read once and cleared, like the running set: a crash mid-resume prompts nobody twice. */
-    async takeInterruptedAtQuit(): Promise<readonly AgentId[]> {
-        const ids = this.#interruptedAtQuit;
+    /** STUB (Tynn #754 RED): the old take-and-clear. */
+    async beginRestore(): Promise<{ running: readonly AgentId[]; interrupted: readonly AgentId[] }> {
+        const { running, interrupted } = await this.#store.beginRestore();
+        const known = (ids: readonly string[]) => ids.filter((id): id is AgentId => this.#agents.some((a) => a.id === id));
+        this.#runningAtQuit = [];
         this.#interruptedAtQuit = [];
-        await this.#store.writeInterruptedAtQuit([]);
-        return ids;
+        return { running: known(running), interrupted: known(interrupted) };
     }
 
-    /** Read once and cleared, so a crash mid-restore does not start anyone twice. */
-    async takeRunningAtQuit(): Promise<readonly AgentId[]> {
-        const ids = this.#runningAtQuit;
-        this.#runningAtQuit = [];
-        await this.#store.writeRunningAtQuit([]);
-        return ids;
+    /** STUB (Tynn #754 RED). */
+    async restoreStarted(id: AgentId): Promise<void> {
+        await this.#store.restoreStarted(id);
+    }
+
+    /** STUB (Tynn #754 RED): the in-memory lists. */
+    async pendingRestore(): Promise<{ running: readonly AgentId[]; interrupted: readonly AgentId[] }> {
+        return { running: this.#runningAtQuit, interrupted: this.#interruptedAtQuit };
     }
 
     setProbe(probe: SessionProbe): void {
