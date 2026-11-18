@@ -55,7 +55,8 @@ describe('#848 the Home version picker lists the current roadmap only', () => {
 
     it('decodes HTML entities in version titles, once', () => {
         const d = parseHome(served(ACTIVE, [...SERVED, { id: 'up-3', number: '1.4.0', title: 'A &amp;amp; B', status: 'accepted' }]))!.dashboard!;
-        expect(d.versions.map((v) => v.title)).toEqual(["Now & here", 'In review', "R&D 'next' <b>", 'Later', 'A &amp; B']);
+        // up-3 is served last (lowest `order`), so it is the first upcoming version.
+        expect(d.versions.map((v) => v.title)).toEqual(["Now & here", 'In review', 'A &amp; B', "R&D 'next' <b>", 'Later']);
     });
 
     it('the picker offers those versions, labelled, with the active one selected by default', () => {
@@ -73,6 +74,8 @@ describe('#848 the Home version picker lists the current roadmap only', () => {
         const offered = options(html).filter((o) => o.value !== '');
         expect(offered.map((o) => o.value)).toEqual(['now', 'rev', 'up-1', 'up-2']);
         expect(offered.some((o) => o.selected)).toBe(false);
-        // Control: the same render with the active version served does select it (see the test above).
+        // What is selected is the placeholder, never the off-roadmap version (a picker given rel-hot selects nothing at
+        // all). Control: the same render with the active version served selects it (the test above).
+        expect(options(html).filter((o) => o.selected)).toEqual([{ value: '', label: 'Pick a version', selected: true }]);
     });
 });
