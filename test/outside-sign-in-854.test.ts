@@ -51,13 +51,17 @@ describe('a /login done outside Genie is noticed', () => {
         const reader = new AccountIdentityReader(book, () => portsFor(run), () => {}, identityReadHooks({
             attribution, activeId: (p) => book.activeFor(p).id, offer, changed: () => { changed += 1; }, read: (p) => watch?.read(p),
         }));
-        watch = new IdentityWatch({ refresh: (p) => reader.refreshProvider(p), now: () => clock });
+        // Only the reads the WATCH asks for are recorded: a test waits for those, and never starts one itself.
+        const asked: Promise<void>[] = [];
+        watch = new IdentityWatch({ refresh: (p) => { const read = reader.refreshProvider(p); asked.push(read); return read; }, now: () => clock });
         const arrive = headroomArrival({ watch, attribution, offer });
-        await reader.refreshProvider('claude'); // Genie's start-up read
+        await reader.refreshAll(); // Genie's start-up read, of every provider
         const claudeRuns = () => run.mock.calls.filter(([b]) => String(b).endsWith('claude')).length;
         return {
             book, reader, watch, arrive, shown, claudeRuns,
             changes: () => changed,
+            asks: () => asked.length,
+            settle: () => Promise.all(asked),
             at: (ms: number) => { clock = ms; },
             loginElsewhere: (email: string) => { signedInAs = email; },
         };
@@ -70,7 +74,8 @@ describe('a /login done outside Genie is noticed', () => {
         r.at(IDENTITY_AFTER_READING_MS + 1);
         r.loginElsewhere(NEW); // /login in a TUI: no Genie flow ran
         r.arrive('claude', room(97), { accountId: work.id, runId: 'run_1' });
-        await r.reader.refreshProvider('claude'); // joins the read the reading started
+        expect(r.asks()).toBe(1);
+        await r.settle();
         const now = r.book.activeFor('claude');
         expect(now.identity.email).toBe(NEW);
         expect(r.changes()).toBe(1);
@@ -85,6 +90,7 @@ describe('a /login done outside Genie is noticed', () => {
         r.at(IDENTITY_AFTER_READING_MS - 1);
         r.arrive('claude', room(50), { accountId: work.id, runId: 'run_1' });
         r.arrive('claude', room(49), { accountId: work.id, runId: 'run_1' });
+        expect(r.asks()).toBe(0);
         expect(r.claudeRuns()).toBe(before);
         expect(r.shown.map((s) => s.stamp?.accountId)).toEqual([work.id, work.id]);
     });
@@ -94,10 +100,11 @@ describe('a /login done outside Genie is noticed', () => {
         r.loginElsewhere(NEW);
         r.at(IDENTITY_IDLE_MS - 1);
         r.watch.tick();
-        expect(r.book.activeFor('claude').identity.email).toBe(WORK); // not due yet
+        expect(r.asks()).toBe(0); // not due yet
         r.at(IDENTITY_IDLE_MS + 1);
         r.watch.tick();
-        await r.reader.refreshProvider('claude');
+        expect(r.asks()).toBe(2); // claude and codex
+        await r.settle();
         expect(r.book.activeFor('claude').identity.email).toBe(NEW);
         expect(r.changes()).toBe(1);
     });
@@ -109,6 +116,7 @@ describe('a /login done outside Genie is noticed', () => {
         const before = r.claudeRuns();
         r.at(IDENTITY_IDLE_MS + 1);
         r.watch.tick();
+        expect(r.asks()).toBe(1); // codex only: claude was read 11 ms ago
         expect(r.claudeRuns()).toBe(before);
     });
 
@@ -117,7 +125,8 @@ describe('a /login done outside Genie is noticed', () => {
         const work = r.book.activeFor('claude');
         r.at(IDENTITY_AFTER_READING_MS + 1);
         r.arrive('claude', room(80), { accountId: work.id, runId: 'run_1' });
-        await r.reader.refreshProvider('claude');
+        expect(r.asks()).toBe(1);
+        await r.settle();
         expect(r.book.activeFor('claude').id).toBe(work.id);
         expect(r.changes()).toBe(0);
         expect(r.shown.map((s) => s.stamp?.accountId)).toEqual([work.id]);
