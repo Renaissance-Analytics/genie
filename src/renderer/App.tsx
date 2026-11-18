@@ -2365,7 +2365,7 @@ function DesktopApp({ bridge }: AppProps) {
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}
-            // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
+            // The title bar's search icon (left of GApps; the box until beta.65) opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
             onOpenPalette={() => setPaletteOpen(true)}
             windowScope={windowScope}
         />
