@@ -40,7 +40,7 @@ const strip = (trailing: ReactNode, path?: string) => (
     <WorkspaceTabs designed={{ tabs: [] }} agents={agentTabs} current={{ kind: 'agent', id: 'a1' }} canDesign hasSettings onView={() => {}} onAdd={() => {}} onOpenAgent={() => {}} trailing={trailing} {...(path ? { path } : {})} />
 );
 const avEl = (props: Partial<Parameters<typeof AgentView>[0]> = {}) => (
-    <AgentView agent={agent} session={null} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} workspace={workspace} onTakeOver={() => {}} bar={strip} {...props} />
+    <AgentView agent={agent} session={null} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} workspace={workspace} onTakeOver={() => {}} bar={(trailing) => strip(trailing, agent.cwd)} {...props} />
 );
 const ws = (o?: WorkspaceOpsProps) => renderToStaticMarkup(wsEl(o));
 const av = (props?: Partial<Parameters<typeof AgentView>[0]>) => renderToStaticMarkup(avEl(props));

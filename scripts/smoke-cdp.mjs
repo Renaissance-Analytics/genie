@@ -406,7 +406,7 @@ if (typeof agentRow === 'string') {
         };
     })())`);
     const h = JSON.parse(header || '{}');
-    check(h.bar && h.bars === 1 && !h.crumb && h.subviews && h.chip === '' && /ACP/.test(h.chipTitle ?? '') && Boolean(h.logo) && /^(Turn \d+ · |Idle$|No turns yet$|Not started$|Broken · )/.test(h.pill ?? '') && h.chords && h.height === 32 && h.columns <= 1, '54. the Agent view has ONE bar, its workspace\'s strip: no crumbs, its views and icon actions at its right end, 32px, one right column', header);
+    check(h.bar && h.bars === 1 && !h.crumb && h.subviews && h.chip === '' && /ACP/.test(h.chipTitle ?? '') && Boolean(h.logo) && /^(Turn \d+ · |Idle$|No turns yet$|Not started$|Broken · )/.test(h.pill ?? '') && h.chords && h.height >= 32 && h.columns <= 1, '54. the Agent view has ONE bar, its workspace\'s strip: no crumbs, its views and icon actions at its right end, one right column', header);
 
     // 51. EVERY TAB HAS A BODY (board audit, 2026-10-12: only Stream had one). Changes lists this agent's changed files or
     // says there are none. No Files tab (the owner, 2026-11-16): files are the workspace's Files tab. Then back to Stream,

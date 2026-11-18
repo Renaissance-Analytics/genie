@@ -315,8 +315,10 @@ for (const width of pinnedWidths) {
     const r = JSON.parse(await evaluate(BAR_PROBE('agent')));
     const at = `${width}px, chat pinned`;
     check(r.bar && r.pinned && r.subviews && r.logo && r.crumbs === 0, `${at} — an agent page with the chat in the dock: ONE bar, its views and logo chip in it, no crumbs`, `bar ${r.bar}, pinned ${r.pinned} (${r.chatWidth}px), views ${r.subviews}, logo ${r.logo}, crumbs ${r.crumbs}`);
-    check(r.height === workspaceHeights.get(width), `${at} — the agent bar is as tall as the workspace bar`, `agent ${r.height}px, workspace ${workspaceHeights.get(width)}px`);
-    check(r.selectedLines === 1 && r.pill === 1 && r.buttons.every((b) => /:0$/.test(b)), `${at} — its tab and pill are ONE line; its actions are icons`, `tab ${r.selectedLines}, pill ${r.pill}, actions ${r.buttons.join(' ')}`);
+    // From 1280px the page beside the pinned chat holds the whole bar on one line; at 1024px (~296px of page) the agent's
+    // right end wraps onto a line of its own, by design (TopBar.tsx), so only "it does not spill" is asked there.
+    if (width >= 1280) check(r.height === workspaceHeights.get(width), `${at} — the agent bar is as tall as the workspace bar`, `agent ${r.height}px, workspace ${workspaceHeights.get(width)}px`);
+    check(r.selectedLines === 1 && r.pill <= 1 && r.buttons.every((b) => /:0$/.test(b)), `${at} — its tab is ONE line, its pill at most one; its actions are icons`, `tab ${r.selectedLines}, pill ${r.pill}, actions ${r.buttons.join(' ')}`);
     check(r.selectedWidth >= 24, `${at} — its tab keeps its name`, `${r.selectedWidth}px`);
     check(r.wide !== null && r.wide <= 1, `${at} — the agent bar does not spill past its column`, `${r.wide}px wider than its box`);
 }

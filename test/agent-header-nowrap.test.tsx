@@ -32,17 +32,34 @@ describe('the agent\'s bar', () => {
     });
 
     /*
-     * AT 1024PX WITH THE CHAT PINNED the page is ~286px wide (the 520px chat and the 208px rail take the rest), measured on
-     * omarchy-test by the layout sweep. The tabs scroll inside the bar and keep at least 6rem; the right end never shrinks,
-     * and in a column too narrow for both it moves to a line of its own (the bar wraps) rather than spill.
+     * WHAT GIVES WAY (measured in a real window by scripts/one-bar-proof.mjs: at 1600px with the chat pinned the right end
+     * squeezed the agent's own tab out of view; at 1024px it spilled 56px): in a bar under 64rem the pulse hides and a running
+     * pill shows its dot and clock (the words its tooltip); the tabs scroll and keep at least 8rem; in a column too narrow
+     * for both (1024px with the chat pinned leaves the page ~296px) the right end moves to a line of its own and wraps
+     * there, rather than spill.
      */
-    it('the tabs give way first: they scroll inside the bar; the right end keeps its size and wraps to its own line', () => {
+    it('the tabs scroll and keep 8rem; the right end may shrink, and wraps on a line of its own rather than spill', () => {
         const bar = classOf(/data-top-bar=""/);
         for (const c of ['flex-wrap', 'min-h-8', '@container']) expect(bar).toContain(c);
         const tabs = classOf(/data-bar-tabs=""/);
-        for (const c of ['min-w-[6rem]', 'flex-1', 'overflow-x-auto']) expect(tabs).toContain(c);
+        for (const c of ['min-w-[8rem]', 'flex-1', 'overflow-x-auto', 'h-[31px]']) expect(tabs).toContain(c);
         const end = classOf(/data-bar-trailing=""/);
-        for (const c of ['shrink-0', 'max-w-full']) expect(end).toContain(c);
+        for (const c of ['shrink', 'min-w-0', 'max-w-full', 'flex-wrap']) expect(end).toContain(c);
+    });
+
+    it('in a narrow bar the pulse hides and a running pill keeps its dot and clock, its words on hover', () => {
+        const working = { ...idle, turnState: 'working' } as LiveSession;
+        const h = renderToStaticMarkup(<AgentView agent={agent} session={working} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={3} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 62_000} workspace={{ id: 'ws', name: 'genie2-vm', path: '/w/ws' }} />);
+        const word = h.match(/data-pill="([^"]*)"/)?.[1] ?? '';
+        expect(word).toMatch(/^Turn 3/);
+        // A clock runs, so the words hide below 64rem and stay as the pill's tooltip.
+        expect(h).toContain(`data-pill="${word}" title="${word}"`);
+        expect(h).toContain(`<span class="@max-[64rem]:hidden">${word}</span><span class="font-mono`);
+        // CONTROL: an idle pill has no clock, so its words never hide.
+        const idleWord = html.match(/data-pill="([^"]*)"/)?.[1] ?? '';
+        expect(html).toContain(`<span>${idleWord}</span>`);
+        // The pulse's slot hides in a narrow bar.
+        expect(h).toContain('items-center @max-[64rem]:hidden"');
     });
 
     it('the actions are icons named for a screen reader and on hover: nothing to wrap', () => {

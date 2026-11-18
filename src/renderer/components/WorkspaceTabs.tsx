@@ -55,6 +55,13 @@ export interface WorkspaceTabsProps {
 /** The selected tab's tooltip is the path (the owner: no path column eating space). */
 const pathTitle = (selected: boolean, path: string | null): Record<string, string> => (selected && path ? { title: path } : {});
 
+/**
+ * THE SELECTED TAB STAYS IN VIEW (scripts/one-bar-proof.mjs, 1600px with the chat pinned: the agent's own tab was scrolled
+ * out of the strip). A marker inside the selected tab; React calls this when the marker is attached, i.e. when the
+ * selection moves, never on a re-render, so it never fights a person scrolling the strip themselves.
+ */
+const SHOW_SELECTED = (el: HTMLSpanElement | null): void => { el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }); };
+
 const STATE_DOT: Record<string, string> = {
     working: 'bg-[var(--accent)]',
     waiting: 'bg-[var(--warning)]',
@@ -105,6 +112,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                         <Tabs.Tab key={`agent:${t.id}`} value={`agent:${t.id}`} data-workspace-tab={`agent:${t.id}`} title={on ? `${t.name} · ${state}${path ? ` · ${path}` : ''}` : `${t.name} · ${state}`} className={`flex shrink-0 items-center gap-1.5 ${tab(on)}`}>
                             <span data-agent-state={state} className={`size-1.5 rounded-full ${STATE_DOT[state] ?? 'bg-[var(--fg-4)]'}`} />
                             {t.name}
+                            {on ? <span ref={SHOW_SELECTED} aria-hidden="true" /> : null}
                         </Tabs.Tab>
                     );
                 }
@@ -113,6 +121,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                 return (
                     <Tabs.Tab key={view} value={view} data-workspace-tab={view} {...pathTitle(on, path)} {...(t.kind === 'artboard' && artboardWaiting > 0 ? { 'data-artboard-waiting': 'true' } : {})} className={`shrink-0 ${tab(on)}`}>
                         {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : t.kind === 'artboard' ? 'ArtBoard' : t.kind === 'storage' ? 'Storage' : 'Settings'}
+                        {on ? <span ref={SHOW_SELECTED} aria-hidden="true" /> : null}
                         {t.kind === 'artboard' && artboardWaiting > 0 ? <span data-artboard-badge={String(artboardWaiting)} title={`${artboardWaiting} waiting for your verdict`} className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-semibold leading-4 text-[var(--bg-0)]">{artboardWaiting}</span> : null}
                     </Tabs.Tab>
                 );

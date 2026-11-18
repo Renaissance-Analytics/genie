@@ -66,15 +66,17 @@ describe('the Files button (the board: `folder-tree` · Files · ⌘B)', () => {
         expect(ICON_NAMES).toContain('folder-tree');
     });
 
-    it('the workspace header button draws the icon, the word and the chord', () => {
+    // An icon in the one bar (the owner on beta.64: as few words as possible): its name and its chord are on it, not beside it.
+    it('the workspace bar button: the icon, named Files, the chord in its tooltip', () => {
         const html = renderToStaticMarkup(<Workspace view="terminals" workspace={{ id: 'tynn', name: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} files={{} as never} panel={null} onTogglePanel={() => {}} />);
         const start = html.indexOf('data-action="toggle-files"');
         expect(start).toBeGreaterThan(-1);
-        const button = html.slice(start, html.indexOf('</button>', start));
+        // The whole opening tag (react-fancy's Button writes its class before the forwarded attributes).
+        const button = html.slice(html.lastIndexOf('<button', start), html.indexOf('</button>', start));
         // The icon itself renders only once the registry is loaded (the icons census proves the name is registered
-        // and that the JSX asks for it); here the word and the chord, and the button's new flex chrome.
-        expect(button).toContain('Files');
-        expect(button).toContain('⌘B');
-        expect(button).toMatch(/class="[^"]*flex items-center gap-1\.5/);
+        // and that the JSX asks for it); here its name, the chord on hover, and the bar's icon chrome.
+        expect(button).toContain('aria-label="Files"');
+        expect(button).toContain('title="Files (⌘B)"');
+        expect(button).toContain('flex size-7 shrink-0 items-center justify-center');
     });
 });

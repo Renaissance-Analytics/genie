@@ -7,9 +7,13 @@ import type { CSSProperties, ReactNode } from 'react';
  * selected puts its status, its own views and its actions, as icons, at the right end (`trailing`). No row of crumbs, no
  * path column (the path is the selected tab's tooltip), no second row of tabs: the content starts right under it.
  *
- * One line, 32px, while it fits. The tabs give way first (they scroll); in a column too narrow for the right end beside a
- * few tabs (800px with the chat pinned leaves the page 72px), the right end moves to a line of its own and wraps there
- * rather than spill behind the chat. It is the view's header for the dock (`data-view-header`), the surface's first child.
+ * 32px, its rule included, while it fits (the old strip's height). What gives way, in order (measured in a real window by
+ * scripts/one-bar-proof.mjs: at 1600px with the chat pinned the right end first squeezed the agent's own tab out of view):
+ *   1. the right end's status (the state pill, then the pulse) clips; the pulse hides in a bar under 64rem;
+ *   2. the tabs scroll, keeping at least 8rem, the selected one scrolled into view (WorkspaceTabs);
+ *   3. in a column too narrow for the tabs and the right end's views and actions (800px with the chat pinned leaves the
+ *      page 72px), the right end moves to a line of its own and wraps there, rather than spill behind the chat.
+ * It is the view's header for the dock (`data-view-header`), the surface's first child.
  */
 export function TopBar({ children, trailing, color = null, style, attrs }: {
     children: ReactNode;
@@ -27,8 +31,8 @@ export function TopBar({ children, trailing, color = null, style, attrs }: {
             style={style}
             className={`@container flex min-h-8 shrink-0 flex-wrap items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-3${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
         >
-            <div data-bar-tabs="" className="flex h-8 min-w-[6rem] flex-1 basis-0 items-stretch overflow-x-auto">{children}</div>
-            {trailing ? <div data-bar-trailing="" className="ml-auto flex h-8 min-w-0 max-w-full shrink-0 items-center gap-1 pl-2 pr-2">{trailing}</div> : null}
+            <div data-bar-tabs="" className="flex h-[31px] min-w-[8rem] flex-1 basis-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">{children}</div>
+            {trailing ? <div data-bar-trailing="" className="ml-auto flex min-h-[31px] min-w-0 max-w-full shrink flex-wrap items-center justify-end gap-x-1 pl-2 pr-2">{trailing}</div> : null}
         </nav>
     );
 }

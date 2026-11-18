@@ -707,15 +707,16 @@ function AgentViewBody({
                         <span data-bar-status="" className="flex min-w-0 shrink items-center gap-2 overflow-hidden">
                     <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'cool' ? 'cooling' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                     <span data-provider-chip={agent.provider} title={`${providerName(agent.provider)} · ${agent.fidelity === 'observed' ? 'pty' : 'ACP'}`} className="flex shrink-0 items-center text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" /></span>
-                    <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
+                    <span data-pill={pill.word} title={pill.title ?? pill.word} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
                         <span className="size-1.5 rounded-full bg-current" />
-                        {pill.word}
+                        {/* In a bar under 64rem a running turn shows its dot and clock; the words are the pill's tooltip. */}
+                        <span {...(pill.elapsed ? { className: '@max-[64rem]:hidden' } : {})}>{pill.word}</span>
                         {/* A clock only while a turn runs. On an idle agent it counts up forever
                             and reads as work in progress. */}
                         {pill.elapsed ? <span className="font-mono tabular-nums">{pill.elapsed}</span> : null}
                     </span>
                             {/* THE AGENT PULSE (beta.64): the last minute of its work; a fixed slot, so nothing moves. The tab note is its tooltip. */}
-                            {(() => { const n = tabNote(rows, active, agent.name, clock()); return <span {...(n ? { 'data-tab-note': n.kind, title: n.text } : {})} className="flex shrink-0 items-center"><AgentPulse rows={rows} working={session?.running === true && session.turnState === 'working'} now={clock} /></span>; })()}
+                            {(() => { const n = tabNote(rows, active, agent.name, clock()); return <span {...(n ? { 'data-tab-note': n.kind, title: n.text } : {})} className="flex shrink-0 items-center @max-[64rem]:hidden"><AgentPulse rows={rows} working={session?.running === true && session.turnState === 'working'} now={clock} /></span>; })()}
                         </span>
                         {/* ITS OWN VIEWS, a segmented control in the bar (react-fancy Tabs: role="tab", arrow keys; the route's ?tab= is the truth). */}
                         <span data-agent-subviews="" className="flex shrink-0 items-center rounded-md bg-[var(--bg-2)] p-0.5">

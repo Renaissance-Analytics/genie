@@ -39,11 +39,11 @@ describe('which repos the bar shows', () => {
 });
 
 describe('the bar, drawn', () => {
-    it('one line while it fits; the tabs scroll; the right end keeps its size and wraps to its own line rather than spill', () => {
+    it('one line while it fits; the tabs scroll; the right end shrinks, then wraps on a line of its own rather than spill', () => {
         const h = bar(render(twelve));
         for (const c of ['min-h-8', 'flex-wrap']) expect(classOf(h, 'data-top-bar=""')).toContain(c);
-        for (const c of ['min-w-[6rem]', 'flex-1', 'overflow-x-auto']) expect(classOf(h, 'data-bar-tabs=""')).toContain(c);
-        for (const c of ['shrink-0', 'max-w-full']) expect(classOf(h, 'data-bar-trailing=""')).toContain(c);
+        for (const c of ['min-w-[8rem]', 'flex-1', 'overflow-x-auto']) expect(classOf(h, 'data-bar-tabs=""')).toContain(c);
+        for (const c of ['shrink', 'min-w-0', 'max-w-full', 'flex-wrap']) expect(classOf(h, 'data-bar-trailing=""')).toContain(c);
     });
 
     it('no path column: the path is the selected tab\'s tooltip', () => {
