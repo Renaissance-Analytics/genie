@@ -22,6 +22,32 @@ export interface ProcessSchedule {
     readonly agent?: string;
     readonly lastRunAt?: number;
     readonly lastRunStatus?: LastRunStatus;
+    /** Tynn #860: the last runs, newest first (at most KEPT_RUNS). */
+    readonly runs?: readonly ScheduledRun[];
+}
+
+/** One fire (or Run now) of a scheduled task, as it ended (Tynn #860). */
+export interface ScheduledRun {
+    readonly at: number;
+    readonly endedAt: number;
+    readonly status: LastRunStatus;
+    /** Why it failed or was skipped, in the words of whatever refused it. */
+    readonly reason?: string;
+    /** agent-nudge: the text it handed (or tried to hand) the agent. */
+    readonly sent?: string;
+}
+
+/** How many runs a scheduled task keeps. */
+export const KEPT_RUNS = 20;
+
+/** STUB (Tynn #860 RED). */
+export function withRun(schedule: ProcessSchedule, _run: ScheduledRun): ProcessSchedule {
+    return schedule;
+}
+
+/** STUB (Tynn #860 RED). */
+export function lastFailure(_schedule: ProcessSchedule): string | null {
+    return null;
 }
 
 /** Why this schedule could never run, or null. Checked before anything is kept (and before an agent's request is put to the person). */

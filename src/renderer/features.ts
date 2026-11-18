@@ -109,6 +109,9 @@ export interface SiteEditing {
 }
 
 /** A site row: the site, and the end of each of its processes' output (the supervisor's tail — there after a crash). */
+/** A process's whole kept log, opened by its Log button (Tynn #860). */
+export type ProcessLogOpen = import('../core/output-tail.js').ProcessLog & { readonly processId: string };
+
 export type HostedSite = SiteInfo & { readonly logs?: readonly SiteProcessLog[] };
 
 /** What the canvas's save did (genie#1204): stored — disarmed if it changed what an armed flow does — or refused, on the nodes. */
@@ -354,7 +357,7 @@ export interface FeatureData {
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null; saved?: FlowSaved | null; toolKinds?: readonly import('@particle-academy/fancy-flow/engine').NodeKindDefinition[] } | null;
     /** Workspaces waiting for the person's yes. Absent = none. */
     readonly trust?: readonly TrustStepView[];
-    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[] } | null;
+    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[]; /** Tynn #860: the process log the person opened. */ processLog?: ProcessLogOpen | null } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
     readonly toolchain: ToolchainSection | null;
@@ -474,7 +477,7 @@ export type FeatureAction =
     | { kind: 'flows.edit'; flowId: string }
     | { kind: 'flows.save'; flowId: string; form: FlowForm }
     /** THE CANVAS (genie#1204): open a flow, or a new one in a workspace, in the flow editor's own window. */
-    | { kind: 'flows.openEditor'; flowId: string }
+    | { kind: 'flows.openEditor'; flowId: string; /** Tynn #860: open on this run's review (its index in `runs`). */ run?: number }
     | { kind: 'flows.newFlow'; workspaceId: string }
     /** The canvas's Save, as the USER: create (`flowId` absent, always disarmed) or update in place. Answered in `flows.saved`. */
     | { kind: 'flows.saveGraph'; flowId?: string; workspaceId: string; name: string; document: unknown }
@@ -509,6 +512,9 @@ export type FeatureAction =
     /** Start a kept process the person stopped; the start is written down too. */
     | { kind: 'hosting.startProcess'; processId: string }
     | { kind: 'hosting.removeProcess'; processId: string }
+    /** Tynn #860: open a process's whole kept log (and a scheduled task's runs); it stays open until closed. */
+    | { kind: 'hosting.openProcessLog'; processId: string }
+    | { kind: 'hosting.closeProcessLog' }
     | { kind: 'services.add'; workspaceId: string }
     | { kind: 'services.cancelForm' }
     /** The Add-an-engine form, submitted. `consent: true` is the person's answer to the pull question. */

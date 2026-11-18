@@ -89,3 +89,11 @@ export class OutputTail {
         return { text: take.map(readable).join('\n'), lines: take.length, dropped: this.#dropped };
     }
 }
+
+/** Genie's line between a kept process's output from before a Genie restart and what it printed since (Tynn #860). */
+export const RESTART_NOTE = 'Genie restarted; the lines above are from before';
+
+/** STUB (Tynn #860 RED). */
+export function joinLogs(_earlier: ProcessLog | null, _current: ProcessLog | null, _lines?: number): ProcessLog | null {
+    return null;
+}

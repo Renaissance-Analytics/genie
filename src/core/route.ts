@@ -111,7 +111,7 @@ export type Route =
      * THE FLOW EDITOR in its own window (genie#1204, Genie 1's genie#505): one flow on fancy-flow's canvas.
      * `genie://flow/<flowId>`, or `genie://flow/new?workspace=<id>` for a new one. No chrome.
      */
-    | ({ surface: 'flow'; flowId: string | null; workspaceId: string | null } & Common)
+    | ({ surface: 'flow'; flowId: string | null; workspaceId: string | null; /** Tynn #860: the run to open in review. */ run?: number | null } & Common)
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
     | ({ surface: PlainFeature } & Common)
     | ({ surface: 'hosting'; tab?: HostingTab; commandRun?: { processId: string; workspaceId: string } } & Common)
@@ -363,3 +363,8 @@ export function carryChat(next: string, current: Route, roster: readonly ChatRos
     return formatRoute({ ...parsedNext, chat: followChat(current.chat, parsedNext, roster, opened), pin: current.pin });
 }
 
+
+/** STUB (Tynn #860 RED). */
+export function sameFlowWindow(_url: string, _route: string): boolean {
+    return false;
+}

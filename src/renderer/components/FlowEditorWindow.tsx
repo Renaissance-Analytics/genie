@@ -50,6 +50,8 @@ export interface FlowEditorWindowProps {
     /** The flow to open; `null` = a new one, in `workspaceId`. */
     readonly flowId: string | null;
     readonly workspaceId: string | null;
+    /** Tynn #860: open on this run's review (its index in the flow's runs). */
+    readonly run?: number | null;
     readonly hibernated?: boolean;
     readonly data: FeatureData;
     readonly workspaces: readonly { id: string; path: string; name?: string | undefined }[];

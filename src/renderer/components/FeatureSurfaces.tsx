@@ -24,7 +24,7 @@ import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
 import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
-import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
+import type { FeatureAction, FeatureData, ProcessLogOpen, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -691,7 +691,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string }; processLog?: ProcessLogOpen | null }) {
     const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     const wsName = (id: string) => (workspaces.length > 0 ? workspaceLabel(workspaces, id) : null);
     return (
@@ -738,6 +738,11 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
             )}
         </div>
     );
+}
+
+/** STUB (Tynn #860 RED). */
+export function ProcessLogView(_props: { process: NonNullable<FeatureData['hosting']>['processes'][number]; log: ProcessLogOpen }) {
+    return null;
 }
 
 /** "Add process": a button that opens the labelled form in a modal. The only hook in the Processes tab, kept out of the panel. */

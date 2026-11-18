@@ -114,6 +114,8 @@ export interface ProcessBookDeps {
     /** SAFE MODE (Tynn #386): while on, the launch restore starts no kept process; each is held back, saying why. */
     readonly safeMode?: () => boolean;
     readonly now?: () => number;
+    /** Tynn #860: each kept process's output, kept past a Genie restart (kept-process-logs.ts). Absent = the supervisor's alone. */
+    readonly logs?: Pick<import('./kept-process-logs.js').KeptProcessLogs, 'read' | 'forget'>;
     /** Genie 1's database and Genie 2's workspaces: the book imports v1's background processes ONCE when it opens. */
     readonly v1?: {
         readonly database: string;
@@ -336,6 +338,11 @@ export class ProcessBook {
         if (!p.schedule) return undefined;
         const live = p.wanted && !this.#deps.asleep(p.workspaceId);
         return { ...p.schedule, enabled: p.wanted, nextRunAt: live ? nextCronAfter(p.schedule.cron, this.#now(), undefined) : null };
+    }
+
+    /** STUB (Tynn #860 RED). */
+    log(_id: string, _lines?: number): ProcessLog | null {
+        return null;
     }
 
     owns(id: string): boolean {

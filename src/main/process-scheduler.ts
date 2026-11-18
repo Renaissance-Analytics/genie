@@ -22,6 +22,9 @@ import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
 
 export type RunNowResult = 'started' | 'ok' | 'failed' | 'skipped' | 'held';
 
+/** What a nudge came to (Tynn #860): delivered, or why not. */
+export type NudgeOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
 export interface ProcessSchedulerDeps {
     readonly book: Pick<ProcessBook, 'scheduledTasks' | 'recordScheduledRun' | 'onChange'>;
     readonly supervisor: Pick<ProcessSupervisor, 'start' | 'status' | 'onChange'>;
@@ -33,7 +36,7 @@ export interface ProcessSchedulerDeps {
     readonly appEnv?: (process: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => Readonly<Record<string, string>>;
     readonly asleep: (workspaceId: string) => boolean;
     /** Deliver `text` to the agent at `address`, from the task named `from` — now, or when its turn ends. False = nowhere to deliver. */
-    readonly nudge: (address: string, text: string, from: string) => boolean | Promise<boolean>;
+    readonly nudge: (address: string, text: string, from: string) => boolean | NudgeOutcome | Promise<boolean | NudgeOutcome>;
     readonly now: () => number;
     readonly schedule: (fn: () => void, ms: number) => () => void;
     /** SAFE MODE (Tynn #386): while on, no scheduled task is armed or fired; Run now is the person's and still runs. */
@@ -133,7 +136,7 @@ export class ProcessScheduler {
             this.#inFlight.set(p.id, { at, done: nudged, finish: finishNudge });
             try {
                 let ok = false;
-                try { ok = await this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
+                try { const r = await this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); ok = typeof r === 'boolean' ? r : r.ok; } catch { ok = false; }
                 await this.#record(p.id, at, ok ? 'ok' : 'failed');
                 return ok ? 'ok' : 'failed';
             } finally {
