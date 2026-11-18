@@ -473,7 +473,7 @@ describe('a phone that opens a chat gets its history (Tynn #862)', () => {
         r.off();
     });
 
-    it('CONTROL: an agent nobody wants is still never built or sent; changes after the want flow as before', async () => {
+    it('an agent nobody wants is still never built or sent; once wanted, it is pushed as it is, and its later changes flow as before', async () => {
         const r = await rig();
         r.wants(['agent_b']);
         r.changed('agent_a');
