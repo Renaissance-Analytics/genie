@@ -55,7 +55,12 @@ export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 
 export type WorkspacePanel = 'files';
 /** `tab:<id>` is a tab the person designed (Tynn #282, core/workspace-tabs.ts). */
 export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | 'tynn' | 'artboard' | 'storage' | `tab:${string}`;
-const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn', 'artboard', 'storage'];
+/**
+ * A workspace's named views. THE ONE LIST: the window's address (core/address.ts) names its tabs from it, so a view added
+ * here is a tab the address can carry. ArtBoard (#739) and Storage (#697) were added here only, and the address wrote them
+ * as the Dashboard: their tabs did nothing (beta.64).
+ */
+export const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn', 'artboard', 'storage'];
 /** A designed tab's id, as `core/workspace-tabs.ts` mints it; anything else in `view=` falls back to the Agents view. */
 const DESIGNED_TAB = /^tab:[A-Za-z0-9-]{1,40}$/;
 function workspaceViewOf(raw: string | null): WorkspaceView {
