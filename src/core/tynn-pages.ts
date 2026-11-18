@@ -400,7 +400,8 @@ export interface HomeDashboard {
     readonly storyBreakdown: Readonly<Record<string, number>>;
     readonly sparkline: readonly number[];
     readonly charts: { readonly velocity: ChartData; readonly agentActivity: ChartData };
-    readonly versions: ReadonlyArray<{ readonly id: string; readonly number: string | null; readonly title: string }>;
+    /** The current roadmap only (#848): the active version, then any in review, then the upcoming ones in roadmap order. */
+    readonly versions: readonly HomeVersionRef[];
     readonly version: HomeVersion | null;
     readonly comparison: ReadonlyArray<Readonly<Record<string, unknown>> & { readonly id: string; readonly status: string }>;
     readonly attention: readonly HomeAttention[];
@@ -443,6 +444,39 @@ function chart(v: unknown): ChartData {
         series: rows(c.series).map((s) => ({ label: str(s.label) ?? '', data: Array.isArray(s.data) ? s.data.map((d) => (typeof d === 'number' && Number.isFinite(d) ? d : 0)) : [] })),
     };
 }
+const ENTITIES: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: String.fromCharCode(0xa0) };
+/**
+ * Tynn stores some titles HTML-escaped ("R&amp;D"); React escapes again, so they would show raw. One pass, so an
+ * escaped entity ("&amp;amp;") decodes to its text ("&amp;") and never further. Unknown names stay as they are.
+ */
+export function decodeEntities(s: string): string {
+    return s.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, e: string) => {
+        if (e[0] === '#') {
+            const code = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+            return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+        }
+        return ENTITIES[e.toLowerCase()] ?? whole;
+    });
+}
+
+export interface HomeVersionRef { readonly id: string; readonly number: string | null; readonly title: string; readonly status: string }
+/**
+ * Tynn #848: the picker's versions are the current roadmap only. tynn.ai's ProjectHome answers `availableVersions` as
+ * every active, accepted and released version, `order` descending, with no filter to ask for less (its web dashboard
+ * wants the released ones). Genie keeps the active version(s), then any in review (still in flight; ProjectHome does not
+ * send them yet), then the upcoming (`accepted`) ones in roadmap order, which is that order reversed. Anything else
+ * (released, done, archived, draft, rejected, VIP) is never offered.
+ */
+function roadmapVersions(served: unknown): HomeVersionRef[] {
+    const all = rows(served).flatMap((v): HomeVersionRef[] => {
+        const id = str(v.id);
+        return id === null ? [] : [{ id, number: str(v.number), title: decodeEntities(str(v.title) ?? ''), status: str(v.status) ?? '' }];
+    });
+    return [...all.filter((v) => v.status === 'active'), ...all.filter((v) => v.status === 'review'), ...all.filter((v) => v.status === 'accepted').reverse()];
+}
+/** The version the picker shows as chosen: the served one when it is on the roadmap, else none (never a different one). */
+export const pickedVersion = (d: HomeDashboard): string | null => (d.version !== null && d.versions.some((x) => x.id === d.version!.id) ? d.version.id : null);
+
 /** The activity list arrives bare from the JSON door, or wrapped in `data` the way Inertia hands the web page a resource collection. */
 const listOf = (v: unknown): Row[] => rows(isRow(v) && Array.isArray(v.data) ? v.data : v);
 
@@ -474,7 +508,7 @@ function homeDashboard(d: Row): HomeDashboard {
         storyBreakdown: counts(d.storyBreakdown),
         sparkline: Array.isArray(d.sparkline) ? d.sparkline.map((n) => (typeof n === 'number' && Number.isFinite(n) ? n : 0)) : [],
         charts: { velocity: chart(charts.velocity), agentActivity: chart(charts.agentActivity) },
-        versions: rows(d.availableVersions).flatMap((v) => { const id = str(v.id); return id === null ? [] : [{ id, number: str(v.number), title: str(v.title) ?? '' }]; }),
+        versions: roadmapVersions(d.availableVersions),
         version: homeVersion(d.version),
         comparison: rows(d.versionComparison).flatMap((r) => { const id = str(r.id); return id === null ? [] : [{ ...r, id, status: str(r.status) ?? '' }]; }),
         attention: rows(d.attention).flatMap((a): HomeAttention[] => { const id = str(a.id); return id === null ? [] : [{ id, slug: str(a.slug) ?? '', title: str(a.title) ?? '', status: str(a.status) ?? '', openTasks: num(a.open_tasks) }]; }),

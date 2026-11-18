@@ -1,7 +1,7 @@
 import { Button, Chart, Icon, Input, Progress, Select, Switch, Tabs, Textarea } from '@particle-academy/react-fancy';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { LiveState } from '../../core/tynn-board.js';
-import { HOME_RANGES, type ChartData, type HomeDashboard, type HomeDetails, type HomeSection, type HomeView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState } from '../../core/tynn-pages.js';
+import { HOME_RANGES, pickedVersion, type ChartData, type HomeDashboard, type HomeDetails, type HomeSection, type HomeView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState } from '../../core/tynn-pages.js';
 import { LiveMark, OpLine } from './TynnBoardPanel.js';
 
 /**
@@ -127,7 +127,7 @@ function Dashboard({ d, onQuery }: { d: HomeDashboard; onQuery: TynnHomePanelPro
                 <span className="flex-1" />
                 {d.versions.length > 0 ? (
                     <span data-home-version="" className="min-w-48">
-                        <Select aria-label="Version" value={v?.id ?? d.versions[0]!.id} onValueChange={(id) => query({ version: id })} list={d.versions.map((x) => ({ value: x.id, label: `v${x.number ?? ''} — ${x.title || 'Untitled'}` }))} />
+                        <Select aria-label="Version" placeholder="Pick a version" value={pickedVersion(d) ?? ''} onValueChange={(id) => query({ version: id })} list={d.versions.map((x) => ({ value: x.id, label: `v${x.number ?? ''} — ${x.title || 'Untitled'}` }))} />
                     </span>
                 ) : null}
             </div>
