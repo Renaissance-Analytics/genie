@@ -86,10 +86,10 @@ describe('the title bar', () => {
         expect(bar({ route: 'genie://agent/kai?tab=stream' })).toContain('genie://agent/kai?tab=stream');
     });
 
-    it('offers the palette as a 280\u00d724 box with its own placeholder, NOT as the only route', () => {
+    it('offers the palette as a small labelled search icon button (beta.65; the box is gone), NOT as the only route', () => {
         const html = bar();
-        expect(html).toContain('w-[280px]');
-        expect(html).toContain('Search, jump, run');
+        expect(html).not.toContain('w-[280px]');
+        expect(html).toMatch(/data-palette="true"[^>]*aria-label="Search, jump, run|aria-label="Search, jump, run[^"]*"[^>]*data-palette="true"/);
         // The hint names a key this reader actually HAS, so it is platform-dependent and
         // asserted by platform in its own describe below.
         expect(html).toContain('data-palette-hint');

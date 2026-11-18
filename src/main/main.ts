@@ -254,6 +254,7 @@ import { elementSourcesFor } from './workspace-save-sources.js';
 import { installContextMenu, type MenuWebContents } from './context-menu.js';
 import { nestGoverned } from '../core/rail-view.js';
 import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
+import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
 
 /**
  * THE MAIN PROCESS.
@@ -2490,6 +2491,9 @@ async function boot(): Promise<void> {
             // A remote window's message starts the agent as the composer's does (q_04ce323c).
             startForWork: (record) => startOnDemand(record),
             startForYourMessage: (record) => startForYours(record),
+            // ANY FILE IN A MESSAGE (Tynn #829): one that is not an image or text, saved into the agent's workspace on this
+            // host. Trust is read now; not composed yet = not known = untrusted, refused.
+            saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(registry?.workspace(record.workspaceId), composedNow?.untrustedNow(record) ?? true), files, now: new Date() }),
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => agentsUp().stop(id),

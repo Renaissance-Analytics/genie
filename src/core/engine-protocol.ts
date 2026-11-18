@@ -315,8 +315,9 @@ export interface WireAttachment {
     readonly name: string;
     readonly type: string;
     readonly b64: string;
+    /** Saved into the workspace by the host (Tynn #829): where, as `Attachment.saved`. */
+    readonly saved?: { readonly path: string; readonly type: string; readonly size: number };
 }
-
 /** Where the host writes what a window needs to find and trust it (`<genieHome>/runtime/host.json`). */
 export interface HostRecord {
     readonly pid: number;
