@@ -94,7 +94,7 @@ describe('the row menu (happy-dom)', () => {
     const mount = (over: Partial<Parameters<typeof Dashboard>[0]> = {}) => act(() => root.render(
         <Dashboard
             rows={AGENTS} workspaces={WORKSPACES} onOpenAgent={(id) => opened.push(id)} onAddAgent={() => {}} onNavigate={(r) => navigated.push(r)}
-            onOpenTerminalWindow={(id) => terminals.push(id)} onOpenFilesWindow={(id) => files.push(id)} {...over}
+            onOpenTerminalWindow={(id) => { terminals.push(id); }} onOpenFilesWindow={(id) => files.push(id)} {...over}
         />,
     ));
     const click = (el: Element | null | undefined) => { expect(el).toBeTruthy(); act(() => (el as HTMLElement).click()); };
