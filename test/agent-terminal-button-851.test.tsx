@@ -111,6 +111,70 @@ describe('the sidebar row’s terminal button, through the Shell', () => {
     });
 });
 
+describe('the Dashboard row’s Open window → Terminal, through the Shell (Tynn #851, the owner’s screenshot)', () => {
+    // It opened a whole second Genie window — rail, chat, and a workspace panel saying "No terminals open in Tynn" — not a
+    // terminal. It is the same door as the sidebar button: a shell in the row's workspace, in a window of its own.
+    const snapshot: GenieSnapshot = {
+        ...EMPTY_SNAPSHOT,
+        agents: AGENTS,
+        workspaces: [{ id: 'tynn', path: '/w/tynn', agentsKnown: true }, { id: 'fancy', path: '/w/fancy', agentsKnown: true }],
+        deckItems: [],
+        signals: { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
+        workstation: { name: 'alphar', healthy: true },
+    };
+    let shells: string[];
+    let popOuts: string[];
+    let takeOvers: string[];
+    let files: string[];
+    const mount = (over: Record<string, unknown> = {}) => {
+        shells = []; popOuts = []; takeOvers = []; files = [];
+        act(() => root.render(
+            <Shell
+                route="genie://dashboard" snapshot={snapshot} servable={['dashboard', 'agent', 'workspace']} agentDetail={null} agentResolved={false}
+                selectedRowId={null} chatThread={null} pinned={null} files={NO_FILES} onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}}
+                onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}} onSend={() => {}} onToggleFilesPin={() => {}} onCloseChat={() => {}}
+                answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}}
+                onTakeOver={(id: string) => { takeOvers.push(id); }}
+                onOpenScratchTerminal={async (workspaceId: string) => { shells.push(workspaceId); return { ok: true as const }; }}
+                {...({ onPopOutTerminals: (id: string) => { popOuts.push(id); } } as Record<string, unknown>)}
+                onPopOutFiles={(id: string) => { files.push(id); }}
+                {...over}
+            />,
+        ));
+    };
+    const trigger = (agent: string) => host.querySelector<HTMLButtonElement>(`[data-agent="${agent}"] [data-windows-menu]`);
+    const item = (label: string) => [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent?.trim() === label);
+
+    it('Terminal opens a SHELL in the row’s workspace — never a Genie window on its Terminals view, never the TUI', async () => {
+        mount();
+        click(trigger('a_fancy'));
+        click(item('Terminal'));
+        await flush();
+        expect(shells).toEqual(['fancy']);
+        expect(popOuts, 'a second Genie window').toEqual([]);
+        expect(takeOvers).toEqual([]);
+    });
+
+    it('CONTROL: Files still opens the row’s Files window', async () => {
+        mount();
+        click(trigger('a_tynn'));
+        click(item('Files'));
+        await flush();
+        expect(files).toEqual(['tynn']);
+        expect(shells).toEqual([]);
+    });
+
+    it('a window that cannot open a workspace shell has no live Terminal entry — it does not fall back to a Genie window', async () => {
+        mount({ onOpenScratchTerminal: undefined });
+        click(trigger('a_fancy'));
+        const terminal = item('Terminal');
+        if (terminal) click(terminal);
+        await flush();
+        expect(popOuts).toEqual([]);
+        expect(shells).toEqual([]);
+    });
+});
+
 describe('the button’s words', () => {
     const ws = (id: string, name: string): RailItem => ({
         id, path: `/w/${id}`, name, count: 1, alert: null, processes: 'running', processesTitle: '1 process', sites: 'running', sitesTitle: '1 site', working: 0, color: 'teal',
