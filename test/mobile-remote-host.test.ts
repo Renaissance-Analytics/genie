@@ -233,8 +233,9 @@ describe('a phone receives only what a phone shows', () => {
         const first = (watched as { value: { seq: number; detail: { rowsPending?: boolean }; rows: { append: Row[] } } }).value;
         expect(first.detail.rowsPending).toBe(true);
         expect(first.rows.append).toEqual([]);
-        expect(api.requested).toEqual(['agent_a']);
+        // Asked on the next turn, after the answer went (a push before it would find no window on the phone).
         const pushed = await phone.drain();
+        expect(api.requested).toEqual(['agent_a']);
         expect(pushed).toHaveLength(1);
         expect(pushed[0]).toMatchObject({ kind: 'event', channel: 'agent:agent_a', payload: { seq: first.seq + 1, detail: { agent: { name: 'atlas' } }, rows: { append: rows } } });
     });
@@ -242,12 +243,23 @@ describe('a phone receives only what a phone shows', () => {
     it('a watch already recorded asks for nothing more; a desktop window (which reads every agent) asks for nothing (Tynn #862)', async () => {
         const { c: phone } = await pairedPhone('mobile');
         await phone.call('agent.watch', 'agent_a', {});
+        await phone.drain();
         await phone.call('agent.watch', 'agent_a', {});
+        await phone.drain();
         expect(api.requested).toEqual(['agent_a']);
         const t = (await pairedPhone(null)).token;
         const desk = connect();
         await desk.hello({ kind: 'token', token: t });
+        await desk.drain();
         expect(api.requested).toEqual(['agent_a']);
+    });
+
+    it('a watch dropped before its turn comes asks for nothing (Tynn #862)', async () => {
+        const { c: phone } = await pairedPhone('mobile');
+        await phone.call('agent.watch', 'agent_a', {});
+        await phone.call('agent.unwatch', 'agent_a');
+        await phone.drain();
+        expect(api.requested).toEqual([]);
     });
 
     it('a guest phone may not watch an agent outside its workspace', async () => {
