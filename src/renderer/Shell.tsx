@@ -262,8 +262,6 @@ export interface ShellProps {
     /** Workspaces whose file panel is in its own window (§4.3): the dock holds a bar, not the panel. */
     filesPopped?: readonly string[] | undefined;
     onPopOutFiles?: ((workspaceId: string) => void) | undefined;
-    /** A workspace's terminals view in a NEW window (Tynn #706): the Dashboard's windows column. Absent = that entry is disabled. */
-    onPopOutTerminals?: ((workspaceId: string) => void) | undefined;
     onBringBackFiles?: ((workspaceId: string) => void) | undefined;
     /** An agent is writing a file you have dirty (§4.3): the ask, and its lifting. */
     onPauseAgent?: ((agent: string, path: string) => void) | undefined;
@@ -444,7 +442,6 @@ export function Shell({
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
-    onPopOutTerminals,
     onBringBackFiles,
     onPauseAgent,
     onResumeAgent,
@@ -806,9 +803,10 @@ export function Shell({
                     // click picks the chat, as a Dashboard row does, without leaving the page on screen.
                     agents={snapshot.agents.filter((agent) => !hiddenWorkspaces.has(agent.workspaceId))}
                     onChatAgent={onChatAgent}
-                    // The row's terminal and folder buttons open WINDOWS, never navigate (Tynn #733): the agent's Take Over window and the
-                    // workspace's popped-out Files panel — the same openers the Agent and Files pages use.
-                    onOpenAgentTerminal={onTakeOver}
+                    // The row's terminal and folder buttons open WINDOWS, never navigate (Tynn #733): a shell in the agent's
+                    // WORKSPACE — the workspace header's Terminal button's opener, never the agent's TUI (Tynn #851: that is a
+                    // diagnostics tool in the agent's Settings) — and the workspace's popped-out Files panel.
+                    onOpenWorkspaceTerminal={onOpenScratchTerminal && !readOnly ? onOpenScratchTerminal : undefined}
                     onOpenWorkspaceFiles={onPopOutFiles}
                     // THE PERSON'S INBOX (Tynn #742): one click from the rail, its unread count on the row.
                     {...(featureAsk && !scoped ? { personInbox: { unread: features.inbox ? personUnread(features.inbox.unread) : null, open: personOpen, onToggle: () => openInbox(personOpen ? null : PERSON_INBOX) } } : {})}
@@ -890,7 +888,9 @@ export function Shell({
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
                             // The windows column (Tynn #706): new windows, never a navigation; a share window offers its own workspace only.
-                            onOpenTerminalWindow={onPopOutTerminals}
+                            // Open window → Terminal (Tynn #706, #851): a SHELL in the row's workspace, the sidebar button's and the
+                            // workspace header's opener — not a second Genie window on an empty Terminals view (the owner's screenshot).
+                            onOpenTerminalWindow={onOpenScratchTerminal && !readOnly ? onOpenScratchTerminal : undefined}
                             onOpenFilesWindow={onPopOutFiles}
                             scopeWorkspaceId={scoped?.workspaceId}
                             faults={workspaceFaults}

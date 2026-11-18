@@ -100,8 +100,12 @@ export interface SidebarProps {
     agents?: readonly AgentRow[] | undefined;
     /** An agent row's click: that agent's chat, beside whatever is on screen — the Dashboard's row click (genie#1209). */
     onChatAgent?: ((agentId: string) => void) | undefined;
-    /** An agent row's terminal button (Tynn #733): that agent's terminal in a NEW window, never a navigation. Absent = the button is disabled. */
-    onOpenAgentTerminal?: ((agentId: string) => void) | undefined;
+    /**
+     * An agent row's terminal button (Tynn #733, #851): a SHELL in that agent's WORKSPACE, in a NEW window — the workspace
+     * header's Terminal button's path — never a navigation and never the agent's TUI (that is in the agent's Settings). Its
+     * answer says whether it opened; a refusal is said on the button. Absent = the button is disabled.
+     */
+    onOpenWorkspaceTerminal?: ((workspaceId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     /** An agent row's folder button (Tynn #733): that workspace's Files in a NEW window, never a navigation. Absent = the button is disabled. */
     onOpenWorkspaceFiles?: ((workspaceId: string) => void) | undefined;
     /**
@@ -279,9 +283,19 @@ function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigat
     compact: boolean;
     onChat: (agentId: string) => void;
     onNavigate: (route: string) => void;
-    onOpenTerminal: ((agentId: string) => void) | undefined;
+    onOpenTerminal: ((workspaceId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     onOpenFiles: ((workspaceId: string) => void) | undefined;
 }) {
+    // A shell that did not open is said on the button (its colour and tooltip), never a dead click; the next click retries.
+    const [terminalFailed, setTerminalFailed] = useState<string | null>(null);
+    const openTerminal = () => {
+        if (!onOpenTerminal) return;
+        setTerminalFailed(null);
+        void onOpenTerminal(agent.workspaceId).then(
+            (r) => { if (!r.ok) setTerminalFailed(r.reason); },
+            (error: unknown) => setTerminalFailed(error instanceof Error ? error.message : String(error)),
+        );
+    };
     const state = shownState(agent);
     const word = statusOf(agent).word;
     // Shells and tasks still running (core/agent-shells.ts `count`); `null` = never reported, which draws nothing.
@@ -306,7 +320,9 @@ function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigat
     }
     const shellsTitle = shells === null ? '' : `${shells} shell${shells === 1 ? '' : 's'} running`;
     const workspaceLabel = `Open ${workspaceName} Files in a new window`;
-    const terminalLabel = `Open ${agent.name}’s terminal in a new window`;
+    // The WORKSPACE's terminal (Tynn #851), not the agent's: its TUI is a diagnostics tool in the agent's Settings.
+    const terminalLabel = `Open a terminal in ${workspaceName} (new window)`;
+    const terminalTitle = terminalFailed === null ? terminalLabel : `The terminal did not open: ${terminalFailed} Click to try again.`;
     const settingsLabel = `${agent.name} settings`;
     return (
         <div data-rail-agent-unit="" className="relative">
@@ -334,8 +350,9 @@ function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigat
             </FancySidebar.Item>
             {/* REAL buttons beside the row, never nested in its button (the workspace row's runtime pill does the same). */}
             <span className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
-                <Button type="button" variant="ghost" size="xs" data-agent-open-terminal={agent.id} aria-label={terminalLabel} title={terminalLabel}
-                    disabled={!onOpenTerminal} onClick={() => onOpenTerminal?.(agent.id)} className="size-4 p-0 text-[var(--fg-3)]">
+                <Button type="button" variant="ghost" size="xs" data-agent-open-terminal={agent.id} aria-label={terminalLabel} title={terminalTitle}
+                    data-terminal-failed={terminalFailed !== null ? '' : undefined}
+                    disabled={!onOpenTerminal} onClick={openTerminal} className={`size-4 p-0 ${terminalFailed !== null ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`}>
                     <Icon name="square-terminal" size="xs" />
                 </Button>
                 <Button type="button" variant="ghost" size="xs" data-agent-open-workspace={agent.workspaceId} aria-label={workspaceLabel} title={workspaceLabel}
@@ -355,7 +372,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null, agents, onChatAgent, onOpenAgentTerminal, onOpenWorkspaceFiles, personInbox }: SidebarProps) {
+export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null, agents, onChatAgent, onOpenWorkspaceTerminal, onOpenWorkspaceFiles, personInbox }: SidebarProps) {
     countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
@@ -403,7 +420,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
     const chatAgent = onChatAgent ?? ((agentId: string) => onNavigate(`genie://agent/${agentId}`));
     const agentRows = (compact: boolean) => listed.map((a) => (
         <AgentRailRow key={a.id} agent={a} workspaceName={workspaceNameOf(a.workspaceId)} active={current === `genie://agent/${a.id}`} compact={compact}
-            onChat={chatAgent} onNavigate={onNavigate} onOpenTerminal={onOpenAgentTerminal} onOpenFiles={onOpenWorkspaceFiles} />
+            onChat={chatAgent} onNavigate={onNavigate} onOpenTerminal={onOpenWorkspaceTerminal} onOpenFiles={onOpenWorkspaceFiles} />
     ));
     // THE TOGGLE (Tynn #687): two icons, no words — each named by its tooltip and accessible name.
     const viewToggle = canListAgents ? (

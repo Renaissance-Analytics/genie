@@ -17,7 +17,7 @@ import { isOsAgent } from './os-agent.js';
 export type SettingsSection = 'general' | 'permissions' | 'issuewatch' | 'persona' | 'skills';
 
 export type SettingsControl =
-    | 'provider' | 'model' | 'mode' | 'run' | 'remove'
+    | 'provider' | 'model' | 'mode' | 'run' | 'tui' | 'remove'
     | 'tools' | 'access' | 'autonomous' | 'manage-tabs' | 'drive-pages'
     | 'issuewatch' | 'persona' | 'skills';
 
@@ -36,6 +36,11 @@ export interface SettingsFacts {
     readonly manageTabs: boolean;
     readonly drivePages: boolean;
     readonly issueWatch: boolean;
+    /**
+     * The window can open the agent's TUI (Take Over). Tynn #851, the owner: it is "a diagnostics ui only really and used
+     * for logins", so it lives on General, not on the agents sidebar's terminal button. Absent = false.
+     */
+    readonly tui?: boolean | undefined;
     /** The agent has a persona path. */
     readonly persona: boolean;
     /** The provider reported its skills and commands. */
@@ -61,7 +66,7 @@ export function settingsSections(f: SettingsFacts): SettingsSectionView[] {
     const out: SettingsSectionView[] = [];
     const push = (id: SettingsSection, controls: SettingsControl[]) => { if (controls.length > 0) out.push({ id, label: SETTINGS_LABEL[id], controls }); };
     if (f.ops) {
-        push('general', ['provider', ...(f.model ? ['model' as const] : []), 'mode', 'run', 'remove']);
+        push('general', ['provider', ...(f.model ? ['model' as const] : []), 'mode', 'run', ...(f.tui ? ['tui' as const] : []), 'remove']);
         if (!isOsAgent(f)) push('permissions', [
             ...(f.provider === 'claude' && f.tools ? ['tools' as const] : []),
             'access',

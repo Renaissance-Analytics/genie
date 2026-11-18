@@ -2347,7 +2347,6 @@ function DesktopApp({ bridge }: AppProps) {
                 // The route says where the panel is: on this workspace, `?files=detached`.
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address) : undefined}
-            onPopOutTerminals={resolvedBridge?.popOutTerminals ? (id) => { void resolvedBridge.popOutTerminals!(id); } : undefined}
             onBringBackFiles={(id) => moveFilePanel(() => filesWindows?.bringBack(id), () => {
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address)}
