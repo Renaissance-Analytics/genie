@@ -71,6 +71,46 @@ export function contrastRatio(a: string, b: string): number {
     return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 }
 
+const hex2 = (v: number): string => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0');
+
+function toHsl(color: string): [number, number, number] {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16) / 255) as [number, number, number];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    if (max === min) return [0, 0, l];
+    const d = max - min;
+    const s = d / (1 - Math.abs(2 * l - 1));
+    const h = max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h * 60, s, l];
+}
+
+function fromHsl(h: number, s: number, l: number): string {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return `#${hex2(r + m)}${hex2(g + m)}${hex2(b + m)}`;
+}
+
+/**
+ * The colour, moved in LIGHTNESS ONLY (hue and saturation kept) until it stands `floor`:1 against every surface of the
+ * theme: lighter on dark, darker on light. A colour that already clears it comes back unchanged (lower-cased), so a
+ * workspace's dot and what is drawn in its colour match wherever they can.
+ */
+export function readableOn(color: string, theme: Theme, floor: number): string {
+    const clears = (c: string) => THEME_SURFACES[theme].every((bg) => contrastRatio(c, bg) >= floor);
+    const start = norm(color);
+    if (clears(start)) return start;
+    const [h, s, l] = toHsl(start);
+    const step = theme === 'dark' ? 0.005 : -0.005;
+    for (let next = l + step; next >= 0 && next <= 1; next += step) {
+        const c = fromHsl(h, s, next);
+        if (clears(c)) return c;
+    }
+    return theme === 'dark' ? '#ffffff' : '#000000';
+}
+
 /** The themes on which a colour falls under 3:1 against any of their surfaces — `[]` when it is visible on both. */
 export function lowContrastThemes(color: string): Theme[] {
     return (Object.keys(THEME_SURFACES) as Theme[]).filter((theme) => THEME_SURFACES[theme].some((bg) => contrastRatio(color, bg) < MIN_CONTRAST));

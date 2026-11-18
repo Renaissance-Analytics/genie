@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { commsOf } from '../src/core/comms.js';
-import { ARC_CAP, ARC_WINDOW_SECONDS, arcGeometry, arcsFor, bezierAt, labelRect, rectsOverlap, type ArcInput, type Rect } from '../src/core/flight-arcs.js';
+import { ARC_CAP, ARC_WINDOW_SECONDS, arcGeometry, arcsFor, bezierAt, labelRect, rectsOverlap, type Arc, type ArcInput, type Point, type Rect } from '../src/core/flight-arcs.js';
+import { THEME_SURFACES, WORKSPACE_PALETTE, contrastRatio } from '../src/core/workspace-color.js';
 
 /**
  * THE COMMS FLIGHT PATHS (Tynn #750, option D) — the geometry and the flags, decided without a DOM. An arch starts at the
@@ -157,5 +158,146 @@ describe('the comms links carry what the arches need', () => {
         expect(by('agent_c')).toMatchObject({ lastFrom: 'peer', unread: true, waiting: false });
         expect(by('agent_d')).toMatchObject({ lastFrom: 'peer', unread: false, waiting: true });
         expect(commsOf(mail, 'agent_a', t0, t0 + 55_000).links.find((l) => l.peer === 'agent_d')).toMatchObject({ waiting: false });
+    });
+});
+
+/**
+ * THE SHADOW (owner, 2026-11-17: "the shadows are busted and look dumb. they don't come together like they should at the
+ * contact points"). A flight path's shadow is its projection on the ground: it starts and ends EXACTLY where the arc touches
+ * down, is furthest from the arc at the apex, and is thin and faint, never heavier than the arc. Before this it was the arc
+ * itself, blurred, thicker, and moved 16px down: it missed both contact points and read as a second stroke.
+ */
+type Curve = { p0: Point; c1: Point; c2: Point; p3: Point };
+type Shadow = Curve & { d: string; width: number; opacity: number };
+const shadowOf = (arc: Arc): Shadow => (arc as unknown as { shadow: Shadow }).shadow;
+const arcCurve = (arc: Arc): Curve => arcGeometry(arc.start, arc.end, arc.dist);
+const gap = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+const SAMPLES = Array.from({ length: 41 }, (_, i) => i / 40);
+
+describe('the shadow of a flight path', () => {
+    const arcs = arcsFor(input([link('a'), link('wren'), link('moth')]));
+
+    it("starts and ends exactly at the arc's two contact points (the pointer and the partner row), within 0.5px", () => {
+        expect(arcs).toHaveLength(3);
+        for (const arc of arcs) {
+            const s = shadowOf(arc);
+            expect(s).toBeDefined();
+            expect(gap(bezierAt(s, 0), arc.start)).toBeLessThan(0.5);
+            expect(gap(bezierAt(s, 1), arc.end)).toBeLessThan(0.5);
+            // The drawn path itself: it moves to the pointer and its last point is the partner's end.
+            expect(s.d.startsWith(`M${arc.start.x},${arc.start.y} C`)).toBe(true);
+            const last = s.d.trim().split(/[ ,]+/).slice(-2).map(Number);
+            expect(gap({ x: last[0]!, y: last[1]! }, arc.end)).toBeLessThan(0.5);
+        }
+    });
+
+    it('is 0 apart at both ends and furthest apart at the apex, opening steadily on the way up and closing on the way down', () => {
+        for (const arc of arcs) {
+            const g = arcCurve(arc);
+            const s = shadowOf(arc);
+            const sep = SAMPLES.map((t) => gap(bezierAt(g, t), bezierAt(s, t)));
+            expect(sep[0]!).toBeLessThan(0.5);
+            expect(sep[sep.length - 1]!).toBeLessThan(0.5);
+            // The apex: where the arc stands highest above the straight line between its ends.
+            const chordY = (x: number) => arc.start.y + ((x - arc.start.x) / (arc.end.x - arc.start.x)) * (arc.end.y - arc.start.y);
+            const height = SAMPLES.map((t) => { const p = bezierAt(g, t); return chordY(p.x) - p.y; });
+            const apex = height.indexOf(Math.max(...height));
+            const widest = sep.indexOf(Math.max(...sep));
+            expect(Math.abs(widest - apex)).toBeLessThanOrEqual(2);
+            expect(Math.max(...sep)).toBeGreaterThan(8);
+            for (let i = 1; i <= widest; i++) expect(sep[i]!).toBeGreaterThanOrEqual(sep[i - 1]! - 1e-6);
+            for (let i = widest + 1; i < sep.length; i++) expect(sep[i]!).toBeLessThanOrEqual(sep[i - 1]! + 1e-6);
+        }
+    });
+
+    it('lies on the ground side: below the arc everywhere between the ends', () => {
+        for (const arc of arcs) {
+            const g = arcCurve(arc);
+            const s = shadowOf(arc);
+            for (const t of SAMPLES.slice(1, -1)) expect(bezierAt(s, t).y).toBeGreaterThan(bezierAt(g, t).y);
+        }
+    });
+
+    it("is never heavier than the arc: its width and opacity are at most the arc's, and it fades the higher the arc flies", () => {
+        for (const arc of arcs) {
+            const s = shadowOf(arc);
+            expect(s.width).toBeGreaterThan(0);
+            expect(s.width).toBeLessThanOrEqual(arc.width);
+            expect(s.opacity).toBeGreaterThan(0);
+            expect(s.opacity).toBeLessThanOrEqual(arc.opacity);
+            expect(s.opacity).toBeLessThanOrEqual(0.3);
+        }
+        const low = shadowOf(arcs.find((a) => a.peer === 'a')!);
+        const high = shadowOf(arcs.find((a) => a.peer === 'moth')!);
+        expect(high.opacity).toBeLessThan(low.opacity);
+        // An old, thin, faint arc still casts a lighter shadow than itself.
+        const old = arcsFor(input([link('moth', { ageSeconds: 86_000 })]))[0]!;
+        expect(shadowOf(old).width).toBeLessThanOrEqual(old.width);
+        expect(shadowOf(old).opacity).toBeLessThanOrEqual(old.opacity);
+    });
+});
+
+/**
+ * THE SENDER'S COLOUR (owner, 2026-11-17: "the coms lines should be colored based on the sending workspace"). An arc, its
+ * dots and its label take the workspace colour of whoever sent the last message, the dot in the Workspace column. A colour
+ * too faint for a theme is moved in lightness only (never hue) until it clears the floor: 3:1 for the stroke and dots
+ * (WCAG 1.4.11), 4.5:1 for the label text, against every surface of that theme.
+ */
+type Paint = { stroke: string; text: string };
+const colorOf = (arc: Arc) => (arc as unknown as { color: string | null }).color;
+const paintOf = (arc: Arc) => (arc as unknown as { paint: Record<'light' | 'dark', Paint> | null }).paint;
+const ROSE = '#e11d48';
+const EMERALD = '#059669';
+const colored = (links: ArcInput['links'], colors: Record<string, string>): ArcInput => ({ ...input(links), colors }) as ArcInput;
+function hueOf(hex: string): number {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    if (max === min) return 0;
+    const d = max - min;
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+}
+
+describe('an arc is coloured by the sending workspace', () => {
+    it("out (this agent sent last): the focus agent's workspace colour; in (the partner did): the partner's", () => {
+        const arcs = arcsFor(colored([link('a', { lastFrom: 'self' }), link('b', { lastFrom: 'peer' })], { kai: ROSE, a: EMERALD, b: EMERALD }));
+        expect(colorOf(arcs.find((a) => a.peer === 'a')!)).toBe(ROSE);
+        expect(colorOf(arcs.find((a) => a.peer === 'b')!)).toBe(EMERALD);
+        // Rose-600 already clears the stroke floor on both themes: drawn exactly as the Workspace column's dot.
+        expect(paintOf(arcs.find((a) => a.peer === 'a')!)!.dark.stroke).toBe(ROSE);
+        expect(paintOf(arcs.find((a) => a.peer === 'a')!)!.light.stroke).toBe(ROSE);
+    });
+
+    it('two workspaces give two colours', () => {
+        const arcs = arcsFor(colored([link('a', { lastFrom: 'peer' }), link('b', { lastFrom: 'peer' })], { kai: ROSE, a: EMERALD, b: ROSE }));
+        expect(new Set(arcs.map((a) => paintOf(a)!.dark.stroke)).size).toBe(2);
+        expect(new Set(arcs.map((a) => paintOf(a)!.light.stroke)).size).toBe(2);
+    });
+
+    it('a sender with no workspace colour keeps the default paint (no colour, no paint)', () => {
+        const arc = arcsFor(colored([link('a', { lastFrom: 'peer' })], { kai: ROSE }))[0]!;
+        expect(colorOf(arc)).toBeNull();
+        expect(paintOf(arc)).toBeNull();
+    });
+
+    it('the contrast floor holds on both themes for every palette colour and for faint custom ones, with the hue kept', () => {
+        const faint = ['#1e293b', '#312e81', '#fef08a', '#e0f2fe', '#14532d', '#000000', '#ffffff'];
+        for (const hex of [...WORKSPACE_PALETTE, ...faint]) {
+            const paint = paintOf(arcsFor(colored([link('a', { lastFrom: 'self' })], { kai: hex }))[0]!)!;
+            for (const theme of ['light', 'dark'] as const) {
+                for (const bg of THEME_SURFACES[theme]) {
+                    expect(contrastRatio(paint[theme].stroke, bg), `${hex} stroke on ${theme} ${bg}`).toBeGreaterThanOrEqual(3);
+                    expect(contrastRatio(paint[theme].text, bg), `${hex} label on ${theme} ${bg}`).toBeGreaterThanOrEqual(4.5);
+                }
+                // Lightness moves, hue does not (a grey has no hue to keep).
+                if (hueOf(hex) !== 0) {
+                    for (const c of [paint[theme].stroke, paint[theme].text]) {
+                        const off = Math.abs(hueOf(c) - hueOf(hex));
+                        expect(Math.min(off, 360 - off), `${hex} -> ${c} hue on ${theme}`).toBeLessThan(4);
+                    }
+                }
+            }
+        }
     });
 });

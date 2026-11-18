@@ -1,5 +1,6 @@
 import type { CommsLink } from './comms.js';
 import { ageLabel } from './reveal.js';
+import { readableOn, type Theme } from './workspace-color.js';
 
 /**
  * THE COMMS FLIGHT PATHS (Tynn #750, option D), decided without a DOM. Hovering an agent's Comms cell draws each of its
@@ -33,6 +34,60 @@ export function arcGeometry(start: Point, end: Point, rows: number): ArcGeometry
     const c1 = { x: start.x + dx * 0.22, y: start.y - lift };
     const c2 = { x: start.x + dx * 0.78, y: end.y - lift };
     return { d: `M${start.x},${start.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${end.x},${end.y}`, lift, p0: start, c1, c2, p3: end };
+}
+
+/** A flight path's shadow: a cubic like the arc's, with how heavy it is drawn. */
+export interface ShadowGeometry {
+    readonly d: string;
+    readonly p0: Point;
+    readonly c1: Point;
+    readonly c2: Point;
+    readonly p3: Point;
+    /** How far the arc's highest point stands above the straight line between its ends. */
+    readonly apex: number;
+    readonly width: number;
+    readonly opacity: number;
+}
+
+/** How far below the ground line the shadow falls, as a share of the arc's height there: the light is a little in front. */
+export const SHADOW_DROP = 0.25;
+
+const round = (v: number): number => Math.round(v * 100) / 100;
+
+/**
+ * The arc's shadow on the ground (owner 2026-11-17: the old one, a blurred copy moved 16px down, "don't come together like
+ * they should at the contact points"). The ground is the straight line between the arc's ends; at every point the shadow
+ * sits SHADOW_DROP of the arc's height there below it. Bezier curves are affine in their points, so that is exactly the
+ * cubic whose control points are the arc's, each moved to the ground line and then down by SHADOW_DROP of its own height:
+ * the same ends, the same x at every t, a gap of (1 + SHADOW_DROP) × the arc's height — 0 at both ends, widest at the
+ * apex. It is drawn thinner and fainter the higher the arc flies, and never as heavy as the arc.
+ */
+export function shadowGeometry(g: Pick<ArcGeometry, 'p0' | 'c1' | 'c2' | 'p3'>, arc: { readonly width: number; readonly opacity: number }): ShadowGeometry {
+    const { p0, p3 } = g;
+    const ground = (x: number): number => (p3.x === p0.x ? p0.y + (p3.y - p0.y) / 2 : p0.y + ((x - p0.x) / (p3.x - p0.x)) * (p3.y - p0.y));
+    const drop = (c: Point): Point => {
+        const base = ground(c.x);
+        return { x: c.x, y: base + (base - c.y) * SHADOW_DROP };
+    };
+    const c1 = drop(g.c1);
+    const c2 = drop(g.c2);
+    let apex = 0;
+    for (let i = 1; i < 32; i++) {
+        const p = bezierAt(g, i / 32);
+        apex = Math.max(apex, ground(p.x) - p.y);
+    }
+    const width = round(arc.width * Math.min(0.8, Math.max(0.45, 0.8 - apex / 400)));
+    const opacity = round(Math.min(arc.opacity, Math.max(0.07, 0.22 - apex / 900)));
+    return {
+        d: `M${p0.x},${p0.y} C${round(c1.x)},${round(c1.y)} ${round(c2.x)},${round(c2.y)} ${p3.x},${p3.y}`,
+        p0,
+        c1,
+        c2,
+        p3,
+        apex,
+        width,
+        opacity,
+    };
 }
 
 export function bezierAt(g: Pick<ArcGeometry, 'p0' | 'c1' | 'c2' | 'p3'>, t: number): Point {
@@ -93,6 +148,29 @@ export interface Arc {
     readonly label: ArcLabel | null;
     /** The static arrow for reduced motion: near the receiving end, pointing along the flight. */
     readonly arrow: { readonly x: number; readonly y: number; readonly angle: number };
+    /** Its shadow on the ground: from the same two contact points, thinner and fainter than the arc. */
+    readonly shadow: ShadowGeometry;
+    /** The SENDING agent's workspace colour (whoever sent the last message), `#rrggbb`; `null` = it has none. */
+    readonly color: string | null;
+    /** That colour as drawn per theme: `stroke` (the path, its dots, its end) clears 3:1, `text` (the label) 4.5:1. `null` with no colour. */
+    readonly paint: Readonly<Record<Theme, ArcPaint>> | null;
+}
+
+export interface ArcPaint {
+    readonly stroke: string;
+    readonly text: string;
+}
+
+/** WCAG: 3:1 for a graphical object (1.4.11), 4.5:1 for text (1.4.3). */
+export const ARC_STROKE_CONTRAST = 3;
+export const ARC_TEXT_CONTRAST = 4.5;
+
+/** A workspace colour as an arc draws it on each theme: lightness moved, hue kept, until it clears the floors. */
+export function arcPaint(color: string): Record<Theme, ArcPaint> {
+    return {
+        light: { stroke: readableOn(color, 'light', ARC_STROKE_CONTRAST), text: readableOn(color, 'light', ARC_TEXT_CONTRAST) },
+        dark: { stroke: readableOn(color, 'dark', ARC_STROKE_CONTRAST), text: readableOn(color, 'dark', ARC_TEXT_CONTRAST) },
+    };
 }
 
 export interface ArcInput {
@@ -106,6 +184,8 @@ export interface ArcInput {
     readonly pointer: Point;
     /** The text the arches must not cover (every text leaf of every row, the pointer's ring is added here), in the overlay's coordinates. Absent = none known. */
     readonly obstacles?: readonly Rect[] | undefined;
+    /** Agent id -> its workspace's colour (`#rrggbb`). An arc is drawn in its sender's. Absent = none known. */
+    readonly colors?: Readonly<Record<string, string | null | undefined>> | undefined;
 }
 
 /** Labels are tried at these points along a path, the arc's own staggered first, so neighbours do not stack. */
@@ -181,6 +261,10 @@ export function arcsFor(input: ArcInput): Arc[] {
         const [ta, tb] = out ? [0.86, 0.92] : [0.14, 0.08];
         const pa = bezierAt(g, ta);
         const pb = bezierAt(g, tb);
+        const width = Math.max(1.2, 2.8 - frac * 1.6);
+        const opacity = Math.max(0.35, 0.95 - frac * 0.6);
+        // The SENDER's workspace: this agent's when it sent last, the partner's when the partner did.
+        const color = input.colors?.[out ? input.focus : l.peer] ?? null;
         return {
             peer: l.peer,
             d: g.d,
@@ -193,10 +277,13 @@ export function arcsFor(input: ArcInput): Arc[] {
             unread,
             pulseAt: unread ? (out ? end : input.pointer) : null,
             ageSeconds: l.ageSeconds,
-            width: Math.max(1.2, 2.8 - frac * 1.6),
-            opacity: Math.max(0.35, 0.95 - frac * 0.6),
+            width,
+            opacity,
             label: labels.get(l.peer) ?? null,
             arrow: { x: pb.x, y: pb.y, angle: (Math.atan2(pb.y - pa.y, pb.x - pa.x) * 180) / Math.PI },
+            shadow: shadowGeometry(g, { width, opacity }),
+            color,
+            paint: color ? arcPaint(color) : null,
         };
     });
 }
