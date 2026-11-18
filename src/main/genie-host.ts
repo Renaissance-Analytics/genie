@@ -153,6 +153,10 @@ import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
 import { PlaywrightHost, osConnections } from './playwright-host.js';
+import { PlaywrightInstaller, playwrightToolPort } from './playwright-auto.js';
+import { installPlaywrightBrowsers, nodePlaywrightFs, readyOnDisk } from './playwright-browsers.js';
+import { PLAYWRIGHT_AUTO_INSTALL_ENV, autoInstallEnabled } from '../core/playwright-managed.js';
+import { applyPlaywrightEnv, nodeToolchainFs, processEnv } from './toolchain-ops.js';
 import { playwrightServerPort } from './playwright-server.js';
 import { nodePhpVersionsFs } from './php-versions.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
@@ -1253,6 +1257,25 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    // GENIE INSTALLS ITS PLAYWRIGHT BROWSERS ITSELF (Tynn #846): the stable set at launch when it has none, a version a
+    // project pins when its agents start, a version an agent asks for. One at a time; quiet in the log; a failure is a Deck item.
+    const playwrightToolchain = join(home, 'genie2-toolchain');
+    const playwrightInstaller = new PlaywrightInstaller({
+        install: (version, browsers) => installPlaywrightBrowsers(version, browsers, true, {
+            platform: process.platform as 'win32' | 'linux' | 'darwin', toolchainDir: playwrightToolchain, fs: nodePlaywrightFs(),
+            run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) }),
+            progress: (step) => { if (step !== null) say(`playwright: ${step}`); },
+        }),
+        ready: () => readyOnDisk({ toolchainDir: playwrightToolchain, fs: nodePlaywrightFs() }),
+        enabled: () => autoInstallEnabled(process.env[PLAYWRIGHT_AUTO_INSTALL_ENV]),
+        // What Genie starts from now on uses the set just installed, without a restart (Tynn #845).
+        onInstalled: () => { applyPlaywrightEnv({ env: processEnv, fs: nodeToolchainFs(), dataDir: playwrightToolchain }); },
+        now: () => Date.now(),
+        log: say,
+    });
+    // After the host is up, not during it: a download competes with nothing the person is waiting for.
+    const playwrightAtLaunch = setTimeout(() => { void playwrightInstaller.ensureAtLaunch(); }, 20_000);
+    playwrightAtLaunch.unref();
     // GENIE'S PLAYWRIGHT (Tynn #604): the browsers path is Genie's own environment; the server and a workspace's endpoint are made here, on demand.
     const playwrightHost = new PlaywrightHost({
         toolchainDir: join(home, 'genie2-toolchain'),
@@ -1270,6 +1293,9 @@ async function main(): Promise<void> {
         fs: nodePhpVersionsFs(),
         platform: process.platform as 'win32' | 'linux' | 'darwin',
         link: (target, path, kind) => { symlinkSync(target, path, kind); },
+        installer: { ensure: (version) => (playwrightInstaller.byItself() ? playwrightInstaller.ensure(version) : null), installing: () => playwrightInstaller.installing() },
+        // A workspace not yet trusted triggers no install (Tynn #846 review): the verdict as last read, as `sites`/`services` read it.
+        trusted: (workspaceId) => !hostUntrustedNow({ workspaceId }),
     });
     const playwrightSweep = setInterval(() => { void playwrightHost.server.sweep().catch(() => {}); }, 60_000);
     playwrightSweep.unref();
@@ -1501,7 +1527,7 @@ async function main(): Promise<void> {
         workspaceName: workspaceNameFor,
         approvals: approvals.deckItems(),
         trust: hostingStack?.trustDeckItems() ?? [],
-        notices: limitNotices.items(Date.now()),
+        notices: [...limitNotices.items(Date.now()), ...playwrightInstaller.items()],
         attention: own.attention,
         inbox: own.inbox,
         agents: phoneAgents(), workspaceColor: path => workspaceColors.colorOf(path),
@@ -1659,7 +1685,7 @@ async function main(): Promise<void> {
         featureChanges.add(listener);
         const offs = [featureTynn.onEvent(listener), featureGithub.onEvent(listener), featureKeyring.onEvent(listener),
             pluginsService.onEvent(listener), catalogService.onEvent(listener), remoteAccessHost.onChange(listener),
-            own.attention.onChange(listener), limitNotices.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
+            own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
     hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
@@ -1692,6 +1718,7 @@ async function main(): Promise<void> {
             dismiss: async () => { crashState.dismiss(); return { ok: true }; }, stopAll: async () => { await host.stopAll(); return { ok: true }; } } },
         deck: { attention: own.attention, approvals, inbox: own.inbox, deckItems: featureDeckItems,
             limitNotices,
+            playwrightNotices: { retry: (id) => playwrightInstaller.retry(id), dismiss: (id) => playwrightInstaller.dismiss(id) },
             deliverToAgent: (id, text) => host.deliver(id as AgentId, text, 'you'),
             ...(hostingStack ? { trustCertificate: () => hostingStack.trustCertificate(), deferTrustCertificate: () => hostingStack.deferTrustCertificate(), syncHosts: () => hostingStack.syncHosts(), deferHosts: () => hostingStack.deferHosts() } : {}),
         },
@@ -1991,6 +2018,8 @@ async function main(): Promise<void> {
             engine.callback({ name: 'toolSignal', signal });
         },
         forwardedCalls,
+        // THE AGENTS' `playwright` (Tynn #846): what Genie has, and asking it for a version.
+        playwright: playwrightToolPort({ toolchainDir: playwrightToolchain, fs: nodePhpVersionsFs(), installer: playwrightInstaller, workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null }),
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
         terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), onData: (listener) => terminalHost.onData((id, data) => listener(id, data)), scrollbackCap: 1_000_000 },
         // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.

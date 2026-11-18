@@ -5,6 +5,7 @@ import { HOSTS_APPROVAL_DECK_ID, HOSTS_APPROVE_OPTION, HOSTS_LATER_OPTION } from
 import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
 import { SITE_REACH_DECK_PREFIX, SITE_REACH_LATER_OPTION, SITE_REACH_OPEN_OPTION, siteReachUrl } from './site-reach.js';
 import { LIMIT_NOTICE_DECK_PREFIX } from './limit-alerts.js';
+import { PLAYWRIGHT_NOTICE_DECK_PREFIX } from './playwright-managed.js';
 
 /**
  * RESOLVING A DECK ITEM IN PLACE (§4.5) — what pressing an option on each kind MEANS, as a plain
@@ -39,6 +40,8 @@ export type DeckCommand =
     | { kind: 'dismiss-main-error'; id: string }
     /** A rate-limit alert's kept notice (core/limit-alerts.ts): the person has read it. */
     | { kind: 'dismiss-limit-alert'; id: string }
+    /** A Playwright install Genie could not finish (main/playwright-auto.ts, Tynn #846): Retry installs it again, Dismiss puts it away. */
+    | { kind: 'playwright-install'; id: string; retry: boolean }
     /** Open an editable issue draft for an internal error; the diagnostic log stays local (#636). */
     | { kind: 'report-main-error'; id: string }
     /** Try again on the item for a host copy that could not be made (Tynn #693): the copy is made now. */
@@ -187,6 +190,7 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
                 if (optionId === COPY_DETAIL_OPTION) return refuse('the block is copied in the window that shows it; nothing was answered');
             }
             if (item.id.startsWith(LIMIT_NOTICE_DECK_PREFIX)) return { kind: 'dismiss-limit-alert', id: item.id };
+            if (item.id.startsWith(PLAYWRIGHT_NOTICE_DECK_PREFIX)) return { kind: 'playwright-install', id: item.id, retry: optionId === 'retry' };
             if (item.id.startsWith(MAIN_ERROR_DECK_PREFIX)) {
                 // An action that does something (Tynn #693), beside Dismiss.
                 if (optionId === 'retry') return { kind: 'retry-host-copy', id: item.id };

@@ -30,6 +30,8 @@ export interface DeckAnswerPorts {
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
     /** A rate-limit alert's kept notice (Tynn #748): Dismiss forgets it. */
     readonly limitNotices?: { dismiss(id: string): boolean };
+    /** A Playwright install Genie could not finish (Tynn #846): Retry installs it again, Dismiss puts it away. */
+    readonly playwrightNotices?: { retry(id: string): Promise<boolean>; dismiss(id: string): boolean };
     readonly mainErrors?: { dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
 }
 
@@ -115,6 +117,11 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if (!ports.deferTrustCertificate || !ports.deferHosts) throw new Error(NEEDS_WINDOW('putting this off'));
             ports.deferTrustCertificate();
             ports.deferHosts();
+            break;
+        case 'playwright-install':
+            // A Playwright install Genie could not finish (Tynn #846). Retry runs it again: when it fails again the item stays, with why.
+            if (!ports.playwrightNotices) throw new Error('Genie’s Playwright installer is not running here; nothing was done');
+            if (command.retry ? !(await ports.playwrightNotices.retry(command.id)) : !ports.playwrightNotices.dismiss(command.id)) throw new Error(`no Playwright install item ${command.id}`);
             break;
         case 'dismiss-limit-alert':
             if (!ports.limitNotices) throw new Error(NEEDS_WINDOW('dismissing a rate-limit alert'));

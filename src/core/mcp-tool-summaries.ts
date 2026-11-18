@@ -40,6 +40,7 @@ export const BUILTIN_TOOL_SUMMARIES: Readonly<Record<string, { readonly family: 
     flows: { family: 'workspace', summary: 'List, run and inspect the workspace’s flows.' },
     workspaceTabs: { family: 'workspace', summary: 'Arrange the workspace’s tabs and panels.' },
     pages: { family: 'workspace', summary: 'Create and edit the workspace’s pages.' },
+    playwright: { family: 'workspace', summary: 'See Genie’s Playwright browsers and ask for a version.' },
 };
 
 export function toolFamily(name: string): McpToolFamily {

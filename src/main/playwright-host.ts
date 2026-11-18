@@ -1,5 +1,5 @@
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { countEstablished, playwrightChildEnv, resolveBrowserSet, serverVersionMatch, type ServerEndpoint } from '../core/playwright-managed.js';
+import { PLAYWRIGHT_STABLE, PLAYWRIGHT_VERSIONS_ENV, PLAYWRIGHT_VERSION_ENV, countEstablished, playwrightChildEnv, resolveBrowserSet, serverVersionMatch, type ServerEndpoint } from '../core/playwright-managed.js';
 import { installedVersions, linkWorktreeModules, projectPlaywrightVersion, type WorktreeLinkPorts } from './playwright-browsers.js';
 import { PlaywrightServer, type PlaywrightServerPorts } from './playwright-server.js';
 import type { PhpVersionsFs } from './php-versions.js';
@@ -23,6 +23,13 @@ export interface PlaywrightHostDeps {
     readonly fs: Pick<PhpVersionsFs, 'exists' | 'readText' | 'list' | 'mkdirp'>;
     readonly link: WorktreeLinkPorts['link'];
     readonly platform: WorktreeLinkPorts['platform'];
+    /**
+     * Genie's installer (main/playwright-auto.ts, Tynn #846): a version a project pins and Genie lacks is installed now. `ensure`
+     * answers something falsy when Genie will not install by itself (switched off). Absent = nothing is installed from here.
+     */
+    readonly installer?: { ensure(version: string): unknown; installing(): readonly string[] } | undefined;
+    /** Whether the workspace is trusted (Tynn #846 review): one not yet trusted triggers no install. Absent = trusted. */
+    readonly trusted?: ((workspaceId: string) => boolean) | undefined;
 }
 
 export class PlaywrightHost {
@@ -40,18 +47,27 @@ export class PlaywrightHost {
         if (path === null) return {};
         this.#linkIfWorktree(path);
         const client = projectPlaywrightVersion(path, this.#deps.fs);
-        if (client === null) return {};
-        const installed = installedVersions({ toolchainDir: this.#deps.toolchainDir, fs: this.#deps.fs });
+        const installed = installedVersions({ toolchainDir: this.#deps.toolchainDir, fs: this.#deps.fs }).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+        // What Genie has, for every workspace (Tynn #846): every version, and the one to use.
+        const base: Record<string, string> = installed.length > 0 ? { [PLAYWRIGHT_VERSIONS_ENV]: installed.join(',') } : {};
+        if (client === null) return installed.length > 0 ? { ...base, [PLAYWRIGHT_VERSION_ENV]: installed.includes(PLAYWRIGHT_STABLE) ? PLAYWRIGHT_STABLE : installed[0]! } : base;
         const set = resolveBrowserSet(client, installed);
-        if (set.kind === 'missing') return { [PLAYWRIGHT_NOTE_ENV]: set.note };
-        if (!this.#deps.optIn(workspaceId)) return {};
+        if (set.kind === 'missing') {
+            // The version this project pins: Genie installs it NOW, by itself (Tynn #846). Nobody is asked to do anything.
+            // Not until the person trusts the workspace (Tynn #846 review): opening a folder installs nothing on its say-so.
+            if (this.#deps.trusted?.(workspaceId) === false) return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie installs its browsers once you trust this workspace; until then, nothing is installed for it.` };
+            if (this.#deps.installer?.ensure(client)) return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie is installing Playwright ${client}'s browsers now, by itself; they are there in a few minutes (the playwright tool's status says when). Do not run playwright install.` };
+            return { ...base, [PLAYWRIGHT_NOTE_ENV]: set.note };
+        }
+        base[PLAYWRIGHT_VERSION_ENV] = client;
+        if (!this.#deps.optIn(workspaceId)) return base;
         // One server runs one version. A different one is not swapped under a running test: the note says why, and the next ask after it idles gets its own.
         const running = this.server.running();
         let endpoint: ServerEndpoint | null = null;
         if (running === null || serverVersionMatch(client, running.version).ok) endpoint = this.server.acquire(client);
         else endpoint = running;
         const { env, note } = playwrightChildEnv({ toolchainDir: this.#deps.toolchainDir, optIn: true, clientVersion: client, server: endpoint });
-        return { ...env, ...(note ? { [PLAYWRIGHT_NOTE_ENV]: note } : {}) };
+        return { ...base, ...env, ...(note ? { [PLAYWRIGHT_NOTE_ENV]: note } : {}) };
     }
 
     #linkIfWorktree(path: string): void {

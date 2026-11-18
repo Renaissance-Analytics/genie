@@ -52,22 +52,38 @@ export function managedBrowsersReady(sets: Readonly<Record<string, readonly stri
 
 export type LockKind = 'package-lock' | 'pnpm' | 'yarn';
 
-/** The `@playwright/test` version a project's lockfile pins, or `null` when it does not use Playwright (or the file cannot be read). */
+/**
+ * WHAT A PLAYWRIGHT VERSION IS: `x.y.z`, digits only, and nothing else (Tynn #846 review). Every path that installs goes
+ * through this: the lockfile parser, the installer's `ensure`, `installPlaywrightBrowsers`. A version comes from a
+ * workspace's lockfile, i.e. from whatever repository was cloned, and on Windows npm runs through cmd.exe: a string like
+ * `1.2.3 && calc` must never get as far as a command line.
+ */
+export function isPlaywrightVersion(value: unknown): value is string {
+    return typeof value === 'string' && /^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(value);
+}
+
+const versionOrNull = (value: unknown): string | null => (isPlaywrightVersion(value) ? value : null);
+
+/**
+ * The `@playwright/test` version a project's lockfile pins, or `null` when it does not use Playwright, the file cannot be
+ * read, or what it says is not an `x.y.z` (the WHOLE value is read and checked, never a prefix of it).
+ */
 export function parseLockedPlaywright(lockText: string, kind: LockKind): string | null {
     if (kind === 'package-lock') {
         try {
-            const lock = JSON.parse(lockText) as { packages?: Record<string, { version?: string }>; dependencies?: Record<string, { version?: string }> };
-            return lock.packages?.['node_modules/@playwright/test']?.version ?? lock.dependencies?.['@playwright/test']?.version ?? null;
+            const lock = JSON.parse(lockText) as { packages?: Record<string, { version?: unknown }>; dependencies?: Record<string, { version?: unknown }> };
+            return versionOrNull(lock.packages?.['node_modules/@playwright/test']?.version ?? lock.dependencies?.['@playwright/test']?.version);
         } catch {
             return null;
         }
     }
     if (kind === 'pnpm') {
-        const m = /'?@playwright\/test'?:\s*\r?\n\s+specifier:[^\r\n]*\r?\n\s+version:\s*'?([0-9][^\s('\r\n]*)/.exec(lockText);
-        return m ? m[1]! : null;
+        const m = /'?@playwright\/test'?:[ \t]*\r?\n[ \t]+specifier:[^\r\n]*\r?\n[ \t]+version:[ \t]*'?([^'\r\n]*)/.exec(lockText);
+        // pnpm may add a peer suffix, `1.62.1(…)`: only a suffix right after a whole x.y.z is dropped, then the rest is checked.
+        return m ? versionOrNull(m[1]!.trim().replace(/^(\d+\.\d+\.\d+)\([^)]*\)$/, '$1')) : null;
     }
-    const y = /"?@playwright\/test@[^\r\n]*:\s*\r?\n\s+version:?\s*"?([0-9][^"\s\r\n]*)/.exec(lockText);
-    return y ? y[1]! : null;
+    const y = /"?@playwright\/test@[^\r\n]*:[ \t]*\r?\n[ \t]+version:?[ \t]*"?([^"\r\n]*)/.exec(lockText);
+    return y ? versionOrNull(y[1]!.trim()) : null;
 }
 
 export type BrowserSetResolution =
@@ -157,4 +173,81 @@ export function worktreeLinkDecision(input: { mainLock: string | null; worktreeL
     if (input.mainLock === null || input.worktreeLock === null) return { link: false, reason: 'a lockfile is missing, so nothing proves the worktree and the main checkout want the same packages' };
     if (input.mainLock !== input.worktreeLock) return { link: false, reason: 'the lockfiles differ: the worktree wants other packages than the main checkout has installed' };
     return { link: true };
+}
+
+// ---------------------------------------------------------------- Genie installs what agents need (Tynn #846)
+// The owner, 2026-11-17: "agents need to use what is installed. genie should have been able to install it. I had to click
+// the install button." Genie installs its browsers itself: the STABLE version at launch when it has none, each version a
+// project's lockfile pins, and a version an agent asks for. Only what is unusually large waits for the person.
+
+/**
+ * THE STABLE CHANNEL: the Playwright version Genie installs when nothing else is asked for. Pinned here and raised on
+ * purpose in a release, never read from the registry's newest, so the default does not move under projects.
+ */
+export const PLAYWRIGHT_STABLE = '1.65.1';
+/** The Playwright version a workspace's agents should use: the project's own when Genie has it, else the stable one. */
+export const PLAYWRIGHT_VERSION_ENV = 'GENIE_PLAYWRIGHT_VERSION';
+/** Every version Genie has browsers for, comma-separated. */
+export const PLAYWRIGHT_VERSIONS_ENV = 'GENIE_PLAYWRIGHT_VERSIONS';
+/** `0` (or off/false/no) stops Genie installing browsers by itself: an offline machine, a test machine. Anything else, or unset, is on. */
+export const PLAYWRIGHT_AUTO_INSTALL_ENV = 'GENIE_PLAYWRIGHT_AUTO_INSTALL';
+/** The browsers Genie installs without asking anyone. */
+export const MANAGED_BROWSERS: readonly string[] = ['chromium'];
+/** The browsers Genie also installs, when someone asks for them. */
+export const OPTIONAL_MANAGED_BROWSERS: readonly string[] = ['firefox', 'webkit'];
+/** Past this many sets, one more is unusually large (each is a few hundred MB) and the person is asked first. */
+export const MAX_AUTO_SETS = 6;
+/** A failed install's Deck item: `genie:playwright-install:<version>`. */
+export const PLAYWRIGHT_NOTICE_DECK_PREFIX = 'genie:playwright-install:';
+
+/** `sets.json`: the browsers each version has, and the revision folders Playwright put them in (`--dry-run` says which). */
+export interface BrowserManifest {
+    readonly sets: Readonly<Record<string, readonly string[]>>;
+    readonly folders?: Readonly<Record<string, readonly string[]>> | undefined;
+}
+
+export function autoInstallEnabled(value: string | undefined): boolean {
+    return !/^(0|off|false|no)$/i.test((value ?? '').trim());
+}
+
+/** The revision folders `playwright install --dry-run` names (`Install location: …/chromium-1194`), by their own names. */
+export function parseInstallLocations(text: string): string[] {
+    return [...text.matchAll(/Install location:\s*(.+?)\s*$/gm)].map((m) => m[1]!.split(/[\\/]/).filter(Boolean).pop() ?? '').filter(Boolean);
+}
+
+/** The recorded versions whose browsers are really in the folder: every recorded revision folder there (or, for a set recorded before folders were, a folder of its browser). */
+export function readyVersions(manifest: BrowserManifest, entries: readonly string[]): string[] {
+    const present = new Set(entries.map((e) => e.split(/[\\/]/)[0]!));
+    return Object.keys(manifest.sets).filter((version) => {
+        const folders = manifest.folders?.[version] ?? [];
+        if (folders.length > 0) return folders.every((f) => present.has(f));
+        return (manifest.sets[version] ?? []).some((b) => [...present].some((e) => e.startsWith(`${b}-`) || e.startsWith(`${b}_`)));
+    });
+}
+
+/** What Genie installs at launch: the stable version when it has no set at all, and nothing when it is switched off. */
+export function launchInstall(input: { readonly enabled: boolean; readonly ready: readonly string[] }): string | null {
+    return input.enabled && input.ready.length === 0 ? PLAYWRIGHT_STABLE : null;
+}
+
+export type InstallAsk =
+    | { readonly kind: 'ready' }
+    | { readonly kind: 'install' }
+    | { readonly kind: 'ask'; readonly reason: string }
+    | { readonly kind: 'refused'; readonly reason: string };
+
+/** A project's or an agent's ask for a version's browsers: there already, installed now, asked of the person first (unusually large), or refused. */
+export function decideInstallAsk(input: { readonly version: string; readonly browsers: readonly string[]; readonly ready: readonly string[]; readonly held: readonly string[] }): InstallAsk {
+    if (!isPlaywrightVersion(input.version)) return { kind: 'refused', reason: `${input.version} is not a Playwright version (x.y.z, as your @playwright/test is)` };
+    const known = [...MANAGED_BROWSERS, ...OPTIONAL_MANAGED_BROWSERS];
+    const unknown = input.browsers.filter((b) => !known.includes(b));
+    if (unknown.length > 0) return { kind: 'refused', reason: `Genie installs Playwright's ${known.join(', ')}; not ${unknown.join(', ')}` };
+    const wanted = input.browsers.length > 0 ? input.browsers : MANAGED_BROWSERS;
+    const isReady = input.ready.includes(input.version);
+    const missing = wanted.filter((b) => !(isReady && input.held.includes(b)));
+    if (missing.length === 0) return { kind: 'ready' };
+    const extra = missing.filter((b) => !MANAGED_BROWSERS.includes(b));
+    if (extra.length > 0) return { kind: 'ask', reason: `Playwright ${input.version}'s ${extra.join(' and ')} is another browser of a few hundred MB, beyond the Chromium Genie keeps by itself` };
+    if (!isReady && input.ready.length >= MAX_AUTO_SETS) return { kind: 'ask', reason: `Genie already keeps ${input.ready.length} Playwright browser sets (${input.ready.join(', ')}); one more is a few hundred MB` };
+    return { kind: 'install' };
 }
