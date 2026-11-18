@@ -95,7 +95,10 @@ export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: strin
 /** The route of one of a workspace's views (`home`, `settings`, `tab:<id>`), built by the router (Tynn #805). */
 export function workspaceViewRoute(workspaceId: string, view: string): string {
     const base = parseRoute(`genie://workspace/${encodeURIComponent(workspaceId)}`);
-    return base.surface === 'workspace' ? formatRoute({ ...base, view: view as WorkspaceView }) : `genie://workspace/${encodeURIComponent(workspaceId)}`;
+    if (base.surface !== 'workspace') return `genie://workspace/${encodeURIComponent(workspaceId)}`;
+    // Files is the workspace's open files (`?files=`, beta.35 #41), not a view: `view=files` read as the Dashboard, so the
+    // agent page's Files tab landed there.
+    return formatRoute(view === 'files' ? { ...base, panel: 'files' } : { ...base, view: view as WorkspaceView });
 }
 
 /**

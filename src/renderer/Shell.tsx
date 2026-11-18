@@ -952,6 +952,8 @@ export function Shell({
                                     github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
                                     // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
                                     tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
+                                    // Storage too, as on the workspace's own views (Tynn #697): one strip whatever is selected.
+                                    storage={Boolean(features.storage)}
                                     onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
                                     onAdd={() => {
                                         const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
