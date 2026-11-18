@@ -786,6 +786,10 @@ async function main(): Promise<void> {
                 }),
                 force: () => agentShutdown.force(),
                 release: () => agentShutdown.release(),
+                readPending: async () => {
+                    const [running, interrupted] = await Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]);
+                    return { running, interrupted };
+                },
                 writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
                 writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
                 stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
@@ -996,6 +1000,8 @@ async function main(): Promise<void> {
             workstationId,
             fingerprint,
             sign: (data) => workstationService.sign(host, data),
+            // Only a grant for the Tynn account signed in HERE is the owner's (Tynn #757); read at each admission.
+            signedInHere: () => tynnAccountNow?.userId() ?? tynnAccountNow?.savedUserId() ?? null,
             attach: (transport) => remoteHub.add(transport),
             onStatus,
             log: (message) => say(`tynn relay: ${message}`),
@@ -1771,7 +1777,7 @@ async function main(): Promise<void> {
         clocks.push(startProofOfDone({
             file: join(home, 'proof-of-done-notes.json'),
             keychain,
-            tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), request: (path, init) => account.request(path, init) },
+            tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), credentialId: () => account.credentialId(), request: (path, init) => account.request(path, init) },
             approve: async (request) => (await approvals.gate(podCaller, 'pod.sign', request.detail)) === 'allowed' ? 'allowed' : 'denied',
             workspaces: () => hostRegistry.listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
             label: () => hostname(),
@@ -1811,8 +1817,11 @@ async function main(): Promise<void> {
                         return (await startForWork({ probe: (x) => host.probe(x), start: (r, cwd) => host.start(r, cwd), cwdFor: cwdOf, startRefusal: refusal }, record)).ok;
                     },
                     prompt: (id, text, by) => host.prompt(id as AgentId, text, by),
-                    queue: (id, text, by, replacing) => host.queueFlowPrompt(id as AgentId, text, by, replacing),
+                    // Tynn #826: handed over now (mid-turn where the provider reads it), kept for the next run when nothing can take it.
+                    deliver: (id, text, by, replacing) => host.deliverFlowPrompt(id as AgentId, text, by, replacing),
                     isQueued: (id, promptId) => host.isPromptQueued(id as AgentId, promptId),
+                    keep: (id, text, by) => host.keepFlowPrompt(id as AgentId, text, by),
+                    deliverKept: (id, only) => host.deliverOwed(id as AgentId, undefined, only),
                     subscribe: (listener) => host.subscribe(listener),
                 },
                 resolve: (text) => resolveOnRoster(text, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),

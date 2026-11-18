@@ -8,7 +8,8 @@ import { chatContext, chatMessages } from '../src/core/chat-view.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { SessionDriverFactory } from '../src/core/session.js';
-import { agentPrompter, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
@@ -119,7 +120,7 @@ describe('a flow prompting an agent that is not running', () => {
             },
             subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
         };
-        const prompt = agentPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
+        const prompt = waitingPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
         expect(await prompt('claude:atlas', 'post the standup')).toBe('done');
         expect(calls).toEqual(['start:agent_atlas', 'prompt:agent_atlas:post the standup']);
     });
@@ -142,14 +143,14 @@ describe('a flow prompting an agent that is not running', () => {
             },
             subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
         };
-        const prompt = agentPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
+        const prompt = waitingPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
         expect(await prompt('claude:atlas', 'post the standup')).toBe('done');
         expect(calls).toEqual(['start:agent_atlas', 'prompt:agent_atlas:post the standup']);
     });
 
     it('a port that cannot start keeps the old answer (the control): not running, nowhere to go', async () => {
         const sessions: AgentSessionsPort = { session: () => null, rows: () => [], prompt: () => false, subscribe: () => () => {} };
-        const prompt = agentPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
+        const prompt = waitingPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
         await expect(prompt('claude:atlas', 'x')).rejects.toThrow(/not running/);
     });
 });

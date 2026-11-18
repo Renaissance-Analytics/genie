@@ -16,7 +16,7 @@ import { control } from './helpers/control-markup.js';
 const noop = () => {};
 
 describe('a Tynn workstation row', () => {
-    const list = { ok: true as const, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner' }] };
+    const list = { ok: true as const, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner', mine: true }] };
     const row = (opening: Parameters<typeof TynnWorkstationRows>[0]['opening']) => renderToStaticMarkup(<TynnWorkstationRows list={list} onOpenWorkstation={noop} opening={opening} />);
 
     it('opened: no line under the row', () => {

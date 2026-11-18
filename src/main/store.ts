@@ -304,7 +304,7 @@ export class Store {
         return join(this.#dir, 'agents.json');
     }
 
-    /** Which agents were RUNNING when Genie last closed (§7.6) — written at quit, taken once at launch. */
+    /** Which agents were RUNNING when Genie last closed (§7.6) — written at quit; each leaves it once restored (Tynn #754). */
     get runningAtQuitFile(): string {
         return join(this.#dir, 'running-at-quit.json');
     }
@@ -314,8 +314,12 @@ export class Store {
         return raw.filter((id): id is string => typeof id === 'string');
     }
 
-    async writeRunningAtQuit(ids: readonly string[]): Promise<void> {
-        await writeJsonAtomic(this.runningAtQuitFile, ids);
+    /**
+     * A SHUTDOWN'S RECORD of who comes back. Writing it ENDS any restore in flight here (Tynn #754): a start that lands
+     * after this cannot take its agent off the record, because the sessions are about to end with the shutdown.
+     */
+    writeRunningAtQuit(ids: readonly string[]): Promise<void> {
+        return this.#atQuit(async () => { this.#restoring = false; await writeJsonAtomic(this.runningAtQuitFile, ids); });
     }
 
     /** Which agents were MID-TURN when Genie last shut down — their turns were cancelled; they are resumed at launch. */
@@ -328,8 +332,46 @@ export class Store {
         return raw.filter((id): id is string => typeof id === 'string');
     }
 
-    async writeInterruptedAtQuit(ids: readonly string[]): Promise<void> {
-        await writeJsonAtomic(this.interruptedAtQuitFile, ids);
+    writeInterruptedAtQuit(ids: readonly string[]): Promise<void> {
+        return this.#atQuit(async () => { this.#restoring = false; await writeJsonAtomic(this.interruptedAtQuitFile, ids); });
+    }
+
+    /**
+     * THE RESTORE AFTER A RELAUNCH (Tynn #754): both lists are READ, not cleared. Each agent leaves them only once its
+     * start went through (`restoreStarted`), so a shutdown inside the restore still finds every agent that had not started
+     * yet. They used to be taken (read and emptied) here, before any start: the owner's beta.63 → beta.64 upgrade drained
+     * again 60 s into the 3-second-spaced restore, and 25 of 31 agents were lost.
+     */
+    beginRestore(): Promise<{ running: readonly string[]; interrupted: readonly string[] }> {
+        return this.#atQuit(async () => {
+            const [running, interrupted] = await Promise.all([this.readRunningAtQuit(), this.readInterruptedAtQuit()]);
+            this.#restoring = true;
+            return { running, interrupted };
+        });
+    }
+
+    /**
+     * The agent's restore start went through: it leaves both lists. Once a shutdown has written its record since the
+     * restore began, nothing is taken off it (that record is what the next launch restores). Answers whether it was.
+     */
+    restoreStarted(id: string): Promise<boolean> {
+        return this.#atQuit(async () => {
+            if (!this.#restoring) return false;
+            const [running, interrupted] = await Promise.all([this.readRunningAtQuit(), this.readInterruptedAtQuit()]);
+            if (running.includes(id)) await writeJsonAtomic(this.runningAtQuitFile, running.filter((x) => x !== id));
+            if (interrupted.includes(id)) await writeJsonAtomic(this.interruptedAtQuitFile, interrupted.filter((x) => x !== id));
+            return true;
+        });
+    }
+
+    /** A restore is in flight here: begun, and no shutdown record written since. */
+    #restoring = false;
+    /** The two at-quit files' changes, one at a time: a restore's read-modify-write never interleaves with a record. */
+    #atQuitChain: Promise<unknown> = Promise.resolve();
+    #atQuit<T>(fn: () => Promise<T>): Promise<T> {
+        const mine = this.#atQuitChain.catch(() => undefined).then(fn);
+        this.#atQuitChain = mine;
+        return mine;
     }
 
     async readWorkspaces(): Promise<readonly WorkspaceRecord[]> {

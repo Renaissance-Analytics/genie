@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { mergeWorkstationRead } from '../src/core/connect-machine.js';
-import { principalOf, type HostGrant } from '../src/main/relay-grant.js';
+import { principalOf as principalOn, type HostGrant } from '../src/main/relay-grant.js';
+
+/** The host here is signed in as the grants' own subject, so Tynn's `owner` is this machine's owner (Tynn #757). */
+const principalOf = (g: HostGrant) => principalOn(g, 'user_admin');
 import { connectableWorkstations, type TynnWorkstation } from '../src/main/tynn-network.js';
 
 /**
@@ -15,7 +18,7 @@ const json = (status: number, body: unknown) => ({ ok: status >= 200 && status <
 
 describe('H3: "Connect to my workstations" drops a link-only workstation once its session is over', () => {
     const live = { id: 'ws_link', name: 'Lee’s desk', status: 'active', is_local: false, connectable: true, source: 'share' };
-    const mine = { id: 'ws_mine', name: 'my box', status: 'active', is_local: false, connectable: true, source: 'owner' };
+    const mine = { id: 'ws_mine', name: 'my box', status: 'active', is_local: false, connectable: true, source: 'owner', registered_by_you: true };
 
     async function read(rows: unknown[]) {
         return connectableWorkstations(async () => json(200, { workstations: rows }), new Set());

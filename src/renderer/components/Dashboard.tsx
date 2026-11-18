@@ -560,7 +560,7 @@ interface ArcState {
     readonly reducedMotion: boolean;
 }
 
-function useFlightPaths(shown: readonly AgentRow[]) {
+function useFlightPaths(shown: readonly AgentRow[], colorOf: (row: AgentRow) => string | null | undefined) {
     const surface = useRef<HTMLDivElement | null>(null);
     const [state, setState] = useState<ArcState | null>(null);
     const pending = useRef<{ x: number; y: number } | null>(null);
@@ -622,7 +622,7 @@ function useFlightPaths(shown: readonly AgentRow[]) {
     const row = state ? shown.find((r) => r.id === state.focus) : undefined;
     const paths = state && row
         ? {
-            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, obstacles: state.obstacles, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), pointer: state.pointer }),
+            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, obstacles: state.obstacles, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), colors: Object.fromEntries(shown.map((r) => [r.id, colorOf(r)])), pointer: state.pointer }),
             size: state.size,
             pointer: state.pointer,
             reducedMotion: state.reducedMotion,
@@ -671,7 +671,8 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     const focused = focusedId ?? ownFocus;
     const [ownReveal, setOwnReveal] = useState<string | null>(null);
     const reveal = revealOf(shown, revealId ?? ownReveal);
-    const arcs = useFlightPaths(shown);
+    // An arc is drawn in its sender's workspace colour: the dot in the Workspace column.
+    const arcs = useFlightPaths(shown, (row) => workspaces?.find((workspace) => workspace.id === row.workspaceId)?.color);
     const arcHandlers = arcs.handlers;
     const [ownTray, setOwnTray] = useState<string | null>(null);
     const openTray = trayId ?? ownTray;

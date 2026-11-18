@@ -51,7 +51,8 @@ describe('genie/agent_prompt', () => {
         const ex = genieExecutors(p);
         const out = await ex['genie/agent_prompt']!(ctx('genie/agent_prompt', { agent: 'claude:atlas', prompt: 'Summarise {{in.text}}' }, { in: { text: 'the release notes' } }));
         expect(p.calls).toEqual([['prompt', 'claude:atlas', 'Summarise the release notes']]);
-        expect(out).toEqual({ reply: 'reply to: Summarise the release notes', agent: 'claude:atlas' });
+        // Not waited for (the default, Tynn #826): the port reported nothing, so the step reads delivered.
+        expect(out).toEqual({ reply: 'reply to: Summarise the release notes', agent: 'claude:atlas', delivery: 'delivered' });
     });
 
     it('no agent configured → the node aborts with the reason; a failing port aborts with ITS reason', async () => {

@@ -16,9 +16,9 @@ import { connectableWorkstations } from '../src/main/tynn-network.js';
 
 const json = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 const ROWS = [
-    { id: 'ws_v2_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'pilot' },
-    { id: 'ws_v1_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'pilot' },
-    { id: 'ws_other', name: 'Foundation', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'drone' },
+    { id: 'ws_v2_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'pilot' },
+    { id: 'ws_v1_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'pilot' },
+    { id: 'ws_other', name: 'Foundation', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'drone' },
 ];
 
 describe('every Tynn identity this machine holds is left out', () => {
@@ -28,7 +28,7 @@ describe('every Tynn identity this machine holds is left out', () => {
     });
 
     it('CONTROL: another machine with the same NAME is still listed (identity, not name, decides)', async () => {
-        const rows = [...ROWS, { id: 'ws_namesake', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'drone' }];
+        const rows = [...ROWS, { id: 'ws_namesake', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'drone' }];
         const list = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set(['ws_v2_self', 'ws_v1_self']));
         expect(list.ok && list.workstations.map((w) => w.id)).toEqual(['ws_other', 'ws_namesake']);
     });

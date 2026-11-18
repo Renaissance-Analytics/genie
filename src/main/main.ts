@@ -2324,13 +2324,15 @@ async function boot(): Promise<void> {
         // Genie 1's FLOWS (its `flows` table), brought over ONCE as DISARMED canvas flows (main/v1-flows.ts, genie#1204).
         v1Flows: { database: v1DatabaseFile() },
         // What a flow's agent prompt reaches (flow-runner.ts): the live sessions, late-bound — a prompt to an agent mid-turn
-        // is held back, never queued inside its turn.
+        // goes as a typed message does (Tynn #826), and one no run can take is kept for the agent's next Restart.
         agentSessions: {
             session: (id) => host?.probe(id as AgentId) ?? null,
             // A flow's prompt is work: an agent not running is started for it (q_04ce323c), under the same refusals.
             start: async (id) => { const record = registry?.find(id as AgentId); return record ? (await startOnDemand(record)).ok : false; },
             rows: (id) => host?.rowsFor(id as AgentId) ?? [],
             prompt: (id, text, by) => host?.prompt(id as AgentId, text, by) ?? false,
+            deliver: async (id, text, by) => { const handed = await host?.handOff(id as AgentId, text, by); return handed ? { id: handed.queued } : null; },
+            keep: async (id, text, by) => { if (!host) throw new Error('no agent host to keep the prompt for'); await host.recordOwed(id as AgentId, text, by); },
             subscribe: (listener) => host?.subscribe((agentId) => listener(agentId)) ?? (() => {}),
         },
         // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.
@@ -2903,14 +2905,16 @@ async function boot(): Promise<void> {
         pushFeatures();
     }
     // RESTORE AFTER A RELAUNCH OR UPGRADE (§7.6): only with the ONE setting on; starts spaced three seconds apart; what the
-    // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
+    // user stopped was not running at quit, so it is not in the list. Each agent leaves the saved list once its start went
+    // through (Tynn #754), so a crash mid-restore starts nobody twice and a shutdown mid-restore loses nobody waiting.
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
     // SAFE MODE (Tynn #386): genie-host said so before ready; then nobody is started or resumed and both lists are KEPT.
     void restoreAfterRelaunch({
         safeMode: windowSafeNow,
-        takeRunningAtQuit: () => registry!.takeRunningAtQuit(),
-        takeInterruptedAtQuit: () => registry!.takeInterruptedAtQuit(),
+        pending: () => registry!.beginRestore(),
+        started: (agentId) => registry!.restoreStarted(agentId as AgentId),
+        name: (agentId) => registry?.find(agentId as AgentId)?.name ?? agentId,
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
@@ -2923,9 +2927,16 @@ async function boot(): Promise<void> {
         schedule: (fn, ms) => { setTimeout(fn, ms); },
         start: async (agentId, resume) => {
             const record = registry?.find(agentId as AgentId);
-            if (!record || !host) return;
+            if (!record) return;
+            if (!host) throw new Error('no agent host');
             const engine = host;
-            await engine.start(record, cwdFor(record));
+            // A refused start (Genie shutting down, a previous run still stopping) did not start: the agent stays saved for
+            // the next launch (Tynn #754), and a mid-turn one's prompt is still kept as owed for its Restart (genie#1238).
+            const started = await engine.start(record, cwdFor(record));
+            if (!started.ok) {
+                if (resume) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+                throw new Error(started.reason);
+            }
             // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
             // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
             if (resume && !(await engine.prompt(record.id, RESUME_AFTER_RESTART, 'genie'))) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
@@ -3396,6 +3407,7 @@ function recordShutdownNow(): Promise<unknown> {
     return recordShutdown({
         agents: () => reg.snapshot().agents,
         probe: (id) => live.probe(id),
+        pending: () => reg.pendingRestore(),
         markRunningAtQuit: (ids) => reg.markRunningAtQuit(ids),
         markInterruptedAtQuit: (ids) => reg.markInterruptedAtQuit(ids),
     });
