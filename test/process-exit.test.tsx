@@ -83,20 +83,21 @@ describe('the block in the Agent view', () => {
     const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
         renderToStaticMarkup(<AgentView agent={agent} session={failed({ code: 137, signal: null })} rows={rows} tab="stream" lanes={null} at={null} selectedId={null} turns={9} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} ops={ops} {...props} />);
 
-    // The block's own markup, so the header's `Open terminal` (the same door, further away) cannot satisfy the claim.
+    // The block's own markup, so the header's `Open TUI` (the same door, further away) cannot satisfy the claim.
     const block = (html: string): string => html.slice(html.indexOf('data-rail="process-ended"'), html.indexOf('</section>', html.indexOf('data-rail="process-ended"')));
 
-    it('shows the exit line and the Open terminal door, in the block', () => {
+    it('shows the exit line and the agent’s TUI door, in the block — called a TUI, never a terminal (Tynn #851)', () => {
         const html = render({ onTakeOver: () => {} });
         expect(block(html)).toContain('data-exit="exit 137"');
-        expect(block(html)).toContain('data-action="open-terminal-rail"');
-        expect(block(html)).toContain('Open terminal');
+        expect(block(html)).toContain('data-action="open-tui-rail"');
+        expect(block(html)).toContain('Open TUI');
+        expect(block(html)).not.toContain('Open terminal');
     });
 
     it('no exit line when none was reported — the block itself still there, with its door', () => {
         const html = render({ session: failed(), onTakeOver: () => {} });
         expect(html).toContain('data-rail="process-ended"');
         expect(block(html)).not.toContain('data-exit=');
-        expect(block(html)).toContain('data-action="open-terminal-rail"');
+        expect(block(html)).toContain('data-action="open-tui-rail"');
     });
 });
