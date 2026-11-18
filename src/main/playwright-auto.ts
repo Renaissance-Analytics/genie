@@ -34,7 +34,7 @@ interface Failure {
     readonly at: number;
 }
 
-const ok = (o: PlaywrightInstallOutcome): boolean => o.kind === 'installed' || o.kind === 'already-installed';
+const ok = (o: PlaywrightInstallOutcome): o is Extract<PlaywrightInstallOutcome, { kind: 'installed' | 'already-installed' }> => o.kind === 'installed' || o.kind === 'already-installed';
 
 export class PlaywrightInstaller {
     readonly #ports: PlaywrightInstallerPorts;
