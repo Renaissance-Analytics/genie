@@ -45,7 +45,7 @@ import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
 import { flowSummary } from '../../core/flow-canvas.js';
 import { pausedWords } from '../../core/flow-pills.js';
-import { describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
+import { describeSchedule, formatLastRun, formatNextRun, lastFailure } from '../../core/scheduled-task.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
@@ -247,16 +247,16 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                         Runs · last {runs.length}
                     </summary>
                     <ol className="mt-1 flex flex-col gap-1">
-                        {[...runs].reverse().map((r, i) => (
+                        {[...runs].reverse().map((r, i) => { const index = runs.length - 1 - i; return (
                             <li key={`${runs.length - i}:${r.at}`} data-flow-run={r.outcome} className="flex items-baseline gap-2 text-xs">
                                 <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{outcomeLabel(r)}</Badge>
                                 <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
                                 <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : r.trigger === 'file' ? `when ${r.file ?? 'a file'} was added` : 'on schedule'}</span>
-                                {r.nodes ? <Button size="xs" type="button" className="text-[var(--fg-3)]" onClick={open} title="Open the flow; pick this run to see it on the canvas">on the canvas</Button> : null}
+                                <Button size="xs" type="button" data-flow-review={String(index)} className="text-[var(--fg-3)]" title="Open this run's review" onClick={() => onAction({ kind: 'flows.openEditor', flowId: f.id, run: index })}>Review</Button>
                                 {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
                                 {r.steps && r.steps.length > 0 ? <RunSteps steps={r.steps} /> : null}
                             </li>
-                        ))}
+                        );})}
                     </ol>
                 </details>
             ) : null}
@@ -616,7 +616,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
-                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} {...(commandRun ? { commandRun } : {})} />
+                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} processLog={hosting.processLog ?? null} {...(commandRun ? { commandRun } : {})} />
                         </Tabs.Panel>
                         <Tabs.Panel value="services">
                             <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} onNavigate={onNavigate} />
@@ -691,9 +691,11 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string }; processLog?: ProcessLogOpen | null }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun, processLog = null }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string }; processLog?: ProcessLogOpen | null }) {
     const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     const wsName = (id: string) => (workspaces.length > 0 ? workspaceLabel(workspaces, id) : null);
+    // The Log the person opened (Tynn #860): shown while its process is still listed.
+    const opened = processLog ? processes.find((p) => p.id === processLog.processId) ?? null : null;
     return (
         <div className="flex flex-col">
             <div className="flex items-center justify-end px-5 py-2">
@@ -722,6 +724,7 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                                 <span className="ml-auto flex shrink-0 items-center gap-1.5">
                                     {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
                                     <RowMenu items={acts.menu} onRun={run} />
+                                    <LogButton processId={p.id} onAction={onAction} />
                                 </span>
                                 {p.commandRun || (p.log && p.log.lines > 0) ? (
                                     <details data-process-log={p.id} className="basis-full">
@@ -736,13 +739,59 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                     })}
                 </ul>
             )}
+            {opened ? (
+                <Modal open onClose={() => onAction({ kind: 'hosting.closeProcessLog' })} size="lg">
+                    <Modal.Header>{opened.name}</Modal.Header>
+                    <Modal.Body>
+                        <ProcessLogView process={opened} log={processLog!} />
+                    </Modal.Body>
+                </Modal>
+            ) : null}
         </div>
     );
 }
 
-/** STUB (Tynn #860 RED). */
-export function ProcessLogView(_props: { process: NonNullable<FeatureData['hosting']>['processes'][number]; log: ProcessLogOpen }) {
-    return null;
+/**
+ * A process's Log (Tynn #860): opens its whole kept output, earlier Genies' included, and a scheduled task's runs. An icon
+ * button like the row's others (Tynn #708: icons, named by their label), always last on the line.
+ */
+function LogButton({ processId, onAction }: { processId: string; onAction: SurfaceProps['onAction'] }) {
+    return <Button type="button" variant="circle" size="sm" icon="file-text" aria-label="Log" title="Log" data-process-log-open={processId} onClick={() => onAction({ kind: 'hosting.openProcessLog', processId })} />;
+}
+
+const RUN_WORD: Record<string, string> = { ok: 'Ran', failed: 'Failed', skipped: 'Skipped' };
+const RUN_COLOR: Record<string, 'green' | 'red' | 'amber'> = { ok: 'green', failed: 'red', skipped: 'amber' };
+
+/**
+ * WHAT THE LOG SHOWS (Tynn #860; the owner: "anything that executes tasks needs to provide a log I can read"). A scheduled
+ * task's runs first, newest first: how each ended, when it started and ended, WHY a run failed, and what a nudge sent.
+ * Then the output Genie kept — across Genie restarts, with Genie's own line where one took over — or that there is none.
+ */
+export function ProcessLogView({ process: p, log }: { process: NonNullable<FeatureData['hosting']>['processes'][number]; log: ProcessLogOpen }) {
+    const runs = p.schedule?.runs ?? [];
+    const nudge = p.schedule?.kind === 'agent-nudge';
+    return (
+        <div data-process-log-view={p.id} className="flex flex-col gap-3 text-xs">
+            {p.schedule ? (
+                runs.length > 0 ? (
+                    <ol data-scheduled-runs className="flex flex-col gap-1.5">
+                        {runs.map((r) => (
+                            <li key={`${r.at}:${r.status}`} data-scheduled-run={r.status} className="flex flex-wrap items-baseline gap-2">
+                                <Badge color={RUN_COLOR[r.status] ?? 'zinc'} variant="soft" size="sm">{RUN_WORD[r.status] ?? r.status}</Badge>
+                                <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()} → {new Date(r.endedAt).toLocaleTimeString()}</span>
+                                {r.reason ? <span data-scheduled-run-reason className="basis-full text-[var(--danger)]">{r.reason}</span> : null}
+                                {r.sent ? <span className="basis-full text-[var(--fg-3)]">Sent: <span className="text-[var(--fg-2)]">{r.sent}</span></span> : null}
+                            </li>
+                        ))}
+                    </ol>
+                ) : <p className="text-[var(--fg-3)]">No runs yet.</p>
+            ) : null}
+            {log.dropped > 0 ? <p className="text-[var(--fg-4)]">{log.dropped} earlier {log.dropped === 1 ? 'line was' : 'lines were'} cut</p> : null}
+            {log.text !== '' || !nudge ? (
+                <pre data-process-log-text className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono">{log.text === '' ? 'No output' : log.text}</pre>
+            ) : null}
+        </div>
+    );
 }
 
 /** "Add process": a button that opens the labelled form in a modal. The only hook in the Processes tab, kept out of the panel. */
@@ -808,6 +857,8 @@ function scheduledRow({ p, up, now, onAction, workspace = null }: { p: NonNullab
     const s = p.schedule!;
     const nudge = s.kind === 'agent-nudge';
     const status = up ? 'Running now' : s.enabled ? 'Scheduled' : 'Paused — not firing';
+    // Why the last run failed or was skipped, on the row (Tynn #860); its Log has every run.
+    const failure = lastFailure(s);
     const acts = scheduledActions(p);
     const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     return (
@@ -820,10 +871,12 @@ function scheduledRow({ p, up, now, onAction, workspace = null }: { p: NonNullab
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
                 {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
                 <RowMenu items={acts.menu} onRun={run} />
+                <LogButton processId={p.id} onAction={onAction} />
             </span>
             <span className="basis-full text-xs text-[var(--fg-3)]">
                 {describeSchedule(s.cron)} · Next run: {formatNextRun(s.nextRunAt, now)} · Last run: {formatLastRun(s.lastRunAt, s.lastRunStatus, now)}
             </span>
+            {failure ? <span data-run-reason className="basis-full text-xs text-[var(--danger)]">{failure}</span> : null}
             {nudge ? (
                 <span className="basis-full text-xs text-[var(--fg-3)]">Each run nudges {s.agent} with: <span className="text-[var(--fg-2)]">{s.prompt}</span></span>
             ) : null}

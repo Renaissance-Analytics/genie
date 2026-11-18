@@ -40,14 +40,15 @@ export interface ScheduledRun {
 /** How many runs a scheduled task keeps. */
 export const KEPT_RUNS = 20;
 
-/** STUB (Tynn #860 RED). */
-export function withRun(schedule: ProcessSchedule, _run: ScheduledRun): ProcessSchedule {
-    return schedule;
+/** The schedule with this run kept: newest first, at most KEPT_RUNS; the last run's time and outcome follow it. */
+export function withRun(schedule: ProcessSchedule, run: ScheduledRun): ProcessSchedule {
+    return { ...schedule, lastRunAt: run.at, lastRunStatus: run.status, runs: [run, ...(schedule.runs ?? [])].slice(0, KEPT_RUNS) };
 }
 
-/** STUB (Tynn #860 RED). */
-export function lastFailure(_schedule: ProcessSchedule): string | null {
-    return null;
+/** Why the LAST run failed or was skipped, or null (it went fine, never ran, or was recorded before Tynn #860). */
+export function lastFailure(schedule: ProcessSchedule): string | null {
+    const last = schedule.runs?.[0];
+    return last && last.status !== 'ok' && last.reason ? last.reason : null;
 }
 
 /** Why this schedule could never run, or null. Checked before anything is kept (and before an agent's request is put to the person). */

@@ -2,14 +2,14 @@ import { limitRefusal } from '../core/shell-limits.js';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, normalize } from 'node:path';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
-import type { ProcessLog } from '../core/output-tail.js';
+import { ROW_LOG_LINES, type ProcessLog } from '../core/output-tail.js';
 import { runtimeDir } from './paths.js';
 import type { ProcessStatus, ProcessSupervisor, RestartPolicy } from './process-supervisor.js';
 import { readJson, writeJsonAtomic } from './store.js';
 import { planV1ProcessImport } from '../core/v1-processes.js';
 import { readV1Processes } from './v1-processes.js';
 import { nextCronAfter } from '../core/cron.js';
-import { scheduleProblem, type LastRunStatus, type ProcessSchedule, type ScheduleKind } from '../core/scheduled-task.js';
+import { scheduleProblem, withRun, type ProcessSchedule, type ScheduledRun, type ScheduleKind } from '../core/scheduled-task.js';
 import { planV1ScheduleImport } from '../core/v1-schedules.js';
 import { readV1Schedules } from './v1-schedules.js';
 import { scheduledTaskFromFlow } from './scheduled-tasks-move.js';
@@ -297,11 +297,11 @@ export class ProcessBook {
         await this.#setWanted(id, false);
     }
 
-    /** What one fire (or Run now) of a scheduled task came to. */
-    async recordScheduledRun(id: string, at: number, status: LastRunStatus): Promise<void> {
+    /** What one fire (or Run now) of a scheduled task came to: kept with its reason and what it sent (Tynn #860). */
+    async recordScheduledRun(id: string, run: ScheduledRun): Promise<void> {
         const p = this.#data.processes.find((x) => x.id === id);
         if (!p?.schedule) return;
-        const next: KeptProcess = { ...p, schedule: { ...p.schedule, lastRunAt: at, lastRunStatus: status } };
+        const next: KeptProcess = { ...p, schedule: withRun(p.schedule, run) };
         this.#data = { ...this.#data, processes: this.#data.processes.map((x) => (x.id === id ? next : x)) };
         await this.#flush();
     }
@@ -340,9 +340,12 @@ export class ProcessBook {
         return { ...p.schedule, enabled: p.wanted, nextRunAt: live ? nextCronAfter(p.schedule.cron, this.#now(), undefined) : null };
     }
 
-    /** STUB (Tynn #860 RED). */
-    log(_id: string, _lines?: number): ProcessLog | null {
-        return null;
+    /**
+     * A kept process's output (Tynn #860): what it printed in this Genie AND what earlier Genies kept of it — the Log
+     * button's and the agents' `processes logs`. Null when no kept logs are wired (the supervisor's tail is then the read).
+     */
+    log(id: string, lines?: number): ProcessLog | null {
+        return this.#deps.logs ? this.#deps.logs.read(id, lines) : null;
     }
 
     owns(id: string): boolean {
@@ -367,6 +370,7 @@ export class ProcessBook {
         // are listed and controlled as SITES, never here, where a Stop or Restart would act on a site behind its back.
         const live = this.#deps.supervisor.list(workspaceId).filter((s) => byId.has(s.id));
         const withSchedule = (p: KeptProcess) => { const v = this.#scheduleView(p); return v ? { schedule: v } : {}; };
+        const keptTail = (id: string) => { const log = this.#deps.logs?.read(id, ROW_LOG_LINES); return log && log.lines > 0 ? { log } : {}; };
         const rows: HostedProcess[] = live.map((s) => ({ ...s, durable: true, command: byId.get(s.id)!.command, ...withSchedule(byId.get(s.id)!) }));
         const seen = new Set(live.map((s) => s.id));
         for (const p of this.#data.processes) {
@@ -385,6 +389,8 @@ export class ProcessBook {
                 durable: true,
                 command: p.command,
                 ...withSchedule(p),
+                // Not run by this Genie (stopped, or stopped by a restart): the output earlier Genies kept (Tynn #860).
+                ...keptTail(p.id),
             });
         }
         return rows.filter((p) => !this.#deps.asleep(p.workspaceId));
@@ -544,6 +550,8 @@ export class ProcessBook {
         this.#heldBack.delete(id);
         this.#data = { ...this.#data, processes: this.#data.processes.filter((p) => p.id !== id) };
         await this.#flush();
+        // Its kept output goes with it (Tynn #860): a process the person removed leaves no log behind.
+        await this.#deps.logs?.forget(id);
     }
 
     /**

@@ -39,13 +39,13 @@ describe('the Processes tab', () => {
 
     it('a kept process that is running offers Stop and Restart, and shows its command', () => {
         const html = render(data([row({ durable: true, command: 'php artisan queue:work' })]));
-        expect(buttonsOf(html, 'p1')).toEqual(['Stop', 'More actions']);
+        expect(buttonsOf(html, 'p1')).toEqual(['Stop', 'More actions', 'Log']);
         expect(html).toContain('php artisan queue:work');
     });
 
     it('a kept process that is stopped offers Start and Remove, and a held-back one says why', () => {
         const html = render(data([row({ state: 'stopped', pid: null, durable: true, command: 'npm run watch', reason: 'its workspace is hibernated; nothing starts there until it is woken' })]));
-        expect(buttonsOf(html, 'p1')).toEqual(['Start', 'More actions']);
+        expect(buttonsOf(html, 'p1')).toEqual(['Start', 'More actions', 'Log']);
         expect(html).toMatch(/hibernated/);
     });
 
@@ -58,7 +58,7 @@ describe('the Processes tab', () => {
         expect(html).toMatch(/Log · last 3 lines/);
         expect(html).toContain('PDOException: could not connect');
         expect(html).toContain('[genie] exited with code 1; gave up after 5 consecutive failures');
-        expect(buttonsOf(html, 'p1')).toEqual(['Start', 'More actions']);
+        expect(buttonsOf(html, 'p1')).toEqual(['Start', 'More actions', 'Log']);
     });
 
     it('a log the bound has cut says so; a row with no output draws no log (control)', () => {
@@ -66,12 +66,12 @@ describe('the Processes tab', () => {
         expect(cut).toMatch(/Log · last 1 line \(earlier output was cut\)/);
         const none = render(data([row({ durable: true, command: 'npm run watch' })]));
         expect(none).not.toContain('data-process-log');
-        expect(buttonsOf(none, 'p1')).toEqual(['Stop', 'More actions']);
+        expect(buttonsOf(none, 'p1')).toEqual(['Stop', 'More actions', 'Log']);
     });
 
     it('a site’s process is never offered Remove — it goes with its site', () => {
         const html = render(data([row({ id: 'site:docs', name: 'docs dev server' }), row({ id: 'site:api', name: 'api dev server', state: 'exited', pid: null, exitCode: 1 })]));
-        expect(buttonsOf(html, 'site:docs')).toEqual(['Stop', 'More actions']);
-        expect(buttonsOf(html, 'site:api')).toEqual(['Restart']);
+        expect(buttonsOf(html, 'site:docs')).toEqual(['Stop', 'More actions', 'Log']);
+        expect(buttonsOf(html, 'site:api')).toEqual(['Restart', 'Log']);
     });
 });

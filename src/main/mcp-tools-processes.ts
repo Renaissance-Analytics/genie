@@ -3,7 +3,7 @@ import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './b
 import type { ProcessLog } from '../core/output-tail.js';
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
-import { describeSchedule, type ScheduleKind } from '../core/scheduled-task.js';
+import { describeSchedule, lastFailure, type ScheduleKind } from '../core/scheduled-task.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
 import type { ProcessBookApi } from './processes-host.js';
 import type { RunNowResult } from './process-scheduler.js';
@@ -85,6 +85,17 @@ function view(p: HostedProcess): Record<string, unknown> {
                 ...(p.schedule.prompt === undefined ? {} : { prompt: p.schedule.prompt }),
                 ...(p.schedule.agent === undefined ? {} : { agent: p.schedule.agent }),
                 ...(p.schedule.lastRunAt === undefined ? {} : { lastRunAt: new Date(p.schedule.lastRunAt).toISOString(), lastRunStatus: p.schedule.lastRunStatus }),
+                // Tynn #860: why the last run failed, and each kept run — its start and end, outcome, reason, what it sent.
+                ...(lastFailure(p.schedule) === null ? {} : { lastRunReason: lastFailure(p.schedule) }),
+                ...(p.schedule.runs === undefined ? {} : {
+                    runs: p.schedule.runs.map((r) => ({
+                        at: new Date(r.at).toISOString(),
+                        endedAt: new Date(r.endedAt).toISOString(),
+                        status: r.status,
+                        ...(r.reason === undefined ? {} : { reason: r.reason }),
+                        ...(r.sent === undefined ? {} : { sent: r.sent }),
+                    })),
+                }),
             },
         }),
     };
@@ -127,7 +138,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                         if (typeof p === 'string') return err(p);
                         if (args.lines !== undefined && (typeof args.lines !== 'number' || !Number.isFinite(args.lines) || args.lines < 1)) return err('`lines` is a positive number');
                         const log = port.logs(p.id, typeof args.lines === 'number' ? Math.floor(args.lines) : DEFAULT_LOG_LINES);
-                        if (!log) return ok({ ok: true, process: view(p), log: '', lines: 0, dropped: 0, note: 'Genie has no output from it since Genie started: it has not run since then' });
+                        if (!log) return ok({ ok: true, process: view(p), log: '', lines: 0, dropped: 0, note: 'Genie has kept no output from it: it has not printed anything Genie saw' });
                         return ok({ ok: true, process: view(p), log: log.text, lines: log.lines, dropped: log.dropped });
                     }
                     case 'add': {
@@ -233,12 +244,13 @@ export const PROCESSES_TOOL: BuiltinTool = declareBuiltinTool(
     'Your workspace’s background processes — queue workers, watchers, dev servers — kept running by GENIE: never leave one running in a terminal or with `nohup`/`&`. '
         + 'Genie starts it in the workspace with the workspace’s service variables, restarts it by its policy, and keeps its log after it exits or crashes. With restart: never it stays stopped after Genie restarts until explicitly started; other policies bring it back on launch until it is stopped. '
         + 'Actions: `list` — this workspace’s processes, including its sites’ servers. '
-        + '`logs` {process, lines?} — the end of its output (default 200 lines), still there after a crash. '
+        + '`logs` {process, lines?} — the end of its output (default 200 lines), still there after a crash and after Genie restarts. '
         + '`add` {name, command, folder? (inside the workspace; default its root), restart? on-failure (default) | always | never} — the person approves it first and sees the command. '
         + '`start` / `stop` / `restart` {process} — a process this workspace keeps (a site’s server is the `sites` tool’s). '
         + '`remove` {process} — the person approves it; it is stopped and no longer brought back. '
         + 'A SCHEDULED TASK is a process with a `schedule` (five-field cron, this machine’s local time): `add` {name, schedule, command, folder?} runs the command at each due, once (never restarted); with `scheduleKind: agent-nudge` {name, schedule, prompt, agent (an inbox address)} each due hands the prompt to that agent (delivered when its turn ends). The person approves it and sees the recurrence; then it is enabled. '
-        + '`run-now` {process} — run a scheduled task once now. `enable` / `disable` {process} — arm or pause its schedule.',
+        + '`run-now` {process} — run a scheduled task once now. `enable` / `disable` {process} — arm or pause its schedule. '
+        + '`list` shows each scheduled task\'s last runs (`schedule.runs`: start, end, outcome, the reason a run failed, what a nudge sent) and `schedule.lastRunReason`.',
     {
         type: 'object',
         properties: {

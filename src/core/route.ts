@@ -203,7 +203,9 @@ export function parseRoute(input: string): Route {
             // No id is not a window; `new` is a new flow, in the workspace the link names.
             if (!tail) return dashboard(common);
             if (tail === 'new') return { surface: 'flow', flowId: null, workspaceId: params.get('workspace') || null, chat: null, pin: null };
-            return { surface: 'flow', flowId: decodeURIComponent(tail), workspaceId: null, chat: null, pin: null };
+            // `run` (Tynn #860): open on that run's review — its index in the flow's runs; anything else is no run.
+            const run = /^[0-9]+$/.test(params.get('run') ?? '') ? Number(params.get('run')) : null;
+            return { surface: 'flow', flowId: decodeURIComponent(tail), workspaceId: null, run, chat: null, pin: null };
         }
         case 'files': {
             // The popped-out panel (§4.3): no id is not a window; no modifiers either.
@@ -312,6 +314,7 @@ export function formatRoute(route: Route): string {
             break;
         case 'flow':
             if (route.flowId === null && route.workspaceId) params.set('workspace', route.workspaceId);
+            if (route.flowId !== null && typeof route.run === 'number') params.set('run', String(route.run));
             break;
     }
 
@@ -364,7 +367,15 @@ export function carryChat(next: string, current: Route, roster: readonly ChatRos
 }
 
 
-/** STUB (Tynn #860 RED). */
-export function sameFlowWindow(_url: string, _route: string): boolean {
-    return false;
+/**
+ * Whether the window at `url` is the flow editor `route` names (Tynn #860): one window per flow, whichever run it shows —
+ * a link to a run of a flow already open brings that window up, never a second one. Compared by flow, query aside.
+ */
+export function sameFlowWindow(url: string, route: string): boolean {
+    const hash = url.indexOf('#');
+    if (hash < 0) return false;
+    const flowOf = (r: string) => (r.startsWith('genie://flow/') ? r.slice('genie://flow/'.length).split('?')[0] ?? '' : null);
+    const open = flowOf(url.slice(hash + 1));
+    const wanted = flowOf(route);
+    return open !== null && wanted !== null && open !== '' && open !== 'new' && open === wanted;
 }

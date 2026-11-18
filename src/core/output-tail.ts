@@ -93,7 +93,20 @@ export class OutputTail {
 /** Genie's line between a kept process's output from before a Genie restart and what it printed since (Tynn #860). */
 export const RESTART_NOTE = 'Genie restarted; the lines above are from before';
 
-/** STUB (Tynn #860 RED). */
-export function joinLogs(_earlier: ProcessLog | null, _current: ProcessLog | null, _lines?: number): ProcessLog | null {
-    return null;
+/** How much of a process's log rides each Hosting snapshot: the end of it. All of it is its Log button's, and `processes logs`. */
+export const ROW_LOG_LINES = 40;
+
+/**
+ * A KEPT PROCESS'S WHOLE LOG ACROSS GENIE RESTARTS (Tynn #860): what earlier Genies kept of it, then Genie's own line where
+ * this one took over, then what it printed since. Bounded as one tail; `dropped` counts every cut, earlier ones included.
+ * Null when there is neither.
+ */
+export function joinLogs(earlier: ProcessLog | null, current: ProcessLog | null, lines?: number): ProcessLog | null {
+    if (!earlier && !current) return null;
+    const tail = new OutputTail();
+    if (earlier && earlier.text !== '') tail.append(`${earlier.text}\n`);
+    if (earlier && current) tail.note(RESTART_NOTE);
+    if (current && current.text !== '') tail.append(`${current.text}\n`);
+    const read = tail.read(lines);
+    return { ...read, dropped: read.dropped + (earlier?.dropped ?? 0) + (current?.dropped ?? 0) };
 }

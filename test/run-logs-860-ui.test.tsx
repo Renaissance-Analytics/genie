@@ -42,11 +42,16 @@ function elements(node: ReactNode): ReactElement[] {
 describe('a Log button on every process (Tynn #860)', () => {
     const html = renderToStaticMarkup(<ProcessesPanel processes={[watch, stoppedByRestart, running]} workspaces={workspaces} onAction={() => {}} now={NOW} />);
 
-    it.each(['p1', 'p2', 'p3'])('row %s has a react-fancy Log button', (id) => {
+    it.each(['p1', 'p2', 'p3'])('row %s has a react-fancy Log button: an icon named Log, last on the line (Tynn #708: icons over words)', (id) => {
         const log = control(html, `data-process-log-open="${id}"`);
         expect(log).not.toBeNull();
         expect(log!.fancy).toBe(true);
-        expect(log!.text).toBe('Log');
+        expect(log!.open).toMatch(/aria-label="Log"/);
+        expect(log!.text).toBe('');
+        expect(log!.inner).toMatch(/<svg/);
+        const row = html.slice(html.indexOf(`data-process="${id}"`), html.indexOf('</li>', html.indexOf(`data-process="${id}"`)));
+        const labels = [...row.matchAll(/<button\b[^>]*>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[0])?.[1] ?? '');
+        expect(labels.at(-1)).toBe('Log');
     });
 
     it('pressing it opens that process\'s log', () => {

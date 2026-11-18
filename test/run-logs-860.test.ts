@@ -250,7 +250,7 @@ describe('the Log button reads the kept output in Hosting (Tynn #860)', () => {
     } as never;
     const ports = { processes: { list: () => [row], owns: (id: string) => id === 'p1', log: async (id: string) => (id === 'p1' ? { text: 'all of it', lines: 1, dropped: 0 } : null) } } as never;
 
-    it('a stopped row keeps the book\'s output when the supervisor has none', async () => {
+    it('CONTROL: a stopped row keeps the output the book put on it when the supervisor has none', async () => {
         const snap = await hostingFeatureSnapshot(services, {}, ports);
         expect(snap.hosting!.processes[0]!.log).toMatchObject({ text: 'from before' });
     });

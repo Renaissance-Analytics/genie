@@ -64,7 +64,7 @@ export interface FlowEditorWindowProps {
     readonly onSaved?: (flowId: string) => void;
 }
 
-export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data, workspaces, act, Editor = FlowEditor as unknown as AnyComponent, Viewer = RunCanvas as unknown as AnyComponent, now = Date.now(), onSaved }: FlowEditorWindowProps) {
+export function FlowEditorWindow({ flowId, workspaceId, run: openRun = null, hibernated = false, data, workspaces, act, Editor = FlowEditor as unknown as AnyComponent, Viewer = RunCanvas as unknown as AnyComponent, now = Date.now(), onSaved }: FlowEditorWindowProps) {
     const flows = data.flows?.flows ?? null;
     // GENIE'S TOOLS AS STEPS (genie#1204): their kinds arrive in the snapshot and are registered BEFORE any graph is read
     // or the canvas mounts — a canvas that mounted first would draw them as bare boxes (Genie 1's lesson,
@@ -81,7 +81,9 @@ export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data
     // "Saved" is a Flash on the Save button, never a bar (the owner, 2026-11-16); a warning stays a note.
     const [savedFlash, setSavedFlash] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
-    const [viewing, setViewing] = useState<number | null>(null);
+    // Opened on a run (Tynn #860: a run's Review in Flows), its review shows first; a later link moves to its run.
+    const [viewing, setViewing] = useState<number | null>(openRun);
+    useEffect(() => { if (openRun !== null) setViewing(openRun); }, [openRun]);
     const [opened, setOpened] = useState<FlowPaneName | null>(null);
     const [width, setWidth] = useState(0);
     const shell = useRef<HTMLDivElement | null>(null);

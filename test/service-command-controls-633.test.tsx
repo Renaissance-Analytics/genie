@@ -30,13 +30,14 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); 
 
 describe('service commands in the existing Processes surface (#633)', () => {
     it('offers only Stop for a running one-shot command, never an unapproved Restart', () => {
-        expect(buttonTexts(row(markup(running)))).toEqual(['Stop']);
+        expect(buttonTexts(row(markup(running)))).toEqual(['Stop', 'Log']);
     });
 
     it.each(['exited', 'failed', 'stopped'] as const)('keeps a %s command visible with its log and offers no Start or Restart', (state) => {
         const html = row(markup({ ...running, state, pid: null, exitCode: state === 'failed' ? 2 : 0, since: NOW }));
         expect(html).toContain('live output');
-        expect(buttonTexts(html)).toEqual([]);
+        // Its Log only (Tynn #860): never Start or Restart.
+        expect(buttonTexts(html)).toEqual(['Log']);
     });
 
     it('shows elapsed running time in human-readable units', () => {

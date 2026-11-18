@@ -87,6 +87,8 @@ import { withElements } from '../core/workspace-elements.js';
 import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
+import { KeptProcessLogs } from './kept-process-logs.js';
+import { nudgeOnRoster } from './scheduled-nudge.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from './engine-launch.js';
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
@@ -1904,19 +1906,26 @@ async function main(): Promise<void> {
                 // Safe mode: the restore starts no kept process, and no scheduled task is armed.
                 safeMode: safeNow,
             };
+            // Each kept process's output, kept past this Genie (Tynn #860): a row "stopped by restart" still has its log.
+            let opened: ProcessBook | null = null;
+            const keptLogs = await KeptProcessLogs.open(join(runtime, 'process-logs'), { supervisor: processSupervisor, owns: (id) => opened?.owns(id) ?? false });
             const processBook = await ProcessBook.open(home, {
                 ...deps,
+                logs: keptLogs,
                 limit: (workspaceId) => limitOf(settings.snapshotFor(workspaceId), 'processes'),
                 v1: { database: databasePath, workspaces: () => hostRegistry.listWorkspaces(), roster: () => hostRegistry.listAgents() },
             });
+            opened = processBook;
+            // Written before the host goes ("Shut down everything" stops the clocks): the last output is not left pending.
+            clocks.push({ stop: () => { void keptLogs.flush(); } });
             const scheduler = new ProcessScheduler({
                 ...deps,
                 book: processBook,
-                // A nudge reaches its agent by its address, on the host's roster, at its turn's end.
-                nudge: (address, text, from) => {
-                    const found = resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs());
-                    return found.kind === 'one' ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
-                },
+                // A nudge reaches its agent by its address, on the host's roster, at its turn's end; a miss says which (Tynn #860).
+                nudge: (address, text, from) => nudgeOnRoster({
+                    resolve: (a) => resolveOnRoster(a, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
+                    deliver: (id, t, by) => host.deliver(id as AgentId, t, by),
+                }, address, text, from),
                 now: Date.now,
                 schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
             });
@@ -2020,7 +2029,8 @@ async function main(): Promise<void> {
         forwardedCalls,
         // THE AGENTS' `playwright` (Tynn #846): what Genie has, and asking it for a version.
         playwright: playwrightToolPort({ toolchainDir: playwrightToolchain, fs: nodePhpVersionsFs(), installer: playwrightInstaller, workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null }),
-        processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
+        // `logs` reads a kept process's output from before a restart too (Tynn #860); a site's server, the supervisor's tail.
+        processes: { book: hostBook, logs: (id, lines) => processBookNow?.log(id, lines) ?? processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
         terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), onData: (listener) => terminalHost.onData((id, data) => listener(id, data)), scrollbackCap: 1_000_000 },
         // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.
         terminalEnv: (workspaceId) => {
