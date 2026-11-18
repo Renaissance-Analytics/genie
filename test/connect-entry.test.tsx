@@ -56,8 +56,8 @@ describe('the menu', () => {
 
     it('a row per machine; Open on the ones Tynn says you may reach, the reason on the others', () => {
         const html = render({ workstations: { ok: true, workstations: [
-            { id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner' },
-            { id: 'ws_b', name: 'old box', active: false, connectable: false, local: false, source: 'owner' },
+            { id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner', mine: true },
+            { id: 'ws_b', name: 'old box', active: false, connectable: false, local: false, source: 'owner', mine: true },
         ] } });
         expect(html).toMatch(/data-tynn-workstation-row="ws_a"[^]*?data-action="open-workstation"/);
         const b = html.slice(html.indexOf('data-tynn-workstation-row="ws_b"'));
@@ -90,7 +90,7 @@ describe('the menu', () => {
 });
 
 describe('opening a workstation shows its progress, then success or the reason with Retry (the owner, 2026-10-27)', () => {
-    const list = { ok: true as const, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner' }] };
+    const list = { ok: true as const, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner', mine: true }] };
     const row = (opening: Parameters<typeof TynnWorkstationRows>[0]['opening']) =>
         renderToStaticMarkup(<TynnWorkstationRows list={list} onOpenWorkstation={() => {}} opening={opening} />);
 

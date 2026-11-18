@@ -7,7 +7,8 @@ import type { Resolution } from '../src/core/inbox.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { RateLimitGate } from '../src/core/rate-limit-gate.js';
 import { LIMIT_RESUME_PROMPT, type DriverEvents, type SessionDriverFactory } from '../src/core/session.js';
-import { agentPrompter, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -78,7 +79,7 @@ describe('#749 through the real host: a flow step whose agent is cut by the limi
             subscribe: (l) => host.subscribe((id) => l(id)),
         };
         const resolve = (text: string): Resolution => (text === 'claude:atlas' ? { kind: 'one', id: r.id } : { kind: 'none' });
-        const asked = agentPrompter({ sessions: port, resolve, agent: () => ({ name: 'atlas', workspaceId: 'ws' }), asleep: () => false, by: 'flow "nightly"' })('claude:atlas', 'build the report');
+        const asked = waitingPrompter({ sessions: port, resolve, agent: () => ({ name: 'atlas', workspaceId: 'ws' }), asleep: () => false, by: 'flow "nightly"' })('claude:atlas', 'build the report');
         await tick();
         expect(sent.get('atlas')).toEqual(['build the report']);
         rejected('atlas', now + 60 * MIN);

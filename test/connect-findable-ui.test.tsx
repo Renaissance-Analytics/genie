@@ -35,7 +35,7 @@ describe('an empty list of your Tynn workstations says what to do on the other m
 
     it('CONTROL: a list with a machine in it shows the machine, not the steps', () => {
         const html = renderToStaticMarkup(
-            <ConnectRemote {...base} tynnWorkstations={{ ok: true, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner' }] }} onOpenWorkstation={() => {}} />,
+            <ConnectRemote {...base} tynnWorkstations={{ ok: true, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner', mine: true }] }} onOpenWorkstation={() => {}} />,
         );
         expect(html).toContain('data-tynn-workstation-row="ws_a"');
         expect(html).not.toContain(GUIDANCE);

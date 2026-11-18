@@ -72,6 +72,7 @@ async function rig(start: RelayHostServicePorts['start']) {
 function realLink(ticket: () => Promise<{ ticket: string; relayEndpoint: string }>, handles: RelayHostHandle[]): RelayHostServicePorts['start'] {
     return ({ workstationId, fingerprint, onStatus }) => {
         const handle = startRelayHost({
+            signedInHere: () => 'user_1',
             ports: { ticket, keys: async () => [], introspect: async () => false },
             socket: () => { throw new Error('no relay is dialled without a ticket'); },
             workstationId,

@@ -108,6 +108,7 @@ beforeEach(async () => {
         relayUrl: RELAY,
         workstationId: WS_ID,
         hello: async () => buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey) }),
+        signedInHere: () => 'user_1',
         validateGrant: async (token) => {
             const check = verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID });
             if (!check.ok) return check;

@@ -10,7 +10,8 @@ import { agentRowFor } from '../src/core/roster.js';
 import { AgentSession, type DriverEvents, type SessionDriverFactory } from '../src/core/session.js';
 import { openDurableStore } from '../src/core/thread-store.js';
 import { SettingApplier, setModel, type AgentOpsPorts } from '../src/main/agent-ops-host.js';
-import { agentPrompter, type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { type AgentSessionsPort } from '../src/main/flow-runner.js';
+import { waitingPrompter } from './helpers/waiting-prompter.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -218,7 +219,7 @@ describe('a flow prompting an agent whose prompt waits for `ready`', () => {
             prompt: () => true,
             subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
         };
-        const prompt = agentPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
+        const prompt = waitingPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
         let answer: string | null = null;
         const replied = prompt('claude:atlas', 'check the queue').then((a) => { answer = a; return a; });
         await new Promise((done) => setTimeout(done, 0));

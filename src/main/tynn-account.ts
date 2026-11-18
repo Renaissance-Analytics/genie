@@ -44,7 +44,17 @@ export interface TynnAccountPorts {
     readonly openExternal?: (url: string) => Promise<void>;
     /** One timer (`setTimeout` in the app): the retry after Tynn could not be reached. Absent = no retry (tests, headless). */
     readonly schedule?: (ms: number, fn: () => void) => () => void;
+    /** The clock (`Date.now` in the app). */
+    readonly now?: () => number;
 }
+
+/**
+ * A path that answered 404 while /me still answered 200 does not ask /me again for this long (Tynn #755). A 404 is Tynn's
+ * "not authorized" as well as "not found", so the first one on a path asks /me; but a caller that polls a route its
+ * credential cannot reach (Proof-of-Done before #755, every minute) must not turn each poll into a /me as well. Another
+ * path's first 404 still asks at once, so a revocation is still found from anywhere.
+ */
+const ME_RECHECK_PER_PATH_MS = 10 * 60 * 1000;
 
 /**
  * How long after an UNREACHABLE check Genie asks again (the owner, 2026-10-21: an issue was filed and no agent was told —
@@ -177,6 +187,8 @@ export class TynnAccount implements TynnAccountPort {
     #diskWork: Promise<unknown> = Promise.resolve();
     readonly #listeners = new Set<() => void>();
     #retry: { step: number; cancel: () => void } | null = null;
+    /** Path -> when a 404 there was last followed by a /me that confirmed this credential (ME_RECHECK_PER_PATH_MS). */
+    readonly #confirmedAfter404 = new Map<string, number>();
 
     private constructor(ports: TynnAccountPorts) { this.#ports = ports; }
 
@@ -254,6 +266,11 @@ export class TynnAccount implements TynnAccountPort {
     host(): string { return trimHost(this.#ports.host()); }
     status(): TynnStatus { return this.#me && this.#meHost === this.host() ? { signedIn: true, host: this.#meHost, user: this.#me.user } : { signedIn: false }; }
     userId(): string | null { return this.status().signedIn ? this.#me!.id : null; }
+    /** The held pairing credential's public id (`gpk_<id>.…`, never the secret): it changes when the person pairs again. */
+    credentialId(): string | null {
+        const held = this.#credential;
+        return held && held.host === this.host() ? held.token.slice(4, 30) : null;
+    }
     /**
      * The saved credential's account, before Tynn has confirmed it this launch (genie#1234): an agent's own stored Tynn key
      * is usable off grid. `null` once signed out or the credential is forgotten.
@@ -393,8 +410,20 @@ export class TynnAccount implements TynnAccountPort {
             else if (res.status === 404 && path === '/api/v1/me') { this.#unconfirmed(); if (!this.#retry) this.#retryAfter(0); }
             else if (res.status === 404) {
                 // A 404 is Tynn's "not authorized" as well as "not found": /me decides, and a 404 there signs out (kept).
-                try { await this.#whoami(init.signal); }
-                catch (error) { if (init.signal?.aborted) throw error; if (!this.#retry) this.#retryAfter(0); }
+                // Once per path per ME_RECHECK_PER_PATH_MS while /me keeps confirming (Tynn #755).
+                const key = `${credential.token.slice(4, 30)} ${path.split('?')[0]!}`;
+                const now = (this.#ports.now ?? Date.now)();
+                const confirmed = this.#confirmedAfter404.get(key);
+                if (confirmed === undefined || now - confirmed >= ME_RECHECK_PER_PATH_MS || !this.status().signedIn) {
+                    this.#confirmedAfter404.delete(key);
+                    try {
+                        await this.#whoami(init.signal);
+                        if (this.#credential === credential && this.status().signedIn) {
+                            if (this.#confirmedAfter404.size >= 64) this.#confirmedAfter404.clear();
+                            this.#confirmedAfter404.set(key, now);
+                        }
+                    } catch (error) { if (init.signal?.aborted) throw error; if (!this.#retry) this.#retryAfter(0); }
+                }
             }
         }
         return res;

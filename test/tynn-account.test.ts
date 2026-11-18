@@ -368,6 +368,31 @@ describe('TynnAccount.request — every call uses the scoped bearer', () => {
         expect((await TynnAccount.open(t.ports)).status().signedIn).toBe(false);
     });
 
+    it('a path that keeps answering 404 while /me answers 200 re-checks /me once per 10 minutes, not on every call (Tynn #755)', async () => {
+        const t = fakeTynn({ authFail: 404 });
+        let clock = 1_000_000;
+        const account = await TynnAccount.open({ ...t.ports, now: () => clock });
+        await account.signIn(CODE);
+        const meChecks = () => t.calls.filter((c) => c.path === '/api/v1/me' && c.headers.Authorization !== undefined).length;
+        const before = meChecks();
+
+        expect((await account.request('/api/v1/pod/host-keys', { method: 'POST', body: {} })).status).toBe(404);
+        expect(meChecks() - before, 'the first 404 on the path asks /me').toBe(1);
+        for (let i = 0; i < 9; i++) {
+            clock += 60_000;
+            expect((await account.request('/api/v1/pod/host-keys', { method: 'POST', body: {} })).status).toBe(404);
+        }
+        expect(meChecks() - before, 'nine more a minute apart do not').toBe(1);
+        clock += 60_000;
+        await account.request('/api/v1/pod/host-keys', { method: 'POST', body: {} });
+        expect(meChecks() - before, 'ten minutes on, it asks again').toBe(2);
+
+        // CONTROL: another path's first 404 still asks /me, so a revocation is still found from anywhere.
+        await account.request('/api/v1/nothing-here', { method: 'GET' });
+        expect(meChecks() - before).toBe(3);
+        expect(account.status().signedIn).toBe(true);
+    });
+
     it('CONTROL: a 404 for a path that is not there, with the session live, leaves this Genie signed in', async () => {
         const t = fakeTynn({ authFail: 404 });
         const account = await TynnAccount.open(t.ports);

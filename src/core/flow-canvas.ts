@@ -36,13 +36,14 @@ export const GENIE_NODE_KINDS: readonly NodeKindDefinition[] = [
         name: 'genie/agent_prompt',
         category: 'ai',
         label: 'Prompt an agent',
-        description: 'Send a prompt to a Genie agent and wait for its reply.',
+        description: 'Send a prompt to a Genie agent: a busy agent gets it mid-turn. Waiting for its reply is an option.',
         icon: '🧞',
         inputs: [{ id: 'in' }],
         outputs: [{ id: 'out', label: 'reply' }],
         configSchema: [
             { type: 'text', key: 'agent', label: 'Agent', placeholder: 'atlas@tynn-ai', required: true, description: 'An inbox address: name@workspace (a bare name when it is unique).' },
             { type: 'textarea', key: 'prompt', label: 'Prompt', required: true, description: 'Templates like {{in.text}} resolve into the node’s inputs.' },
+            { type: 'switch', key: 'waitForReply', label: 'Wait for the reply', default: false, description: 'Off: the step is done once the agent has the prompt. On: it waits for the agent’s turn to end and hands on its reply.' },
         ],
     },
     {
@@ -392,11 +393,11 @@ export function withProblems(graph: FlowGraph, problems: readonly FlowProblem[])
 }
 
 /** One node's outcome in a recorded run (main/flow-store.ts FlowRun.nodes). */
-export type NodeOutcome = 'ran' | 'failed' | 'held' | 'skipped' | 'not reached' | 'stopped' | 'running' | 'queued' | 'paused';
+export type NodeOutcome = 'ran' | 'failed' | 'held' | 'skipped' | 'not reached' | 'stopped' | 'running' | 'queued' | 'paused' | 'delivered' | 'waiting';
 
 /** A run's node outcomes as fancy-flow's viewer statuses: what the run overlay draws on the canvas (genie#1204 item 6). */
 export function viewerStatuses(nodes: Readonly<Record<string, NodeOutcome>>): Record<string, 'ok' | 'running' | 'failed' | 'skipped' | 'pending'> {
-    const map = { ran: 'ok', failed: 'failed', held: 'running', skipped: 'skipped', 'not reached': 'pending', stopped: 'failed', running: 'running', queued: 'running', paused: 'running' } as const;
+    const map = { ran: 'ok', failed: 'failed', held: 'running', skipped: 'skipped', 'not reached': 'pending', stopped: 'failed', running: 'running', queued: 'running', paused: 'running', delivered: 'ok', waiting: 'pending' } as const;
     return Object.fromEntries(Object.entries(nodes).map(([id, o]) => [id, map[o]]));
 }
 

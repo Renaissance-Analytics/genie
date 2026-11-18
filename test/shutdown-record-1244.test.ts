@@ -96,11 +96,11 @@ function named(agents: Record<Kind, AgentRecord>, plan: ReadonlyArray<{ agentId:
     return plan.map((s) => ({ name: (Object.keys(agents) as Kind[]).find((k) => agents[k].id === s.agentId) ?? s.agentId, resume: s.resume }));
 }
 
-/** What the NEXT launch reads from disk and starts (main.ts boot: take both lists, relaunchPlan). */
+/** What the NEXT launch reads from disk and starts (main.ts boot: read both lists, relaunchPlan). */
 async function nextBoot(): Promise<Array<{ agentId: string; resume: boolean }>> {
     const registry = new Registry(new Store(dir));
     await registry.load({ name: 'alphar', healthy: true });
-    const [running, interrupted] = await Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]);
+    const { running, interrupted } = await registry.beginRestore();
     return relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted }).map(({ agentId, resume }) => ({ agentId, resume }));
 }
 

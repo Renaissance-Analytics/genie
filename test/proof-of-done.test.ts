@@ -15,7 +15,7 @@ import { POD_KEY_SECRET, ProofOfDone, podKeyId, type PodPorts, type PendingNote 
 const b64u = (b: Buffer | Uint8Array) => Buffer.from(b).toString('base64url');
 
 interface Call { method: string; path: string; body?: unknown }
-type Options = { userId?: string | null; pending?: unknown[]; approval?: 'allowed' | 'denied'; keychainFails?: boolean; gitHas?: (cwd: string, sha: string) => boolean; pushOk?: boolean; signStatus?: number; secrets?: Map<string, string> };
+type Options = { userId?: string | null; pending?: unknown[]; approval?: 'allowed' | 'denied'; keychainFails?: boolean; gitHas?: (cwd: string, sha: string) => boolean; pushOk?: boolean; signStatus?: number; secrets?: Map<string, string>; hostKeyStatus?: number; pendingStatus?: number };
 
 const CLAIM = { v: 'pod/1', request: { system: 'tynn', project: 'p1', task: 7, story: 742 }, work: { repo: 'acme/widgets', commits: ['a'.repeat(40), 'b'.repeat(40)] }, score: { value: '0.800', checkpoint: 'C5', next: 'C6' }, nonce: 'n1' };
 const hashOf = (claim: unknown) => createHash('sha256').update(canonicalize(claim), 'utf8').digest();
@@ -29,6 +29,10 @@ function rig(options: Options = {}) {
     let userId: string | null = options.userId === undefined ? 'u1' : options.userId;
     let retry: PendingNote[] = [];
     let pushOk = options.pushOk ?? true;
+    let clock = 1_000;
+    let credential: string | null = 'cred-1';
+    let hostKeyStatus = options.hostKeyStatus ?? 201;
+    let pendingStatus = options.pendingStatus ?? 200;
     const ports: PodPorts = {
         keychain: {
             get: async (name: SecretName): Promise<KeychainRead> => options.keychainFails ? { kind: 'unavailable', reason: 'locked' } : secrets.has(name) ? { kind: 'value', value: secrets.get(name)! } : { kind: 'missing' },
@@ -37,10 +41,11 @@ function rig(options: Options = {}) {
         tynn: {
             signedIn: () => userId !== null,
             userId: () => userId,
+            credentialId: () => credential,
             request: async (path, init) => {
                 calls.push({ method: init.method, path, ...(init.body !== undefined ? { body: init.body } : {}) });
-                if (path === '/api/v1/pod/host-keys') return { ok: true, status: 201, json: async () => ({ data: { key_id: 'x' } }) };
-                if (path === '/api/v1/pod/pending') return { ok: true, status: 200, json: async () => ({ data: options.pending ?? [] }) };
+                if (path === '/api/v1/pod/host-keys') return { ok: hostKeyStatus < 300, status: hostKeyStatus, json: async () => ({ data: { key_id: 'x' } }) };
+                if (path === '/api/v1/pod/pending') return { ok: pendingStatus < 300, status: pendingStatus, json: async () => ({ data: options.pending ?? [] }) };
                 if (/^\/api\/v1\/pod\/[^/]+\/signature$/.test(path)) {
                     const status = options.signStatus ?? 200;
                     return { ok: status < 300, status, json: async () => ({ data: { token: 'pod1.HASH.SIG' } }) };
@@ -59,9 +64,11 @@ function rig(options: Options = {}) {
         retry: { load: async () => retry, save: async (notes) => { retry = [...notes]; } },
         label: () => 'Desk',
         log: (line) => { logs.push(line); },
-        now: () => 1_000,
+        now: () => clock,
     };
-    return { pod: new ProofOfDone(ports), ports, secrets, calls, logs, asked, gitCalls, retry: () => retry, setPush: (ok: boolean) => { pushOk = ok; }, setUser: (id: string | null) => { userId = id; } };
+    return { pod: new ProofOfDone(ports), ports, secrets, calls, logs, asked, gitCalls, retry: () => retry, setPush: (ok: boolean) => { pushOk = ok; }, setUser: (id: string | null) => { userId = id; },
+        advance: (ms: number) => { clock += ms; }, setCredential: (id: string | null) => { credential = id; },
+        setHostKeyStatus: (status: number) => { hostKeyStatus = status; }, setPendingStatus: (status: number) => { pendingStatus = status; } };
 }
 
 const item = (over: Record<string, unknown> = {}, claim: unknown = CLAIM) => ({ id: 'pod-1', status: 'pending', approval: 'agent', claim, claim_hash: b64u(hashOf(claim)), issued_at: '2026-11-15T10:00:00Z', ...over });
@@ -257,5 +264,110 @@ describe('the git note', () => {
         expect(r.gitCalls.some((g) => argumentsOf(g).some((a) => String(a).includes('upload-pack')))).toBe(false);
         expect(r.gitCalls.filter((g) => g.args[0] === 'cat-file')).toHaveLength(1);
         expect(r.gitCalls.some((g) => g.args.includes('c'.repeat(40)))).toBe(true);
+    });
+});
+
+/*
+ * A REFUSAL IS NOT ASKED AGAIN EVERY MINUTE (Tynn #755). Tynn answers every unauthorized request with 404, and before #755
+ * it refused Genie's pairing token on every PoD route, so the host asked again each poll (only a 422 was remembered) and
+ * each 404 also made the account re-check /me. Any 4xx now backs the whole PoD conversation off, doubling from 2 minutes
+ * to a cap of 6 hours; a new pairing credential or another person asks again at once.
+ */
+describe('a refusal from Tynn (Tynn #755)', () => {
+    const MIN = 60_000;
+    const hostKeyPosts = (r: ReturnType<typeof rig>) => posts(r).length;
+
+    it.each([400, 403, 404, 422, 429])('backs off after a %s at host-keys: the poll a minute later does not ask again', async (status) => {
+        const r = rig({ hostKeyStatus: status });
+        await r.pod.tick();
+        expect(hostKeyPosts(r)).toBe(1);
+        r.advance(MIN);
+        await r.pod.tick();
+        expect(hostKeyPosts(r), 'the next minute does not ask').toBe(1);
+        r.advance(MIN);
+        await r.pod.tick();
+        expect(hostKeyPosts(r), 'after the 2 minute backoff it asks again').toBe(2);
+        expect(r.calls.some((c) => c.path === '/api/v1/pod/pending'), 'no claims are asked for without a key').toBe(false);
+    });
+
+    it('doubles the wait after each refusal, up to a cap of 6 hours, and then keeps to the cap', async () => {
+        const r = rig({ hostKeyStatus: 404 });
+        const asks: number[] = [];
+        let last = 0;
+        for (let minute = 0; minute <= 3 * 24 * 60; minute++) {
+            await r.pod.tick();
+            if (hostKeyPosts(r) !== last) { last = hostKeyPosts(r); asks.push(minute); }
+            r.advance(MIN);
+        }
+        const gaps = asks.slice(1).map((m, i) => m - asks[i]!);
+        expect(gaps.slice(0, 8)).toEqual([2, 4, 8, 16, 32, 64, 128, 256]);
+        expect(gaps.slice(8).length).toBeGreaterThan(0);
+        expect(gaps.slice(8).every((g) => g === 360), 'capped at 6 hours').toBe(true);
+        expect(asks.length, 'about 20 asks in 3 days, not 4320').toBeLessThan(25);
+    });
+
+    it('says the refusal once per try, with when it tries again, never once a minute', async () => {
+        const r = rig({ hostKeyStatus: 404 });
+        for (let i = 0; i < 10; i++) { await r.pod.tick(); r.advance(MIN); }
+        const said = r.logs.filter((l) => l.includes('did not take the host key'));
+        expect(said.length).toBe(hostKeyPosts(r));
+        expect(said.length).toBeLessThan(10);
+        expect(said[0]).toMatch(/404/);
+        expect(said[0]).toMatch(/again in 2 min/);
+    });
+
+    it('CONTROL: a 5xx is not a refusal, so the next poll asks again', async () => {
+        const r = rig({ hostKeyStatus: 503 });
+        await r.pod.tick();
+        r.advance(MIN);
+        await r.pod.tick();
+        expect(hostKeyPosts(r)).toBe(2);
+    });
+
+    it('asks again at once when the pairing credential changes (signed in again), and when the person changes', async () => {
+        const r = rig({ hostKeyStatus: 404 });
+        await r.pod.tick();
+        r.advance(MIN);
+        await r.pod.tick();
+        expect(hostKeyPosts(r)).toBe(1);
+
+        r.setHostKeyStatus(201);
+        r.setCredential('cred-2');
+        await r.pod.tick();
+        expect(hostKeyPosts(r), 'a new credential asks at once').toBe(2);
+        expect(r.calls.at(-1)?.path, 'and, taken, goes on to the claims').toBe('/api/v1/pod/pending');
+
+        const other = rig({ hostKeyStatus: 404 });
+        await other.pod.tick();
+        other.setUser('u2');
+        await other.pod.tick();
+        expect(hostKeyPosts(other), 'another person asks at once').toBe(2);
+    });
+
+    it('starts again from 2 minutes once Tynn takes the key', async () => {
+        const r = rig({ hostKeyStatus: 404 });
+        await r.pod.tick();
+        r.advance(2 * MIN); await r.pod.tick();
+        expect(hostKeyPosts(r)).toBe(2);
+        r.setHostKeyStatus(201);
+        r.advance(4 * MIN); await r.pod.tick();
+        expect(hostKeyPosts(r), 'taken after the 4 minute wait').toBe(3);
+        r.setCredential('cred-2'); r.setHostKeyStatus(404);
+        await r.pod.tick();
+        expect(hostKeyPosts(r)).toBe(4);
+        r.advance(2 * MIN); await r.pod.tick();
+        expect(hostKeyPosts(r), 'the backoff starts again at 2 minutes').toBe(5);
+    });
+
+    it('backs off after a 4xx listing the claims too, without registering the key again', async () => {
+        const r = rig({ pendingStatus: 404 });
+        await r.pod.tick();
+        const pendingAsks = () => r.calls.filter((c) => c.path === '/api/v1/pod/pending').length;
+        expect(pendingAsks()).toBe(1);
+        r.advance(MIN); await r.pod.tick();
+        expect(pendingAsks(), 'not the next minute').toBe(1);
+        r.advance(MIN); await r.pod.tick();
+        expect(pendingAsks(), 'after 2 minutes').toBe(2);
+        expect(hostKeyPosts(r), 'the key stays registered').toBe(1);
     });
 });

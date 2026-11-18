@@ -71,9 +71,9 @@ describe('setWorkstationRole — asking Tynn', () => {
 describe('the list carries each workstation’s role from Tynn', () => {
     it('exactly pilot or drone, else unknown', async () => {
         const rows = [
-            { id: 'a', name: 'a', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'pilot' },
-            { id: 'b', name: 'b', status: 'active', is_local: false, connectable: true, source: 'owner', role: 'drone' },
-            { id: 'c', name: 'c', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'admin' },
+            { id: 'a', name: 'a', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'pilot' },
+            { id: 'b', name: 'b', status: 'active', is_local: false, connectable: true, source: 'owner', registered_by_you: true, role: 'drone' },
+            { id: 'c', name: 'c', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'admin' },
         ];
         const out = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set());
         expect(out.ok && out.workstations.map((w) => w.role)).toEqual(['pilot', 'drone', null]);
@@ -82,8 +82,8 @@ describe('the list carries each workstation’s role from Tynn', () => {
 
 describe('the switch on each workstation (a pilot only)', () => {
     const rows = { ok: true as const, workstations: [
-        { id: 'ws_desk', name: 'desk', active: true, connectable: true, local: true, source: 'owner', role: 'pilot' as const },
-        { id: 'ws_cloud', name: 'cloud', active: true, connectable: true, local: false, source: 'owner', role: 'drone' as const },
+        { id: 'ws_desk', name: 'desk', active: true, connectable: true, local: true, source: 'owner', mine: true, role: 'pilot' as const },
+        { id: 'ws_cloud', name: 'cloud', active: true, connectable: true, local: false, source: 'owner', mine: true, role: 'drone' as const },
         { id: 'ws_guest', name: 'pat', active: true, connectable: true, local: true, source: 'invite', role: 'pilot' as const },
     ] };
     const row = (html: string, id: string) => { const at = html.slice(html.indexOf(`data-tynn-workstation-row="${id}"`)); return at.slice(0, at.indexOf('</li>')); };
