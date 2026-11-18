@@ -1,7 +1,8 @@
 import { access, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { listRepos } from '../core/repo-registry.js';
-import { clearArtBoard, pinArtBoardPost, readArtBoard, restoreArtBoard, reviewArtBoardPost, type ReviewResult } from './artboard-host.js';
+import { pinArtBoardPost, readArtBoard, reviewArtBoardPost, type ReviewResult } from './artboard-host.js';
+import { clearArtBoard, restoreArtBoard } from './artboard-clear.js';
 import { repoCommit, repoCreateBranch, repoDiff, repoPull, repoPush, repoStage, repoStatus, repoUnstage, type RepoResult } from './repo-git.js';
 import type { ClearScope, ResolvedBoard } from '../core/artboard.js';
 import { readArtboardFiles, type ArtboardFilesBoard } from './artboard-files.js';

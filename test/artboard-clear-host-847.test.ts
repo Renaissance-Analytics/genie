@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BOARD_DIR, BOARD_HISTORY, BOARD_INDEX, parseBoard, type BoardPost } from '../src/core/artboard.js';
-import { clearArtBoard, restoreArtBoard, type ReviewDeps } from '../src/main/artboard-host.js';
+import { clearArtBoard, restoreArtBoard } from '../src/main/artboard-clear.js';
+import type { ReviewDeps } from '../src/main/artboard-host.js';
 import { artboardReview } from '../src/main/official-panels-host.js';
 import { WorkspaceStorage } from '../src/main/workspace-storage-host.js';
 
