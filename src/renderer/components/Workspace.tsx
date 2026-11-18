@@ -56,7 +56,7 @@ import type { WorkspaceView } from '../../core/route.js';
 import { workspaceDashboard } from '../../core/workspace-dashboard.js';
 import type { DeckItem } from '../../core/deck.js';
 import { lockedRepos, repoChip } from '../../core/repo-status.js';
-import { ViewHeader } from './ViewHeader.js';
+import { BAR_ACTION } from './TopBar.js';
 import { WorkspaceDashboard } from './WorkspaceDashboard.js';
 import { AgentRosterView, type AgentRosterViewProps } from './ImportedAgents.js';
 import { WorkspaceColorPicker } from './WorkspaceColorPicker.js';
@@ -649,44 +649,43 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             </div>
     </>);
 
+    // THE BAR'S RIGHT END (TopBar.tsx; the owner on beta.64: one bar, tabs along the top, no wasted space): a LOCKED repo,
+    // the one problem worth a chip ("I don't need all of the repos listed in the workspace header"), then the actions as icons.
+    const barEnd = (
+        <>
+            {ops?.repos?.list ? lockedRepos(ops.repos.list).map((r) => {
+                const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
+                return (
+                    <span key={r.slug} data-bar-status="" className="flex min-w-0 shrink items-center gap-1">
+                        <span data-repo-chip={r.slug} data-tone={chip.tone} title={chip.label} className="flex h-6 min-w-0 items-center gap-1 whitespace-nowrap rounded-md border border-[var(--danger)] px-1.5 font-mono text-[11px] text-[var(--danger)]">
+                            <Icon name="circle-alert" className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{chip.label}</span>
+                        </span>
+                        {chip.fix ? <Button size="xs" type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="shrink-0 whitespace-nowrap rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</Button> : null}
+                    </span>
+                );
+            }) : null}
+            <span data-bar-actions="" className="flex shrink-0 items-center">
+                {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
+                {files ? (
+                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} aria-label="Files" title="Files (⌘B)" className={`${BAR_ACTION}${panel === 'files' ? ' bg-[var(--bg-3)] text-[var(--fg-1)]' : ''}`}><Icon name="folder-tree" size="xs" /></Button>
+                ) : null}
+                {ops ? (ops.asleep ? (
+                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="wake" aria-label="Wake" title="Wake: agents and services start again" onClick={ops.onWake} className={BAR_ACTION}><Icon name="play" size="xs" /></Button>
+                ) : (
+                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="hibernate" aria-label="Hibernate" title="Hibernate: ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className={BAR_ACTION}><Icon name="moon" size="xs" /></Button>
+                )) : null}
+                {ops ? <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="remove-workspace" aria-label="Remove from Genie" title="Remove from Genie…" onClick={ops.onPreviewRemove} className={BAR_ACTION}><Icon name="trash-2" size="xs" /></Button> : null}
+            </span>
+        </>
+    );
+
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
+            {/* THE TRUST STEP COMES FIRST ON THE PAGE, above even the bar (scripts/trust-step-cdp.mjs check 5): nothing of an
+                untrusted workspace is offered before it asks. A terminal that could not open says so beside it. */}
             {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
             {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
-            {/*
-              * ONE HEADER (ViewHeader.tsx; the owner, 2026-11-16: "the different headers based on the view"): the agent view's,
-              * with the workspace as its one crumb. No repo list and no agent pills ("I don't need all of the repos listed in the
-              * workspace header either, or the agents in pill. they have tabs and a dashboard"): only a LOCKED repo, a problem
-              * with a fix, keeps its chip. The header fits its column by clipping, never by wrapping (beta.33 item 23).
-              */}
-            <ViewHeader
-                crumbs={[{ label: workspace.name ?? workspace.id, attrs: { 'data-workspace-name': '' } }]}
-                path={workspace.path}
-                status={ops?.repos?.list ? lockedRepos(ops.repos.list).map((r) => {
-                    const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
-                    return (
-                        <span key={r.slug} className="flex shrink-0 items-center gap-1.5">
-                            <span data-repo-chip={r.slug} data-tone={chip.tone} className="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] px-2 font-mono text-[11px] text-[var(--danger)]">
-                                <Icon name="circle-alert" className="h-3 w-3 shrink-0" />
-                                <span className="truncate">{chip.label}</span>
-                            </span>
-                            {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="shrink-0 whitespace-nowrap rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
-                        </span>
-                    );
-                }) : null}
-                actions={<>
-                    {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
-                    {files ? (
-                        <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} aria-label="Files" title="The workspace's files: one panel, who is touching what (⌘B)" className={`flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘B</kbd></button>
-                    ) : null}
-                    {ops ? (ops.asleep ? (
-                        <button type="button" data-action="wake" aria-label="Wake" title="Wake: agents and services start again" onClick={ops.onWake} className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="play" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Wake</span></button>
-                    ) : (
-                        <button type="button" data-action="hibernate" aria-label="Hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="moon" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Hibernate</span></button>
-                    )) : null}
-                    {ops ? <button type="button" data-action="remove-workspace" aria-label="Remove from Genie" title="Remove from Genie…" onClick={ops.onPreviewRemove} className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"><Icon name="trash-2" size="xs" className="shrink-0" /><span className="@max-[46rem]:hidden">Remove from Genie…</span></button> : null}
-                </>}
-            />
             {/*
               * THE STRIP (Tynn #282): Agents, the tabs you designed, a small +, Settings — + always just before Settings,
               * Settings always last. Labelled tabs, never a shortcut-only door (§4.0). The + needs somewhere to keep a tab:
@@ -709,8 +708,12 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
                 onOpenAgent={(id) => onOpenAgent?.(id)}
                 onShare={ops?.onShare}
+                trailing={barEnd}
+                path={workspace.path}
             />
             </ErrorBoundary>
+            {/* EVERYTHING UNDER THE BAR is the view's body: the bar stays put whatever opens below it. */}
+            <div data-view-body="" className="flex min-h-0 flex-1 flex-col">
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
                     {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.
@@ -1033,6 +1036,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                     </ErrorBoundary>
                 );
             })() : null}
+            </div>
         </section>
     );
 }
@@ -1053,16 +1057,15 @@ function ScratchTerminalButton({ open }: { open: () => Promise<{ ok: true } | { 
         );
     };
     return (
-        <span className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+        <span className="flex min-w-0 shrink items-center gap-1.5">
             {failed !== null ? (
                 <span data-scratch-terminal-error="" role="alert" className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--danger)]">
                     <span className="min-w-0 truncate" title={failed}>{failed}</span>
                     <Button size="xs" type="button" data-action="open-scratch-terminal-retry" onClick={go} disabled={busy} className="shrink-0 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]">Retry</Button>
                 </span>
             ) : null}
-            <Button size="xs" labelClassName="contents" type="button" data-action="open-scratch-terminal" loading={busy} onClick={go} title="A throwaway terminal in its own window; closing the window ends it" className="flex min-w-0 items-center gap-1.5 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
-                <Icon name="square-terminal" size="xs" className="shrink-0" />
-                <span className="truncate">Terminal</span>
+            <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="open-scratch-terminal" loading={busy} onClick={go} aria-label="Terminal" title="Terminal: a throwaway one in its own window; closing the window ends it" className={BAR_ACTION}>
+                <Icon name="square-terminal" size="xs" />
             </Button>
         </span>
     );

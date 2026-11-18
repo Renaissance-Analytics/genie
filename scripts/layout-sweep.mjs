@@ -216,76 +216,24 @@ for (const width of WIDTHS) {
 say('landing on the workspace');
 await evaluate(`window.location.hash = '#genie://workspace/tynn'; true`);
 await new Promise((r) => setTimeout(r, 400));
-const onWorkspace = await evaluate(`Boolean(document.querySelector('[data-surface="workspace"] [data-view-header]'))`);
+const onWorkspace = await evaluate(`Boolean(document.querySelector('[data-surface="workspace"] [data-top-bar]'))`);
 say(`workspace rendered: ${onWorkspace}`);
 if (!onWorkspace) {
     console.error('LAYOUT SWEEP could not reach the seeded workspace');
     process.exit(1);
 }
-const HEADER_PROBE = `
-    (() => {
-        const header = document.querySelector('[data-surface="workspace"] [data-view-header]');
-        const column = header ? header.closest('main') : null;
-        // THE POSITIVE CONTROL: the seeded workspace's own header — its name crumb and its actions — is what is measured.
-        // It lists no repos any more (the owner, 2026-11-16), so the twelve seeded repos are not in it: none healthy is locked.
-        // Its name is the seeded checkout's folder; its id is tynn.
-        const named = (header?.querySelector('[data-workspace-name]')?.textContent ?? '').trim();
-        const id = header?.closest('[data-surface="workspace"]')?.getAttribute('data-workspace') ?? null;
-        const actions = header ? header.querySelectorAll('[data-header-actions] [data-action]').length : 0;
-        const chips = header ? header.querySelectorAll('[data-repo-chip]').length : 0;
-        // WHAT spills, when something does: each child whose right edge passes the header's content box, by how much — so
-        // a failure names its element instead of only a number.
-        const box = header ? header.getBoundingClientRect() : null;
-        const padRight = header ? parseFloat(getComputedStyle(header).paddingRight) || 0 : 0;
-        // Only what is NOT clipped: an element inside a scrolling or hidden-overflow box (the agents strip) cannot widen the header.
-        const clipped = (el) => { for (let p = el.parentElement; p && p !== header; p = p.parentElement) { if (getComputedStyle(p).overflowX !== 'visible') return true; } return false; };
-        const spills = header && box ? [...header.querySelectorAll('*')].filter((el) => !clipped(el)).map((el) => {
-            const r = el.getBoundingClientRect();
-            const over = Math.round(r.right - (box.right - padRight));
-            const tag = el.tagName.toLowerCase();
-            const mark = [...el.attributes].filter((a) => a.name.startsWith('data-')).map((a) => a.name + (a.value ? '=' + a.value : '')).join(' ');
-            return { over, what: (tag + ' ' + mark + ' ' + (el.textContent ?? '').trim().slice(0, 24)).trim(), width: Math.round(r.width) };
-        }).filter((x) => x.over > 1).sort((a, b) => b.over - a.over).slice(0, 3) : [];
-        return JSON.stringify({
-            named, id, actions, chips,
-            header: header ? header.scrollWidth - header.clientWidth : null,
-            column: column ? column.scrollWidth - column.clientWidth : null,
-            headerWidth: box ? Math.round(box.width) : null,
-            spills,
-        });
-    })()
-`;
-for (const width of WIDTHS) {
-    await send('Emulation.setDeviceMetricsOverride', { width, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
-    await new Promise((r) => setTimeout(r, 250));
-    const r = JSON.parse(await evaluate(HEADER_PROBE));
-    check(r.id === 'tynn' && r.named !== '' && r.actions >= 3 && r.chips === 0, `${width}px — the seeded workspace's header: its name, its actions, no repo list`, JSON.stringify({ id: r.id, named: r.named, actions: r.actions, chips: r.chips }));
-    check(r.header !== null && r.header <= 1, `${width}px — the workspace header fits its column`, r.header > 1 ? `${r.header}px wider than its column (header ${r.headerWidth}px; spilling: ${JSON.stringify(r.spills)})` : '');
-    check(r.column !== null && r.column <= 1, `${width}px — the page column does not scroll sideways`, r.column > 1 ? `${r.column}px wider` : '');
-}
-
 /*
- * THE AGENT HEADER STAYS ONE LINE WITH THE CHAT PINNED (the owner's checklist, 2026-10-14: at 1024px with the chat pinned
- * the Windows VM's screenshot showed "genie2-vm /" on two lines and the provider chip wrapped — the chip is the provider's
- * LOGO since genie#1266). Measured on a real agent page with the chat in the dock, at every width and at 1024 by name: each
- * piece of the header is ONE line of text, and the header truncates rather than spill past its column.
+ * ONE BAR FOR EVERY VIEW (the owner on beta.64, 2026-11-17: "agents should not have a different header UX than
+ * workspaces ... I prefer the tabs along the top layout"). The workspace's tab strip is the view's only header: the tabs
+ * scroll inside it, the right end holds the selected view's status and actions. Measured: it is the surface's first
+ * child, 32px tall at every width, and it never pushes the page column sideways. The workspace's height is kept and the
+ * agent's is compared with it below.
  */
-say('landing on a workspace agent, chat pinned');
-await evaluate(`window.location.hash = '#genie://dashboard'; true`);
-await new Promise((r) => setTimeout(r, 400));
-await evaluate(`(() => { const stopped = document.querySelector('[data-dashboard-filter="stopped"]'); if (stopped?.getAttribute('aria-pressed') === 'false') stopped.click(); return true; })()`);
-const seededAgent = await evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])')?.getAttribute('data-agent') ?? null`);
-if (!seededAgent) {
-    console.error('LAYOUT SWEEP found no seeded workspace agent on the Dashboard');
-    process.exit(1);
-}
-await evaluate(`window.location.hash = '#genie://agent/${seededAgent}?tab=stream'; true`);
-await new Promise((r) => setTimeout(r, 600));
-const AGENT_HEADER_PROBE = `
+const BAR_PROBE = (surface) => `
     (() => {
-        const header = document.querySelector('[data-surface="agent"] [data-view-header]');
-        // How many lines an element's WORDS take: the distinct tops of its text nodes' line boxes. Text only — the chip's
-        // logo and the pill's dot are boxes of their own, at their own tops, and are not lines of text.
+        const surface = document.querySelector('[data-surface="${surface}"]');
+        const bar = surface?.firstElementChild?.hasAttribute('data-top-bar') ? surface.firstElementChild : null;
+        const column = bar ? bar.closest('main') : null;
         const lines = (el) => {
             if (!el) return 0;
             const tops = [];
@@ -298,32 +246,66 @@ const AGENT_HEADER_PROBE = `
             }
             return tops.sort((a, b) => a - b).filter((t, i, all) => i === 0 || t - all[i - 1] > 4).length;
         };
-        const crumb = header?.querySelector('[data-crumb]') ?? null;
-        const chip = header?.querySelector('[data-provider-chip]') ?? null;
-        const pill = header?.querySelector('[data-pill]') ?? null;
-        // The agent's name: its own mark, else (before it had one) the header's one bold span.
-        const name = header?.querySelector('[data-agent-name]') ?? header?.querySelector('span.font-medium') ?? null;
-        const buttons = header ? [...header.querySelectorAll('button[data-action]')] : [];
-        const box = header ? header.getBoundingClientRect() : null;
+        const selected = bar?.querySelector('[data-workspace-tab][aria-selected="true"], [data-agent-name][aria-selected="true"]') ?? null;
+        const chip = bar?.querySelector('[data-provider-chip]') ?? null;
+        const pill = bar?.querySelector('[data-pill]') ?? null;
+        const box = bar ? bar.getBoundingClientRect() : null;
         const pinned = document.querySelector('[data-chat="pinned"]');
         return JSON.stringify({
-            // THE POSITIVE CONTROLS: an agent page, the chat in the dock beside it, and the pieces that wrapped.
+            // THE POSITIVE CONTROLS: the bar is there, it is this surface's first child, and the selected tab is in it.
+            bar: Boolean(bar),
+            id: surface?.getAttribute('data-workspace') ?? surface?.getAttribute('data-agent') ?? null,
+            selected: (selected?.textContent ?? '').trim(),
+            selectedWidth: selected ? Math.round(selected.getBoundingClientRect().width) : null,
+            selectedLines: lines(selected),
+            title: selected?.getAttribute('title') ?? null,
+            actions: bar ? bar.querySelectorAll('[data-bar-actions] [data-action]').length : 0,
+            chips: bar ? bar.querySelectorAll('[data-repo-chip]').length : 0,
+            crumbs: surface ? surface.querySelectorAll('[data-crumb], [data-react-fancy-breadcrumbs], [data-header-path]').length : -1,
+            subviews: Boolean(bar?.querySelector('[data-agent-subviews] [data-tab]')),
+            logo: Boolean(chip?.querySelector('[data-provider-logo]')),
+            pill: lines(pill),
+            // An action shows its icon, never words: no line of text in any.
+            buttons: bar ? [...bar.querySelectorAll('[data-bar-actions] button[data-action]')].map((b) => b.getAttribute('data-action') + ':' + lines(b)) : [],
             pinned: Boolean(pinned),
             chatWidth: pinned ? Math.round(pinned.getBoundingClientRect().width) : 0,
-            pieces: [crumb, name, chip, pill].filter(Boolean).length,
-            logo: Boolean(chip?.querySelector('[data-provider-logo]')),
-            headerWidth: box ? Math.round(box.width) : null,
-            crumb: lines(crumb), name: lines(name), chip: lines(chip), pill: lines(pill),
-            // An action button shows one line of words, or none when only its icon shows — never two.
-            buttons: buttons.map((b) => b.getAttribute('data-action') + ':' + lines(b)),
-            crumbWidth: crumb ? Math.round(crumb.getBoundingClientRect().width) : null,
-            nameWidth: name ? Math.round(name.getBoundingClientRect().width) : null,
-            // Taller than its row = something wrapped; wider than its box = something spilled instead of truncating.
-            tall: header ? header.scrollHeight - header.clientHeight : null,
-            wide: header ? header.scrollWidth - header.clientWidth : null,
+            height: box ? Math.round(box.height) : null,
+            barWidth: box ? Math.round(box.width) : null,
+            wide: bar ? bar.scrollWidth - bar.clientWidth : null,
+            column: column ? column.scrollWidth - column.clientWidth : null,
         });
     })()
 `;
+const workspaceHeights = new Map();
+for (const width of WIDTHS) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
+    await new Promise((r) => setTimeout(r, 250));
+    const r = JSON.parse(await evaluate(BAR_PROBE('workspace')));
+    workspaceHeights.set(width, r.height);
+    check(r.bar && r.id === 'tynn' && r.selected === 'Dashboard' && (r.title ?? '') !== '' && r.actions >= 3 && r.chips === 0 && r.crumbs === 0, `${width}px — the seeded workspace's ONE bar: its Dashboard tab selected (the path its tooltip), its actions, no repo list, no crumbs`, JSON.stringify({ bar: r.bar, id: r.id, selected: r.selected, title: r.title, actions: r.actions, chips: r.chips, crumbs: r.crumbs }));
+    // One 32px line wherever the page is wide enough for it (from 1024px, measured by scripts/one-bar-proof.mjs). At 800px the
+    // pinned chat leaves the page 72px: the bar wraps there by design (TopBar.tsx), and only "nothing spills" is asked.
+    if (width >= 1024) check(r.height === 32, `${width}px — the workspace bar is one 32px line`, `${r.height}px`);
+    check(r.wide !== null && r.wide <= 1, `${width}px — the workspace bar fits its column`, r.wide > 1 ? `${r.wide}px wider than its column (bar ${r.barWidth}px)` : '');
+    check(r.column !== null && r.column <= 1, `${width}px — the page column does not scroll sideways`, r.column > 1 ? `${r.column}px wider` : '');
+}
+
+/*
+ * THE AGENT'S BAR IS THE SAME BAR, WITH THE CHAT PINNED (the owner's checklist, 2026-10-14: at 1024px with the chat pinned
+ * the agent header wrapped). Measured on a real agent page with the chat in the dock: its bar is its workspace's strip,
+ * as tall as the workspace's at the same width; its tab and pill are one line; its actions are icons; it holds its views.
+ */
+say('landing on a workspace agent, chat pinned');
+await evaluate(`window.location.hash = '#genie://dashboard'; true`);
+await new Promise((r) => setTimeout(r, 400));
+await evaluate(`(() => { const stopped = document.querySelector('[data-dashboard-filter="stopped"]'); if (stopped?.getAttribute('aria-pressed') === 'false') stopped.click(); return true; })()`);
+const seededAgent = await evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])')?.getAttribute('data-agent') ?? null`);
+if (!seededAgent) {
+    console.error('LAYOUT SWEEP found no seeded workspace agent on the Dashboard');
+    process.exit(1);
+}
+await evaluate(`window.location.hash = '#genie://agent/${seededAgent}?tab=stream'; true`);
+await new Promise((r) => setTimeout(r, 600));
 /*
  * 1024 first: the width the defect was seen at. Not 800: there the pinned chat (520px) and the rail (208px) leave the page
  * 72px, and what a page can do in 72px is the dock's question, not the header's.
@@ -332,14 +314,15 @@ const pinnedWidths = [...new Set([1024, ...WIDTHS.filter((w) => w >= 1024)])];
 for (const width of pinnedWidths) {
     await send('Emulation.setDeviceMetricsOverride', { width, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
     await new Promise((r) => setTimeout(r, 250));
-    const r = JSON.parse(await evaluate(AGENT_HEADER_PROBE));
+    const r = JSON.parse(await evaluate(BAR_PROBE('agent')));
     const at = `${width}px, chat pinned`;
-    check(r.pinned && r.pieces === 4 && r.logo, `${at} — an agent page with the chat in the dock, its crumb, name, logo chip and pill`, `pinned ${r.pinned} (${r.chatWidth}px), ${r.pieces} of 4 pieces, logo ${r.logo}, header ${r.headerWidth}px`);
-    check(r.crumb === 1 && r.name === 1 && r.chip === 1 && r.pill === 1 && r.buttons.every((b) => /:[01]$/.test(b)),
-        `${at} — the crumb, the name, the provider chip, the pill and each action are ONE line`, `crumb ${r.crumb}, name ${r.name}, chip ${r.chip}, pill ${r.pill}, actions ${r.buttons.join(' ')}`);
-    // Truncated, not vanished: a crumb or a name squeezed to nothing is not a truncation.
-    check(r.crumbWidth >= 24 && r.nameWidth >= 24, `${at} — the crumb and the name keep some of their words`, `crumb ${r.crumbWidth}px, name ${r.nameWidth}px`);
-    check(r.tall !== null && r.tall <= 1 && r.wide !== null && r.wide <= 1, `${at} — the agent header neither wraps nor spills: it truncates`, `${r.tall}px taller, ${r.wide}px wider than its box`);
+    check(r.bar && r.pinned && r.subviews && r.logo && r.crumbs === 0, `${at} — an agent page with the chat in the dock: ONE bar, its views and logo chip in it, no crumbs`, `bar ${r.bar}, pinned ${r.pinned} (${r.chatWidth}px), views ${r.subviews}, logo ${r.logo}, crumbs ${r.crumbs}`);
+    // From 1280px the page beside the pinned chat holds the whole bar on one line; at 1024px (~296px of page) the agent's
+    // right end wraps onto a line of its own, by design (TopBar.tsx), so only "it does not spill" is asked there.
+    if (width >= 1280) check(r.height === workspaceHeights.get(width), `${at} — the agent bar is as tall as the workspace bar`, `agent ${r.height}px, workspace ${workspaceHeights.get(width)}px`);
+    check(r.selectedLines === 1 && r.pill <= 1 && r.buttons.every((b) => /:0$/.test(b)), `${at} — its tab is ONE line, its pill at most one; its actions are icons`, `tab ${r.selectedLines}, pill ${r.pill}, actions ${r.buttons.join(' ')}`);
+    check(r.selectedWidth >= 24, `${at} — its tab keeps its name`, `${r.selectedWidth}px`);
+    check(r.wide !== null && r.wide <= 1, `${at} — the agent bar does not spill past its column`, `${r.wide}px wider than its box`);
 }
 
 await send('Emulation.clearDeviceMetricsOverride');

@@ -938,41 +938,44 @@ export function Shell({
 
 
                     {canServe && parsed.surface === 'agent' && agentDetail ? (
-                        // AN AGENT OPENS INSIDE ITS WORKSPACE (Tynn #805; the owner's choice, as in Genie 1): its page sits under
-                        // its workspace's strip — Dashboard, every agent of the workspace, your tabs, +, Settings — one click from each.
+                        // AN AGENT OPENS INSIDE ITS WORKSPACE (Tynn #805; the owner's choice, as in Genie 1): its page's bar IS its
+                        // workspace's strip — Dashboard, every agent of the workspace, your tabs, +, Settings — one click from each.
                         <div data-agent-in-workspace={agentWorkspace?.id ?? ''} className="flex h-full min-h-0 flex-col">
-                            {agentWorkspace ? (
-                                <ErrorBoundary surface="Tab strip" resetKeys={[parsed.agentId]}>
-                                <WorkspaceTabs
-                                    designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
-                                    agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
-                                    current={{ kind: 'agent', id: parsed.agentId }}
-                                    onShare={scoped ? undefined : workspaceOps?.onShare}
-                                    color={agentWorkspace.color ?? null}
-                                    canDesign={!readOnly && Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
-                                    hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
-                                    artboardWaiting={agentArtboardWaiting}
-                                    github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
-                                    // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
-                                    tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
-                                    // Storage too, as on the workspace's own views (Tynn #697): one strip whatever is selected.
-                                    storage={Boolean(features.storage)}
-                                    onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
-                                    onAdd={() => {
-                                        const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
-                                        const made = addTab(parseTabs(typeof raw === 'string' ? raw : '{"tabs":[]}'));
-                                        workspaceOps?.settings?.onSet('workspace_tabs', serializeTabs(made.state));
-                                        onNavigate(workspaceViewRoute(agentWorkspace.id, `tab:${made.id}`));
-                                    }}
-                                    onOpenAgent={onOpenAgent}
-                                    // The Active Plan column's toggle, at the strip's right end — only where the column exists.
-                                    {...(agentDetail.agent.fidelity !== 'observed' ? { planToggle: { open: planOpen, onToggle: () => setPlanColumn(!planOpen) } } : {})}
-                                />
-                                </ErrorBoundary>
-                            ) : null}
-                            <div className="min-h-0 flex-1">
                             <ErrorBoundary surface="Agent view" resetKeys={[parsed.agentId]}>
                             <AgentView
+                                // ITS WORKSPACE'S STRIP IS ITS BAR (TopBar.tsx; the owner on beta.64: one bar for every view): the agent puts
+                                // its state, its own views and its actions at the strip's right end; nothing is drawn above or below it.
+                                bar={agentWorkspace ? (trailing) => (
+                                    <ErrorBoundary surface="Tab strip" resetKeys={[parsed.agentId]}>
+                                    <WorkspaceTabs
+                                        designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
+                                        agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
+                                        current={{ kind: 'agent', id: parsed.agentId }}
+                                        onShare={scoped ? undefined : workspaceOps?.onShare}
+                                        color={agentWorkspace.color ?? null}
+                                        canDesign={!readOnly && Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
+                                        hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
+                                        artboardWaiting={agentArtboardWaiting}
+                                        github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
+                                        // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
+                                        tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
+                                        // Storage too, as on the workspace's own views (Tynn #697): one strip whatever is selected.
+                                        storage={Boolean(features.storage)}
+                                        onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
+                                        onAdd={() => {
+                                            const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
+                                            const made = addTab(parseTabs(typeof raw === 'string' ? raw : '{"tabs":[]}'));
+                                            workspaceOps?.settings?.onSet('workspace_tabs', serializeTabs(made.state));
+                                            onNavigate(workspaceViewRoute(agentWorkspace.id, `tab:${made.id}`));
+                                        }}
+                                        onOpenAgent={onOpenAgent}
+                                        // The Active Plan column's toggle, at the strip's right end — only where the column exists.
+                                        {...(agentDetail.agent.fidelity !== 'observed' ? { planToggle: { open: planOpen, onToggle: () => setPlanColumn(!planOpen) } } : {})}
+                                        trailing={trailing}
+                                        path={agentDetail.agent.cwd ?? null}
+                                    />
+                                    </ErrorBoundary>
+                                ) : undefined}
                                 chatRefs={chatRefs}
                                 planOpen={planOpen}
                                 onPlanCollapse={() => setPlanColumn(false)}
@@ -994,6 +997,8 @@ export function Shell({
                                 onNavigate={onNavigate}
                                 onSelect={onSelectRow}
                                 chatSubject={parsed.chat}
+                                // The chat holds the side for good: when it is this agent's, the bar's Chat would open what is open.
+                                chatInView={chatThread?.agentId === agentDetail.agent.id}
                                 onLanes={(next) => {
                                     const value = formatLanes(next);
                                     const base = `genie://agent/${agentDetail.agent.id}?tab=${parsed.tab}`;
@@ -1025,7 +1030,6 @@ export function Shell({
                                 terminalsReadOnly={readOnly}
                             />
                             </ErrorBoundary>
-                            </div>
                         </div>
                     ) : null}
 

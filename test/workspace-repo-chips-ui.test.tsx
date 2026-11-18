@@ -23,7 +23,8 @@ const ops: WorkspaceOpsProps = {
 };
 const render = (o: WorkspaceOpsProps | null = ops, view: 'home' | 'terminals' | 'settings' = 'home') =>
     renderToStaticMarkup(<Workspace view={view} workspace={{ id: 'acme', name: 'Acme', path: '/w/acme' }} terminals={NO_TERMINALS} ops={o ?? undefined} />);
-const header = (html: string) => html.slice(html.indexOf('<header data-view-header'), html.indexOf('</header>'));
+// The one bar (TopBar.tsx): its markup up to the view's body. The locked repo sits at its right end.
+const header = (html: string) => html.slice(html.indexOf('data-top-bar'), html.indexOf('data-view-body'));
 
 describe('repo chips', () => {
     it('only the locked repo is in the header (COUNTED: one of three)', () => {
