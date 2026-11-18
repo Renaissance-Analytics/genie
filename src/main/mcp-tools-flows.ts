@@ -32,7 +32,8 @@ import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 /** What the tool acts on: the flow store, and the scheduler's Run now. Main wires the composition's. */
 export interface FlowsPort {
     readonly store: Pick<import('./flows-host.js').FlowsApi, 'list' | 'get' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove'>;
-    readonly runNow: (flowId: string) => Promise<FlowRun>;
+    /** `by`: who pressed it (Tynn #839), recorded on the run: here, always the calling agent. */
+    readonly runNow: (flowId: string, by?: Actor) => Promise<FlowRun>;
     /** Stop a flow's run in flight (Tynn #833). Absent = this Genie cannot stop runs. */
     readonly stopRun?: (flowId: string, by: Actor) => Promise<StopAnswer>;
     /**
@@ -159,7 +160,8 @@ export function flowTools(deps: FlowToolsDeps): Registration[] {
                         // Started, not awaited, as the Flows tab's Run now is: a prompted agent's turn can take minutes. The
                         // outcome lands in the flow's runs (a run already going is recorded held). A rejection here is a flow
                         // removed while it ran, which has no runs left to read.
-                        void port.runNow(f.id).catch(() => {});
+                        // Recorded as started by this agent (Tynn #839: the run review says who).
+                        void port.runNow(f.id, me).catch(() => {});
                         return ok({ ok: true, started: f.id, note: 'running now; its outcome lands in the flow’s runs (`flows get`)' });
                     }
                     case 'stop': {

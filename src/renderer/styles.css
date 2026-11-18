@@ -148,3 +148,24 @@ nav,
     scrollbar-width: thin;
     scrollbar-color: var(--border-2, var(--border-1)) transparent;
 }
+
+/*
+ * A FLOW RUN ON THE CANVAS (Tynn #839): each node outlined by its outcome, the steps the run never reached faded, and the
+ * path it took drawn over the edges it did not. The classes are put on React Flow's node and edge wrappers by
+ * core/flow-run-review.ts `runCanvasGraph`.
+ */
+.react-flow__node.genie-run-node .ff-node { border-width: 2px; }
+.react-flow__node.genie-run-node--ran .ff-node { border-color: var(--success); }
+.react-flow__node.genie-run-node--delivered .ff-node { border-color: var(--sky-400); }
+.react-flow__node.genie-run-node--failed .ff-node,
+.react-flow__node.genie-run-node--stopped .ff-node { border-color: var(--danger); }
+.react-flow__node.genie-run-node--held .ff-node,
+.react-flow__node.genie-run-node--paused .ff-node,
+.react-flow__node.genie-run-node--queued .ff-node,
+.react-flow__node.genie-run-node--waiting .ff-node { border-color: var(--warning); }
+.react-flow__node.genie-run-node--running .ff-node { border-color: var(--sky-400); }
+.react-flow__node.genie-run-node--skipped,
+.react-flow__node.genie-run-node--not-reached { opacity: 0.45; }
+.react-flow__node.genie-run-node.selected .ff-node { box-shadow: 0 0 0 3px var(--primary); }
+.react-flow__edge.genie-run-edge--taken .react-flow__edge-path { stroke: var(--primary); stroke-width: 2.5px; }
+.react-flow__edge.genie-run-edge--idle .react-flow__edge-path { opacity: 0.3; stroke-dasharray: 4 4; }

@@ -2822,7 +2822,7 @@ async function boot(): Promise<void> {
             // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
             ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines), ...(processScheduler ? { runNow: (id: string) => processScheduler!.runNow(id) } : {}) } } : {}),
             // The agents' `flows` tool: the Flows tab's own store, and the scheduler's Run now (the tool runs only armed flows).
-            flows: { store: composed.flows, runNow: (id: string) => composed.flowScheduler.runNow(id), stopRun: (id, by) => composed.flowScheduler.stopRun(id, by), approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call) },
+            flows: { store: composed.flows, runNow: (id: string, by?: import('./flow-store.js').Actor) => composed.flowScheduler.runNow(id, by), stopRun: (id, by) => composed.flowScheduler.stopRun(id, by), approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call) },
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
             // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window.

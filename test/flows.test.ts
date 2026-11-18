@@ -468,7 +468,8 @@ describe('runs and their outcomes', () => {
         const scheduler = new FlowScheduler({ store, now, schedule: fc.schedule, run: async (_flow, trigger) => { triggers.push(trigger); } });
         const f = await store.create({ workspaceId: 'tynn', name: 'by hand', document: doc('0 3 * * *'), by: user });
         const run = await scheduler.runNow(f.id);
-        expect(run).toEqual({ at: '2026-10-11T05:03:00.000Z', endedAt: '2026-10-11T05:03:00.000Z', trigger: 'manual', outcome: 'ran' });
+        // Tynn #839: a Run now records who pressed it (here the person).
+        expect(run).toEqual({ at: '2026-10-11T05:03:00.000Z', endedAt: '2026-10-11T05:03:00.000Z', trigger: 'manual', outcome: 'ran', startedBy: { kind: 'user' } });
         expect(triggers).toEqual([{ nodeId: 't', cron: '0 3 * * *', timezone: 'UTC' }]);
         expect(store.get(f.id)!.armed).toBe(false);
         expect(scheduler.nextDue()).toBeNull();
