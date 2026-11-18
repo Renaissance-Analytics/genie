@@ -7,6 +7,8 @@ import { PLAYWRIGHT_NOTE_ENV, PlaywrightHost } from '../src/main/playwright-host
 import type { PlaywrightServerPorts } from '../src/main/playwright-server.js';
 import { playwrightTools } from '../src/main/mcp-tools-playwright.js';
 import type { Caller } from '../src/main/mcp-tools.js';
+import { PERSON_ONLY_TOOLS } from '../src/core/gapp-grants.js';
+import { genieCatalog } from '../src/main/genie-catalog.js';
 
 /**
  * A WORKSPACE'S LOCKFILE IS NOT TRUSTED INPUT (Tynn #846 review). Genie installs the Playwright a project pins just because
@@ -147,5 +149,17 @@ describe('the version goes to npm as ONE argument, and a hostile one builds no c
             expect((await installPlaywrightBrowsers(v, ['chromium'], true, r.ports)).kind, v).toBe('refused');
             expect(r.calls, v).toEqual([]);
         }
+    });
+});
+
+// ---------------------------------------------------------------- never granted to an app (decision 3)
+
+describe('the playwright tool is never granted to a GApp', () => {
+    it('it can wait on the person’s approval (another browser, a seventh set), so by decision 3 only an agent has it', () => {
+        expect(PERSON_ONLY_TOOLS.has('playwright')).toBe(true);
+        expect(genieCatalog().get('playwright')?.payload.grantable).toBe(false);
+    });
+    it('CONTROL: a tool an app may be granted still is (knowledge)', () => {
+        expect(genieCatalog().get('knowledge')?.payload.grantable).not.toBe(false);
     });
 });
