@@ -33,7 +33,7 @@ import { chatPickAfter, chatSubjectFor, resolveChatAgent } from '../core/chat-sc
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
 import { rewrittenAddress, routeFor, windowBridge, windowChromeOf } from './window-address.js';
-import { answerOutcome, remoteQuestionFeed } from './remote-questions-feed.js';
+import { answerOutcome, remoteQuestionFeed, visualsOutcome } from './remote-questions-feed.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -1095,11 +1095,24 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => { window.genie?.remoteQuestions?.report(questionFeed.host, questionFeed.items); }, [questionFeed.host, questionFeed.items]);
     const questionAct = useRef<((action: FeatureAction) => Promise<unknown>) | null>(null);
     questionAct.current = remote.state?.connected === true && resolvedBridge ? (action) => resolvedBridge.features.act(action) : null;
-    useEffect(() => window.genie?.remoteQuestions?.onAct?.((action) => answerOutcome(() => {
-        const act = questionAct.current;
-        if (!act) throw new Error('this window is no longer connected to that machine');
-        return act(action);
-    })), []);
+    // The connected machine's ArtBoard, for a question's visuals (Tynn #835): the reader this window's ArtBoard tab uses.
+    const questionArtboard = useRef<NonNullable<GenieBridge['artboard']> | null>(null);
+    questionArtboard.current = remote.state?.connected === true ? resolvedBridge?.artboard ?? null : null;
+    useEffect(() => window.genie?.remoteQuestions?.onAct?.((action) => {
+        // A connected machine's question's VISUALS (Tynn #835): read from its ArtBoard, through this window, as its tab reads them.
+        if ((action as { kind: string }).kind === 'deck.visuals') {
+            const artboard = questionArtboard.current;
+            return visualsOutcome((action as unknown as { item: DeckItem }).item, (workspaceId) => {
+                if (!artboard) throw new Error('this window is no longer connected to that machine');
+                return artboard.read(workspaceId);
+            });
+        }
+        return answerOutcome(() => {
+            const act = questionAct.current;
+            if (!act) throw new Error('this window is no longer connected to that machine');
+            return act(action);
+        });
+    }), []);
     // A workspace's designed tabs, once its settings are read (its tab addresses resolve from them).
     const [tabsByWorkspace, setTabsByWorkspace] = useState<ReadonlyMap<string, ReadonlyArray<{ id: string; name: string }>>>(() => new Map());
     const addressContext: AddressContext | null = snapshot.workstation && snapshot.workspaces
@@ -2221,6 +2234,8 @@ function DesktopApp({ bridge }: AppProps) {
             onSend={(id, text, attachments) => (id ? send(id, text, attachments ?? []) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: 'No agent to send to.' }))}
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}
+            // Withdraw / Edit a queued message (Tynn #843): the host takes it back, here and from a Pilot window alike.
+            onResolveQueued={chatThread && resolvedBridge ? (promptId, action) => resolvedBridge.resolvePrompt(chatThread.agentId, promptId, action) : undefined}
             answeringApproval={answering}
             approvalRefusal={approvalRefusal}
             onAnswerApproval={(id, optionId, note, approval) => answerApproval(id, optionId, note ?? '', approval ?? null)}

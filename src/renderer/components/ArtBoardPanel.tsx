@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Button, Card, ContentRenderer, Dropdown, Modal, Textarea, Toast, useToast } from '@particle-academy/react-fancy';
-import { clearChoices, clearedToast, clearPrompt, timelineOf, visiblePosts, type BoardFilter, type ClearScope, type DisplayPost, type DisplayVersion } from '../../core/artboard.js';
+import { clearChoices, clearedToast, clearPrompt, questionOutcomeWords, timelineOf, visiblePosts, type BoardFilter, type ClearScope, type DisplayPost, type DisplayVersion } from '../../core/artboard.js';
 import type { GenieBridge } from '../bridge.js';
 import { genieClipboardWriter } from '../clipboard.js';
 
@@ -132,9 +132,9 @@ function Trail({ post, open }: { readonly post: DisplayPost; readonly open: bool
                 {events.map((e, i) => (
                     <li key={i} data-trail-event={e.kind} className="flex flex-col text-[var(--fg-2)]">
                         <span className="font-mono text-[11px] text-[var(--fg-4)]">
-                            v{e.version} · {e.kind === 'version' ? `posted${e.by ? ` by ${e.by}` : ''}` : e.kind === 'verdict' ? `${e.verdict}${e.by ? ` by ${e.by}` : ''}` : `${e.by ?? 'agent'} replied`} · {when(e.at)}
+                            v{e.version} · {e.kind === 'version' ? `posted${e.by ? ` by ${e.by}` : ''}` : e.kind === 'verdict' ? `${e.verdict}${e.by ? ` by ${e.by}` : ''}` : e.kind === 'question' ? `${questionOutcomeWords(e.outcome)} in a question${e.by ? ` by ${e.by}` : ''}` : `${e.by ?? 'agent'} replied`} · {when(e.at)}
                         </span>
-                        {e.kind === 'version' ? (e.note ? <span>{e.note}</span> : null) : e.kind === 'verdict' ? (e.comment ? <span>“{e.comment}”</span> : null) : <span>{e.text}</span>}
+                        {e.kind === 'version' ? (e.note ? <span>{e.note}</span> : null) : e.kind === 'verdict' ? (e.comment ? <span>“{e.comment}”</span> : null) : e.kind === 'question' ? <span data-trail-question={e.questionId}>{e.header}{e.answer ? `: “${e.answer}”` : ''}</span> : <span>{e.text}</span>}
                     </li>
                 ))}
             </ol>

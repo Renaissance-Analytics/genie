@@ -64,7 +64,8 @@ describe('reading the Home', () => {
         expect(home.details).toBeNull();
         const d = home.dashboard!;
         expect(d.range).toBe(30);
-        expect(d.versions.map((v) => v.id)).toEqual(['v1', 'v0']);
+        // #848: the picker's versions are the current roadmap only, so the released v0 is not offered.
+        expect(d.versions.map((v) => v.id)).toEqual(['v1']);
         expect(d.version).toMatchObject({ id: 'v1', completedTasks: 5, totalTasks: 10, cycleTimeDays: 2.5, creep: { atActivation: 8, addedAfter: 2 }, window: { endsAt: '2026-11-15' } });
         expect(d.version!.forecast).toEqual({ tone: 'on_track', label: 'On track', etaDate: '2026-11-10', targetDate: '2026-11-15', daysDelta: 5, remaining: 5 });
         expect(d.attention[0]).toEqual({ id: 's1', slug: 'stuck', title: 'Stuck <thing>', status: 'blocked', openTasks: 2 });

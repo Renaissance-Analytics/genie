@@ -29,6 +29,7 @@ import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
 import { SendGrace, holdsSend, putBackUndone, type HeldSend } from '../../core/send-grace.js';
+import { takeBackQueued, type QueuedAction, type QueuedResolve } from '../../core/queued-withdraw.js';
 import { ChatHeldSends } from './ChatHeldSend.js';
 import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
@@ -64,7 +65,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -150,17 +151,33 @@ export const QUEUED_SILENT_MS = 120_000;
  * `Send now (stop the current turn)` — the Interrupt-and-send path: the turn ends and what waits goes next, in order.
  * Without a way to stop the turn, only the words. Hook-free: `now` comes from the caller.
  */
-export function ChatQueuedNote({ id, agentName, silentSince, now, onSendNow }: { id: string; agentName: string; silentSince: number | null; now: number; onSendNow?: (() => void) | undefined }) {
+export function ChatQueuedNote({ id, agentName, silentSince, now, onSendNow, actions }: { id: string; agentName: string; silentSince: number | null; now: number; onSendNow?: (() => void) | undefined; actions?: ReactNode }) {
     const silent = silentSince !== null && now - silentSince >= QUEUED_SILENT_MS;
     return (
         <span data-chat-queued={id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]">
             <span>Queued · waiting for the current turn to end</span>
+            {actions}
             {silent && onSendNow ? (
                 <Button type="button" size="xs" color="amber" data-action="send-now" data-message={id} title={`${agentName} has shown nothing for ${ago(silentSince, now)}: stop its current turn and send what waits, in order`} onClick={() => onSendNow()} className="shrink-0 font-sans">
                     Send now (stop the current turn)
                 </Button>
             ) : null}
         </span>
+    );
+}
+
+/**
+ * WITHDRAW AND EDIT ON A QUEUED MESSAGE (Tynn #843): small react-fancy buttons on the message's own Queued line, so
+ * nothing below moves when they appear or go. Withdraw takes it out of the queue (the agent never gets it); Edit also puts
+ * its words back in the composer. A withdrawn message keeps only Edit. Disabled while the host answers.
+ */
+export function ChatQueuedActions({ id, busy, withdrawn = false, onAction }: { id: string; busy: boolean; withdrawn?: boolean; onAction: (id: string, pressed: QueuedAction) => void }) {
+    const button = 'h-auto px-1 py-0 font-mono text-[11px]';
+    return (
+        <>
+            {withdrawn ? null : <Button size="xs" variant="ghost" type="button" data-action="withdraw-queued" data-message={id} disabled={busy} title="Take it back: the agent never gets it" onClick={() => onAction(id, 'withdraw')} className={`${button} text-[var(--fg-1)]`}>Withdraw</Button>}
+            <Button size="xs" variant="ghost" type="button" data-action="edit-queued" data-message={id} disabled={busy} title={withdrawn ? 'Put it back in the composer' : 'Take it back and put it in the composer to change'} onClick={() => onAction(id, 'edit')} className={`${button} text-[var(--fg-2)]`}>Edit</Button>
+        </>
     );
 }
 
@@ -285,6 +302,11 @@ export interface ChatFlyoutProps {
     /** Put an undelivered draft away, unsent (the owner, 2026-10-20: it was "stuck on my screen"). */
     onDiscardDraft?: ((draftId: string) => void) | undefined;
     /**
+     * Take back one of your messages still QUEUED for the turn's end (Tynn #843), by its prompt id: the host's
+     * `resolvePrompt(…, 'withdraw' | 'edit')`. Absent: queued messages offer no Withdraw / Edit.
+     */
+    onResolveQueued?: QueuedResolve | undefined;
+    /**
      * Present = a turn is running AND it can be stopped with the agent kept (`turnStopOffered`): `Stop this turn` sits on
      * the context line, with the turn's status. Absent = no turn Stop in the chat — never a Stop that ends the agent.
      */
@@ -392,7 +414,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 function ChatFlyoutBody({
     busy = false, onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onResolveQueued, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -505,10 +527,11 @@ function ChatFlyoutBody({
     // THE QUEUE (Tynn #702): your messages waiting behind the turn, and those not delivered, in the order written.
     const queue = (() => {
         const yours = messages.filter((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you');
-        const undelivered = yours.filter((m) => !m.delivered && !m.queued);
+        // A withdrawn message (Tynn #843) was taken back on purpose: not waiting, and not "not delivered".
+        const undelivered = yours.filter((m) => !m.delivered && !m.queued && !m.withdrawn);
         return { waiting: yours.filter((m) => m.queued || (m.waiting !== undefined && m.delivered)).length, undelivered, sendable: undelivered.filter((m) => !m.reason) };
     })();
-    const restartOn = [...messages].reverse().find((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you' && !m.delivered && !m.queued && !m.reason && m.resend !== 'send')?.id ?? null;
+    const restartOn = [...messages].reverse().find((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you' && !m.delivered && !m.queued && !m.withdrawn && !m.reason && m.resend !== 'send')?.id ?? null;
     /** The scroll height before a page of history was added: the reader stays on the message they were reading. */
     const anchorRef = useRef<number | null>(null);
     const showEarlier = () => {
@@ -582,6 +605,28 @@ function ChatFlyoutBody({
      * through the keeper because `setDraft` does not fire `onDraftChange`.
      */
     const composerRefs = useRef(new Map<string, DraftHandle>());
+    /*
+     * WITHDRAW / EDIT A QUEUED MESSAGE (Tynn #843, core/queued-withdraw.ts): the host takes it out of the queue, or says it
+     * was delivered first; only then do its words come back to this chat's composer. One press at a time per message.
+     */
+    const [queuedBusy, setQueuedBusy] = useState<ReadonlySet<string>>(() => new Set());
+    const [queuedProblems, setQueuedProblems] = useState<Readonly<Record<string, string>>>({});
+    const onQueuedAction = onResolveQueued ? (messageId: string, pressed: QueuedAction): void => {
+        const m = messages.find((x) => x.id === messageId);
+        const chat = activeChat;
+        if (!m?.promptId || chat === null || queuedBusy.has(messageId)) return;
+        setQueuedBusy((b) => new Set(b).add(messageId));
+        setQueuedProblems((p) => { if (!(messageId in p)) return p; const next = { ...p }; delete next[messageId]; return next; });
+        void takeBackQueued({
+            pressed, promptId: m.promptId, text: m.text,
+            composer: () => composerRefs.current.get(chat)?.getDraft() ?? (keeper && chat !== '' ? keeper.initial(chat) ?? null : null),
+            resolve: onResolveQueued,
+            putBack: (text, focus) => putBack(chat, text, focus),
+        }).then((r) => {
+            setQueuedBusy((b) => { const next = new Set(b); next.delete(messageId); return next; });
+            if (!r.ok) setQueuedProblems((p) => ({ ...p, [messageId]: r.reason }));
+        });
+    } : undefined;
     // Why each chat's last send was not sent (react-fancy's `onSubmitError`), until its next send.
     const [sendErrors, setSendErrors] = useState<Readonly<Record<string, string>>>({});
     const applied = useRef<number | null>(null);
@@ -790,6 +835,9 @@ function ChatFlyoutBody({
                     mailOnly={mailOnly}
                     onOpenMail={onOpenMail}
                     onDiscardDraft={onDiscardDraft}
+                    onQueuedAction={onQueuedAction}
+                    queuedBusy={queuedBusy}
+                    queuedProblems={queuedProblems}
                     loadAttachment={threadAttachment}
                 />
                 {/* Held for the undo window (Tynn #745): where the message will be, so nothing moves when it goes. */}
@@ -995,6 +1043,12 @@ export interface ChatMessagesProps {
     readonly mailOnly: boolean;
     readonly onOpenMail?: ((messageId: string) => void) | undefined;
     readonly onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /** Withdraw / Edit on your queued (or withdrawn) message (Tynn #843), by the message's id. Absent: not offered. */
+    readonly onQueuedAction?: ((messageId: string, pressed: QueuedAction) => void) | undefined;
+    /** Messages whose Withdraw / Edit is with the host now: their buttons are disabled until it answers. */
+    readonly queuedBusy?: ReadonlySet<string> | undefined;
+    /** What the host said when a Withdraw / Edit lost (it was delivered first), by message id. */
+    readonly queuedProblems?: Readonly<Record<string, string>> | undefined;
     /** Read one image a sent message kept, for THIS thread's agent (Tynn #642): the pill's thumbnail. Absent: images are named only. */
     readonly loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
 }
@@ -1004,7 +1058,7 @@ export interface ChatMessagesProps {
  * same rows as here, never a phone summary). The scroller, the history window, the queue bar and the composer are the
  * surface's own.
  */
-export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOpenMail, onDiscardDraft, loadAttachment }: ChatMessagesProps) {
+export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOpenMail, onDiscardDraft, onQueuedAction, queuedBusy, queuedProblems, loadAttachment }: ChatMessagesProps) {
     return (
         <>
             {/*
@@ -1063,7 +1117,7 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                     <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
                         <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
                         {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
-                        <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
+                        <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : m.withdrawn ? 'border-dashed border-[var(--border-2)] bg-[var(--bg-2)] text-[var(--fg-3)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
                         {/* What it sent (Tynn #642): a kept image is the composer's own pill, its thumbnail read from the host on first hover. */}
                         {m.attachments ? <SentAttachments id={m.id} names={m.attachments} refs={m.attachmentRefs} load={loadAttachment} /> : null}
                         {/*
@@ -1078,9 +1132,19 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                             <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                         ) : null}
                         {m.queued ? (m.queuedForStart || m.queuedForProvider
-                            ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>
-                            : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} />) : null}
-                        {m.delivered || m.queued ? null : (
+                            ? <span data-chat-queued={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"><span>{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>{onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null}</span>
+                            : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} actions={onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null} />) : null}
+                        {/* A Withdraw / Edit that lost to the turn's end (Tynn #843): the host's words, on the message. */}
+                        {queuedProblems?.[m.id] ? <span role="alert" className="text-[12px] text-[var(--warning)]">{queuedProblems[m.id]}</span> : null}
+                        {/* WITHDRAWN (Tynn #843): taken back before the agent got it; kept, to edit back into the composer or remove. */}
+                        {m.withdrawn ? (
+                            <span data-chat-withdrawn={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]">
+                                <span>Withdrawn · {thread?.name ?? 'the agent'} never got it</span>
+                                {onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} withdrawn onAction={onQueuedAction} /> : null}
+                                {onDiscardDraft ? <Button size="xs" variant="ghost" type="button" data-action="remove-draft" data-draft={m.id} aria-label="Remove this message" title="Remove this message" onClick={() => onDiscardDraft(m.id)} className="h-auto px-1 py-0 text-[13px] leading-none text-[var(--fg-3)] hover:text-[var(--fg-1)]">×</Button> : null}
+                            </span>
+                        ) : null}
+                        {m.delivered || m.queued || m.withdrawn ? null : (
                             <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
                                 {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
                                 <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>

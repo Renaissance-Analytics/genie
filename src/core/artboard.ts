@@ -106,7 +106,20 @@ export interface PostVersion {
 /** A verdict or a reply, against the version it was about. Verdicts are APPENDED — {@link BoardPost.review} is only the latest. */
 export type TrailEntry =
     | { type: 'verdict'; version: number; verdict: 'approved' | 'rejected'; comment?: string; at: string; by?: string }
-    | { type: 'reply'; version: number; text: string; at: string; agentId?: string; agentName?: string };
+    | { type: 'reply'; version: number; text: string; at: string; agentId?: string; agentName?: string }
+    /**
+     * A ForceTheQuestion question showed this item (Tynn #835) and the person decided: the item was the option CHOSEN, an
+     * option NOT chosen, SHOWN beside the question, or the question was DISMISSED. `answer` is what was chosen, in words.
+     */
+    | { type: 'question'; version: number; questionId: string; header: string; outcome: QuestionTrailOutcome; answer?: string; at: string; by?: string };
+
+export const QUESTION_TRAIL_OUTCOMES = ['chosen', 'not-chosen', 'shown', 'dismissed'] as const;
+export type QuestionTrailOutcome = (typeof QUESTION_TRAIL_OUTCOMES)[number];
+
+/** How a ForceTheQuestion decision reads on an item's trail (Tynn #835). */
+export function questionOutcomeWords(outcome: QuestionTrailOutcome): string {
+    return outcome === 'chosen' ? 'chosen' : outcome === 'not-chosen' ? 'not chosen' : outcome === 'shown' ? 'shown' : 'shown, question dismissed';
+}
 
 export type PostStatus = 'waiting' | 'approved' | 'rejected' | 'shown';
 export type BoardFilter = 'waiting' | 'decided' | 'all';
@@ -186,6 +199,13 @@ function toTrailEntry(raw: unknown): TrailEntry | null {
         if (r.verdict !== 'approved' && r.verdict !== 'rejected') return null;
         const e: TrailEntry = { type: 'verdict', version: r.version, verdict: r.verdict, at: r.at };
         if (typeof r.comment === 'string' && r.comment) e.comment = r.comment;
+        if (typeof r.by === 'string' && r.by) e.by = r.by;
+        return e;
+    }
+    if (r.type === 'question') {
+        if (typeof r.questionId !== 'string' || !r.questionId || typeof r.header !== 'string' || !(QUESTION_TRAIL_OUTCOMES as readonly unknown[]).includes(r.outcome)) return null;
+        const e: TrailEntry = { type: 'question', version: r.version, questionId: r.questionId, header: r.header, outcome: r.outcome as QuestionTrailOutcome, at: r.at };
+        if (typeof r.answer === 'string' && r.answer) e.answer = r.answer;
         if (typeof r.by === 'string' && r.by) e.by = r.by;
         return e;
     }
@@ -389,7 +409,8 @@ export function waitingCount(posts: readonly { askVerdict?: boolean | undefined;
 export type TimelineEvent =
     | { kind: 'version'; version: number; at: string; by?: string; note?: string }
     | { kind: 'verdict'; version: number; at: string; verdict: 'approved' | 'rejected'; comment?: string; by?: string }
-    | { kind: 'reply'; version: number; at: string; text: string; by?: string };
+    | { kind: 'reply'; version: number; at: string; text: string; by?: string }
+    | { kind: 'question'; version: number; at: string; questionId: string; header: string; outcome: QuestionTrailOutcome; answer?: string; by?: string };
 
 /** PURE. Everything that happened to an item, oldest first: each version posted, each verdict, each reply. */
 export function timelineOf(versions: readonly { n: number; createdAt: string; by?: string | undefined; note?: string | undefined }[], trail: readonly TrailEntry[]): TimelineEvent[] {
@@ -397,7 +418,9 @@ export function timelineOf(versions: readonly { n: number; createdAt: string; by
         ...versions.map((v): TimelineEvent => ({ kind: 'version', version: v.n, at: v.createdAt, ...(v.by ? { by: v.by } : {}), ...(v.note ? { note: v.note } : {}) })),
         ...trail.map((e): TimelineEvent => e.type === 'verdict'
             ? { kind: 'verdict', version: e.version, at: e.at, verdict: e.verdict, ...(e.comment ? { comment: e.comment } : {}), ...(e.by ? { by: e.by } : {}) }
-            : { kind: 'reply', version: e.version, at: e.at, text: e.text, ...(e.agentName ? { by: e.agentName } : {}) }),
+            : e.type === 'question'
+                ? { kind: 'question', version: e.version, at: e.at, questionId: e.questionId, header: e.header, outcome: e.outcome, ...(e.answer ? { answer: e.answer } : {}), ...(e.by ? { by: e.by } : {}) }
+                : { kind: 'reply', version: e.version, at: e.at, text: e.text, ...(e.agentName ? { by: e.agentName } : {}) }),
     ];
     return events.map((e, i) => ({ e, i })).sort((x, y) => x.e.at.localeCompare(y.e.at) || x.i - y.i).map(({ e }) => e);
 }

@@ -22,7 +22,7 @@ export interface FlowsEngineDeps {
     readonly resolve: (address: string) => Resolution;
     readonly agent: (id: string) => { name: string; workspaceId: string } | null;
     // Typed by what the runner asks of them, so a flow file names no hub (test/flows-acceptance-ci.test.ts holds the set).
-    readonly supervisor: Parameters<typeof supervisedCommand>[0]['supervisor'];
+    readonly supervisor: Parameters<typeof supervisedCommand>[0]['supervisor'] & { stop(id: string): unknown };
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     readonly addKnowledge: (entry: { title: string; body: string; [k: string]: unknown }) => Promise<{ id: string }>;
     readonly attention: Parameters<typeof questionWaiter>[0];
@@ -65,6 +65,8 @@ export function startFlowsEngine(deps: FlowsEngineDeps): FlowsEngine {
                     { supervisor: deps.supervisor, workspacePath: deps.workspacePath, envFor: deps.envFor },
                     { processId: `flow-run:${flow.id}`, name: `flow: ${flow.name}` },
                 ),
+                // STOP (Tynn #833): the flow's running command is its one supervised process.
+                stopCommand: () => { deps.supervisor.stop(`flow-run:${flow.id}`); },
                 // The person armed it (an agent never can), so what it writes is theirs.
                 addKnowledge: async (entry) => deps.addKnowledge({ ...entry, source: 'user' }),
                 // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.

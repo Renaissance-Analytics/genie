@@ -1,4 +1,4 @@
-import { formatRoute, parseRoute, type Route } from './route.js';
+import { formatRoute, parseRoute, WORKSPACE_VIEWS, type Route } from './route.js';
 
 /**
  * GENIE'S ADDRESSES: genie://{workstation}/{workspace-slug}/{tab} (the owner, 2026-10-19: "this whole address is wrong. it
@@ -42,8 +42,13 @@ export interface AddressContext {
 const OS_WORKSPACE = '__genie__';
 /** The words after the workstation that are pages, not workspaces. */
 const PAGES = ['dashboard', 'deck', 'hosting', 'settings', 'knowledge', 'flows', 'toolchain', 'inbox', 'browser', 'takeover', 'genie'] as const;
+/**
+ * A workspace's named views as address words: every view route.ts knows (`home` is written `dashboard`). Taken from
+ * route.ts, never listed twice: a list kept here missed ArtBoard and Storage, and their tabs landed on the Dashboard.
+ */
+const VIEW_WORDS: readonly string[] = WORKSPACE_VIEWS.filter((v) => v !== 'home');
 /** The words after a workspace that are its tabs (and its popped-out file window), not agents or designed tabs. */
-const TABS = ['dashboard', 'settings', 'github', 'tynn', 'terminals', 'files'] as const;
+const TABS: readonly string[] = ['dashboard', ...VIEW_WORDS, 'files'];
 /**
  * The old heads (`genie://workspace/<id>`…): an address that starts with one is read as it is. `flow` is the flow editor
  * window's own route (`genie://flow/<id>`, genie#1204): without it here the window read its route as "not a route" and
@@ -127,7 +132,7 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             const slug = slugsFor(ctx.workspaces).get(r.workspaceId);
             if (!slug) return internal;
             let tab = 'dashboard';
-            if (r.view === 'settings' || r.view === 'github' || r.view === 'tynn' || r.view === 'terminals') tab = r.view;
+            if (VIEW_WORDS.includes(r.view)) tab = r.view;
             else if (r.view.startsWith('tab:')) {
                 const designed = tabSlugs(ctx, r.workspaceId).get(r.view.slice(4));
                 if (!designed) return internal;
@@ -138,6 +143,8 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
                 if (r.filter === 'changed' && !r.detached) params.set('filter', 'changed');
                 if (r.file && r.line !== null && !r.detached) params.set('line', String(r.line));
             }
+            // A link to one ArtBoard item (Tynn #739) opens the tab on it.
+            if (r.view === 'artboard' && r.artboardItem) params.set('item', r.artboardItem);
             return withQuery(`${ws}/${slug}/${tab}`, params);
         }
         case 'files': {
@@ -245,8 +252,8 @@ function routeOfPage(address: string, ctx: AddressContext): string | null {
     if (!workspaceId) return null;
     const wsQuery = q(keep(['files', 'filter', 'line']));
     if (third === undefined || third === 'dashboard') return `genie://workspace/${workspaceId}${wsQuery}`;
-    if (third === 'settings' || third === 'github' || third === 'tynn' || third === 'terminals') {
-        const p = keep(['files', 'filter', 'line']);
+    if (VIEW_WORDS.includes(third)) {
+        const p = keep(third === 'artboard' ? ['files', 'filter', 'line', 'item'] : ['files', 'filter', 'line']);
         p.set('view', third);
         return `genie://workspace/${workspaceId}?${p.toString()}`;
     }

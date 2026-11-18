@@ -222,6 +222,8 @@ export interface ShellProps {
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** Discard an undelivered chat draft, unsent. */
     onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /** Withdraw / Edit one of your queued messages in the open chat (Tynn #843): the host's `resolvePrompt`. */
+    onResolveQueued?: import('../core/queued-withdraw.js').QueuedResolve | undefined;
     onOpenAgent: (agentId: string) => void;
     /** The Dashboard's row click: that agent's chat, docked beside the Dashboard, which stays (genie#1209). */
     onChatAgent?: ((agentId: string) => void) | undefined;
@@ -469,6 +471,7 @@ export function Shell({
     onSend,
     onRestartAndSend,
     onDiscardDraft,
+    onResolveQueued,
     answeringApproval,
     approvalRefusal = null,
     onAnswerApproval,
@@ -686,7 +689,7 @@ export function Shell({
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk && !scoped ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
-                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); } } : undefined}
+                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); }, onStop: (flowId) => { void onFeature({ kind: 'flows.stop', flowId }); } } : undefined}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || scoped || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
@@ -952,6 +955,8 @@ export function Shell({
                                     github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
                                     // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
                                     tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
+                                    // Storage too, as on the workspace's own views (Tynn #697): one strip whatever is selected.
+                                    storage={Boolean(features.storage)}
                                     onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
                                     onAdd={() => {
                                         const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
@@ -1220,6 +1225,7 @@ export function Shell({
                         {...(featureAsk && !scoped ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
+                        onResolveQueued={readOnly ? undefined : onResolveQueued}
                         onStopTurn={chatTurnStop && chatThread && !readOnly ? () => onCancelTurn?.(chatThread.agentId, 'stop') : undefined}
                         // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
                         // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).

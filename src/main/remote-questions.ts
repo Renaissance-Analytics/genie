@@ -18,10 +18,14 @@ export type RemoteQuestionAction =
     | { kind: 'deck.answerForm'; selections: string[][]; notes: string[] }
     | { kind: 'deck.dismiss'; notes: string[] };
 
-/** What the window driving the host is asked to send, as the host's FeatureAction. */
+/**
+ * What the window driving the host is asked to do: send an answer or a Dismiss as the host's FeatureAction, or read the
+ * question's VISUALS from the host's ArtBoard (Tynn #835) — the board as that window's ArtBoard tab reads it.
+ */
 export type RemoteDeckAction =
     | { kind: 'deck.answerForm'; item: DeckItem; selections: string[][]; notes: string[]; note: string }
-    | { kind: 'deck.dismiss'; item: DeckItem; notes: string[] };
+    | { kind: 'deck.dismiss'; item: DeckItem; notes: string[] }
+    | { kind: 'deck.visuals'; item: DeckItem };
 
 export interface RemoteQuestionRequest {
     readonly id: string;
@@ -47,7 +51,8 @@ interface Reported {
 
 interface Pending {
     readonly sender: number;
-    readonly resolve: () => void;
+    /** The window's outcome, once it said ok. */
+    readonly resolve: (outcome: Record<string, unknown>) => void;
     readonly reject: (error: Error) => void;
     readonly timer: ReturnType<typeof setTimeout>;
     readonly host: string;
@@ -121,18 +126,31 @@ export class RemoteQuestions {
 
     /** Answer or Dismiss another machine's question, through the window driving it. Rejects with the reason it was refused. */
     act(item: DeckItem, action: RemoteQuestionAction): Promise<void> {
+        return this.#request(item, (original) => (action.kind === 'deck.answerForm'
+            ? { kind: 'deck.answerForm', item: original, selections: action.selections, notes: action.notes, note: '' }
+            : { kind: 'deck.dismiss', item: original, notes: action.notes })).then(() => undefined);
+    }
+
+    /**
+     * Another machine's question's VISUALS (Tynn #835): its ArtBoard posts, read through the window driving that machine —
+     * the board as its ArtBoard tab reads it, so a remote driver sees what a person at that machine sees.
+     */
+    visuals(item: DeckItem): Promise<{ posts: readonly unknown[] }> {
+        return this.#request(item, (original) => ({ kind: 'deck.visuals', item: original }))
+            .then((outcome) => ({ posts: Array.isArray(outcome.posts) ? outcome.posts.filter((p) => typeof p === 'object' && p !== null) : [] }));
+    }
+
+    #request(item: DeckItem, build: (original: DeckItem) => RemoteDeckAction): Promise<Record<string, unknown>> {
         let sender: number | null = null;
         let reported: Reported | null = null;
         for (const [s, r] of this.#byWindow) if (r.originals.has(item.id)) { sender = s; reported = r; }
         if (sender === null || reported === null) return Promise.reject(new Error('that question was already answered'));
         const original = reported.originals.get(item.id)!;
         const host = reported.host;
-        const remote: RemoteDeckAction = action.kind === 'deck.answerForm'
-            ? { kind: 'deck.answerForm', item: original, selections: action.selections, notes: action.notes, note: '' }
-            : { kind: 'deck.dismiss', item: original, notes: action.notes };
+        const remote = build(original);
         const id = `rq_${++this.#next}`;
         const to = sender;
-        return new Promise<void>((resolve, reject) => {
+        return new Promise<Record<string, unknown>>((resolve, reject) => {
             const timer = setTimeout(() => {
                 if (!this.#pending.delete(id)) return;
                 reject(new Error(`${host} did not answer in time; the question is still there`));
@@ -154,7 +172,7 @@ export class RemoteQuestions {
         clearTimeout(p.timer);
         this.#pending.delete(requestId);
         const o = outcome as Partial<Outcome> | null;
-        if (o && o.ok === true) p.resolve();
+        if (o && o.ok === true) p.resolve(o as Record<string, unknown>);
         else p.reject(new Error(o && o.ok === false && typeof o.reason === 'string' ? o.reason : `${p.host} did not say whether it took the answer`));
         return true;
     }

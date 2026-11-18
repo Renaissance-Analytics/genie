@@ -181,6 +181,9 @@ export function KnowledgeSurface({ data, onAction, workspaces = [] }: SurfacePro
 }
 
 const OUTCOME_LABEL = { ran: 'ran', failed: 'failed', held: 'held back', stopped: 'stopped by quit' } as const;
+/** A run's outcome in words: one a person or an agent stopped says who (Tynn #833). */
+const outcomeLabel = (r: { outcome: keyof typeof OUTCOME_LABEL; stoppedBy?: string | undefined }): string =>
+    r.outcome === 'stopped' && r.stoppedBy !== undefined ? (r.stoppedBy === 'you' ? 'stopped by you' : `stopped by ${r.stoppedBy}`) : OUTCOME_LABEL[r.outcome];
 const OUTCOME_COLOR = { ran: 'green', failed: 'red', held: 'amber', stopped: 'amber' } as const;
 
 type FlowRecordView = NonNullable<FeatureData['flows']>['flows'][number];
@@ -210,13 +213,14 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
             {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
             {last ? (
                 <span data-flow-last={last.outcome} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
-                    <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[last.outcome]}</Badge>
+                    <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{outcomeLabel(last)}</Badge>
                     {new Date(last.at).toLocaleString()}
                 </span>
             ) : (
                 <span className="text-xs text-[var(--fg-4)]">not run yet</span>
             )}
             <span className="ml-auto flex gap-3">
+                {f.inFlight ? <Button size="xs" type="button" data-flow-stop={f.id} className="text-[13px] text-[var(--danger)]" title="Stop this run now" onClick={() => onAction({ kind: 'flows.stop', flowId: f.id })}>Stop</Button> : null}
                 <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.runNow', flowId: f.id })}>Run now</Button>
                 {f.armed ? (
                     <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</Button>
@@ -245,7 +249,7 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                     <ol className="mt-1 flex flex-col gap-1">
                         {[...runs].reverse().map((r, i) => (
                             <li key={`${runs.length - i}:${r.at}`} data-flow-run={r.outcome} className="flex items-baseline gap-2 text-xs">
-                                <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
+                                <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{outcomeLabel(r)}</Badge>
                                 <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
                                 <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : r.trigger === 'file' ? `when ${r.file ?? 'a file'} was added` : 'on schedule'}</span>
                                 {r.nodes ? <Button size="xs" type="button" className="text-[var(--fg-3)]" onClick={open} title="Open the flow; pick this run to see it on the canvas">on the canvas</Button> : null}
