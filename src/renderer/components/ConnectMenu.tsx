@@ -150,67 +150,78 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {}, onS
             </div>
         );
     }
+    const row = (w: TynnWorkstationRow) => {
+        const state = opening[w.id] ?? { kind: 'idle' as const };
+        const role = changed[w.id] ?? w.role ?? null;
+        // Only your own desktops: a cloud machine is always a drone, and one shared with you is not yours to change.
+        const switchable = onSetRole !== undefined && w.local && w.mine === true && role !== null;
+        const confirm = (to: 'pilot' | 'drone', code: string) => {
+            if (!onSetRole) return;
+            setChanging({ id: w.id, to, code, state: { kind: 'working', step: 'Asking Tynn…' } });
+            onSetRole(w, to, code).then(
+                (r) => {
+                    if (r.ok) setChanged((now) => ({ ...now, [w.id]: r.role }));
+                    setChanging((now) => (now?.id === w.id ? { ...now, code: r.ok ? '' : now.code, state: r.ok ? { kind: 'done', note: `${w.name} is now a ${r.role}` } : { kind: 'failed', reason: r.reason } } : now));
+                },
+                (error: unknown) => setChanging((now) => (now?.id === w.id ? { ...now, state: { kind: 'failed', reason: error instanceof Error ? error.message : String(error) } } : now)),
+            );
+        };
+        return (
+            <li key={w.id} data-tynn-workstation-row={w.id} className="flex flex-col gap-1 rounded-lg px-2 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
+                <div className="flex items-center gap-2">
+                    {/* Desktop or cloud is a glyph, named for a screen reader and on hover (the owner's reduce-reading rule). */}
+                    <span title={w.local ? 'Desktop' : 'Cloud'} aria-label={w.local ? 'Desktop' : 'Cloud'} className="flex shrink-0 text-[var(--fg-3)]">
+                        <Icon name={w.local ? 'monitor' : 'cloud'} size="sm" />
+                    </span>
+                    <PresenceDot online={w.online} />
+                    <span className="min-w-0 flex-1 font-semibold break-words">{w.name}</span>
+                    {w.mine !== true ? <span title="Shared with you" aria-label="Shared with you" className="flex shrink-0 text-[var(--fg-4)]"><Icon name="link" size="xs" /></span> : null}
+                    {role ? (
+                        <span data-workstation-role={role} title={ROLE_TITLE[role]} aria-label={ROLE_NAME[role]} className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-medium ${role === 'pilot' ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'bg-[var(--bg-3)] text-[var(--fg-3)]'}`}><Icon name={ROLE_ICON[role]} size="xs" />{ROLE_NAME[role]}</span>
+                    ) : null}
+                    {switchable && role ? (
+                        <Button size="xs" labelClassName="contents" type="button" data-action="change-role" title={`Make ${w.name} a ${role === 'pilot' ? 'drone' : 'pilot'}`} onClick={() => setChanging({ id: w.id, to: role === 'pilot' ? 'drone' : 'pilot', code: '', state: { kind: 'idle' } })} className={`shrink-0 whitespace-nowrap ${BUTTON}`}>
+                            <Icon name={ROLE_ICON[role === 'pilot' ? 'drone' : 'pilot']} size="xs" />Make {role === 'pilot' ? 'drone' : 'pilot'}
+                        </Button>
+                    ) : null}
+                    {w.connectable && onOpenWorkstation ? (
+                        // Its step is the button's spinner and "opened" a Flash on it: no line under the row (the owner, 2026-11-16).
+                        <Flash note={state.kind === 'done' ? state.note : null}>
+                            <Button size="xs" type="button" data-action="open-workstation" title={state.kind === 'working' ? state.step : `Open ${w.name} in its own window`} loading={state.kind === 'working'} aria-busy={state.kind === 'working' ? true : undefined} onClick={() => onOpenWorkstation(w)} className={`shrink-0 whitespace-nowrap ${OPEN_BUTTON}`}>Open</Button>
+                        </Flash>
+                    ) : (
+                        <span className="shrink-0 text-[11px] whitespace-nowrap text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
+                    )}
+                </div>
+                {onOpenWorkstation && state.kind === 'failed' ? <Progress state={state} onRetry={() => onOpenWorkstation(w)} retryAction="retry-workstation" /> : null}
+                {changing?.id === w.id ? (
+                    <RoleChangeForm
+                        to={changing.to}
+                        name={w.name}
+                        code={changing.code}
+                        state={changing.state}
+                        onCode={(code) => setChanging((now) => (now ? { ...now, code, state: now.state.kind === 'working' ? now.state : { kind: 'idle' } } : now))}
+                        onConfirm={() => confirm(changing.to, changing.code)}
+                        onCancel={() => setChanging(null)}
+                    />
+                ) : null}
+            </li>
+        );
+    };
+    // THIS ACCOUNT'S OWN MACHINES APART FROM SHARED ONES (Tynn #757, security): Tynn's `owner` alone does not make a
+    // machine yours; `mine` is owner AND registered by this account. Everything else is listed under its own heading.
+    const yours = list.workstations.filter((w) => w.mine === true);
+    const shared = list.workstations.filter((w) => w.mine !== true);
     return (
-        <ul data-tynn-workstations="" className="flex flex-col gap-0.5">
-            {list.workstations.map((w) => {
-                const state = opening[w.id] ?? { kind: 'idle' as const };
-                const role = changed[w.id] ?? w.role ?? null;
-                // Only your own desktops: a cloud machine is always a drone, and one shared with you is not yours to change.
-                const switchable = onSetRole !== undefined && w.local && w.source === 'owner' && role !== null;
-                const confirm = (to: 'pilot' | 'drone', code: string) => {
-                    if (!onSetRole) return;
-                    setChanging({ id: w.id, to, code, state: { kind: 'working', step: 'Asking Tynn…' } });
-                    onSetRole(w, to, code).then(
-                        (r) => {
-                            if (r.ok) setChanged((now) => ({ ...now, [w.id]: r.role }));
-                            setChanging((now) => (now?.id === w.id ? { ...now, code: r.ok ? '' : now.code, state: r.ok ? { kind: 'done', note: `${w.name} is now a ${r.role}` } : { kind: 'failed', reason: r.reason } } : now));
-                        },
-                        (error: unknown) => setChanging((now) => (now?.id === w.id ? { ...now, state: { kind: 'failed', reason: error instanceof Error ? error.message : String(error) } } : now)),
-                    );
-                };
-                return (
-                    <li key={w.id} data-tynn-workstation-row={w.id} className="flex flex-col gap-1 rounded-lg px-2 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
-                        <div className="flex items-center gap-2">
-                            {/* Desktop or cloud is a glyph, named for a screen reader and on hover (the owner's reduce-reading rule). */}
-                            <span title={w.local ? 'Desktop' : 'Cloud'} aria-label={w.local ? 'Desktop' : 'Cloud'} className="flex shrink-0 text-[var(--fg-3)]">
-                                <Icon name={w.local ? 'monitor' : 'cloud'} size="sm" />
-                            </span>
-                            <PresenceDot online={w.online} />
-                            <span className="min-w-0 flex-1 font-semibold break-words">{w.name}</span>
-                            {w.source && w.source !== 'owner' ? <span title="Shared with you" aria-label="Shared with you" className="flex shrink-0 text-[var(--fg-4)]"><Icon name="link" size="xs" /></span> : null}
-                            {role ? (
-                                <span data-workstation-role={role} title={ROLE_TITLE[role]} aria-label={ROLE_NAME[role]} className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-medium ${role === 'pilot' ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'bg-[var(--bg-3)] text-[var(--fg-3)]'}`}><Icon name={ROLE_ICON[role]} size="xs" />{ROLE_NAME[role]}</span>
-                            ) : null}
-                            {switchable && role ? (
-                                <Button size="xs" labelClassName="contents" type="button" data-action="change-role" title={`Make ${w.name} a ${role === 'pilot' ? 'drone' : 'pilot'}`} onClick={() => setChanging({ id: w.id, to: role === 'pilot' ? 'drone' : 'pilot', code: '', state: { kind: 'idle' } })} className={`shrink-0 whitespace-nowrap ${BUTTON}`}>
-                                    <Icon name={ROLE_ICON[role === 'pilot' ? 'drone' : 'pilot']} size="xs" />Make {role === 'pilot' ? 'drone' : 'pilot'}
-                                </Button>
-                            ) : null}
-                            {w.connectable && onOpenWorkstation ? (
-                                // Its step is the button's spinner and "opened" a Flash on it: no line under the row (the owner, 2026-11-16).
-                                <Flash note={state.kind === 'done' ? state.note : null}>
-                                    <Button size="xs" type="button" data-action="open-workstation" title={state.kind === 'working' ? state.step : `Open ${w.name} in its own window`} loading={state.kind === 'working'} aria-busy={state.kind === 'working' ? true : undefined} onClick={() => onOpenWorkstation(w)} className={`shrink-0 whitespace-nowrap ${OPEN_BUTTON}`}>Open</Button>
-                                </Flash>
-                            ) : (
-                                <span className="shrink-0 text-[11px] whitespace-nowrap text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
-                            )}
-                        </div>
-                        {onOpenWorkstation && state.kind === 'failed' ? <Progress state={state} onRetry={() => onOpenWorkstation(w)} retryAction="retry-workstation" /> : null}
-                        {changing?.id === w.id ? (
-                            <RoleChangeForm
-                                to={changing.to}
-                                name={w.name}
-                                code={changing.code}
-                                state={changing.state}
-                                onCode={(code) => setChanging((now) => (now ? { ...now, code, state: now.state.kind === 'working' ? now.state : { kind: 'idle' } } : now))}
-                                onConfirm={() => confirm(changing.to, changing.code)}
-                                onCancel={() => setChanging(null)}
-                            />
-                        ) : null}
-                    </li>
-                );
-            })}
-        </ul>
+        <div data-tynn-workstation-groups="" className="flex flex-col gap-2">
+            {yours.length > 0 ? <ul data-tynn-workstations="yours" className="flex flex-col gap-0.5">{yours.map(row)}</ul> : null}
+            {shared.length > 0 ? (
+                <div className="flex flex-col gap-0.5">
+                    <p data-tynn-workstations-heading="shared" className="flex items-center gap-1.5 px-2 text-[11px] font-medium text-[var(--fg-3)]"><Icon name="link" size="xs" />Shared with you</p>
+                    <ul data-tynn-workstations="shared" className="flex flex-col gap-0.5">{shared.map(row)}</ul>
+                </div>
+            ) : null}
+        </div>
     );
 }
 

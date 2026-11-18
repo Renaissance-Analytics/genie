@@ -25,6 +25,12 @@ export interface TynnWorkstation {
     readonly local: boolean;
     /** owner | grant | invite; `null` when not entitled. */
     readonly source: string | null;
+    /**
+     * THIS ACCOUNT'S OWN MACHINE (Tynn #757, security): Tynn says `owner` AND that this account registered it
+     * (`registered_by_you`). Anything else, a Tynn that does not say included, is shared with you: never filed beside
+     * your own machines.
+     */
+    readonly mine: boolean;
     /** Its Pilot/Drone role as Tynn holds it (genie#1278): exactly one of the two, else `null`. */
     readonly role: 'pilot' | 'drone' | null;
     /**
@@ -75,6 +81,7 @@ export async function connectableWorkstations(request: SessionRequest, thisMachi
             connectable: r.connectable === true,
             local: r.is_local === true,
             source: typeof r.source === 'string' ? r.source : null,
+            mine: r.source === 'owner' && r.registered_by_you === true,
             role: r.role === 'pilot' || r.role === 'drone' ? r.role : null,
             online: typeof r.online === 'boolean' ? r.online : null,
         });
@@ -214,6 +221,8 @@ export function startRelayHost(input: {
     workstationId: string;
     fingerprint: string;
     sign: (data: Buffer) => Buffer | Promise<Buffer>;
+    /** The Tynn account signed in on this machine (Tynn #757): the only one admitted as the owner. */
+    signedInHere: () => string | null;
     attach?: (transport: ServerTransport) => () => void;
     onStatus?: (status: RelayHostStatus) => void;
     reconnect?: { minMs: number; maxMs: number };
@@ -264,6 +273,7 @@ export function startRelayHost(input: {
                 return buildTicketHostHello({ ticket: t.ticket, workstationId: input.workstationId, fingerprint: input.fingerprint, sign: input.sign });
             },
             validateGrant: grantValidator({ workstationId: input.workstationId, keys: () => input.ports.keys(), introspect: (t) => input.ports.introspect(t) }),
+            signedInHere: input.signedInHere,
             ...(input.reconnect ? { reconnect: input.reconnect } : {}),
             ...(input.site ? { site: input.site } : {}),
             onState: (state, detail) => {

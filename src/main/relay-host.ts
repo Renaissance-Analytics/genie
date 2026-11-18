@@ -27,6 +27,11 @@ export interface RelayHostLinkDeps {
     hello(): Promise<TicketHostHello>;
     /** Signature + claims, and still active at Tynn. */
     validateGrant(token: string): Promise<GrantCheck>;
+    /**
+     * The Tynn account signed in on THIS machine, or null (Tynn #757): only a grant for it is the owner's; every other
+     * caller, whatever Tynn says, is a guest who meets the Allow. Read at each admission.
+     */
+    signedInHere(): string | null;
     popTimeoutMs?: number;
     /** Re-check every admitted grant this often; 0 = never (tests call `revalidate`). */
     revalidateMs?: number;
@@ -62,8 +67,8 @@ interface Session {
 }
 
 /** Why this grant may not open a site stream, or null: only the owner's own control link browses this host's sites. */
-function siteRefusal(grant: HostGrant): string | null {
-    const who = principalOf(grant);
+function siteRefusal(grant: HostGrant, signedInHere: string | null): string | null {
+    const who = principalOf(grant, signedInHere);
     if (!who.ok || !who.principal.isOwner || who.principal.readonly) return "only the owner's own control link may browse this workstation's sites";
     return null;
 }
@@ -119,7 +124,7 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         }
         if (session.sites.has(reqId)) return;
         const host = (frame.payload as { host?: unknown } | undefined)?.host;
-        const refusal = siteRefusal(session.grant) ?? (!deps.site ? 'this Genie does not serve its sites over the relay' : !isGenHost(host) ? 'a site stream names one .gen site' : null);
+        const refusal = siteRefusal(session.grant, deps.signedInHere()) ?? (!deps.site ? 'this Genie does not serve its sites over the relay' : !isGenHost(host) ? 'a site stream names one .gen site' : null);
         if (refusal !== null || !deps.site || !isGenHost(host)) {
             say({ kind: 'error', reason: refusal ?? 'refused' });
             return;
@@ -161,7 +166,7 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
     };
 
     const accept = (sid: string, grant: HostGrant, token: string) => {
-        const who = principalOf(grant);
+        const who = principalOf(grant, deps.signedInHere());
         if (!who.ok) {
             reject(sid, who.reason);
             return;
@@ -246,7 +251,7 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
             check = { ok: false, reason: 'grant validation error' };
         }
         if (state !== 'open' || sessions.get(sid) !== session) return;
-        const refusal = !check.ok ? check.reason : renewalRefusal(session.grant, check.grant);
+        const refusal = !check.ok ? check.reason : renewalRefusal(session.grant, check.grant, deps.signedInHere());
         if (refusal !== null || !check.ok) {
             reject(sid, `grant renewal refused: ${refusal ?? 'invalid'}`);
             return;
@@ -399,11 +404,11 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
 }
 
 /** Why `next` may not replace `current` for a live session, or null when it may: same person, key and principal. */
-function renewalRefusal(current: HostGrant, next: HostGrant): string | null {
+function renewalRefusal(current: HostGrant, next: HostGrant, signedInHere: string | null): string | null {
     if (next.sub !== current.sub) return 'it is for someone else';
     if ((next.confirmationKeyThumbprint ?? null) !== (current.confirmationKeyThumbprint ?? null)) return 'it is bound to a different key';
-    const was = principalOf(current);
-    const now = principalOf(next);
+    const was = principalOf(current, signedInHere);
+    const now = principalOf(next, signedInHere);
     if (!now.ok) return now.reason;
     if (!was.ok || was.principal.isOwner !== now.principal.isOwner || was.principal.workspaceId !== now.principal.workspaceId || was.principal.readonly !== now.principal.readonly) {
         return 'it changes what this session may reach';

@@ -106,16 +106,22 @@ export function verifyMemberGrant(token: string, opts: { keys: readonly TynnJwk[
  * host (`host:all`), or of the one workspace named. Genie 2 scopes a guest to a single workspace, so a grant naming
  * several is refused in words rather than widened.
  */
-export function principalOf(grant: HostGrant): { ok: true; principal: PreAuth } | { ok: false; reason: string } {
+export function principalOf(grant: HostGrant, signedInHere: string | null): { ok: true; principal: PreAuth } | { ok: false; reason: string } {
     const label = grant.name ?? grant.sub;
     const readonly = grant.capability === 'readonly';
+    // THE OWNER IS THE ACCOUNT SIGNED IN HERE (Tynn #757, security): Tynn's `src = owner` alone is not enough. A share-link
+    // visit could leave Tynn holding a record whose owner is the VISITOR, and Tynn then signs `owner` into the visitor's
+    // grant. So a grant is the owner's only when it is ALSO for the Tynn account signed in on this machine; any other
+    // "owner" is a guest of the whole host, who meets the #731 Allow and has a guest's powers. Nobody signed in here:
+    // nobody is the owner.
+    const owner = grant.source === 'owner' && signedInHere !== null && signedInHere !== '' && grant.sub === signedInHere;
     // A DRONE (genie#1278 W5; the owner: drones "auto-accept connections from known and paired devices"; 2026-10-28:
     // "allow share links", then "links only") admits its owner connecting from one of the owner's own registered
     // machines, and a guest whose access came from a redeemed share LINK (`src = share` with `share_origin = link`),
     // scoped by that grant below exactly as on a pilot and never the owner. A member share, an email-invite share, a
     // share grant that does not say its origin (an older Tynn, or a share written before origins were kept), every
     // other guest, and an owner from an unbound device are refused. All of it from the Tynn-signed grant.
-    const ownersOwnMachine = grant.source === 'owner' && grant.sourceWorkstationId !== null;
+    const ownersOwnMachine = owner && grant.sourceWorkstationId !== null;
     const shareLink = grant.source === 'share' && grant.shareOrigin === 'link';
     if (grant.audRole !== 'pilot' && !ownersOwnMachine && !shareLink) {
         if (grant.source === 'share') {
@@ -123,8 +129,9 @@ export function principalOf(grant: HostGrant): { ok: true; principal: PreAuth } 
         }
         return { ok: false, reason: 'this workstation is a drone: it accepts only its owner, from the owner’s own paired machines, and share links' };
     }
-    if (grant.source === 'owner') return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly } };
-    if (grant.scopes.includes('host:all')) return { ok: true, principal: { label, isOwner: false, workspaceId: null, readonly } };
+    if (owner) return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly } };
+    // Tynn's "owner" for someone else reaches the whole host, as Tynn scoped it, but as a guest.
+    if (grant.source === 'owner' || grant.scopes.includes('host:all')) return { ok: true, principal: { label, isOwner: false, workspaceId: null, readonly } };
     const workspaces = grant.scopes.map((s) => s.slice('workspace:'.length));
     if (workspaces.length !== 1) return { ok: false, reason: `this Genie shares one workspace per link; this grant names ${workspaces.length}` };
     return { ok: true, principal: { label, isOwner: false, workspaceId: workspaces[0]!, readonly } };

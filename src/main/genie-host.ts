@@ -996,6 +996,8 @@ async function main(): Promise<void> {
             workstationId,
             fingerprint,
             sign: (data) => workstationService.sign(host, data),
+            // Only a grant for the Tynn account signed in HERE is the owner's (Tynn #757); read at each admission.
+            signedInHere: () => tynnAccountNow?.userId() ?? tynnAccountNow?.savedUserId() ?? null,
             attach: (transport) => remoteHub.add(transport),
             onStatus,
             log: (message) => say(`tynn relay: ${message}`),

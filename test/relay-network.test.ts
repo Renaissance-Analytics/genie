@@ -97,6 +97,7 @@ beforeEach(async () => {
         relayUrl: 'wss://relay.example.com',
         workstationId: WS_ID,
         hello: async () => { tickets++; return buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey) }); },
+        signedInHere: () => 'user_1',
         validateGrant: async (token) => {
             const check = verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID });
             return check.ok && !active.has(check.grant.jti) ? { ok: false, reason: 'grant is no longer active' } : check;

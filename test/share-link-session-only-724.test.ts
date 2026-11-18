@@ -21,7 +21,7 @@ describe('the hosts list holds the account’s hosts, not a link pass (Tynn #724
 
     it('CONTROL: your own machine, a durable share and an older Tynn that does not say stay listed', async () => {
         const rows = [
-            { id: 'ws_mine', name: 'mine', status: 'active', is_local: true, connectable: true, source: 'owner', share_origin: null, session_only: false },
+            { id: 'ws_mine', name: 'mine', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, share_origin: null, session_only: false },
             { id: 'ws_invite', name: 'invited', status: 'active', is_local: true, connectable: true, source: 'share', share_origin: 'invite', session_only: false },
             { id: 'ws_old', name: 'old tynn', status: 'active', is_local: true, connectable: true, source: 'share' },
         ];
@@ -30,7 +30,7 @@ describe('the hosts list holds the account’s hosts, not a link pass (Tynn #724
 
     it('a mixed list drops only the pass', async () => {
         const rows = [
-            { id: 'ws_mine', name: 'mine', status: 'active', is_local: true, connectable: true, source: 'owner', session_only: false },
+            { id: 'ws_mine', name: 'mine', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, session_only: false },
             { id: 'ws_link', name: 'Lee’s desk', status: 'active', is_local: true, connectable: true, source: 'share', session_only: true },
         ];
         expect(await listed(rows)).toEqual(['ws_mine']);
