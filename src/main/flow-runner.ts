@@ -1,6 +1,7 @@
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import { getNodeKind, runFlow, type NodeExecutor } from '@particle-academy/fancy-flow/engine';
 import { canonicalKind, type NodeOutcome } from '../core/flow-canvas.js';
+import type { FlowRunStepDetail } from '../core/flow-run-review.js';
 import { stepLabel } from '../core/flow-reach.js';
 import type { Resolution } from '../core/inbox.js';
 import { genieExecutors, type FlowPorts, type PromptDelivery, type PromptHooks, type PromptOptions } from './flow-executors.js';
@@ -53,6 +54,12 @@ export interface RunObserver {
     readonly paused?: (info: { resumesAtMs: number | null; agentId: string; agent: string } | null) => void;
     /** Each step's output as it finishes (genie#1204): kept with the run in flight, so a quit can resume after it. */
     readonly output?: (nodeId: string, value: unknown) => void;
+    /**
+     * What each step did, as it goes (Tynn #839): its start and end, its error, and by kind the command (exit code, this
+     * run's output, its process), the prompt (text, recipient, delivery, reply) or the way a branch went. A patch: the
+     * watcher folds it into what the step had (`mergeStep`).
+     */
+    readonly step?: (nodeId: string, patch: Partial<FlowRunStepDetail>) => void;
 }
 
 /** Resume a run Genie quit under (genie#1204): the outputs of the steps it had done, handed on, not run again. */

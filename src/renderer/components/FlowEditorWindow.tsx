@@ -278,7 +278,26 @@ const OUTCOME_WORDS: Record<string, string> = { ran: 'ran', failed: 'failed', he
  * `<FlowViewer>`, "read-only by construction"). The flow's own graph, each node marked with what it did in that run, and
  * the same outcomes listed in words beneath it.
  */
-export function FlowRunOverlay({ flow, run, Viewer = FlowViewer as unknown as AnyComponent }: { flow: FlowRecord; run: FlowRun; Viewer?: AnyComponent }) {
+export interface FlowRunOverlayProps {
+    readonly flow: FlowRecord;
+    readonly run: FlowRun;
+    /** The canvas the run is drawn on (`RunCanvas`); a test hands a stand-in. */
+    readonly Viewer?: AnyComponent;
+    /** Run the flow again (the person's Run now). */
+    readonly onRerun?: () => void;
+    /** Stop the run going now (Tynn #833); absent where this build cannot stop one. */
+    readonly onStop?: () => void;
+    /** The run before / after this one; absent at either end. */
+    readonly onPrevious?: () => void;
+    readonly onNext?: () => void;
+}
+
+/** THE RUN'S CANVAS (Tynn #839): fancy-flow's FlowCanvas at the height its box measures, never `100%` of nothing. */
+export function RunCanvas(props: { graph: FlowGraph; statuses?: unknown; selectedNodeId?: string | null; onSelectNode?: (node: { id: string }) => void; Canvas?: AnyComponent }) {
+    return <FlowViewer graph={props.graph} height="100%" />;
+}
+
+export function FlowRunOverlay({ flow, run, Viewer = FlowViewer as unknown as AnyComponent }: FlowRunOverlayProps) {
     const graph = useMemo(() => documentToGraph(flow.document), [flow.document]);
     const nodes = run.nodes ?? {};
     const listed = graph.nodes.filter((n) => nodes[n.id] !== undefined);

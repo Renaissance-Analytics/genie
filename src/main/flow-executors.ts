@@ -49,7 +49,8 @@ export interface FlowPorts {
     promptAgent(address: string, text: string, hooks?: PromptHooks, options?: PromptOptions): Promise<string>;
     /** This agent's folder skills are off, so a value in its prompt must not name one back in. */
     escapesPromptValues?(address: string): boolean;
-    runCommand(workspaceId: string, command: string, cwd: string | undefined): Promise<{ exitCode: number; output: string }>;
+    /** `processId`: the supervised process whose kept log holds the whole output (Tynn #839: the run review names it). */
+    runCommand(workspaceId: string, command: string, cwd: string | undefined): Promise<{ exitCode: number; output: string; processId?: string }>;
     addKnowledge(input: { title: string; body: string; class: MemoryClass; scope: Scope; tags: string[] }): Promise<{ id: string }>;
     /** genie/file_move: into `toFolder` (relative) of the same workspace; `to: null` when it was already there. No shell. */
     moveFile?(workspaceId: string, from: string, toFolder: string): Promise<{ from: string; to: string | null }>;

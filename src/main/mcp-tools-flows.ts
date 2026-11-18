@@ -32,7 +32,8 @@ import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 /** What the tool acts on: the flow store, and the scheduler's Run now. Main wires the composition's. */
 export interface FlowsPort {
     readonly store: Pick<import('./flows-host.js').FlowsApi, 'list' | 'get' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove'>;
-    readonly runNow: (flowId: string) => Promise<FlowRun>;
+    /** `by`: who pressed it (Tynn #839), recorded on the run: here, always the calling agent. */
+    readonly runNow: (flowId: string, by?: Actor) => Promise<FlowRun>;
     /** Stop a flow's run in flight (Tynn #833). Absent = this Genie cannot stop runs. */
     readonly stopRun?: (flowId: string, by: Actor) => Promise<StopAnswer>;
     /**

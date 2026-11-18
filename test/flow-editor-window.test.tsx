@@ -96,7 +96,9 @@ describe('a run on the canvas, read-only', () => {
         const html = renderToStaticMarkup(<FlowRunOverlay flow={flow({ runs: [run] })} run={run} Viewer={Viewer} />);
         expect(seen[0]!.statuses).toEqual({ t: 'ok', s: 'failed', k: 'pending' });
         expect((seen[0]!.graph as { nodes: unknown[] }).nodes).toHaveLength(3);
-        expect(seen[0]!.onSelectNode).toBeUndefined();
+        // Tynn #839: picking a node on the run's canvas picks its step in the timeline (it still cannot edit).
+        expect(typeof seen[0]!.onSelectNode).toBe('function');
+        expect(seen[0]!.onChange).toBeUndefined();
         expect(html).toContain('npm run report ended with exit code 2');
         expect([...html.matchAll(/data-flow-node-outcome="([^"]+)"/g)].map((m) => m[1])).toEqual(['ran', 'failed', 'not reached']);
     });

@@ -2,7 +2,8 @@ import { nextCronAfter } from '../core/cron.js';
 import { matchesFileTrigger, type FileAddedProps, type FileTriggerConfig } from '../core/file-trigger.js';
 import type { NodeOutcome } from '../core/flow-canvas.js';
 import type { RunObserver, RunResume } from './flow-runner.js';
-import type { FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule, Actor } from './flow-store.js';
+import type { FlowRunStepDetail } from '../core/flow-run-review.js';
+import type { Actor, FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule } from './flow-store.js';
 
 /**
  * FLOWS (§6.6) — the scheduler. ONE timer, set to the nearest due among the ARMED flows'
@@ -226,7 +227,7 @@ export class FlowScheduler {
      * The PERSON's Run now: one run of the flow, armed or not, recorded as `manual`. Answers the run as
      * recorded — `held` when the flow's previous run is still going. Throws for a flow that does not exist.
      */
-    async runNow(flowId: string): Promise<FlowRun> {
+    async runNow(flowId: string, _by: Actor = { kind: 'user' }): Promise<FlowRun> {
         const flow = this.#deps.store.get(flowId);
         if (!flow) throw new Error(`no flow ${flowId}`);
         const run = await this.#start(flow, this.#deps.store.schedules(flow.id)[0] ?? null, 'manual');
@@ -335,7 +336,7 @@ export class FlowScheduler {
         return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...fileOf, nodes, log, ...(resume ? { resumed: true } : {}) });
     }
 
-    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean; stoppedBy?: string }): Promise<FlowRun | null> {
+    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean; stoppedBy?: string; timeline?: readonly FlowRunStepDetail[]; startedBy?: Actor }): Promise<FlowRun | null> {
         return this.#deps.store.recordRun(flowId, run);
     }
 }
