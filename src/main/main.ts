@@ -2323,13 +2323,15 @@ async function boot(): Promise<void> {
         // Genie 1's FLOWS (its `flows` table), brought over ONCE as DISARMED canvas flows (main/v1-flows.ts, genie#1204).
         v1Flows: { database: v1DatabaseFile() },
         // What a flow's agent prompt reaches (flow-runner.ts): the live sessions, late-bound — a prompt to an agent mid-turn
-        // is held back, never queued inside its turn.
+        // goes as a typed message does (Tynn #826), and one no run can take is kept for the agent's next Restart.
         agentSessions: {
             session: (id) => host?.probe(id as AgentId) ?? null,
             // A flow's prompt is work: an agent not running is started for it (q_04ce323c), under the same refusals.
             start: async (id) => { const record = registry?.find(id as AgentId); return record ? (await startOnDemand(record)).ok : false; },
             rows: (id) => host?.rowsFor(id as AgentId) ?? [],
             prompt: (id, text, by) => host?.prompt(id as AgentId, text, by) ?? false,
+            deliver: async (id, text, by) => { const handed = await host?.handOff(id as AgentId, text, by); return handed ? { id: handed.queued } : null; },
+            keep: async (id, text, by) => { if (!host) throw new Error('no agent host to keep the prompt for'); await host.recordOwed(id as AgentId, text, by); },
             subscribe: (listener) => host?.subscribe((agentId) => listener(agentId)) ?? (() => {}),
         },
         // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.

@@ -1811,8 +1811,11 @@ async function main(): Promise<void> {
                         return (await startForWork({ probe: (x) => host.probe(x), start: (r, cwd) => host.start(r, cwd), cwdFor: cwdOf, startRefusal: refusal }, record)).ok;
                     },
                     prompt: (id, text, by) => host.prompt(id as AgentId, text, by),
-                    queue: (id, text, by, replacing) => host.queueFlowPrompt(id as AgentId, text, by, replacing),
+                    // Tynn #826: handed over now (mid-turn where the provider reads it), kept for the next run when nothing can take it.
+                    deliver: (id, text, by, replacing) => host.deliverFlowPrompt(id as AgentId, text, by, replacing),
                     isQueued: (id, promptId) => host.isPromptQueued(id as AgentId, promptId),
+                    keep: (id, text, by) => host.keepFlowPrompt(id as AgentId, text, by),
+                    deliverKept: (id, only) => host.deliverOwed(id as AgentId, undefined, only),
                     subscribe: (listener) => host.subscribe(listener),
                 },
                 resolve: (text) => resolveOnRoster(text, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
