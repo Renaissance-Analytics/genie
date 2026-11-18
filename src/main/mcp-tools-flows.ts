@@ -3,7 +3,7 @@ import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import { flowNodes } from '../core/flow-form.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 
 /**
@@ -35,8 +35,11 @@ export interface FlowsPort {
     readonly runNow: (flowId: string) => Promise<FlowRun>;
     /** Stop a flow's run in flight (Tynn #833). Absent = this Genie cannot stop runs. */
     readonly stopRun?: (flowId: string, by: Actor) => Promise<StopAnswer>;
-    /** The person's approval for an agent's action (the ApprovalQueue gate); absent = nobody to ask. */
-    readonly approve?: (caller: Caller, action: string, detail: string) => Promise<'allowed' | 'denied'>;
+    /**
+     * The person's approval for an agent's action (the ApprovalQueue gate); absent = nobody to ask. `call`: the MCP call
+     * waiting on it (genie#1360), so a client that goes away ends its wait denied instead of leaving it on the Deck.
+     */
+    readonly approve?: (caller: Caller, action: string, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
 }
 
 export interface FlowToolsDeps {
@@ -167,7 +170,7 @@ export function flowTools(deps: FlowToolsDeps): Registration[] {
                         const own = f.createdBy.kind === 'agent' && f.createdBy.id === caller.agentId;
                         if (!own) {
                             if (!port.approve) return err(`"${f.name}" was made by ${byName(f.createdBy)}: stopping its run needs the person’s approval, and there is nobody to ask here. Nothing was stopped`);
-                            const verdict = await port.approve(caller, 'flows.stop', `stop the run of the flow “${f.name}”`);
+                            const verdict = await port.approve(caller, 'flows.stop', `stop the run of the flow “${f.name}”`, context);
                             if (verdict !== 'allowed') return err(`the person did not approve stopping "${f.name}"; nothing was stopped`);
                         }
                         const r = await port.stopRun(f.id, me);

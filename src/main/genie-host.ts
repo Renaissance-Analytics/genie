@@ -1995,7 +1995,7 @@ async function main(): Promise<void> {
             return { ...engine.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
         },
         // Tynn #833: an agent's Stop is its own (`by`); a person's flow only through the person's approval on the Deck.
-        flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id), stopRun: (id, by) => flowsService.stopRun(id, by), approve: (caller, action, detail) => approvals.gate(caller, action, detail) },
+        flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id), stopRun: (id, by) => flowsService.stopRun(id, by), approve: (caller, action, detail, call) => approvals.gate(caller, action, detail, call) },
         // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
         ...(hostingStack?.mail ? { mail: hostingStack.mail } : {}),
         // THE AGENTS' `sites` AND `services` (Tynn #444): this host's own hosting (P5a) under its own supervisor — what the

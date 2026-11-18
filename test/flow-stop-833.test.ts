@@ -230,7 +230,7 @@ describe('an agent\'s Stop: its own flow, or the person\'s with the person\'s ap
             flows: {
                 store, runNow: async () => { throw new Error('not here'); },
                 stopRun: async (id, by) => { stops.push([id, by]); return { ok: true }; },
-                ...(options.approve === 'absent' ? {} : { approve: async (_c: Caller, action: string, detail: string) => { asked.push([action, detail]); return verdict; } }),
+                ...(options.approve === 'absent' ? {} : { approve: async (_c: Caller, action: string, detail: string, _call: unknown) => { asked.push([action, detail]); return verdict; } }),
             },
         }).find((t) => t.definition.name === 'flows')!;
         const stop = async (id: string) => { const r = await tool.handler({ action: 'stop', id, terminalId: 'term-1' }, { server: 'genie', tool: 'flows', headers: {} }); return { ...r, json: JSON.parse(r.text) as Record<string, unknown> }; };
