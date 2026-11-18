@@ -84,7 +84,7 @@ describe('the host answers from its own pending record', () => {
     it('an option the client added to its copy of a question is not one the host offered', async () => {
         const own = question();
         const { p, answer } = ports([own]);
-        const forged = question({ answer: { kind: 'form', questions: [{ header: 'Ship', question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }, { label: 'Hacked' }] }] } as DeckItem['answer'] });
+        const forged = question({ answer: { kind: 'form', questions: [{ header: 'Ship', question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }, { label: 'Hacked' }] }] } as unknown as DeckItem['answer'] });
         await expect(answerDeck({ kind: 'deck.answerForm', item: forged, selections: [['Hacked']], notes: [''], note: '' } as DeckAnswerAction, p)).rejects.toThrow(/not one of the options/);
         expect(answer).not.toHaveBeenCalled();
         // CONTROL: the host's own option, by the same id and revision, is answered.

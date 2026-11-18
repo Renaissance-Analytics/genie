@@ -26,7 +26,8 @@ const draw = (item: DeckItem, expanded = false) => renderToStaticMarkup(
 );
 const count = (html: string, text: string) => html.split(text).length - 1;
 // The window's error record holds the item an answer names (Tynn #861: the host answers from its own record).
-const ports = (item: DeckItem, mainErrors: DeckAnswerPorts['mainErrors']) => ({ deckItems: () => [], mainErrors: { deckItems: () => [item], ...mainErrors } } as unknown as DeckAnswerPorts);
+const ports = (item: DeckItem, mainErrors: DeckAnswerPorts['mainErrors']) => ({ deckItems: () => [], // A real book holds its own items; a stub of its actions is given the item.
+    mainErrors: mainErrors && 'deckItems' in mainErrors ? mainErrors : { deckItems: () => [item], ...mainErrors } } as unknown as DeckAnswerPorts);
 const answer = (item: DeckItem, optionId: string, mainErrors: DeckAnswerPorts['mainErrors']) =>
     answerDeck({ kind: 'deck.answer', item, optionId }, ports(item, mainErrors));
 

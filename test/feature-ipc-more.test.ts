@@ -151,7 +151,7 @@ describe('the Deck’s inline answers reach the stores', () => {
     it('a refused resolution rejects with the reason and changes nothing', async () => {
         // A real question the host holds (Tynn #861: an answer is resolved against the host's own record): a form, which a
         // one-click answer cannot answer.
-        const asked = await services.attention.ask({ agentId: ('agent_' + 'z'.repeat(32)) as never, agentName: 'atlas', workspaceId: 'tynn', questions: [{ header: 'A', question: 'A?', options: [{ label: 'x' }] }, { header: 'B', question: 'B?', options: [{ label: 'y' }] }] }, { userActive: true });
+        const asked = await services.attention.ask({ agentId: ('agent_' + 'z'.repeat(32)) as never, agentName: 'atlas', workspaceId: 'tynn', questions: [{ header: 'A', question: 'A?', options: [{ label: 'x' }, { label: 'w' }] }, { header: 'B', question: 'B?', options: [{ label: 'y' }, { label: 'v' }] }] }, { userActive: true });
         await expect(handleFeatureAction(services, { kind: 'deck.answer', item: { id: asked.questionId }, optionId: 'x' }, state())).rejects.toThrow(/full form/);
         expect(services.attention.pending().map((q) => q.id)).toEqual([asked.questionId]);
     });

@@ -204,7 +204,8 @@ describe('main wires it', () => {
     it('the question window’s Dismiss sends the notes on to deck.dismiss', () => {
         // Another machine's question (Tynn #726) is dismissed on that machine, with the same notes; this machine's as before.
         expect(main.match(/dismiss:\s*async\s*\(item,\s*notes\)\s*=>\s*\{\s*if\s*\(remoteQuestions\.owns\(item\.id\)\)\s*return remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.dismiss',\s*notes\s*\}\);\s*await questionAction\(\{\s*kind:\s*'deck\.dismiss',\s*item,\s*notes\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
-        expect(main).toContain("const reply = await client.call('engine.featureQuestion', [action]);");
+        // Encoded for the wire like any client's answer (Tynn #861).
+        expect(main).toContain("const reply = await client.call('engine.featureQuestion', [deckActionForWire(action)]);");
         expect(main).toContain('if (!reply.ok) throw new Error(reply.reason);');
     });
 });
