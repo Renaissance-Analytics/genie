@@ -69,7 +69,7 @@ writeFileSync(join(runtime, 'agents.json'), JSON.stringify(AGENTS.map((a) => ({
     id: a.id, workspaceId: a.ws, provider: 'codex', name: a.key, instructions: null, threadId: null,
     createdAt: nowIso, lastUsedAt: null, mode: 'manual', accessScope: 'none',
 })), null, 2));
-writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: 'dark', whats_new_seen_version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version }, null, 2));
+writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: process.env.ARCS_THEME === 'light' ? 'light' : 'dark', whats_new_seen_version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version }, null, 2));
 
 // THE MAIL: [from, to, seconds after MAIL_FROM_S, read?]. meridian is the hovered agent: it sent to sable (read, unanswered),
 // ember (unread), cobalt (read, unanswered) and atlas (unread); vesper wrote to it (read, unanswered), quill (unread).
