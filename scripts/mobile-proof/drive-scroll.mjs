@@ -42,7 +42,10 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const note = (name, detail) => { checks.push({ name, note: true, detail }); console.log(`NOTE ${name} — ${detail}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const act = (g, action) => g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action);
+/** A step that may not hang the run silently (Tynn #862: the first Azure run sat 25 min with nothing said). */
+const step = (name) => console.log(`--- ${new Date().toISOString().slice(11, 19)} ${name}`);
+const within = (ms, what, p) => Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what}: no answer in ${ms / 1000} s`)), ms))]);
+const act = (g, action) => within(60_000, `features.act ${action.kind}`, g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action));
 
 /** Where the target is on screen, the viewport, the document's own scroll, and the scroller's computed style (if any). */
 const measure = (page, target) => page.evaluate((sel) => {
@@ -288,6 +291,7 @@ async function proveChat(page, cdp, profile) {
 }
 
 async function runProfile(g, profile, device) {
+    step(`${profile}: pairing`);
     let remote = await act(g, { kind: 'remote.issuePin' });
     const pin = remote.pin?.code;
     check(`${profile}: a PIN is issued`, /^\d{6}$/.test(pin ?? ''));
@@ -386,9 +390,13 @@ async function runProfile(g, profile, device) {
 }
 
 async function main() {
-    const g = await genieWindow();
+    step('waiting for Genie’s window on CDP 9222');
+    const g = await within(300_000, 'Genie’s window (CDP 9222, its preload bridge)', genieWindow());
+    step('Genie’s window answered; turning remote access on');
     let remote = await act(g, { kind: 'settings.set', key: 'remote_access', value: true });
-    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)'); }
+    step(`remote access set: ${JSON.stringify({ url: remote?.url ?? null, unavailable: remote?.unavailable ?? null })}`);
+    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await within(30_000, 'features.snapshot', g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)')); }
+    step(`remote access: ${JSON.stringify({ url: remote?.url ?? null, unavailable: remote?.unavailable ?? null })}`);
     check('remote access listens on the tailnet name', remote.url === `wss://${DNS}:7421/genie`, `url=${remote.url}`);
     for (const [profile, name] of [['iphone13', 'iPhone 13'], ['pixel7', 'Pixel 7']]) {
         try { await runProfile(g, profile, devices[name]); } catch (error) {
