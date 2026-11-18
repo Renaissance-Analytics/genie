@@ -11,6 +11,7 @@ import { ageLabel, type DeckItem } from '../../core/deck.js';
 import { activeQuestion, type QuestionDraft, type QuestionDrafts } from '../../core/question-drafts.js';
 import { resetScrollOnQuestionChange } from '../../core/question-scroll.js';
 import { QuestionForm } from './QuestionForm.js';
+import { PreviewFullButton, PreviewFullFrame } from './PreviewFull.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 
 /**
@@ -143,15 +144,19 @@ function MediaBody({ path, media, onOpenInFiles }: { path: string; media: Questi
  */
 const DRAG = { WebkitAppRegion: 'drag' } as CSSProperties;
 
-export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile, onOpenInFiles }: QuestionAppProps) {
+export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile, onOpenInFiles, drawerFull = false, onDrawerFull }: QuestionAppProps) {
     // ESC IS LATER (Tynn #759; Genie 1's "PARK, never kill"): the question stays in Pending Questions with its draft;
     // Dismiss, which tells the agent, is never a key. Re-bound every render so it acts on the question now shown.
     useEffect(() => {
         if (!view) return;
         const onKey = (e: KeyboardEvent): void => {
             // Esc closes the file drawer first (Genie 1's), then is Later.
-            const action = questionWindowAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false }, { drawerOpen: drawer !== null });
-            if (action === 'close-drawer') {
+            // A drawer filling the window is put back before it is closed (core/preview-full.ts).
+            const action = questionWindowAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false }, { drawerOpen: drawer !== null, drawerFull });
+            if (action === 'restore-preview') {
+                e.preventDefault();
+                onDrawerFull?.(false);
+            } else if (action === 'close-drawer') {
                 e.preventDefault();
                 onCloseFile?.();
             } else if (action === 'later') {
@@ -213,8 +218,12 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
             {/* GENIE 1'S FILE DRAWER: the file the question names, beside it (the window widens for it, question-drawer.ts). */}
             {drawer ? (
                 <aside data-question-drawer={drawer.path} className="flex min-h-0 w-[520px] max-w-[60%] shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
+                    {/* FULL WINDOW (the owner, beta.65): the drawer's content fills the window below the header; the aside keeps
+                        its box, so the question beside it never moves (core/preview-full.ts). */}
+                    <PreviewFullFrame full={drawerFull} window="question" className="flex min-h-0 flex-1 flex-col">
                     <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3 py-2 text-[12px]">
                         <span className="min-w-0 flex-1 truncate font-mono" title={drawer.path}>{drawer.path}</span>
+                        {drawer.error === undefined ? <PreviewFullButton full={drawerFull} onToggle={() => onDrawerFull?.(!drawerFull)} /> : null}
                         <Button size="xs" type="button" data-action="question-drawer-close" onClick={() => onCloseFile?.()} title="Close (Esc)" className="rounded-md border border-[var(--border-1)] px-2 py-0.5">Close</Button>
                     </div>
                     {drawer.error !== undefined ? (
@@ -226,6 +235,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                     ) : (
                         <p className="px-3 py-2 text-[12px] text-[var(--fg-3)]">Opening…</p>
                     )}
+                    </PreviewFullFrame>
                 </aside>
             ) : null}
             </div>

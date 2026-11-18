@@ -150,6 +150,8 @@ export type QuestionWindowAction = 'later' | 'close-drawer' | 'restore-preview';
  */
 export function questionWindowAction(press: KeyPress, window: { drawerOpen: boolean; drawerFull?: boolean }): QuestionWindowAction | null {
     if (press.key !== 'Escape' || press.ctrlKey || press.metaKey || press.altKey || press.shiftKey) return null;
+    // A drawer filling the window (core/preview-full.ts) is put back first: Esc undoes the last thing done.
+    if (window.drawerOpen && window.drawerFull === true) return 'restore-preview';
     return window.drawerOpen ? 'close-drawer' : 'later';
 }
 
