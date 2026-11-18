@@ -2210,6 +2210,8 @@ export class SessionHost {
         return {
             limit: this.#limitOf(this.#loginFor(entry.provider), entry.session.held),
             signedOut: entry.session.signedOut,
+            // The turn its provider stopped, explained and counted (Tynn #859): the red stop line's words.
+            providerStop: entry.session.providerStop,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),
             accountPaused: entry.session.accountPaused,

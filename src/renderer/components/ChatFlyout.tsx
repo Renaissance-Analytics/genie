@@ -859,7 +859,15 @@ function ChatFlyoutBody({
                 {thread?.context?.tone === 'bad' ? (
                     <div data-chat-error="" className="flex items-center gap-2 border-y border-[var(--danger)] py-1.5 font-mono text-[11px] text-[var(--danger)]">
                         <Icon name="circle-alert" size="xs" />
-                        <span>{thread.context.text.replace(/^Broken · /, '')}</span>
+                        {thread.context.stop ? (
+                            // A PROVIDER STOP, in words (Tynn #859): what it means and what to do, and how often it has happened.
+                            <span data-chat-stop={thread.context.stop.code} className="whitespace-normal font-sans">
+                                {thread.context.stop.words}
+                                {thread.context.stop.count > 1 ? <span data-chat-stop-count="" className="ml-2 rounded-full border border-[var(--danger)] px-1.5 font-mono">{thread.context.stop.count} times</span> : null}
+                            </span>
+                        ) : (
+                            <span>{thread.context.text.replace(/^Broken · /, '')}</span>
+                        )}
                     </div>
                 ) : null}
             </div>

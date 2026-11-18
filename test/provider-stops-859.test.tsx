@@ -114,7 +114,11 @@ describe('a turn the provider stops', () => {
         session.prompt('scan the ports', 'you');
         fail('cyberPolicy');
         session.prompt('go on', 'you');
-        expect(prompts[1]!.startsWith(providerStopNote(explainProviderStop('cyberPolicy'), 1))).toBe(true);
+        // Not vacuous (the RED run caught `startsWith('')` passing against an empty note): the note is there, and named.
+        const note = providerStopNote(explainProviderStop('cyberPolicy'), 1);
+        expect(note).toContain('cyberPolicy');
+        expect(prompts[1]).not.toBe('go on');
+        expect(prompts[1]!.startsWith(note)).toBe(true);
         expect(prompts[1]!.endsWith('go on')).toBe(true);
         end('end_turn');
         session.prompt('next thing', 'you');

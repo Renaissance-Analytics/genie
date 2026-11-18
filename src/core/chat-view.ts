@@ -180,7 +180,11 @@ export function chatContext(detail: ChatDetail): ChatContext {
     // Held for its provider's limit (Tynn #794): until when, never Idle.
     const held = limitWords(s.limit);
     if (held) { const title = limitTitle(s.limit); return { text: `Paused · ${held}`, tone: 'warn', ...(title ? { title } : {}) }; }
-    if (s.failure !== null) return { text: `Broken · ${s.failure.reason}`, tone: 'bad' };
+    if (s.failure !== null) {
+        // A failure the PROVIDER's stop explains (Tynn #859): the red line says what it means and how often, not the bare code.
+        const stop = s.providerStop && s.providerStop.code === s.failure.reason ? s.providerStop : null;
+        return { text: `Broken · ${s.failure.reason}`, tone: 'bad', ...(stop ? { stop: { code: stop.code, words: stop.words, count: stop.count } } : {}) };
+    }
     // COMING UP (q_04ce323c): its first message waits for the start, and the line says why.
     if (s.running && s.starting === true && s.turnState !== 'working') return { text: 'Starting', tone: 'muted' };
     if (s.running && s.turnState === 'working') {
