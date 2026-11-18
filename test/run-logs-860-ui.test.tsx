@@ -104,7 +104,7 @@ describe('the log, opened (Tynn #860)', () => {
 describe('a flow run opens in its run review (Tynn #860)', () => {
     const run: FlowRun = { at: '2026-11-18T03:00:00.000Z', endedAt: '2026-11-18T03:00:05.000Z', trigger: 'schedule', outcome: 'failed', reason: 'npm run report ended with exit code 2', nodes: { t: 'ran', s: 'failed' } };
     const { reason: _reason, ...rest } = run;
-    const okRun: FlowRun = { ...rest, at: '2026-11-18T04:00:00.000Z', outcome: 'ok' };
+    const okRun: FlowRun = { ...rest, at: '2026-11-18T04:00:00.000Z', outcome: 'ran' };
     const n = (id: string, kind: string, config: Record<string, unknown> = {}) => ({ id, kind, position: { x: 0, y: 0 }, config });
     const flow: FlowRecord = {
         id: 'flow_a', workspaceId: 'moic-suite', name: 'nightly', armed: true,

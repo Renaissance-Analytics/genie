@@ -191,6 +191,7 @@ describe('a kept process\'s output outlives the Genie that ran it (Tynn #860)', 
         sup2.print('p1', 'booted again\n');
         expect(after.read('p1')!.text).toBe(`booted\nprocessed 3 jobs\n[genie] ${RESTART_NOTE}\nbooted again`);
         expect(after.read('p1', 1)!.text).toBe('booted again');
+        await after.flush();
     });
 
     it('CONTROL: a process the book does not keep (a site\'s server) is never written; forget removes the file', async () => {
@@ -286,6 +287,6 @@ describe('a flow run opens in its run review (Tynn #860)', () => {
         expect(opened).toEqual(['genie://flow/flow_a?run=3', 'genie://flow/flow_a']);
         const ctx: AddressContext = { workstation: 'alphar', workspaces: [{ id: 'moic-suite', name: 'moic', path: '/w/moic' }], agents: [], tabsOf: () => [] };
         expect(parseRoute(routeOfAddress('genie://flow/flow_a?run=3', ctx)!)).toMatchObject({ surface: 'flow', flowId: 'flow_a', run: 3 });
-        expect(addressOf(parseRoute('genie://flow/flow_a?run=3'), ctx)).toBe('genie://flow/flow_a?run=3');
+        expect(addressOf('genie://flow/flow_a?run=3', ctx)).toBe('genie://flow/flow_a?run=3');
     });
 });
