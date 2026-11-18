@@ -83,6 +83,9 @@ export interface QuestionAppProps {
     readonly onCloseFile?: () => void;
     /** A file the drawer cannot draw (a PDF, a binary) opens in Genie's Files panel (Tynn #726). */
     readonly onOpenInFiles?: (path: string) => void;
+    /** The drawer fills the window below its header (preview-full). */
+    readonly drawerFull?: boolean;
+    readonly onDrawerFull?: (full: boolean) => void;
 }
 
 /** The extensions the drawer shows as prose (Genie 1's: what its Document plugin claimed, minus binary .docx). */
