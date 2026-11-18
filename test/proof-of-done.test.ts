@@ -15,7 +15,7 @@ import { POD_KEY_SECRET, ProofOfDone, podKeyId, type PodPorts, type PendingNote 
 const b64u = (b: Buffer | Uint8Array) => Buffer.from(b).toString('base64url');
 
 interface Call { method: string; path: string; body?: unknown }
-type Options = { userId?: string | null; pending?: unknown[]; approval?: 'allowed' | 'denied'; keychainFails?: boolean; gitHas?: (cwd: string, sha: string) => boolean; pushOk?: boolean; signStatus?: number; secrets?: Map<string, string>; hostKeyStatus?: number; pendingStatus?: number };
+type Options = { userId?: string | null; pending?: unknown[]; approval?: 'allowed' | 'denied' | 'wait'; pendingThrows?: boolean; keychainFails?: boolean; gitHas?: (cwd: string, sha: string) => boolean; pushOk?: boolean; signStatus?: number; secrets?: Map<string, string>; hostKeyStatus?: number; pendingStatus?: number };
 
 const CLAIM = { v: 'pod/1', request: { system: 'tynn', project: 'p1', task: 7, story: 742 }, work: { repo: 'acme/widgets', commits: ['a'.repeat(40), 'b'.repeat(40)] }, score: { value: '0.800', checkpoint: 'C5', next: 'C6' }, nonce: 'n1' };
 const hashOf = (claim: unknown) => createHash('sha256').update(canonicalize(claim), 'utf8').digest();
@@ -33,6 +33,10 @@ function rig(options: Options = {}) {
     let credential: string | null = 'cred-1';
     let hostKeyStatus = options.hostKeyStatus ?? 201;
     let pendingStatus = options.pendingStatus ?? 200;
+    let pending = options.pending ?? [];
+    let pendingThrows = options.pendingThrows ?? false;
+    /** Each hitl ask's signal, by claim id: what a withdrawal aborts. */
+    const signals = new Map<string, AbortSignal>();
     const ports: PodPorts = {
         keychain: {
             get: async (name: SecretName): Promise<KeychainRead> => options.keychainFails ? { kind: 'unavailable', reason: 'locked' } : secrets.has(name) ? { kind: 'value', value: secrets.get(name)! } : { kind: 'missing' },
@@ -45,7 +49,10 @@ function rig(options: Options = {}) {
             request: async (path, init) => {
                 calls.push({ method: init.method, path, ...(init.body !== undefined ? { body: init.body } : {}) });
                 if (path === '/api/v1/pod/host-keys') return { ok: hostKeyStatus < 300, status: hostKeyStatus, json: async () => ({ data: { key_id: 'x' } }) };
-                if (path === '/api/v1/pod/pending') return { ok: pendingStatus < 300, status: pendingStatus, json: async () => ({ data: options.pending ?? [] }) };
+                if (path === '/api/v1/pod/pending') {
+                    if (pendingThrows) throw new Error('fetch failed');
+                    return { ok: pendingStatus < 300, status: pendingStatus, json: async () => ({ data: pending }) };
+                }
                 if (/^\/api\/v1\/pod\/[^/]+\/signature$/.test(path)) {
                     const status = options.signStatus ?? 200;
                     return { ok: status < 300, status, json: async () => ({ data: { token: 'pod1.HASH.SIG' } }) };
@@ -53,7 +60,13 @@ function rig(options: Options = {}) {
                 return { ok: false, status: 404, json: async () => null };
             },
         },
-        approve: async (request) => { asked.push(request.detail); return options.approval ?? 'allowed'; },
+        approve: async (request) => {
+            asked.push(request.detail);
+            signals.set(request.id, request.signal);
+            if (options.approval !== 'wait') return options.approval ?? 'allowed';
+            // The person has not answered: only a withdrawal ends this wait, as the Deck's queue ends it (denied).
+            return new Promise<'denied'>((done) => { request.signal.addEventListener('abort', () => done('denied'), { once: true }); });
+        },
         workspaces: () => [{ id: 'w1', path: '/work/widgets' }, { id: 'w2', path: '/work/other' }],
         git: async (cwd, args) => {
             gitCalls.push({ cwd, args });
@@ -68,7 +81,8 @@ function rig(options: Options = {}) {
     };
     return { pod: new ProofOfDone(ports), ports, secrets, calls, logs, asked, gitCalls, retry: () => retry, setPush: (ok: boolean) => { pushOk = ok; }, setUser: (id: string | null) => { userId = id; },
         advance: (ms: number) => { clock += ms; }, setCredential: (id: string | null) => { credential = id; },
-        setHostKeyStatus: (status: number) => { hostKeyStatus = status; }, setPendingStatus: (status: number) => { pendingStatus = status; } };
+        setHostKeyStatus: (status: number) => { hostKeyStatus = status; }, setPendingStatus: (status: number) => { pendingStatus = status; },
+        setPending: (items: unknown[]) => { pending = items; }, setPendingThrows: (on: boolean) => { pendingThrows = on; }, signals };
 }
 
 const item = (over: Record<string, unknown> = {}, claim: unknown = CLAIM) => ({ id: 'pod-1', status: 'pending', approval: 'agent', claim, claim_hash: b64u(hashOf(claim)), issued_at: '2026-11-15T10:00:00Z', ...over });
@@ -369,5 +383,91 @@ describe('a refusal from Tynn (Tynn #755)', () => {
         r.advance(MIN); await r.pod.tick();
         expect(pendingAsks(), 'after 2 minutes').toBe(2);
         expect(hostKeyPosts(r), 'the key stays registered').toBe(1);
+    });
+});
+
+/**
+ * A SUPERSEDED CLAIM'S CARD GOES (Tynn #858). Tynn lists the claims still waiting at every poll; a hitl claim it no longer
+ * lists (superseded, signed elsewhere, withdrawn) must leave the Deck at the next successful poll — no answer recorded and
+ * never signed. Before this, its card stayed until the person pressed Sign (and Tynn answered 422) or Genie restarted:
+ * the owner had 45 of them. A claim still listed keeps its card; a poll that failed says nothing about what is waiting,
+ * so it withdraws nothing.
+ */
+describe('a hitl claim Tynn no longer lists (Tynn #858)', () => {
+    const hitl = (k: string, id = 'pod-1') => item({ id, host_key_id: k, approval: 'hitl' });
+    const flush = async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); };
+
+    it('is withdrawn at the next successful poll: its ask is aborted, nothing is signed, and the log says why', async () => {
+        const { r } = await asTheHost((k) => ({ pending: [hitl(k)], approval: 'wait' }));
+        await r.pod.tick();
+        await flush();
+        expect(r.asked).toHaveLength(1);
+        expect(r.signals.get('pod-1')!.aborted).toBe(false);
+        r.setPending([]);
+        await r.pod.tick();
+        await r.pod.idle();
+        expect(r.signals.get('pod-1')!.aborted).toBe(true);
+        expect(r.calls.some((c) => c.path.endsWith('/signature'))).toBe(false);
+        expect(r.logs.join('\n')).toMatch(/pod-1 withdrawn: Tynn no longer lists it as waiting/);
+        expect(r.logs.join('\n')).not.toMatch(/declined/);
+    });
+
+    it('never signs a withdrawn claim, even when its ask answers Sign after the withdrawal', async () => {
+        let allow: (() => void) | null = null;
+        const { r } = await asTheHost((k) => ({ pending: [hitl(k)] }));
+        const ports: PodPorts = {
+            ...r.ports,
+            approve: async (request) => {
+                r.signals.set(request.id, request.signal);
+                return new Promise<'allowed'>((done) => { allow = () => done('allowed'); });
+            },
+        };
+        const pod = new ProofOfDone(ports);
+        await pod.tick();
+        await flush();
+        expect(allow).not.toBeNull();
+        r.setPending([]);
+        await pod.tick();
+        expect(r.signals.get('pod-1')!.aborted).toBe(true);
+        allow!();
+        await pod.idle();
+        expect(r.calls.some((c) => c.path.endsWith('/signature'))).toBe(false);
+    });
+
+    it('keeps its card while Tynn still lists it, and only the claim that left is withdrawn', async () => {
+        const { r, keyId } = await asTheHost((k) => ({ pending: [hitl(k, 'pod-1'), hitl(k, 'pod-2')], approval: 'wait' }));
+        await r.pod.tick();
+        await flush();
+        await r.pod.tick();
+        await flush();
+        expect(r.asked).toHaveLength(2);
+        expect(r.signals.get('pod-1')!.aborted).toBe(false);
+        expect(r.signals.get('pod-2')!.aborted).toBe(false);
+        r.setPending([hitl(keyId, 'pod-2')]);
+        await r.pod.tick();
+        await flush();
+        expect(r.signals.get('pod-1')!.aborted).toBe(true);
+        expect(r.signals.get('pod-2')!.aborted).toBe(false);
+    });
+
+    it('withdraws nothing when the poll fails: an error status, or the network', async () => {
+        const { r } = await asTheHost((k) => ({ pending: [hitl(k)], approval: 'wait' }));
+        await r.pod.tick();
+        await flush();
+        r.setPending([]);
+        r.setPendingStatus(503);
+        await r.pod.tick();
+        await flush();
+        expect(r.signals.get('pod-1')!.aborted).toBe(false);
+        r.setPendingStatus(200);
+        r.setPendingThrows(true);
+        await r.pod.tick();
+        await flush();
+        expect(r.signals.get('pod-1')!.aborted).toBe(false);
+        // CONTROL: the same rig withdraws it once a poll succeeds.
+        r.setPendingThrows(false);
+        await r.pod.tick();
+        await flush();
+        expect(r.signals.get('pod-1')!.aborted).toBe(true);
     });
 });
