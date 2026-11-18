@@ -127,7 +127,7 @@ export class FakeSessions implements AgentSessionsPort {
         return true;
     }
     /** Absent (`delete`d) = a port that cannot hand a message over mid-turn: a busy agent then holds the prompt back. */
-    deliver?: AgentSessionsPort['deliver'] = (id, text, by) => {
+    deliver?: NonNullable<AgentSessionsPort['deliver']> = (id, text, by) => {
         if (!this.agents.includes(id)) return null;
         if (this.session(id)?.turnState !== 'working') { this.prompt(id, text, by); return { id: null }; }
         this.midTurn.push({ agentId: id, text, by });
