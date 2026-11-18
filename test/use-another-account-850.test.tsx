@@ -28,10 +28,11 @@ const source = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8
 const NOW = new Date(2026, 10, 17, 9, 30).getTime();
 const A = `account_${'a'.repeat(32)}`;
 const X = `account_${'d'.repeat(32)}`;
-/** ONE known account per provider: the case the owner hit. */
+/** ONE known account per provider: the case the owner hit. Each has an email: a provider with no identified account and no
+ * reading is not shown at all (accountsView), so it has no accounts UI to put the button in. */
 const ONE_EACH = [
     { id: A, provider: 'claude', label: 'Work Max', identity: { email: 'work@example.invalid', plan: 'max' } },
-    { id: X, provider: 'codex', label: 'Account 1', identity: { email: null, plan: null } },
+    { id: X, provider: 'codex', label: 'Account 1', identity: { email: 'codex@example.invalid', plan: null } },
 ];
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
