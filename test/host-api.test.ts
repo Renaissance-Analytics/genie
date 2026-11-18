@@ -310,6 +310,8 @@ describe('events', () => {
  * nobody wants never built.
  */
 describe('the phone’s files, attachments and wanted agents', () => {
+    /** A JPEG's signature, padded to `n` bytes: an image by its bytes (core/prompt-content.ts imageTypeOf). */
+    const jpeg = (n: number) => { const b = new Uint8Array(n); b.set([0xff, 0xd8, 0xff].slice(0, n)); return b; };
     const withFiles = () => {
         const f = fakes();
         const seen: string[] = [];
@@ -341,8 +343,8 @@ describe('the phone’s files, attachments and wanted agents', () => {
 
     it('a prompt with files goes to promptWith — by YOU — and may carry no text; without files it goes there too, so a refusal can say why', async () => {
         const { f, seen, api } = withFiles();
-        expect(await api.invoke('prompt', ['agent_a', 'what is this?', [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes: new Uint8Array(12) }]])).toEqual({ ok: true });
-        expect(await api.invoke('prompt', ['agent_a', '', [{ name: 'IMG_2.jpg', type: 'image/jpeg', bytes: new Uint8Array(3) }]])).toEqual({ ok: true });
+        expect(await api.invoke('prompt', ['agent_a', 'what is this?', [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes: jpeg(12) }]])).toEqual({ ok: true });
+        expect(await api.invoke('prompt', ['agent_a', '', [{ name: 'IMG_2.jpg', type: 'image/jpeg', bytes: jpeg(3) }]])).toEqual({ ok: true });
         expect(await api.invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
         expect(seen).toEqual(['promptWith:agent_a:what is this?:IMG_1.jpg/image/jpeg/12:you', 'promptWith:agent_a::IMG_2.jpg/image/jpeg/3:you', 'promptWith:agent_a:hi::you']);
         expect(f.calls).not.toContain('prompt:agent_a:hi');
@@ -362,8 +364,34 @@ describe('the phone’s files, attachments and wanted agents', () => {
 
     it('promptWith’s refusal (a file the provider cannot take) comes back with its reason', async () => {
         const { f, api } = withFiles();
-        f.deps.host.promptWith = () => ({ ok: false, reason: 'clip.mov: this agent’s provider takes images and text only' });
-        expect(await api.invoke('prompt', ['agent_a', 'x', [{ name: 'clip.mov', type: 'video/quicktime', bytes: new Uint8Array(2) }]])).toEqual({ ok: false, reason: 'clip.mov: this agent’s provider takes images and text only' });
+        f.deps.host.promptWith = () => ({ ok: false, reason: 'shot.jpg: this agent’s provider cannot take an image' });
+        expect(await api.invoke('prompt', ['agent_a', 'x', [{ name: 'shot.jpg', type: 'image/jpeg', bytes: jpeg(4) }]])).toEqual({ ok: false, reason: 'shot.jpg: this agent’s provider cannot take an image' });
+    });
+
+    it('a file that is not an image or text is saved by the host first (Tynn #829); no save here, or a refused save, starts and sends nothing', async () => {
+        const docx = { name: 'Letterhead.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', bytes: new Uint8Array([0x50, 0x4b, 3, 4, 0, 0]) };
+        const { f, seen, api } = withFiles();
+        const started: string[] = [];
+        f.deps.startForWork = async (r) => { started.push(r.id); return { ok: true }; };
+
+        // No save on this host: refused, naming the file.
+        const none = await api.invoke('prompt', ['agent_a', 'use this', [docx]]) as { ok: boolean; reason?: string };
+        expect(none.ok).toBe(false);
+        expect(none.reason).toMatch(/Letterhead\.docx.*cannot save/);
+
+        // A refused save: its reason, and nothing started or sent.
+        f.deps.saveUploads = async () => ({ ok: false, reason: 'Letterhead.docx was not sent: this workspace is not trusted' });
+        const api2 = buildHostApi(f.deps);
+        expect(await api2.invoke('prompt', ['agent_a', 'use this', [docx]])).toEqual({ ok: false, reason: 'Letterhead.docx was not sent: this workspace is not trusted' });
+        expect(started).toEqual([]);
+        expect(seen.filter((s) => s.startsWith('promptWith'))).toEqual([]);
+
+        // CONTROL: a save that works sends the saved file (no bytes), after the start.
+        f.deps.saveUploads = async (_r, files) => ({ ok: true, files: files.map((a) => ({ ...a, bytes: new Uint8Array(0), saved: { path: `.ai/_dirty/uploads/2026-11-17/${a.name}`, type: a.type, size: a.bytes.byteLength } })) });
+        const api3 = buildHostApi(f.deps);
+        expect(await api3.invoke('prompt', ['agent_a', 'use this', [docx]])).toEqual({ ok: true });
+        expect(started).toEqual(['agent_a']);
+        expect(seen.filter((s) => s.startsWith('promptWith'))).toEqual(['promptWith:agent_a:use this:Letterhead.docx/application/vnd.openxmlformats-officedocument.wordprocessingml.document/0:you']);
     });
 
     it('an agent no listener wants is never built: detailFor is not called for it', async () => {
