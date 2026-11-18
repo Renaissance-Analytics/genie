@@ -118,6 +118,8 @@ export type TrashOrigin =
     /** `rel` is workspace-relative, or absolute for a worktree outside the workspace (`external`); `head` is its commit, to find it again. */
     | { readonly kind: 'worktree'; readonly repoRel: string; readonly rel: string; readonly branch: string | null; readonly head?: string | null; readonly external?: boolean }
     | { readonly kind: 'chat-file'; readonly agentId: string; readonly attachmentId: string; readonly path: string }
+    /** Items cleared off the workspace's ArtBoard (genie#847): their index records and files; restore puts them back on the board. */
+    | { readonly kind: 'artboard'; readonly ids: readonly string[]; readonly label: string }
     /** Put in .trash by someone other than Genie: listed and emptied with the rest, never restored. */
     | { readonly kind: 'unknown'; readonly name: string };
 
@@ -221,6 +223,7 @@ export function originLabel(o: TrashOrigin): string {
         case 'path': return o.rel;
         case 'worktree': return o.branch ? `${o.rel} (worktree, ${o.branch})` : `${o.rel} (worktree)`;
         case 'chat-file': return `chat: ${o.agentId}, ${o.attachmentId}`;
+        case 'artboard': return `ArtBoard: ${o.label}`;
         default: return o.name;
     }
 }
