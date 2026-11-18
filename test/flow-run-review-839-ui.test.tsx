@@ -5,7 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { FlowRecord, FlowRun } from '../src/main/flow-store.js';
-import { FlowRunOverlay, RunCanvas } from '../src/renderer/components/FlowEditorWindow.js';
+import { FlowEditorWindow, FlowRunOverlay, RunCanvas } from '../src/renderer/components/FlowEditorWindow.js';
+import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from '../src/renderer/features.js';
 
 /**
  * THE RUN REVIEW, ON SCREEN (Tynn #839). The owner's screenshot: a run picked in the Flow window showed a blank canvas the
@@ -186,5 +187,34 @@ describe('picking a step', () => {
         act(() => { host.querySelector('[data-run-next]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
         expect(onRerun).toHaveBeenCalledTimes(1);
         expect(onNext).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('the window drives the run review (Stop is Tynn #833’s, now on the line)', () => {
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    let host: HTMLDivElement;
+    let root: Root;
+    beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host); });
+    afterEach(() => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ''; });
+    const data = (flows: FlowRecord[]): FeatureData => ({ ...EMPTY_FEATURES, flows: { flows, adding: null } });
+
+    it('picking a run while another is going: Stop sends flows.stop for this flow, Run again sends flows.runNow', () => {
+        const sent: FeatureAction[] = [];
+        const going = flow({ runs: [run], inFlight: { at: '2026-11-17T20:00:00.000Z', trigger: 'schedule', nodes: { r: 'running' } } });
+        const actFn = async (a: FeatureAction) => { sent.push(a); return data([going]); };
+        act(() => root.render(<FlowEditorWindow flowId="flow_review" workspaceId={null} data={data([going])} workspaces={[{ id: 'ws-example', path: '/w/ws-example' }]} act={actFn} Editor={() => <div data-stub-editor="" />} Viewer={stub([])} />));
+        const select = host.querySelector('select[aria-label="Show a run on the canvas"]') as HTMLSelectElement;
+        act(() => { select.value = '0'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        const stop = host.querySelector('[data-run-stop]') as HTMLButtonElement;
+        expect(stop).not.toBeNull();
+        expect(stop.disabled).toBe(false);
+        act(() => { stop.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+        act(() => { host.querySelector('[data-run-rerun]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+        expect(sent).toEqual([{ kind: 'flows.stop', flowId: 'flow_review' }, { kind: 'flows.runNow', flowId: 'flow_review' }]);
+    });
+
+    it('a run someone stopped says who', () => {
+        const stopped: FlowRun = { ...run, outcome: 'stopped', reason: 'the run was stopped', stoppedBy: 'you' };
+        expect(attr(html(stopped), 'data-run-stopped-by')).toBe('you');
     });
 });
