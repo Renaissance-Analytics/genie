@@ -13,6 +13,7 @@ import { PAGES_TOOLS } from './mcp-tools-pages.js';
 import { pluginToolOffer } from './mcp-tools-plugins.js';
 import { PROCESS_TOOLS } from './mcp-tools-processes.js';
 import { WORKSPACE_TABS_TOOLS } from './mcp-tools-workspace-tabs.js';
+import { PLAYWRIGHT_TOOLS } from './mcp-tools-playwright.js';
 import { GENIE_TOOLS } from './mcp-tools.js';
 import { PERSON_ONLY_TOOLS } from '../core/gapp-grants.js';
 
@@ -27,10 +28,10 @@ import { PERSON_ONLY_TOOLS } from '../core/gapp-grants.js';
 export const BUILTIN_PACKAGE_ID = 'ai.genie.core';
 const BUILTIN_VERSION = '2.0.0';
 
-/** The 17 builtin tools, in the order agents have always been offered them. */
+/** The builtin tools, in the order agents have always been offered them (`playwright`, Tynn #846, last). */
 export const BUILTIN_TOOLS: readonly BuiltinTool[] = [
     ...GENIE_TOOLS, ...MORE_TOOLS, ...ATTENTION_TOOLS, ...HOSTING_TOOLS, ...PROCESS_TOOLS, ...FLOWS_TOOLS, ...MAIL_TOOLS,
-    ...AGENT_TOOLS, ...WORKSPACE_TABS_TOOLS, ...PAGES_TOOLS,
+    ...AGENT_TOOLS, ...WORKSPACE_TABS_TOOLS, ...PAGES_TOOLS, ...PLAYWRIGHT_TOOLS,
 ];
 
 /** A package as it is handed to `Catalog.register`: plain data, validated there. */

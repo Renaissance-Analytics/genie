@@ -191,27 +191,27 @@ export interface BrowserManifest {
 }
 
 export function autoInstallEnabled(value: string | undefined): boolean {
-    void value;
-    return false; // RED: inert stub
+    return !/^(0|off|false|no)$/i.test((value ?? '').trim());
 }
 
 /** The revision folders `playwright install --dry-run` names (`Install location: …/chromium-1194`), by their own names. */
 export function parseInstallLocations(text: string): string[] {
-    void text;
-    return []; // RED: inert stub
+    return [...text.matchAll(/Install location:\s*(.+?)\s*$/gm)].map((m) => m[1]!.split(/[\\/]/).filter(Boolean).pop() ?? '').filter(Boolean);
 }
 
 /** The recorded versions whose browsers are really in the folder: every recorded revision folder there (or, for a set recorded before folders were, a folder of its browser). */
 export function readyVersions(manifest: BrowserManifest, entries: readonly string[]): string[] {
-    void manifest;
-    void entries;
-    return []; // RED: inert stub
+    const present = new Set(entries.map((e) => e.split(/[\\/]/)[0]!));
+    return Object.keys(manifest.sets).filter((version) => {
+        const folders = manifest.folders?.[version] ?? [];
+        if (folders.length > 0) return folders.every((f) => present.has(f));
+        return (manifest.sets[version] ?? []).some((b) => [...present].some((e) => e.startsWith(`${b}-`) || e.startsWith(`${b}_`)));
+    });
 }
 
 /** What Genie installs at launch: the stable version when it has no set at all, and nothing when it is switched off. */
 export function launchInstall(input: { readonly enabled: boolean; readonly ready: readonly string[] }): string | null {
-    void input;
-    return null; // RED: inert stub
+    return input.enabled && input.ready.length === 0 ? PLAYWRIGHT_STABLE : null;
 }
 
 export type InstallAsk =
@@ -222,6 +222,16 @@ export type InstallAsk =
 
 /** A project's or an agent's ask for a version's browsers: there already, installed now, asked of the person first (unusually large), or refused. */
 export function decideInstallAsk(input: { readonly version: string; readonly browsers: readonly string[]; readonly ready: readonly string[]; readonly held: readonly string[] }): InstallAsk {
-    void input;
-    return { kind: 'refused', reason: 'RED: inert stub' };
+    if (!/^\d+\.\d+\.\d+$/.test(input.version)) return { kind: 'refused', reason: `${input.version} is not a Playwright version (x.y.z, as your @playwright/test is)` };
+    const known = [...MANAGED_BROWSERS, ...OPTIONAL_MANAGED_BROWSERS];
+    const unknown = input.browsers.filter((b) => !known.includes(b));
+    if (unknown.length > 0) return { kind: 'refused', reason: `Genie installs Playwright's ${known.join(', ')}; not ${unknown.join(', ')}` };
+    const wanted = input.browsers.length > 0 ? input.browsers : MANAGED_BROWSERS;
+    const isReady = input.ready.includes(input.version);
+    const missing = wanted.filter((b) => !(isReady && input.held.includes(b)));
+    if (missing.length === 0) return { kind: 'ready' };
+    const extra = missing.filter((b) => !MANAGED_BROWSERS.includes(b));
+    if (extra.length > 0) return { kind: 'ask', reason: `Playwright ${input.version}'s ${extra.join(' and ')} is another browser of a few hundred MB, beyond the Chromium Genie keeps by itself` };
+    if (!isReady && input.ready.length >= MAX_AUTO_SETS) return { kind: 'ask', reason: `Genie already keeps ${input.ready.length} Playwright browser sets (${input.ready.join(', ')}); one more is a few hundred MB` };
+    return { kind: 'install' };
 }

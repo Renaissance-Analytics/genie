@@ -113,6 +113,10 @@ function Run([string]$what, [scriptblock]$cmd) {
 # THIS IS A TEST MACHINE, SAID ONCE AND ONLY WHEN IT IS TRUE. Each window row script refuses to run anywhere else, each
 # with its own variable; GitHub's CI=true used to satisfy them all. They are set here from one statement: the user is
 # `genie` (the Azure test VMs' standard user), or GENIE_TEST_MACHINE=1 was given by whoever started the run.
+# GENIE INSTALLS PLAYWRIGHT'S BROWSERS BY ITSELF at launch (Tynn #846): a few hundred MB from Playwright's CDN, on every
+# test VM, under rows that measure time and count processes. The rows test Genie, not that download: off for every row.
+$env:GENIE_PLAYWRIGHT_AUTO_INSTALL = '0'
+
 function Declare-TestMachine {
     if ($env:GENIE_TEST_MACHINE -ne '1') {
         if ($env:USERNAME -ne 'genie') { Block "not a test machine (user $env:USERNAME): the window rows run only on one; GENIE_TEST_MACHINE=1 says this machine is" }

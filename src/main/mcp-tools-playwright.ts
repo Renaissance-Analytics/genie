@@ -3,6 +3,7 @@ import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './b
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { PlaywrightInstallOutcome } from './playwright-browsers.js';
+import { MANAGED_BROWSERS, decideInstallAsk } from '../core/playwright-managed.js';
 
 /**
  * `playwright` — WHAT GENIE HAS FOR PLAYWRIGHT, AND ASKING IT FOR A VERSION (Tynn #846). Agents never install browsers
@@ -43,6 +44,7 @@ export interface PlaywrightToolDeps {
     readonly approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
 }
 
+const ok = (payload: Record<string, unknown>): McpToolResult => ({ text: JSON.stringify({ ok: true, ...payload }), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
 
 export function playwrightTools(deps: PlaywrightToolDeps): Registration[] {
@@ -51,7 +53,22 @@ export function playwrightTools(deps: PlaywrightToolDeps): Registration[] {
         handler: async (args: JsonObject, context) => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);
             if (typeof caller === 'string') return err(caller);
-            return err('RED: inert stub');
+            const action = typeof args.action === 'string' ? args.action : '';
+            if (action === 'status') return ok({ ...deps.port.status(caller.workspaceId) });
+            if (action !== 'install') return err('action is status or install');
+            const version = typeof args.version === 'string' ? args.version.trim() : '';
+            const asked = Array.isArray(args.browsers) ? args.browsers.filter((b): b is string => typeof b === 'string') : [];
+            const browsers = asked.length > 0 ? asked : MANAGED_BROWSERS;
+            const decision = decideInstallAsk({ version, browsers, ready: deps.port.ready(), held: deps.port.held(version) });
+            if (decision.kind === 'refused') return err(`${decision.reason}; nothing was installed`);
+            if (decision.kind === 'ready') return ok({ version, browsers: deps.port.held(version), note: 'Genie has these already; nothing was installed' });
+            if (decision.kind === 'ask') {
+                const verdict = await deps.approve(caller, PLAYWRIGHT_INSTALL_ACTION, `Install Playwright ${version}'s ${browsers.join(', ')}: ${decision.reason}`, context);
+                if (verdict !== 'allowed') return err(`installing Playwright ${version}'s ${browsers.join(', ')} was denied by the person; nothing was installed`);
+            }
+            const outcome = await deps.port.install(version, browsers);
+            if (outcome.kind === 'installed' || outcome.kind === 'already-installed') return ok({ version: outcome.version, browsers: outcome.browsers });
+            return err(`Playwright ${version}'s browsers were not installed: ${outcome.reason}`);
         },
     };
     return [tool];

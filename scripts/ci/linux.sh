@@ -185,6 +185,10 @@ take_session_display() {
 # here when the machine is one of ours by its own account (the test VMs' user is `genie`, which the row scripts already
 # go by), or by the person who starts the run on another test machine. It is never assumed, and `CI=true` is not set:
 # that was GitHub's word for itself.
+# GENIE INSTALLS PLAYWRIGHT'S BROWSERS BY ITSELF at launch (Tynn #846): a few hundred MB from Playwright's CDN, on every
+# test VM, under rows that measure time and count processes. The rows test Genie, not that download: off for every row.
+export GENIE_PLAYWRIGHT_AUTO_INSTALL=0
+
 declare_test_machine() {
     if [ "${GENIE_TEST_MACHINE:-}" = 1 ]; then echo "--- a test machine: GENIE_TEST_MACHINE=1 was given"; return 0; fi
     if [ "$(id -un)" = genie ]; then export GENIE_TEST_MACHINE=1; echo "--- a test machine: its user is genie"; return 0; fi

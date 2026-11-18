@@ -56,6 +56,8 @@ export interface HostMcpPorts {
     readonly processes?: import('./mcp-tools-processes.js').ProcessesPort;
     /** The flows the `flows` tool acts on (P3.3d): the host's store and scheduler. */
     readonly flows?: import('./mcp-tools-flows.js').FlowsPort;
+    /** Genie's Playwright installer and what is on disk, for the `playwright` tool (Tynn #846). */
+    readonly playwright?: import('./mcp-tools-playwright.js').PlaywrightToolPort;
     /** Genie Mail's inboxes and the shared Mailpit, for the `mail` tool (G6): the host's hosting. */
     readonly mail?: import('./mcp-tools-mail.js').MailPort;
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
@@ -177,6 +179,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.processes ? { processes: ports.processes } : {}),
             ...(ports.flows ? { flows: ports.flows } : {}),
             ...(ports.mail ? { mail: ports.mail } : {}),
+            ...(ports.playwright ? { playwright: ports.playwright } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
             ...(ports.workspaceTrusted ? { workspaceTrusted: ports.workspaceTrusted } : {}),
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),

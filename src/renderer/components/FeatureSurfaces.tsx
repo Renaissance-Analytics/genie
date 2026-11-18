@@ -1469,20 +1469,24 @@ function formatBytes(bytes: number): string {
 /** Genie's one Playwright browser install: version, size, Update (Tynn #604). Every workspace and worktree uses it. */
 /** A version typed into the Playwright section, as the install it asks for (Tynn #846): x.y.z's Chromium, or `null`. */
 export function playwrightInstallChosen(text: string): FeatureAction | null {
-    void text;
-    return null; // RED: inert stub
+    const version = text.trim();
+    return /^\d+\.\d+\.\d+$/.test(version) ? { kind: 'toolchain.installPlaywright', version, browsers: ['chromium'], consent: true } : null;
 }
 
 function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { playwright: NonNullable<NonNullable<FeatureData['toolchain']>['playwright']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const newest = playwright.sets[0]?.version ?? null;
     const outdated = playwright.latest !== null && newest !== playwright.latest;
+    // Any version, typed (Tynn #846): a project pinned to an older Playwright gets its own set beside the others.
+    const [chosen, setChosen] = useState('');
+    const chosenAction = playwrightInstallChosen(chosen);
     return (
         <section data-playwright-browsers={playwright.sets.length} className="border-b border-[var(--border-1)]">
             <div className="flex items-center gap-3 px-5 pt-3">
                 <h3 className="text-sm font-medium">Playwright browsers</h3>
                 <span data-playwright-size="" className="text-xs text-[var(--fg-3)]">{formatBytes(playwright.totalBytes)}</span>
+                <span data-playwright-stable={playwright.stable} className="text-xs text-[var(--fg-3)]">Stable: {playwright.stable}</span>
             </div>
-            <p className="px-5 py-1 text-xs text-[var(--fg-3)]">One install for every workspace and worktree: <span className="font-mono">{playwright.browsersPath}</span></p>
+            <p className="px-5 py-1 text-xs text-[var(--fg-3)]">One install for every workspace and worktree, kept by Genie: it installs the stable version, and each version a project pins, by itself. <span className="font-mono">{playwright.browsersPath}</span></p>
             {refusals.map((r) => (
                 <p key={r.version ?? 'latest'} data-playwright-refusal={r.version ?? 'latest'} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
             ))}
@@ -1490,17 +1494,22 @@ function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { pla
                 {playwright.sets.map((s) => (
                     <li key={s.version} data-playwright-version={s.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
                         <span className="font-medium">Playwright {s.version}</span>
+                        {s.version === playwright.stable ? <span data-playwright-stable-set={s.version} className="rounded bg-[var(--bg-3)] px-1.5 text-[11px] text-[var(--fg-2)]">stable</span> : null}
                         <span className="text-xs text-[var(--fg-3)]">{s.browsers.join(', ')}</span>
-                        {s.version === newest && outdated ? (
-                            <Button size="xs" type="button" data-playwright-update={playwright.latest} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: s.browsers, consent: true })}>Update to {playwright.latest}</Button>
+                        {!s.ready ? (
+                            <Button size="xs" type="button" data-playwright-reinstall={s.version} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: s.version, browsers: s.browsers, consent: true })}>Its browsers are gone: install again</Button>
+                        ) : s.version === newest && outdated && playwright.latest !== null ? (
+                            <Button size="xs" type="button" data-playwright-update={playwright.latest} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: playwright.latest, browsers: s.browsers, consent: true })}>Add {playwright.latest}</Button>
                         ) : null}
                     </li>
                 ))}
             </ul>
             <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                 {playwright.sets.length === 0 ? (
-                    <Button size="xs" type="button" data-playwright-install="latest" disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: ['chromium'], consent: true })}>Install Chromium</Button>
+                    <Button size="xs" type="button" data-playwright-install="stable" disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: ['chromium'], consent: true })}>Install Chromium (Playwright {playwright.stable})</Button>
                 ) : null}
+                <input data-playwright-version-input="" value={chosen} onChange={(e) => setChosen(e.target.value)} placeholder="1.62.1" aria-label="Playwright version to install" className="w-24 rounded-lg border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono text-[13px]" />
+                <Button size="xs" type="button" data-playwright-install-chosen="" disabled={busy || chosenAction === null} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => { if (chosenAction) { onAction(chosenAction); setChosen(''); } }}>Install this version</Button>
                 {newest !== null ? playwright.optional.filter((b) => !(playwright.sets[0]?.browsers ?? []).includes(b)).map((b) => (
                     <Button size="xs" key={b} type="button" data-playwright-add={b} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: newest, browsers: [b], consent: true })}>Add {b}</Button>
                 )) : null}

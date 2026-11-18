@@ -1,6 +1,6 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { planBrowserInstall, playwrightDirs, parseLockedPlaywright, resolveBrowserSet, worktreeLinkDecision, type BrowserSetResolution, type LockKind } from '../core/playwright-managed.js';
+import { MANAGED_BROWSERS, OPTIONAL_MANAGED_BROWSERS, PLAYWRIGHT_STABLE, parseInstallLocations, planBrowserInstall, playwrightDirs, parseLockedPlaywright, readyVersions, resolveBrowserSet, worktreeLinkDecision, type BrowserManifest, type BrowserSetResolution, type LockKind } from '../core/playwright-managed.js';
 import { platformArgv, type Platform } from '../core/toolchain.js';
 import { nodePhpVersionsFs, type PhpVersionsFs } from './php-versions.js';
 import type { CommandRunner } from './toolchain-prober.js';
@@ -9,12 +9,13 @@ import type { CommandRunner } from './toolchain-prober.js';
  * GENIE'S PLAYWRIGHT BROWSERS (Tynn #604): installed ONCE into `<toolchain>/playwright/browsers`, for every workspace and
  * worktree. One Playwright CLI per version lives in `<toolchain>/playwright/cli/<version>` (`npm install playwright@<version>`)
  * and installs that version's browsers into the shared folder; Playwright names each revision's folder itself, so a revision
- * two versions share is downloaded once. A manifest (`sets.json`) records which browsers each version has: that is what
- * "never download a version twice" and "the version a project needs is missing" are answered from.
+ * two versions share is downloaded once. A manifest (`sets.json`) records which browsers each version has, and (Tynn #846)
+ * the revision folders `playwright install --dry-run` says they live in: a version is installed only while all of its
+ * folders are really there, so a deleted folder is downloaded again rather than read as "already installed".
  */
 
-export const DEFAULT_BROWSERS: readonly string[] = ['chromium'];
-export const OPTIONAL_BROWSERS: readonly string[] = ['firefox', 'webkit'];
+export const DEFAULT_BROWSERS: readonly string[] = MANAGED_BROWSERS;
+export const OPTIONAL_BROWSERS: readonly string[] = OPTIONAL_MANAGED_BROWSERS;
 
 export interface PlaywrightBrowsersFs extends PhpVersionsFs {
     /** Total bytes under a path (0 when absent). */
@@ -48,22 +49,37 @@ export type PlaywrightInstallOutcome =
     | { readonly kind: 'not-installed'; readonly reason: string };
 
 type Manifest = Record<string, string[]>;
+type ManifestPorts = { readonly toolchainDir: string; readonly fs: Pick<PhpVersionsFs, 'readText'> };
 
-export function readManifest(ports: { readonly toolchainDir: string; readonly fs: Pick<PhpVersionsFs, 'readText'> }): Manifest {
+const record = (v: unknown): Manifest => (v && typeof v === 'object' && !Array.isArray(v) ? v as Manifest : {});
+
+/** The whole `sets.json`: the browsers each version has, and their revision folders where they were recorded. */
+export function readBrowserManifest(ports: ManifestPorts): { sets: Manifest; folders: Manifest } {
     const text = ports.fs.readText?.(playwrightDirs(ports.toolchainDir).manifest) ?? null;
-    if (text === null) return {};
+    if (text === null) return { sets: {}, folders: {} };
     try {
-        const parsed = JSON.parse(text) as { sets?: Manifest };
-        return parsed.sets && typeof parsed.sets === 'object' ? parsed.sets : {};
+        const parsed = JSON.parse(text) as { sets?: unknown; folders?: unknown };
+        return { sets: record(parsed.sets), folders: record(parsed.folders) };
     } catch {
-        return {};
+        return { sets: {}, folders: {} };
     }
 }
 
-function writeManifest(ports: Pick<PlaywrightBrowsersPorts, 'toolchainDir' | 'fs'>, sets: Manifest): void {
+export function readManifest(ports: ManifestPorts): Manifest {
+    return readBrowserManifest(ports).sets;
+}
+
+function writeManifest(ports: Pick<PlaywrightBrowsersPorts, 'toolchainDir' | 'fs'>, sets: Manifest, folders: Manifest): void {
     const dirs = playwrightDirs(ports.toolchainDir);
     ports.fs.mkdirp(dirs.root);
-    ports.fs.writeText(dirs.manifest, JSON.stringify({ sets }, null, 2));
+    // `folders` only when some are known: a manifest with none reads exactly as before Tynn #846.
+    ports.fs.writeText(dirs.manifest, JSON.stringify(Object.keys(folders).length > 0 ? { sets, folders } : { sets }, null, 2));
+}
+
+/** The versions whose browsers are really in Genie's folder now (Tynn #846). */
+export function readyOnDisk(ports: { readonly toolchainDir: string; readonly fs: Pick<PhpVersionsFs, 'readText' | 'list'> }): string[] {
+    const manifest: BrowserManifest = readBrowserManifest(ports);
+    return readyVersions(manifest, ports.fs.list(playwrightDirs(ports.toolchainDir).browsers));
 }
 
 const VERSION = /^\d+\.\d+\.\d+$/;
@@ -82,38 +98,38 @@ async function latestPlaywright(ports: PlaywrightBrowsersPorts): Promise<string 
 export async function listPlaywrightBrowsers(ports: PlaywrightBrowsersPorts): Promise<PlaywrightBrowsersView> {
     const dirs = playwrightDirs(ports.toolchainDir);
     const manifest = readManifest(ports);
-    const sets = Object.keys(manifest).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })).map((version) => ({ version, browsers: manifest[version]!, ready: false /* RED: inert stub */ }));
-    return { browsersPath: dirs.browsers, totalBytes: ports.fs.size(dirs.browsers), sets, stable: '' /* RED: inert stub */, latest: await latestPlaywright(ports), optional: OPTIONAL_BROWSERS };
+    const ready = readyOnDisk(ports);
+    const sets = Object.keys(manifest).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })).map((version) => ({ version, browsers: manifest[version]!, ready: ready.includes(version) }));
+    return { browsersPath: dirs.browsers, totalBytes: ports.fs.size(dirs.browsers), sets, stable: PLAYWRIGHT_STABLE, latest: await latestPlaywright(ports), optional: OPTIONAL_BROWSERS };
 }
 
-/** The versions Genie has browsers for. */
-export function installedVersions(ports: { readonly toolchainDir: string; readonly fs: Pick<PhpVersionsFs, 'readText'> }): string[] {
-    return Object.keys(readManifest(ports));
+/** The versions Genie has browsers for: recorded AND really in the folder (Tynn #846). */
+export function installedVersions(ports: { readonly toolchainDir: string; readonly fs: Pick<PhpVersionsFs, 'readText' | 'list'> }): string[] {
+    return readyOnDisk(ports);
 }
 
 /** Whether Genie has the browsers a project's Playwright needs. */
-export function browserSetFor(version: string, ports: { readonly toolchainDir: string; readonly fs: Pick<PhpVersionsFs, 'readText'> }): BrowserSetResolution {
+export function browserSetFor(version: string, ports: { readonly toolchainDir: string; readonly fs: Pick<PhpVersionsFs, 'readText' | 'list'> }): BrowserSetResolution {
     return resolveBrowserSet(version, installedVersions(ports));
 }
 
 /**
- * Install (or update to) a Playwright version's browsers. `version` null = the newest. Consent is the click. Only the browsers
- * the version does not already have are downloaded; none missing is `already-installed`, with nothing downloaded.
+ * Install a Playwright version's browsers. `version` null = the STABLE version (`PLAYWRIGHT_STABLE`, Tynn #846: never the
+ * registry's newest, so the default does not move under projects). Consent is the click, or Genie's own installer for its
+ * own toolchain. Only the browsers the version does not already have ON DISK are downloaded; none missing is
+ * `already-installed`, with nothing downloaded. After an install, `--dry-run` names the revision folders, and they are recorded.
  */
 export async function installPlaywrightBrowsers(version: string | null, browsers: readonly string[], consent: boolean, ports: PlaywrightBrowsersPorts): Promise<PlaywrightInstallOutcome> {
     if (!consent) return { kind: 'refused', reason: 'Genie installs nothing without your go-ahead' };
     const wanted = browsers.length > 0 ? browsers : DEFAULT_BROWSERS;
     if (!wanted.every((b) => DEFAULT_BROWSERS.includes(b) || OPTIONAL_BROWSERS.includes(b))) return { kind: 'refused', reason: `Playwright's browsers Genie installs are ${[...DEFAULT_BROWSERS, ...OPTIONAL_BROWSERS].join(', ')}` };
-    let target = version;
-    if (target === null) {
-        ports.progress?.('Asking which Playwright is newest');
-        target = await latestPlaywright(ports);
-        if (target === null) return { kind: 'not-installed', reason: 'the npm registry did not answer, so the newest Playwright is unknown' };
-    }
+    const target = version ?? PLAYWRIGHT_STABLE;
     if (!VERSION.test(target)) return { kind: 'refused', reason: `${target} is not a Playwright version` };
     const dirs = playwrightDirs(ports.toolchainDir);
-    const manifest = readManifest(ports);
-    const plan = planBrowserInstall(target, wanted, manifest);
+    const { sets: manifest, folders } = readBrowserManifest(ports);
+    // What the manifest records counts only while it is really on disk: a set whose folders are gone is downloaded again.
+    const onDisk = readyOnDisk(ports).includes(target);
+    const plan = planBrowserInstall(target, wanted, onDisk ? manifest : {});
     if (plan.download.length === 0) return { kind: 'already-installed', version: target, browsers: manifest[target] ?? [] };
     const cli = join(dirs.cli(target), 'node_modules', 'playwright', 'cli.js');
     if (!ports.fs.exists(cli)) {
@@ -127,8 +143,15 @@ export async function installPlaywrightBrowsers(version: string | null, browsers
     ports.progress?.(`Downloading Playwright ${target}'s ${plan.download.join(', ')}`);
     const installed = await ports.run('node', [cli, 'install', ...plan.download], { env: { PLAYWRIGHT_BROWSERS_PATH: dirs.browsers } });
     if (installed.exitCode !== 0) return { kind: 'not-installed', reason: `playwright install ${plan.download.join(' ')} failed (exit ${installed.exitCode})` };
-    const next: Manifest = { ...manifest, [target]: [...(manifest[target] ?? []), ...plan.download] };
-    writeManifest(ports, next);
+    const browsersNow = [...new Set([...(onDisk ? manifest[target] ?? [] : []), ...plan.download])];
+    const next: Manifest = { ...manifest, [target]: browsersNow };
+    // Where Playwright put them: its own answer, so "installed" can be checked against the folder later (Tynn #846).
+    const located = await ports.run('node', [cli, 'install', '--dry-run', ...browsersNow], { env: { PLAYWRIGHT_BROWSERS_PATH: dirs.browsers } }).catch(() => null);
+    const names = located !== null && located.exitCode === 0 ? parseInstallLocations(located.stdout) : [];
+    const nextFolders: Manifest = { ...folders };
+    if (names.length > 0) nextFolders[target] = names;
+    else delete nextFolders[target];
+    writeManifest(ports, next, nextFolders);
     ports.progress?.(null);
     return { kind: 'installed', version: target, browsers: next[target]! };
 }

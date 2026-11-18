@@ -24,8 +24,8 @@ import {
     type ToolCopy,
 } from '../core/toolchain-repair.js';
 import { SYSTEM_CA_BUNDLES } from '../core/php-trust.js';
-import { PLAYWRIGHT_BROWSERS_ENV, managedBrowsersReady, playwrightDirs, playwrightEnv } from '../core/playwright-managed.js';
-import { readManifest } from './playwright-browsers.js';
+import { PLAYWRIGHT_BROWSERS_ENV, playwrightDirs, playwrightEnv, readyVersions } from '../core/playwright-managed.js';
+import { readBrowserManifest } from './playwright-browsers.js';
 import { probeInstalled, type CommandRunner } from './toolchain-prober.js';
 
 /**
@@ -484,7 +484,8 @@ export function restoreToolchainEnv(ports: Pick<ToolchainOpsPorts, 'platform' | 
  */
 export function applyPlaywrightEnv(ports: { readonly env: EnvPort; readonly fs: Pick<ToolchainFs, 'readText' | 'list'>; readonly dataDir: string }): boolean {
     const dirs = playwrightDirs(ports.dataDir);
-    const ready = managedBrowsersReady(readManifest({ toolchainDir: ports.dataDir, fs: ports.fs }), ports.fs.list?.(dirs.browsers) ?? []);
+    // A set is there when it is recorded AND its folders are (Tynn #846: the same rule the host and the installer use).
+    const ready = readyVersions(readBrowserManifest({ toolchainDir: ports.dataDir, fs: ports.fs }), ports.fs.list?.(dirs.browsers) ?? []).length > 0;
     if (ready) {
         for (const [name, value] of Object.entries(playwrightEnv(ports.dataDir))) ports.env.set(name, value);
         return true;

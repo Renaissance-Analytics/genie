@@ -119,7 +119,10 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             ports.deferHosts();
             break;
         case 'playwright-install':
-            break; // RED: inert stub
+            // A Playwright install Genie could not finish (Tynn #846). Retry runs it again: when it fails again the item stays, with why.
+            if (!ports.playwrightNotices) throw new Error('Genie’s Playwright installer is not running here; nothing was done');
+            if (command.retry ? !(await ports.playwrightNotices.retry(command.id)) : !ports.playwrightNotices.dismiss(command.id)) throw new Error(`no Playwright install item ${command.id}`);
+            break;
         case 'dismiss-limit-alert':
             if (!ports.limitNotices) throw new Error(NEEDS_WINDOW('dismissing a rate-limit alert'));
             if (!ports.limitNotices.dismiss(command.id)) throw new Error(`no rate-limit notice ${command.id}`);
