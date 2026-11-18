@@ -317,12 +317,12 @@ export interface FlowRunOverlayProps {
     /** The canvas the run is drawn on (`RunCanvas`); a test hands a stand-in. */
     readonly Viewer?: AnyComponent;
     /** Run the flow again (the person's Run now). */
-    readonly onRerun?: () => void;
+    readonly onRerun?: (() => void) | undefined;
     /** Stop the run going now (Tynn #833); absent where this build cannot stop one. */
-    readonly onStop?: () => void;
+    readonly onStop?: (() => void) | undefined;
     /** The run before / after this one; absent at either end. */
-    readonly onPrevious?: () => void;
-    readonly onNext?: () => void;
+    readonly onPrevious?: (() => void) | undefined;
+    readonly onNext?: (() => void) | undefined;
 }
 
 /**

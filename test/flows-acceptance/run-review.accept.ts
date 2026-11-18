@@ -18,7 +18,7 @@ describe('a run records each step for its review', () => {
             manual,
             node('c', 'genie/terminal_run', { workspace: WS, command: nodeCommand("process.stdout.write('found 3');process.exit(3)"), allowFailure: true }, 200),
             node('b', '@particle-academy/branch', { match: 'all', conditions: [{ left: '{{ $json.exitCode }}', operator: 'eq', right: '3' }] }, 400),
-            node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'look at {{ $json.output }}', waitForReply: true }, 600),
+            node('p', 'genie/agent_prompt', { agent: AGENT, prompt: 'look at {{ in.output }}', waitForReply: true }, 600),
             node('n', '@particle-academy/log', { level: 'info', message: 'nothing' }, 600),
         ], [edge('t', 'c'), edge('c', 'b'), edge('b', 'p', 'true'), edge('b', 'n', 'false')]);
         const run = await runNow(g, id);

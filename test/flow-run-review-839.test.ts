@@ -40,7 +40,7 @@ const reviewFlow = doc(
         node('t', 'schedule_trigger', { cron: '*/30 * * * *' }),
         node('r', 'genie/terminal_run', { workspace: WS.id, command: 'bash .ai/bin/learning-watch.sh', allowFailure: true }, 200),
         node('b', '@particle-academy/branch', { match: 'all', conditions: [{ left: '{{ $json.exitCode }}', operator: 'eq', right: '10' }] }, 400),
-        node('p', 'genie/agent_prompt', { agent: 'atlas@ws-example', prompt: 'review the learning log: {{ $json.exitCode }}', waitForReply: true }, 600),
+        node('p', 'genie/agent_prompt', { agent: 'atlas@ws-example', prompt: 'review the learning log: {{ in.exitCode }}', waitForReply: true }, 600),
         node('x', '@particle-academy/log', { level: 'info', message: 'nothing new' }, 600),
     ],
     [edge('t', 'r'), edge('r', 'b'), edge('b', 'p', 'true'), edge('b', 'x', 'false')],
