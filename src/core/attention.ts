@@ -1,3 +1,4 @@
+import type { QuestionVisual } from './question-visuals.js';
 import { createHash } from 'node:crypto';
 
 /**
@@ -55,6 +56,8 @@ export function addToList(list: ListKind, items: readonly ListItem[], item: List
 export interface QuestionOption {
     readonly label: string;
     readonly description?: string;
+    /** The visual this option IS ("pick a mockup", core/question-visuals.ts): an ArtBoard post of the asker's workspace. */
+    readonly visual?: QuestionVisual;
 }
 
 export interface Question {
@@ -65,6 +68,8 @@ export interface Question {
     /** 2–4. */
     readonly options: readonly QuestionOption[];
     readonly multiSelect?: boolean;
+    /** What the person looks at while deciding (core/question-visuals.ts): ArtBoard posts of the asker's workspace. */
+    readonly visuals?: readonly QuestionVisual[];
 }
 
 export const QUESTION_LIMITS = { questions: [1, 4], options: [2, 4], header: 12 } as const;

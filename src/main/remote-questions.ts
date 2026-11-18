@@ -147,6 +147,11 @@ export class RemoteQuestions {
         });
     }
 
+    /** STUB (RED): inert. */
+    visuals(_item: DeckItem): Promise<{ posts: readonly unknown[] }> {
+        return Promise.reject(new Error('not yet'));
+    }
+
     /** The window that was asked says how it went. Only that window can settle its request. */
     settle(sender: number, requestId: string, outcome: unknown): boolean {
         const p = this.#pending.get(requestId);

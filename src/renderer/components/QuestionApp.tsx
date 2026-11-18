@@ -83,6 +83,8 @@ export interface QuestionAppProps {
     readonly onCloseFile?: () => void;
     /** A file the drawer cannot draw (a PDF, a binary) opens in Genie's Files panel (Tynn #726). */
     readonly onOpenInFiles?: (path: string) => void;
+    /** The shown question's visuals, resolved (ArtBoard posts); `null`/absent = none loaded. */
+    readonly visuals?: { readonly posts: readonly import('../../core/artboard.js').DisplayPost[]; readonly error?: string } | null;
 }
 
 /** The extensions the drawer shows as prose (Genie 1's: what its Document plugin claimed, minus binary .docx). */
