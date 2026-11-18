@@ -1,6 +1,7 @@
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import { getNodeKind, runFlow, type NodeExecutor } from '@particle-academy/fancy-flow/engine';
 import { canonicalKind, type NodeOutcome } from '../core/flow-canvas.js';
+import type { FlowRunStepDetail } from '../core/flow-run-review.js';
 import { stepLabel } from '../core/flow-reach.js';
 import type { Resolution } from '../core/inbox.js';
 import { genieExecutors, type FlowPorts, type PromptDelivery, type PromptHooks, type PromptOptions } from './flow-executors.js';
@@ -29,6 +30,26 @@ import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
  * A held-back step is not retried: the next scheduled run is the next chance, as Genie 1's skipped runs were.
  */
 
+/**
+ * THE CONDITION a routing step read, in its own terms (Tynn #839): a branch's expression, or its rows with how they
+ * combine; a switch's value. `undefined` for a step whose config names none (a question chooses by the person's answer).
+ */
+export function conditionWords(config: Readonly<Record<string, unknown>>): string | undefined {
+    for (const k of ['expression', 'condition']) {
+        const v = config[k];
+        if (typeof v === 'string' && v.trim() !== '') return v.trim();
+    }
+    if (Array.isArray(config.conditions) && config.conditions.length > 0) {
+        const rows = config.conditions.map((row) => {
+            const r = (row ?? {}) as Record<string, unknown>;
+            return [r.left, r.operator ?? r.op, r.right].filter((x) => x !== undefined && x !== '').map(String).join(' ');
+        });
+        return `${config.match === 'any' ? 'any' : 'all'}: ${rows.join('; ')}`;
+    }
+    if (typeof config.value === 'string' && config.value.trim() !== '') return `value ${config.value.trim()}`;
+    return undefined;
+}
+
 /** A step that could not run now for a reason that is not a failure. The run is recorded `held`. */
 export class HeldBack extends Error {
     override readonly name = 'HeldBack';
@@ -53,6 +74,12 @@ export interface RunObserver {
     readonly paused?: (info: { resumesAtMs: number | null; agentId: string; agent: string } | null) => void;
     /** Each step's output as it finishes (genie#1204): kept with the run in flight, so a quit can resume after it. */
     readonly output?: (nodeId: string, value: unknown) => void;
+    /**
+     * What each step did, as it goes (Tynn #839): its start and end, its error, and by kind the command (exit code, this
+     * run's output, its process), the prompt (text, recipient, delivery, reply) or the way a branch went. A patch: the
+     * watcher folds it into what the step had (`mergeStep`).
+     */
+    readonly step?: (nodeId: string, patch: Partial<FlowRunStepDetail>) => void;
 }
 
 /** Resume a run Genie quit under (genie#1204): the outputs of the steps it had done, handed on, not run again. */
@@ -136,18 +163,52 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         // A file run (genie#1204): its trigger hands the steps after it the file that landed — {{in.path}} and the rest.
         const file = trigger !== null && 'file' in trigger ? trigger.file : null;
         const fileTrig = () => ({ ...(file ?? {}), firedAt });
-        const own: Record<string, NodeExecutor> = { ...genieExecutors(ports), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig, 'genie/file_added': fileTrig };
+        // WHAT EACH STEP DID (Tynn #839), told as it goes: the ports a step calls are that step's own, so the command it ran
+        // (exit code, this run's output, its process) and the prompt it sent (text, recipient, delivery, reply) are its.
+        const tell = (nodeId: string, patch: Partial<FlowRunStepDetail>): void => { observer?.step?.(nodeId, patch); };
+        const portsFor = (nodeId: string): FlowPorts => ({
+            ...ports,
+            runCommand: async (workspaceId, command, cwd) => {
+                tell(nodeId, { command: { command, ...(cwd ? { cwd } : {}) } });
+                const r = await ports.runCommand(workspaceId, command, cwd);
+                tell(nodeId, { command: { command, exitCode: r.exitCode, output: r.output, ...(r.processId ? { processId: r.processId } : {}) } });
+                return r;
+            },
+            promptAgent: async (address, text, hooks, options) => {
+                tell(nodeId, { prompt: { agent: address, text } });
+                const reply = await ports.promptAgent(address, text, {
+                    ...hooks,
+                    delivered: (how, note) => {
+                        tell(nodeId, { prompt: { agent: address, text, delivery: how, deliveredAt: new Date(now()).toISOString() } });
+                        hooks?.delivered?.(how, note);
+                    },
+                }, options);
+                if (options?.waitForReply === true && typeof reply === 'string') tell(nodeId, { prompt: { agent: address, text, reply } });
+                return reply;
+            },
+        });
+        const ownWith = (p: FlowPorts): Record<string, NodeExecutor> => ({ ...genieExecutors(p), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig, 'genie/file_added': fileTrig });
+        const own = ownWith(ports);
         // Every step's output is told as it finishes (genie#1204) — fancy-flow's own logic steps too, through their kinds'
         // executors — so the run in flight holds what a resume hands on. Keyed by every id a node's kind answers to.
         const executors: Record<string, NodeExecutor> = { ...own };
         for (const node of graph.nodes) {
             const declared = String(((node.data ?? {}) as { kind?: unknown }).kind ?? node.type ?? '');
             const def = getNodeKind(declared);
-            const base = own[def?.name ?? declared] ?? own[declared] ?? def?.executor;
-            if (!base) continue;
+            const key = own[def?.name ?? declared] ? (def?.name ?? declared) : own[declared] ? declared : null;
+            const fallback = key !== null ? own[key] : def?.executor;
+            if (!fallback) continue;
             const prompts = canonicalKind(def?.name ?? declared) === 'genie/agent_prompt';
             const wrapped: NodeExecutor = async (ctx) => {
+                // A Genie step runs on ITS node's ports (the map is keyed by kind; the node is known only now).
+                const base = key !== null ? ownWith(portsFor(ctx.node.id))[key]! : fallback;
                 const value = signal ? await Promise.race([base(ctx), stopped]) : await base(ctx);
+                // The way a branch, a switch or a question went, and the condition it read (Tynn #839).
+                const port = (value as { __port?: unknown } | null)?.__port;
+                if (typeof port === 'string') {
+                    const condition = conditionWords(((ctx.node.data ?? {}) as { config?: Record<string, unknown> }).config ?? {});
+                    tell(ctx.node.id, { route: { port, ...(condition !== undefined ? { condition } : {}) } });
+                }
                 if (prompts) {
                     const how = (value as { delivery?: unknown } | null)?.delivery;
                     if (how === 'delivered' || how === 'accepted') delivered.set(ctx.node.id, 'delivered');
@@ -182,6 +243,12 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             }));
         const onEvent = (event: { type: string; nodeId?: string; status?: string; text?: string; message?: string }) => {
             if (event.type === 'node-status' && typeof event.nodeId === 'string' && typeof event.status === 'string') {
+                // Each step's start and end, and its error in the engine's words (Tynn #839). A step a resume handed on
+                // ("done", "resumed") did not run in this run, so it has no times here.
+                const at = new Date(now()).toISOString();
+                if (event.status === 'running' && statuses.get(event.nodeId) !== 'running') tell(event.nodeId, { startedAt: at });
+                else if (event.status === 'done' && event.text !== 'resumed') tell(event.nodeId, { endedAt: at });
+                else if (event.status === 'error') tell(event.nodeId, { endedAt: at, ...(typeof event.text === 'string' ? { error: event.text } : {}) });
                 statuses.set(event.nodeId, event.status);
                 if (event.status === 'idle' && event.text === 'skipped') skipped.add(event.nodeId);
                 observer?.nodes?.(outcomes(false));
@@ -257,7 +324,7 @@ export function supervisedCommand(deps: SupervisedCommandDeps, run: { processId:
                 if (s.state === 'exited' || s.state === 'failed') {
                     off();
                     const after = deps.supervisor.readLog(run.processId)?.text ?? '';
-                    resolveRun({ exitCode: s.exitCode ?? -1, output: after.startsWith(logBefore) ? after.slice(logBefore.length) : after });
+                    resolveRun({ exitCode: s.exitCode ?? -1, output: after.startsWith(logBefore) ? after.slice(logBefore.length) : after, processId: run.processId });
                 } else if (s.state === 'stopped') {
                     off();
                     reject(new Error(`"${command}" was stopped before it finished`));

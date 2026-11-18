@@ -44,7 +44,9 @@ describe('the header', () => {
         expect(live).toContain('data-action="agent-more"');
         const dead = render({ ops, session: broken });
         expect(dead.split('data-action="restart"').length - 1).toBe(1);
-        expect(dead).toContain('data-action="open-terminal"');
+        // The agent's TUI is never called a terminal (Tynn #851): the Broken header offers it as what it is.
+        expect(dead).toMatch(/data-action="open-tui-header"[^>]*>(?:(?!<\/button>).)*Open TUI/);
+        expect(dead).not.toContain('Open terminal');
         expect(dead).not.toContain('data-action="stop-turn"');
         expect(dead).toContain('data-pill="Broken · ACP stream closed · exit 137"');
     });

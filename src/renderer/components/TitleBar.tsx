@@ -17,8 +17,9 @@ import { FlowPills, type FlowPillsProps } from './FlowPills.js';
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
  *
- * Left to right: the brand mark, `Genie`, the four feature icons, **the current route**, the
- * ⌘K box, and the workstation chip.
+ * Left to right: the brand mark, `Genie`, the Command Window's search icon, the four feature icons and the system
+ * icons, **the current route**, the running flows, and (at the right end) the remote badge, the update and the
+ * workstation chip.
  *
  * ## Why the route is in the chrome
  *
@@ -220,6 +221,26 @@ export function TitleBar(props: TitleBarProps) {
              * and nobody ever finds it, which is exactly what happened to the Conversation UI.
              */}
             <div className="flex shrink-0 items-center gap-0.5">
+                {/*
+                 * THE COMMAND WINDOW, as a small search icon immediately left of GApps (the owner, beta.65: "get rid of the
+                 * search box and just have a small icon button left of the Gapps menu"). A button rather than an input: the
+                 * real palette is Fancy's `Command`, which owns its own input. Its name carries the key this reader actually
+                 * has (`⌘K` only on Apple); Ctrl/Cmd+K itself is App's own keydown listener and needs no button.
+                 */}
+                {scopedHome ? null : (
+                    <Tooltip content={`Search, jump, run · ${hint}`} placement="bottom">
+                        <Button variant="ghost" size="xs" labelClassName="contents"
+                            type="button"
+                            data-palette
+                            data-palette-hint={hint}
+                            aria-label={`Search, jump, run (${hint})`}
+                            onClick={onOpenPalette}
+                            className="[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
+                        >
+                            <Icon name="search" size="sm" />
+                        </Button>
+                    </Tooltip>
+                )}
                 {scopedHome ? null : FEATURE_ICONS.map((f) => (
                     <Tooltip key={f.label} content={f.label} placement="bottom">
                         <Button variant="ghost" size="xs" labelClassName="contents"
@@ -321,8 +342,6 @@ export function TitleBar(props: TitleBarProps) {
                     </Popover>
                 ) : null}
             </div>
-            {flows ? <FlowPills {...flows} /> : null}
-
             {workspace ? (
                 <span data-title-workspace={workspace.name} className="flex min-w-0 shrink-0 items-center gap-1.5 text-[12px] font-medium text-[var(--fg-2)]">
                     <WorkspaceSwatch color={workspace.color} />
@@ -336,28 +355,16 @@ export function TitleBar(props: TitleBarProps) {
             </span>
 
             {/*
-             * The palette box. A button rather than an input: the real palette is Fancy's
-             * `Command`, which owns its own input when it opens — two inputs for one search is
-             * a focus fight nobody wins.
+             * THE RUNNING FLOWS sit RIGHT of the address (the owner, beta.65: "on the wrong side. these should be on the
+             * right side of the view address"). Here a flow starting or ending moves nothing left of the address.
              */}
-            {scopedHome ? null : (
-            <Button variant="ghost" size="xs" labelClassName="contents"
-                type="button"
-                data-palette
-                aria-label="Search, jump, run"
-                onClick={onOpenPalette}
-                className="[-webkit-app-region:no-drag] mx-auto flex h-6 w-[280px] shrink-0 items-center gap-2 rounded-md border border-[var(--border-1)] px-2 text-[var(--fg-4)] hover:border-[var(--border-2)]"
-            >
-                <Icon name="search" size="xs" />
-                <span className="text-xs">Search, jump, run</span>
-                {/*
-                 * The key this reader actually has. `⌘K` on Windows or Linux tells somebody to
-                 * press a key that is not on their keyboard — and a reader who cannot act on a
-                 * hint learns to ignore hints.
-                 */}
-                <span data-palette-hint className="ml-auto whitespace-nowrap font-mono text-[11px]">{hint}</span>
-            </Button>
-            )}
+            {flows ? <FlowPills {...flows} /> : null}
+
+            {/*
+             * The spacer keeps the chips below at the right end whatever the address and the pills measure (it took the
+             * old search box's `mx-auto`). It is part of the bar, so it drags the window; it shrinks before the address truncates.
+             */}
+            <span aria-hidden="true" data-title-spacer="" className="min-w-0 flex-1" />
 
             {/*
              * The workstation chip. Health is a DOT, not a word — the word would be read as a

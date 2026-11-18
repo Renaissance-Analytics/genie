@@ -1,3 +1,4 @@
+import { ATTACHMENT_LIMITS, isExecutableName } from './inbox.js';
 import { MAX_OPEN_UPLOADS } from './mobile-wire.js';
 import type { LiveSession } from './roster.js';
 
@@ -31,6 +32,25 @@ export function incomingFileCount(kind: 'paste' | 'drop' | 'pick', data: { files
     if ((data.text ?? '') !== '') return 0;
     return files.filter((f) => f.type.startsWith('image/')).length;
 }
+
+/**
+ * A FILE THAT WILL NOT GO IS REFUSED WHEN IT IS ADDED, NOT AT SEND (Tynn #829). Any type of file can be sent now (one
+ * that is not an image or text is saved into the workspace by the host), so what is left to refuse is what the host
+ * refuses whatever the type: an executable, and a file over 25 MB (core/inbox.ts ATTACHMENT_LIMITS). The files are the
+ * ones `incomingFileCount` counts: a paste that carries text adds none.
+ */
+export function incomingFileRefusal(kind: 'paste' | 'drop' | 'pick', data: { files: ArrayLike<{ name?: string; size?: number; type: string }> | null | undefined; text?: string | undefined }): string | null {
+    let files = Array.from(data.files ?? []);
+    if (kind === 'paste') files = (data.text ?? '') !== '' ? [] : files.filter((f) => f.type.startsWith('image/'));
+    for (const f of files) {
+        const name = f.name ?? 'This file';
+        if (isExecutableName(name)) return `${name} is a natively executable file, so it was not added.`;
+        if ((f.size ?? 0) > ATTACHMENT_LIMITS.perFileBytes) return `${name} is ${((f.size ?? 0) / MB).toFixed(1)} MB; a file can be at most ${ATTACHMENT_LIMITS.perFileBytes / MB} MB, so it was not added.`;
+    }
+    return null;
+}
+
+const MB = 1024 * 1024;
 
 /** Why the incoming files are not added, or `null` when they fit. */
 export function fileLimitRefusal(current: number, incoming: number, limit: number = MESSAGE_FILE_LIMIT): string | null {

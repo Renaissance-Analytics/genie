@@ -41,6 +41,9 @@ import {
     type WorkspaceFault,
 } from '../../core/dashboard-view.js';
 
+/** What a window opener answers when it can say whether it opened (the workspace terminal's `scratchTerminal`). */
+type WindowOpened = { ok: true } | { ok: false; reason: string };
+
 /**
  * THE WORKFLOW DASHBOARD — the landing surface.
  *
@@ -269,7 +272,7 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     /** What waits on this agent: its badges, and whether its items are open under the row. Absent = nothing waits (or no Deck). */
     waiting?: { badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void } | undefined;
     /** The windows column (Tynn #706): absent = this row has none (Genie's own, or a workspace this window may not open). */
-    windows?: { onTerminal?: (() => void) | undefined; onFiles?: (() => void) | undefined } | undefined;
+    windows?: { onTerminal?: (() => void | Promise<WindowOpened>) | undefined; onFiles?: (() => void) | undefined } | undefined;
     /** Its provider's standing switch offer (Tynn #483): one click starts the switch. Absent = none. */
     switchOffer?: { offer: SwitchOffer; onSwitch: (provider: string, choose?: string) => void } | undefined;
 }) {
@@ -279,6 +282,15 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     const target = targetOf(row);
     const comms = commsOf(row);
     const context = contextOf(row);
+    // A Terminal that did not open is said on the row's windows button (Tynn #851), never a dead click; the next try clears it.
+    const [terminalFailed, setTerminalFailed] = useState<string | null>(null);
+    const openTerminal = windows?.onTerminal ? () => {
+        setTerminalFailed(null);
+        void Promise.resolve(windows.onTerminal!()).then(
+            (r) => { if (r && !r.ok) setTerminalFailed(r.reason); },
+            (error: unknown) => setTerminalFailed(error instanceof Error ? error.message : String(error)),
+        );
+    } : undefined;
 
     return (
         <div
@@ -421,11 +433,13 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 {windows ? (
                     <Dropdown placement="bottom-end">
                         <Dropdown.Trigger>
-                            <Button type="button" variant="ghost" size="xs" icon="app-window" data-windows-menu={row.id} aria-label={`Open ${row.name} in a new window`} title="Open in a new window" disabled={!windows.onTerminal && !windows.onFiles} className="px-1 text-[var(--fg-3)]" />
+                            <Button type="button" variant="ghost" size="xs" icon="app-window" data-windows-menu={row.id} aria-label={`Open ${row.name} in a new window`}
+                                title={terminalFailed === null ? 'Open in a new window' : `The terminal did not open: ${terminalFailed}`} data-terminal-failed={terminalFailed !== null ? '' : undefined}
+                                disabled={!windows.onTerminal && !windows.onFiles} className={`px-1 ${terminalFailed !== null ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`} />
                         </Dropdown.Trigger>
                         <Dropdown.Items>
                             {WINDOW_ENTRIES.map((entry) => {
-                                const open = entry.kind === 'terminal' ? windows.onTerminal : windows.onFiles;
+                                const open = entry.kind === 'terminal' ? openTerminal : windows.onFiles;
                                 return (
                                     <Dropdown.Item key={entry.kind} disabled={!open} onClick={() => open?.()}>
                                         <span data-windows-entry={entry.kind} className="flex items-center gap-2 text-xs"><Icon name={entry.icon} size="xs" />{entry.label}</span>
@@ -501,8 +515,11 @@ export interface DashboardProps {
      * no badges, no "Needs you" chip, no Genie row.
      */
     waiting?: DashboardWaiting | undefined;
-    /** The windows column's openers (Tynn #706): a workspace's terminals view, or its Files, in a NEW window. Absent = disabled. */
-    onOpenTerminalWindow?: ((workspaceId: string) => void) | undefined;
+    /**
+     * The windows column's openers (Tynn #706): a SHELL in the workspace (Tynn #851 — not a Genie window on its Terminals
+     * view), or its Files, in a NEW window. The terminal's answer, when given, says whether it opened. Absent = disabled.
+     */
+    onOpenTerminalWindow?: ((workspaceId: string) => void | Promise<WindowOpened>) | undefined;
     onOpenFilesWindow?: ((workspaceId: string) => void) | undefined;
     /** A workspace-share window's workspace (Tynn #690/#691): the column offers that workspace only. Absent = a workstation window. */
     scopeWorkspaceId?: string | null | undefined;

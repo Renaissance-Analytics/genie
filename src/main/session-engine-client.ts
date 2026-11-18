@@ -81,6 +81,7 @@ import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView, WindowBeatPayload } from '../core/crash-record.js';
+import { toWireAttachment } from './engine-wire.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -1225,7 +1226,7 @@ export class SessionEngineClient {
     }
 
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): Promise<{ ok: true } | { ok: false; reason: string | null }> {
-        const wire: WireAttachment[] = attachments.map((a) => ({ name: a.name, type: a.type, b64: Buffer.from(a.bytes).toString('base64') }));
+        const wire: WireAttachment[] = attachments.map(toWireAttachment);
         return this.#value('engine.promptWith', [agentId, text, wire, by], { ok: false, reason: NOT_CONNECTED });
     }
 

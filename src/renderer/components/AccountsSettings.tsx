@@ -10,7 +10,8 @@ import { DesignAuthRow } from './DesignAuthRow.js';
 /**
  * SETTINGS → PROVIDERS → ACCOUNTS (Tynn #484, Accounts S11). Every known account of each provider with its usage, the one
  * signed in on the host marked (every agent of the provider uses it, Tynn #751); Switch on any other (one click: the provider's
- * own login, naming the account, S9/S10), Rename, and Forget, which is refused for the signed-in account and says so. Above
+ * own login, naming the account, S9/S10), Rename, and Forget, which is refused for the signed-in account and says so; under
+ * each provider, always, "Use another account" (Tynn #850: the same login naming no account, for a new one). Above
  * them, the windows that make Genie offer a switch (S8). There is no per-agent account: agents use the signed-in one.
  */
 export interface AccountsSettingsProps {
@@ -44,6 +45,8 @@ export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, on
                     <ul className="divide-y divide-[var(--border-1)]">
                         {p.accounts.map((a) => <AccountRow key={a.id} account={a} now={at} onSwitch={onSwitch} onAct={onAct} />)}
                     </ul>
+                    {/* USE ANOTHER ACCOUNT (Tynn #850): the provider's own login naming no account, even with one known. */}
+                    <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" className="self-start" onClick={() => onSwitch?.(p.provider)}>Use another account</Button>
                     {p.provider === 'claude' && snapshot.design ? <DesignAuthRow design={snapshot.design} onSignIn={onDesignSignIn} /> : null}
                 </div>
             ))}

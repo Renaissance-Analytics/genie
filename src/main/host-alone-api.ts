@@ -111,6 +111,8 @@ export interface HostAlonePorts {
     readonly settings: (Parameters<typeof workspaceSettingsOps>[0] extends () => infer S ? S : never) & Pick<SettingsStore, 'onChange'>;
     /** What genie-host holds for a workspace's lifecycle: its supervisor, engines, trust, accounts. */
     readonly workspaceLifecycle: Omit<WorkspaceLifecycleWiring, 'registry' | 'engine' | 'finished'>;
+    /** A message's file that is not an image or text, saved into the agent's workspace here (Tynn #829). Absent = refused. */
+    readonly saveUploads?: NonNullable<HostApiDeps['saveUploads']>;
     /** A workspace's colour, written to its project.json. */
     readonly colors: { set(path: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** Save to repo (Tynn #756), over this host's registry, disk and git. Absent: refused in words. */
@@ -186,6 +188,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit), ...(ports.signedIn ? { providerSignedIn: ports.signedIn } : {}) }, id as AgentId),
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
+        ...(ports.saveUploads ? { saveUploads: ports.saveUploads } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

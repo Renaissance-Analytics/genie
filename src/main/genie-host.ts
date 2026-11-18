@@ -226,6 +226,7 @@ import { supervisorFailureWords } from '../core/supervisor-failure.js';
 import { setProviderChoiceFile } from './provider-choice.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
+import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
 
 /**
  * GENIE-HOST — the per-user host process (the host split, phase 1: `.ai/plans/genie-2-host-split-2026-10-31.md`).
@@ -1701,6 +1702,8 @@ async function main(): Promise<void> {
         registry: phoneRegistry,
         engine: () => host,
         cwdFor: phoneCwd,
+        // ANY FILE IN A MESSAGE (Tynn #829), with no window connected: saved into the agent's workspace on this host.
+        saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(hostRegistry.workspace(record.workspaceId), hostUntrustedNow(record)), files, now: new Date() }),
         startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
@@ -1994,8 +1997,8 @@ async function main(): Promise<void> {
             const endpoint = mcp?.endpoint() ?? null;
             return { ...engine.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
         },
-        // Tynn #833: an agent's Stop is its own (`by`); a person's flow only through the person's approval on the Deck.
-        flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id), stopRun: (id, by) => flowsService.stopRun(id, by), approve: (caller, action, detail, call) => approvals.gate(caller, action, detail, call) },
+        // Tynn #833: an agent's Stop is its own (`by`); a person's flow only through the person's approval on the Deck. Tynn #839: Run now names who pressed it.
+        flows: { store: hostFlows, runNow: (id, by) => hostFlows.runNow(id, by), stopRun: (id, by) => flowsService.stopRun(id, by), approve: (caller, action, detail, call) => approvals.gate(caller, action, detail, call) },
         // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
         ...(hostingStack?.mail ? { mail: hostingStack.mail } : {}),
         // THE AGENTS' `sites` AND `services` (Tynn #444): this host's own hosting (P5a) under its own supervisor — what the

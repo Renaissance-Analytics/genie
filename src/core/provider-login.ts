@@ -61,23 +61,24 @@ export const ACCOUNT_BACK =
  * the one the person's agents already use, so their conversations carry on. The steps are the provider's own; Genie runs its
  * CLI and shows these words, types nothing, and never sees a code or a token. Empty for a provider Genie has no switch for.
  * `choose` (Tynn #483): the account the person pressed Switch on (its email when known, else its label), named in the steps
- * so they need not remember which one had room; without it, "the other account".
+ * so they need not remember which one had room. Without one (Use another account, Tynn #850) the person picks or creates a
+ * DIFFERENT account in the provider's login; Genie then reads who it is and adds it as a known account.
  */
 export function accountSwitchSteps(provider: string, choose?: string): readonly string[] {
-    const which = choose?.trim() ? choose.trim() : 'the other account';
+    const pick = choose?.trim() ? `choose ${choose.trim()}` : 'choose a different account, or create one';
     const closing = 'When it says you are signed in, close this window. Genie then reads which account is signed in; your agents are not stopped and keep their conversations.';
     if (provider === 'claude') {
         return [
             'Genie has opened Claude Code in the terminal below, in the same place your agents already use.',
             'Type /logout and press Enter.',
-            `Then type /login and press Enter, and choose ${which}. A browser may open: sign in there, then come back to this window.`,
+            `Then type /login and press Enter, and ${pick}. A browser may open: sign in there, then come back to this window.`,
             closing,
         ];
     }
     if (provider === 'codex') {
         return [
             'Genie is running codex logout and then codex login in the terminal below, in the same place your agents already use.',
-            `Follow codex login: choose ${which}. A browser may open: sign in there, then come back to this window.`,
+            `Follow codex login: ${pick}. A browser may open: sign in there, then come back to this window.`,
             'If it stops after codex logout, type codex login and press Enter.',
             closing,
         ];

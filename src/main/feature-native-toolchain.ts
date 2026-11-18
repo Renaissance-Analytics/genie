@@ -3,7 +3,7 @@ import { runCliRepair, runCliUpdate } from './cli-repair.js';
 import { execFileRunner, probeToolLive, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { applyPlaywrightEnv, checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
 import { defaultPathEntries } from '../core/toolchain-defaults.js';
@@ -280,7 +280,12 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             // Genie's one Playwright browser install (main/playwright-browsers.ts, Tynn #604) — same busy line.
             playwright: {
                 list: () => listPlaywrightBrowsers(playwrightPorts()),
-                install: (version, browsers, consent) => installPlaywrightBrowsers(version, browsers, consent, playwrightPorts()),
+                install: async (version, browsers, consent) => {
+                    const outcome = await installPlaywrightBrowsers(version, browsers, consent, playwrightPorts());
+                    // What Genie starts from now on uses the set just installed, without a restart (Tynn #604).
+                    if (outcome.kind === 'installed' || outcome.kind === 'already-installed') applyPlaywrightEnv({ env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
+                    return outcome;
+                },
             },
             // Genie's own Java (main/java-versions.ts; Temurin) — same busy line. Windows and Linux.
             java: {
@@ -295,7 +300,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
 export function adoptFeatureEnvironment(home: string, incoming: Readonly<Record<string, string>>, target: NodeJS.ProcessEnv = process.env,
     platform: Platform = process.platform as Platform): void {
     adoptWindowEnv(target, incoming, platform);
-    const env = { get: (key: string) => target[key], set: (key: string, value: string) => { target[key] = value; } };
+    const env = { get: (key: string) => target[key], set: (key: string, value: string) => { target[key] = value; }, unset: (key: string) => { delete target[key]; } };
     const dataDir = join(home, 'genie2-toolchain');
     restoreToolchainEnv({ platform, env, fs: nodeToolchainFs(), dataDir });
     restoreDefaultsEnv({ platform, env, fs: nodeLinkFs(platform), toolchainDir: dataDir });

@@ -29,6 +29,8 @@ const tailnet: Array<(c: ServerConnection) => void> = [];
 const closers: Array<() => void> = [];
 const sent: Array<{ agentId: string; text: string; attachments: ReadonlyArray<{ name: string; type: string; bytes: unknown }> }> = [];
 const uploads: Array<{ workspaceId: string; dir: string; name: string; bytes: unknown }> = [];
+/** What reached the host's save of a file that is not an image or text (Tynn #829): the agent, and the names. */
+const saves: Array<{ agentId: string; workspaceId: string; names: string[] }> = [];
 
 const AGENT = { id: 'agent_a', name: 'atlas', workspaceId: 'ws_1' };
 
@@ -43,6 +45,11 @@ function windowHostApi() {
             },
             prompt: async () => true,
         },
+        // The host's save (main/chat-uploads.ts): a docx is marked saved at its workspace path; an image is left as it is.
+        saveUploads: async (record: { id: string; workspaceId: string }, files: ReadonlyArray<{ name: string; type: string; bytes: Uint8Array }>) => {
+            saves.push({ agentId: record.id, workspaceId: record.workspaceId, names: files.map((f) => f.name) });
+            return { ok: true, files: files.map((f) => (f.name.endsWith('.docx') ? { ...f, bytes: new Uint8Array(0), saved: { path: `.ai/_dirty/uploads/2026-11-17/${f.name}`, type: f.type, size: f.bytes.byteLength } } : f)) };
+        },
         files: {
             upload: async (workspaceId: string, dir: string, name: string, bytes: unknown) => {
                 uploads.push({ workspaceId, dir, name, bytes });
@@ -55,6 +62,7 @@ function windowHostApi() {
 
 beforeEach(async () => {
     sent.length = 0;
+    saves.length = 0;
     uploads.length = 0;
     tailnet.length = 0;
     home = await mkdtemp(join(tmpdir(), 'genie2-phone-attach-657-'));
@@ -129,6 +137,23 @@ describe('a phone\'s files in a message, through genie-host and the window (Tynn
             expect(a.bytes).toBeInstanceOf(Uint8Array);
             expect(Buffer.from(a.bytes as Uint8Array).equals(Buffer.from(files[i]!.bytes))).toBe(true);
         });
+    });
+
+    it('a remote Pilot\'s .docx is saved on the HOST, in the agent\'s workspace, and the agent gets its path (Tynn #829)', async () => {
+        const c = await phone();
+        const docx = bytesOf(53_248, 5, [0x50, 0x4b, 0x03, 0x04]);
+        const png = bytesOf(1_000, 3, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        expect(await c.bridge.prompt(AGENT.id, 'use this letterhead', [{ name: 'Letterhead.docx', type, bytes: docx }, { name: 'shot.png', type: 'image/png', bytes: png }])).toEqual({ ok: true });
+
+        expect(saves).toEqual([{ agentId: AGENT.id, workspaceId: 'ws_1', names: ['Letterhead.docx', 'shot.png'] }]);
+        expect(sent).toHaveLength(1);
+        const [doc, shot] = sent[0]!.attachments as ReadonlyArray<{ name: string; bytes: Uint8Array; saved?: unknown }>;
+        expect(doc!.saved).toEqual({ path: '.ai/_dirty/uploads/2026-11-17/Letterhead.docx', type, size: 53_248 });
+        expect(doc!.bytes.byteLength).toBe(0);
+        // CONTROL: the image beside it still reaches the agent as its bytes.
+        expect(shot!.saved).toBeUndefined();
+        expect(Buffer.from(shot!.bytes).equals(Buffer.from(png))).toBe(true);
     });
 
     it('a phone\'s file upload reaches the window\'s files.upload as the same bytes', async () => {

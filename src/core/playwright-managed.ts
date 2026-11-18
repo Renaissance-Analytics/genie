@@ -39,6 +39,17 @@ export function playwrightEnv(toolchainDir: string): Record<string, string> {
     return { [PLAYWRIGHT_BROWSERS_ENV]: playwrightDirs(toolchainDir).browsers };
 }
 
+/**
+ * Whether Genie's managed browsers folder holds a set Playwright can use (Tynn #604, the beta.64 regression): the manifest
+ * records at least one version, and the folder holds a revision folder (`chromium-1194`, `chromium_headless_shell-1194`) for a
+ * browser it records. Until then nothing is pointed at the folder, and Playwright's own default works as before.
+ */
+export function managedBrowsersReady(sets: Readonly<Record<string, readonly string[]>>, entries: readonly string[]): boolean {
+    const browsers = new Set(Object.values(sets).flat());
+    if (browsers.size === 0) return false;
+    return entries.some((entry) => [...browsers].some((b) => entry.startsWith(`${b}-`) || entry.startsWith(`${b}_`)));
+}
+
 export type LockKind = 'package-lock' | 'pnpm' | 'yarn';
 
 /** The `@playwright/test` version a project's lockfile pins, or `null` when it does not use Playwright (or the file cannot be read). */
