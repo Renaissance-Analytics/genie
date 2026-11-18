@@ -32,6 +32,11 @@ export function incomingFileCount(kind: 'paste' | 'drop' | 'pick', data: { files
     return files.filter((f) => f.type.startsWith('image/')).length;
 }
 
+/** STUB (Tynn #829 RED). */
+export function incomingFileRefusal(_kind: 'paste' | 'drop' | 'pick', _data: { files: ArrayLike<{ name?: string; size?: number; type: string }> | null | undefined; text?: string | undefined }): string | null {
+    return null;
+}
+
 /** Why the incoming files are not added, or `null` when they fit. */
 export function fileLimitRefusal(current: number, incoming: number, limit: number = MESSAGE_FILE_LIMIT): string | null {
     if (incoming <= 0 || current + incoming <= limit) return null;

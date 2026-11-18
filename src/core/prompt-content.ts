@@ -14,11 +14,27 @@ export type PromptBlock =
     | { type: 'image'; mimeType: string; data: string }
     | { type: 'resource'; resource: { uri: string; mimeType?: string; text: string } };
 
+/** Where the host saved a file that is not an image or text (Tynn #829): workspace-relative, `/`-separated. */
+export interface SavedUpload {
+    readonly path: string;
+    readonly type: string;
+    readonly size: number;
+}
+
 export interface Attachment {
     readonly name: string;
     /** What the picker reported; a hint only. */
     readonly type: string;
     readonly bytes: Uint8Array;
+    /** Saved into the workspace by the host (main/chat-uploads.ts); its bytes are then empty. */
+    readonly saved?: SavedUpload;
+}
+
+export type AttachmentKind = 'image' | 'text' | 'file';
+
+/** STUB (Tynn #829 RED). */
+export function attachmentKind(_a: Attachment): AttachmentKind {
+    return 'text';
 }
 
 /** What the agent's provider takes beyond text (from its driver's declared capabilities). */

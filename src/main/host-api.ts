@@ -125,6 +125,11 @@ export interface HostApiDeps {
         promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): ({ ok: true } | { ok: false; reason: string | null }) | Promise<{ ok: true } | { ok: false; reason: string | null }>;
         subscribe(listener: (agentId: string) => void): () => void;
     };
+    /**
+     * A MESSAGE'S FILES THAT ARE NOT AN IMAGE OR TEXT, SAVED HERE (Tynn #829): into the agent's workspace on THIS host
+     * (main/chat-uploads.ts `saveChatUploads`), each then naming where it went. Absent = such a file is refused, said.
+     */
+    saveUploads?(record: AgentRecord, files: readonly Attachment[]): Promise<{ ok: true; files: Attachment[] } | { ok: false; reason: string }>;
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
     registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
     /**
