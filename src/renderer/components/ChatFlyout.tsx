@@ -29,6 +29,7 @@ import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
 import { SendGrace, holdsSend, putBackUndone, type HeldSend } from '../../core/send-grace.js';
+import type { QueuedAction, QueuedResolve } from '../../core/queued-withdraw.js';
 import { ChatHeldSends } from './ChatHeldSend.js';
 import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
@@ -64,7 +65,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -284,6 +285,11 @@ export interface ChatFlyoutProps {
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** Put an undelivered draft away, unsent (the owner, 2026-10-20: it was "stuck on my screen"). */
     onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /**
+     * Take back one of your messages still QUEUED for the turn's end (Tynn #843), by its prompt id: the host's
+     * `resolvePrompt(…, 'withdraw' | 'edit')`. Absent: queued messages offer no Withdraw / Edit.
+     */
+    onResolveQueued?: QueuedResolve | undefined;
     /**
      * Present = a turn is running AND it can be stopped with the agent kept (`turnStopOffered`): `Stop this turn` sits on
      * the context line, with the turn's status. Absent = no turn Stop in the chat — never a Stop that ends the agent.
@@ -995,6 +1001,12 @@ export interface ChatMessagesProps {
     readonly mailOnly: boolean;
     readonly onOpenMail?: ((messageId: string) => void) | undefined;
     readonly onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /** Withdraw / Edit on your queued (or withdrawn) message (Tynn #843), by the message's id. Absent: not offered. */
+    readonly onQueuedAction?: ((messageId: string, pressed: QueuedAction) => void) | undefined;
+    /** Messages whose Withdraw / Edit is with the host now: their buttons are disabled until it answers. */
+    readonly queuedBusy?: ReadonlySet<string> | undefined;
+    /** What the host said when a Withdraw / Edit lost (it was delivered first), by message id. */
+    readonly queuedProblems?: Readonly<Record<string, string>> | undefined;
     /** Read one image a sent message kept, for THIS thread's agent (Tynn #642): the pill's thumbnail. Absent: images are named only. */
     readonly loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
 }

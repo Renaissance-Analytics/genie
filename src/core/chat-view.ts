@@ -68,6 +68,8 @@ export interface ChatMessage {
      * offers "Send now (stop the current turn)". `null`: nothing from the agent in this thread.
      */
     silentSince?: number | null;
+    /** Taken back by the person while it was queued (Tynn #843): never delivered, kept in the thread to edit or remove. */
+    withdrawn?: boolean;
     /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
     promptId?: string;
     /** A failed Send/Discard press, kept beside the draft so it can be tried again. */

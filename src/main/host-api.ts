@@ -115,7 +115,7 @@ export interface HostApiDeps {
         prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean | Promise<boolean>;
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
-        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: import('../core/prompt-delivery.js').PromptAction): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;

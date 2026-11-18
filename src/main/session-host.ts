@@ -133,7 +133,7 @@ import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
-import { promptDeliveries } from '../core/prompt-delivery.js';
+import { promptDeliveries, type PromptAction } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -1497,7 +1497,8 @@ export class SessionHost {
     }
 
     /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
-    resolvePrompt(agentId: AgentId, id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }> {
+    resolvePrompt(agentId: AgentId, id: string, action: PromptAction): Promise<{ ok: true } | { ok: false; reason: string }> {
+        if (action === 'withdraw' || action === 'edit') return Promise.resolve(this.withdrawQueued(agentId, id, action));
         const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
             await this.settled();
             const { rows } = await readPromptRows(this.#store(), agentId);
@@ -1529,6 +1530,11 @@ export class SessionHost {
         const result = this.#promptActions.then(resolve, resolve);
         this.#promptActions = result.catch(() => undefined);
         return result;
+    }
+
+    /** WITHDRAW / EDIT A QUEUED MESSAGE (Tynn #843) — stub. */
+    withdrawQueued(_agentId: AgentId, _id: string, _action: 'withdraw' | 'edit'): { ok: true } | { ok: false; reason: string } {
+        return { ok: false, reason: 'not implemented' };
     }
 
     /**

@@ -1252,6 +1252,13 @@ export class AgentSession {
         this.#changed();
     }
 
+    /**
+     * TAKE BACK A QUEUED MESSAGE (Tynn #843) — stub.
+     */
+    withdrawPrompt(_id: string, _status: 'withdrawn' | 'discarded'): { text: string } | 'gone' | 'not-yours' {
+        return 'gone';
+    }
+
     discardPrompt(id: string): void {
         this.#afterTurn = this.#afterTurn.filter((p) => p.id !== id);
         void this.#emitRow({ kind: 'prompt_delivery', id, status: 'discarded' });
