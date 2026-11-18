@@ -229,7 +229,14 @@ const MEASURE = `(() => {
     const b = p.getBBox();
     const r = p.getBoundingClientRect();
     return { peer: g.getAttribute('data-peer'), tone: g.getAttribute('data-tone'), direction: g.getAttribute('data-direction'), d: p.getAttribute('d'), strokeWidth: Number(getComputedStyle(p).strokeWidth.replace('px', '')), opacity: Number(g.getAttribute('opacity')), bbox: { w: b.width, h: b.height }, onScreen: { w: r.width, h: r.height },
-      dots: g.querySelectorAll('[data-arc-dot]').length, pulse: Boolean(g.querySelector('[data-arc-pulse]')), label: g.querySelector('[data-arc-label]')?.textContent ?? null };
+      dots: g.querySelectorAll('[data-arc-dot]').length, pulse: Boolean(g.querySelector('[data-arc-pulse]')), label: g.querySelector('[data-arc-label]')?.textContent ?? null,
+      color: g.getAttribute('data-arc-color'), drawn: getComputedStyle(g).getPropertyValue('--arc').trim(), shadowEnds: (() => {
+        const sh = g.querySelector('path[data-arc-shadow]');
+        if (!sh) return null;
+        const n = sh.getTotalLength();
+        const a = sh.getPointAtLength(0), z = sh.getPointAtLength(n), pa = p.getPointAtLength(0), pz = p.getPointAtLength(p.getTotalLength());
+        return { start: Math.hypot(a.x - pa.x, a.y - pa.y), end: Math.hypot(z.x - pz.x, z.y - pz.y), width: Number(getComputedStyle(sh).strokeWidth.replace('px', '')), filter: sh.getAttribute('filter'), transform: sh.getAttribute('transform') };
+      })() };
   });
   const at = svg.getBoundingClientRect();
   const top = document.elementFromPoint(at.left + 5, at.top + 5);
@@ -294,7 +301,11 @@ try {
     check('every arc has a real path, a visible stroke and a non-zero size', hover.arcs.length > 0 && hover.arcs.every((a) => a.d.length > 20 && a.strokeWidth > 0 && a.opacity > 0 && a.bbox.w > 5 && a.bbox.h > 5 && a.onScreen.w > 5 && a.onScreen.h > 5), hover.arcs.map((a) => ({ peer: a.peer, bbox: a.bbox, onScreen: a.onScreen, strokeWidth: a.strokeWidth, opacity: a.opacity })));
     check('the overlay never takes a click and sits above the table', hover.pointerEvents === 'none' && Number(hover.z) >= 10, { z: hover.z, pointerEvents: hover.pointerEvents });
     check('the arcs start at the pointer', hover.arcs.every((a) => { const m = /^M([-\d.]+),([-\d.]+)/.exec(a.d); return m !== null; }));
-    check('amber for the unanswered, dots on every arc', hover.arcs.some((a) => a.tone === 'waiting') && hover.arcs.every((a) => a.dots > 0), hover.arcs.map((a) => ({ peer: a.peer, tone: a.tone, direction: a.direction, pulse: a.pulse, label: a.label })));
+    check('a waiting thread is marked, dots on every arc', hover.arcs.some((a) => a.tone === 'waiting') && hover.arcs.every((a) => a.dots > 0), hover.arcs.map((a) => ({ peer: a.peer, tone: a.tone, direction: a.direction, pulse: a.pulse, label: a.label })));
+    // The shadow (owner 2026-11-17): it meets the arc at both contact points, is unblurred and unshifted, never wider than the arc.
+    check('every shadow meets its arc at both contact points (0.5 px), unblurred, never wider than the arc', hover.arcs.every((a) => a.shadowEnds && a.shadowEnds.start < 0.5 && a.shadowEnds.end < 0.5 && !a.shadowEnds.filter && !a.shadowEnds.transform && a.shadowEnds.width <= a.strokeWidth), hover.arcs.map((a) => ({ peer: a.peer, shadow: a.shadowEnds, strokeWidth: a.strokeWidth })));
+    // The sender's colour (owner 2026-11-17): each arc in its sender's workspace colour; meridian's and vesper's workspaces differ.
+    check('arcs are drawn in the sending workspace colour: two workspaces, two colours', hover.arcs.every((a) => /^#[0-9a-f]{6}$/.test(a.color ?? '') && a.drawn !== '') && new Set(hover.arcs.map((a) => a.drawn)).size >= 2, hover.arcs.map((a) => ({ peer: a.peer, direction: a.direction, color: a.color, drawn: a.drawn })));
     check('the other rows dim and the partners are tinted', hover.dimmed > 0 && hover.peers === 6, { dimmed: hover.dimmed, peers: hover.peers });
     holdAt(cell.x, cell.y);
     // No label covers row text or another label, measured in the real layout (getBoundingClientRect of each label and each text leaf).
