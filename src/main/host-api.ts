@@ -35,6 +35,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
+import { isPromptAction } from '../core/prompt-delivery.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -436,7 +437,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'resolvePrompt': {
                 const r = agent(args[0]);
                 const action = args[2];
-                if (!r || typeof args[1] !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
+                // Withdraw / Edit a queued message (Tynn #843) cross from a Pilot window exactly as Send / Discard do.
+                if (!r || typeof args[1] !== 'string' || !isPromptAction(action)) return { ok: false, reason: 'Invalid draft action.' };
                 return deps.host.resolvePrompt?.(r.id, args[1], action) ?? { ok: false, reason: 'This host does not support queued drafts.' };
             }
             case 'answerApproval': {

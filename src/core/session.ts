@@ -1206,18 +1206,22 @@ export class AgentSession {
         this.#refreshSteers();
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             // A prompt steered into the turn just ended is not sent again while it may still be seen (Tynn #440).
-            const next = this.#afterTurn.find((p) => p.steer === undefined);
-            if (!next) return;
+            const at = this.#afterTurn.findIndex((p) => p.steer === undefined);
+            if (at < 0) return;
+            const next = this.#afterTurn[at]!;
+            // OUT OF THE QUEUE BEFORE THE HAND-OFF (Tynn #843): a withdraw arriving while the provider takes it finds it
+            // gone, never half-sent. Refused, it goes back where it was.
+            this.#afterTurn.splice(at, 1);
             try {
                 this.#send(next.text, next.by, next.sent, false, next.context);
             } catch (error) {
+                this.#afterTurn.splice(Math.min(at, this.#afterTurn.length), 0, next);
                 // One message started a turn. The rest still wait, including after a provider hold resumes.
                 if (this.#inTurn) return;
                 this.#leaveQueuedAsDrafts();
                 void this.#emitRow({ kind: 'notice', level: 'error', message: `Queued input was not delivered: ${error instanceof Error ? error.message : String(error)}` });
                 return;
             }
-            this.#afterTurn.splice(this.#afterTurn.indexOf(next), 1);
             void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
         }
     }
@@ -1239,7 +1243,8 @@ export class AgentSession {
      */
     redeliver(id: string, text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}, options: { hold?: boolean } = {}): void {
         if (!this.running) throw new Error('session is not running');
-        if (this.hasQueuedPrompt(id)) return;
+        // Withdrawn by the person while the record that owes it was being read (Tynn #843): never handed over.
+        if (this.hasQueuedPrompt(id) || this.#withdrawn.has(id)) return;
         this.#afterTurn.push({ id, text, by, sent, context });
         this.#changed();
         // `hold`: more are being handed over (`deliverOwed`); `flushOwed` sends them all together, in order (Tynn #702).
@@ -1252,11 +1257,31 @@ export class AgentSession {
         this.#changed();
     }
 
+    /** Prompts the person took back (Tynn #843): never handed to this run again, by `redeliver` or anything else. */
+    readonly #withdrawn = new Set<string>();
+
     /**
-     * TAKE BACK A QUEUED MESSAGE (Tynn #843) — stub.
+     * TAKE BACK A QUEUED MESSAGE (Tynn #843; the owner: "if an item is queued can I still undo the send even if past the
+     * buffer"). Only what still waits in `#afterTurn` can come back: it has not reached the provider. One check and one
+     * removal, synchronously, on the same queue the turn's end drains (`#flushAfterTurn` takes a prompt OUT of the queue
+     * before it hands it over), so the two cannot interleave: whichever runs first wins, and the loser sees the result.
+     *
+     * - `{ text }`: taken back; recorded `status` (`withdrawn`: kept in the thread, marked; `discarded`: dropped from it,
+     *   its words went back to the composer). The agent never gets it.
+     * - `'gone'`: not waiting any more — handed to the provider (or settled) first. Nothing is recorded.
+     * - `'not-yours'`: someone else's (a flow, a notice): theirs to settle, never the chat's.
+     * A prompt steered into the running turn (mail, Tynn #440) may already have been read: it is `gone`.
      */
-    withdrawPrompt(_id: string, _status: 'withdrawn' | 'discarded'): { text: string } | 'gone' | 'not-yours' {
-        return 'gone';
+    withdrawPrompt(id: string, status: 'withdrawn' | 'discarded'): { text: string } | 'gone' | 'not-yours' {
+        const index = this.#afterTurn.findIndex((p) => p.id === id);
+        const p = index >= 0 ? this.#afterTurn[index]! : undefined;
+        if (!p || p.steer !== undefined) return 'gone';
+        if (p.by !== 'you') return 'not-yours';
+        this.#afterTurn.splice(index, 1);
+        this.#withdrawn.add(id);
+        void this.#emitRow({ kind: 'prompt_delivery', id, status });
+        this.#changed();
+        return { text: p.text };
     }
 
     discardPrompt(id: string): void {

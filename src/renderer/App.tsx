@@ -2221,6 +2221,8 @@ function DesktopApp({ bridge }: AppProps) {
             onSend={(id, text, attachments) => (id ? send(id, text, attachments ?? []) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: 'No agent to send to.' }))}
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}
+            // Withdraw / Edit a queued message (Tynn #843): the host takes it back, here and from a Pilot window alike.
+            onResolveQueued={chatThread && resolvedBridge ? (promptId, action) => resolvedBridge.resolvePrompt(chatThread.agentId, promptId, action) : undefined}
             answeringApproval={answering}
             approvalRefusal={approvalRefusal}
             onAnswerApproval={(id, optionId, note, approval) => answerApproval(id, optionId, note ?? '', approval ?? null)}

@@ -254,8 +254,11 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         const delivered = delivery === undefined || delivery === 'sent';
         // `carried` (Tynn #702): kept across the restart an unconfirmed interrupt made, waiting for the new run like a queued one.
         const queued = (delivery === 'queued' || delivery === 'carried') && detail.session?.running === true;
+        // Taken back by the person while it waited (Tynn #843): kept, marked, never delivered and never owed.
+        const withdrawn = delivery === 'withdrawn';
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
+            ...(withdrawn ? { withdrawn: true } : {}),
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
             ...(queued && detail.session?.starting === true ? { queuedForStart: true }
                 : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),

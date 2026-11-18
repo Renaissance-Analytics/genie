@@ -133,7 +133,7 @@ import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
-import { promptDeliveries, type PromptAction } from '../core/prompt-delivery.js';
+import { promptDeliveries, type PromptAction, type PromptDelivery } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -1498,11 +1498,20 @@ export class SessionHost {
 
     /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
     resolvePrompt(agentId: AgentId, id: string, action: PromptAction): Promise<{ ok: true } | { ok: false; reason: string }> {
-        if (action === 'withdraw' || action === 'edit') return Promise.resolve(this.withdrawQueued(agentId, id, action));
+        // Edit on a message already WITHDRAWN (kept in the thread, Tynn #843): out of the thread, as Discard takes a draft —
+        // decided by the record itself, below; anything else that is no longer queued answers why.
+        let notQueued: { ok: false; reason: string } | null = null;
+        if (action === 'withdraw' || action === 'edit') {
+            const taken = this.withdrawQueued(agentId, id, action);
+            if (taken.ok || action === 'withdraw') return Promise.resolve(taken);
+            notQueued = taken;
+            action = 'discard';
+        }
         const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
             await this.settled();
             const { rows } = await readPromptRows(this.#store(), agentId);
             const status = promptDeliveries(rows).get(id);
+            if (notQueued !== null && status !== 'withdrawn') return notQueued;
             const row = rows.find(({ event: e }) => e.kind === 'message' && e.pending?.id === id)?.event;
             if (!row || row.kind !== 'message' || !row.pending || !status || status === 'sent' || status === 'discarded') return { ok: false, reason: 'This draft was already sent or discarded.' };
             const session = this.#running.get(agentId)?.session;
@@ -1532,9 +1541,30 @@ export class SessionHost {
         return result;
     }
 
-    /** WITHDRAW / EDIT A QUEUED MESSAGE (Tynn #843) — stub. */
-    withdrawQueued(_agentId: AgentId, _id: string, _action: 'withdraw' | 'edit'): { ok: true } | { ok: false; reason: string } {
-        return { ok: false, reason: 'not implemented' };
+    /**
+     * WITHDRAW / EDIT ONE OF YOUR QUEUED MESSAGES (Tynn #843): the host operation behind the chat's buttons, from this
+     * window, the engine and a Pilot window alike (`resolvePrompt`). SYNCHRONOUS on purpose: the session takes it out of
+     * the very queue the turn's end drains (`AgentSession.withdrawPrompt`), in one step, so delivery and withdraw cannot
+     * interleave; whichever comes first wins. `withdraw` keeps it in the thread marked Withdrawn; `edit` drops it (its
+     * words went back to the composer). Lost: the person is told, in words, that the agent already has it.
+     */
+    withdrawQueued(agentId: AgentId, id: string, action: 'withdraw' | 'edit'): { ok: true } | { ok: false; reason: string } {
+        const session = this.#running.get(agentId)?.session;
+        const taken = session?.running ? session.withdrawPrompt(id, action === 'edit' ? 'discarded' : 'withdrawn') : 'gone';
+        if (taken === 'not-yours') return { ok: false, reason: 'Only your own messages can be withdrawn.' };
+        if (taken !== 'gone') {
+            this.#emit(agentId);
+            return { ok: true };
+        }
+        const status = this.#deliveryOf(agentId, id);
+        if (status === 'withdrawn' || status === 'discarded') return { ok: false, reason: 'This message was already withdrawn.' };
+        if (status === 'undelivered' || status === 'carried') return { ok: false, reason: 'This message is no longer queued: it was kept as not delivered. Remove it, or send it again.' };
+        return { ok: false, reason: 'Too late to withdraw: the agent already has it. The turn ended and it was delivered before Withdraw arrived.' };
+    }
+
+    /** What became of one prompt, as this host's ledger for the agent says now. */
+    #deliveryOf(agentId: AgentId, id: string): PromptDelivery | undefined {
+        return promptDeliveries(this.ledgerFor(agentId)).get(id);
     }
 
     /**

@@ -222,6 +222,8 @@ export interface ShellProps {
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** Discard an undelivered chat draft, unsent. */
     onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /** Withdraw / Edit one of your queued messages in the open chat (Tynn #843): the host's `resolvePrompt`. */
+    onResolveQueued?: import('../core/queued-withdraw.js').QueuedResolve | undefined;
     onOpenAgent: (agentId: string) => void;
     /** The Dashboard's row click: that agent's chat, docked beside the Dashboard, which stays (genie#1209). */
     onChatAgent?: ((agentId: string) => void) | undefined;
@@ -469,6 +471,7 @@ export function Shell({
     onSend,
     onRestartAndSend,
     onDiscardDraft,
+    onResolveQueued,
     answeringApproval,
     approvalRefusal = null,
     onAnswerApproval,
@@ -1220,6 +1223,7 @@ export function Shell({
                         {...(featureAsk && !scoped ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
+                        onResolveQueued={readOnly ? undefined : onResolveQueued}
                         onStopTurn={chatTurnStop && chatThread && !readOnly ? () => onCancelTurn?.(chatThread.agentId, 'stop') : undefined}
                         // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
                         // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).

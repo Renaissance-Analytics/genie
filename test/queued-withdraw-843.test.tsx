@@ -25,7 +25,8 @@ import { control } from './helpers/control-markup.js';
  * the composer) and Edit (its words back in the composer). A real host operation, atomic against the turn's end handing
  * it to the provider: whichever comes first wins, and a lost withdraw is told plainly.
  *
- * Predicted on the inert stubs: 19 failed, 5 passed (24). The 5 are the named CONTROLs, which hold either way.
+ * Predicted on the inert stubs: 19 failed, 5 passed (24). The 5 are the named CONTROLs, which hold either way. One test
+ * was added with GREEN (Edit on a withdrawn message); the GREEN job proves it with a break probe.
  */
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -100,6 +101,20 @@ describe('the host takes a queued message back (resolvePrompt withdraw / edit)',
         expect(s.prompts).toEqual(['first']);
         expect(s.deliveries(oops)).toEqual(['discarded']);
         expect(s.messages().some((m) => m.text === 'oops')).toBe(false);
+    });
+
+    // Added after RED (with GREEN); its break probe runs in the GREEN job: the record check in resolvePrompt removed, it goes red.
+    it('Edit on a message already withdrawn (kept, marked) takes it out of the thread; the agent still never gets it', async () => {
+        const s = await open();
+        s.host.promptWith(s.record.id, 'first', []);
+        s.host.promptWith(s.record.id, 'oops', []);
+        const oops = s.pid('oops');
+        expect(await s.host.resolvePrompt(s.record.id, oops, 'withdraw')).toEqual({ ok: true });
+        expect(await s.host.resolvePrompt(s.record.id, oops, 'edit')).toEqual({ ok: true });
+        expect(s.deliveries(oops)).toEqual(['withdrawn', 'discarded']);
+        expect(s.messages().some((m) => m.text === 'oops')).toBe(false);
+        s.end();
+        expect(s.prompts).toEqual(['first']);
     });
 
     it('delivered first: a late Withdraw is refused in plain words, and the message stays delivered', async () => {
