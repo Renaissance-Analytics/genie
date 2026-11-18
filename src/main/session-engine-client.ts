@@ -247,7 +247,12 @@ export class SessionEngineClient {
             let welcomed: EngineWelcome | null = null;
             const handle = (text: string): void => {
                 const parsed = parseEngineFrame(text);
-                if (!parsed.ok) { this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`); return; }
+                if (!parsed.ok) {
+                    // A host's call this window does not know (Tynn #894): answered with its id once linked, so it settles.
+                    if (welcomed !== null && parsed.code === 'unsupported' && parsed.id !== undefined) transport.send(JSON.stringify({ kind: 'result', id: parsed.id, ok: false, reason: parsed.reason, code: 'unsupported' }));
+                    else this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`);
+                    return;
+                }
                 const m = parsed.message;
                 if (welcomed === null) {
                     if (m.kind === 'refused') { finish({ ok: false, reason: m.reason }); transport.close(); return; }

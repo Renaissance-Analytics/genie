@@ -21,10 +21,18 @@ import { GAPP_METHODS, type GAppMethod } from './gapps.js';
  */
 
 /**
- * The remote wire's version, said in `welcome` with the host's build (P10.1e): a client sees what it is talking to. Raised
- * only for a change an older client cannot read; a new field an old client ignores is not one.
+ * The remote wire's number from before schemas (P10.1e), still said in `welcome` for clients that read it (beta.64 and
+ * older check it is at least 1). 2 = this side also says a schema. Compatibility is judged on the SCHEMA, never on this.
  */
-export const REMOTE_PROTOCOL = 1;
+export const REMOTE_PROTOCOL = 2;
+
+/**
+ * THE WIRE'S SCHEMA (Tynn #894; the owner, 2026-11-18): the protocol's version, a date. Every track's build carries it
+ * (`<schema>-<release>[.<hotfix>]`), and each side accepts the other within the FIXED support window
+ * (core/protocol-version.ts `SUPPORT_WINDOW_DAYS`). Moved to the day of a change an older side cannot read; a field an
+ * older side ignores, or a feature it may lack (a capability), is not one.
+ */
+export const REMOTE_SCHEMA = '2026.11.18';
 
 export const REMOTE_METHODS = [
     'snapshot',
@@ -172,7 +180,11 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+/**
+ * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
+ * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
+ */
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -434,11 +446,18 @@ export type WireMessage =
      * `companion` (Tynn #529 part A): the ticket a driving window's Take over was answered with — this connection is that
      * window's Take Over window, for that one terminal. Beside `auth`, never in it: a saved hello's auth is rewritten.
      */
-    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string }
+    /** `track`, `build`, `schema`, `minSchema`, `capabilities` (Tynn #894): the client's offer; absent from an older client. */
+    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string; track?: string; build?: string | null; schema?: string; minSchema?: string; capabilities?: readonly string[] }
     /** `readonly` (Tynn #688): the host's word that this connection may only read; absent from an older host. */
     /** `viewOnly` (Tynn #732): the person at the host has set this person to watch only; absent = full control. */
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; viewOnly?: true; token?: string; protocol?: number; build?: string }
-    | { kind: 'refused'; reason: string }
+    /**
+     * `track`, `schema`, `minSchema`, `capabilities` (Tynn #894): the host's offer beside its `protocol` and `build`; absent
+     * from an older host. `compatible: false` (with `code` and `reason`): outside the support window, this connection is
+     * UPDATE-ONLY: `host.version` and `host.update` answer, every other call is refused with `code: 'version'`.
+     */
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; viewOnly?: true; token?: string; protocol?: number; build?: string; track?: string; schema?: string; minSchema?: string; capabilities?: readonly string[]; compatible?: false; code?: RefusalCode; reason?: string }
+    /** `code: 'version'` (Tynn #894): refused for the protocol floor, either side's. */
+    | { kind: 'refused'; reason: string; code?: RefusalCode }
     /**
      * The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). `guest`: a
      * share-link guest waits for the person there to let it in instead (Tynn #731).
@@ -446,14 +465,24 @@ export type WireMessage =
     | { kind: 'pairing'; host: string; expiresAt: number; guest?: true }
     | { kind: 'call'; id: number; method: RemoteMethod | ControlMethod; args: unknown[] }
     | { kind: 'result'; id: number; ok: true; value: unknown }
-    | { kind: 'result'; id: number; ok: false; reason: string }
+    /**
+     * `code` (Tynn #894): `unsupported`, the other side does not know the method (the call settles, nothing hangs);
+     * `version`, the connection is outside the support window and may only read the version and ask for the update.
+     */
+    | { kind: 'result'; id: number; ok: false; reason: string; code?: ResultCode }
     | { kind: 'event'; channel: string; payload: unknown };
+
+export type RefusalCode = 'version';
+export type ResultCode = 'unsupported' | 'version';
+
+/** Why a frame was not parsed. A CALL to a method this side does not know keeps its `id`, so the answer can carry it. */
+export type FrameRefusal = { ok: false; reason: string; id?: number; method?: string; code?: 'unsupported' };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isMethod = (m: unknown): m is RemoteMethod | ControlMethod =>
     typeof m === 'string' && ((REMOTE_METHODS as readonly string[]).includes(m) || (CONTROL_METHODS as readonly string[]).includes(m));
 
-export function parseMessage(text: string): { ok: true; message: WireMessage } | { ok: false; reason: string } {
+export function parseMessage(text: string): { ok: true; message: WireMessage } | FrameRefusal {
     return parseFrame(text, isMethod);
 }
 
@@ -467,7 +496,7 @@ export type Frame<M extends string> =
  * host's `engine.*` table (core/engine-protocol.ts). One envelope — hello, welcome, call, result, event — so the window's
  * link to its own host and a remote window's link to another Genie are the same protocol, validated the same way.
  */
-export function parseFrame<M extends string>(text: string, isMethodOf: (m: unknown) => m is M): { ok: true; message: Frame<M> } | { ok: false; reason: string } {
+export function parseFrame<M extends string>(text: string, isMethodOf: (m: unknown) => m is M): { ok: true; message: Frame<M> } | FrameRefusal {
     let raw: unknown;
     try {
         raw = JSON.parse(text);
@@ -494,13 +523,14 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             if (typeof raw.id !== 'number' || typeof raw.method !== 'string' || !Array.isArray(raw.args)) {
                 return { ok: false, reason: 'a call needs a numeric id, a method and an args array' };
             }
-            if (!isMethodOf(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method` };
+            // Kept with its id (Tynn #894): the receiver answers this call, so the caller's promise settles.
+            if (!isMethodOf(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method`, id: raw.id, method: raw.method, code: 'unsupported' };
             return { ok: true, message: { kind: 'call', id: raw.id, method: raw.method, args: raw.args } };
         }
         case 'result': {
             if (typeof raw.id !== 'number' || typeof raw.ok !== 'boolean') return { ok: false, reason: 'a result needs a numeric id and ok' };
             if (raw.ok) return { ok: true, message: { kind: 'result', id: raw.id, ok: true, value: raw.value } };
-            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
+            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'unsupported' || raw.code === 'version' ? { code: raw.code } : {}) } };
         }
         case 'event':
             if (typeof raw.channel !== 'string') return { ok: false, reason: 'an event needs a channel' };
@@ -509,7 +539,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             if (typeof raw.connectionId !== 'string' || typeof raw.host !== 'string' || typeof raw.isOwner !== 'boolean') return { ok: false, reason: 'a welcome needs connectionId, host and isOwner' };
             return { ok: true, message: raw as unknown as Frame<M> };
         case 'refused':
-            return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
+            return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'version' ? { code: 'version' as const } : {}) } };
         case 'pairing':
             if (typeof raw.host !== 'string' || typeof raw.expiresAt !== 'number') return { ok: false, reason: 'a pairing frame needs host and expiresAt' };
             return { ok: true, message: { kind: 'pairing', host: raw.host, expiresAt: raw.expiresAt, ...(raw.guest === true ? { guest: true as const } : {}) } };

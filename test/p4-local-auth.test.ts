@@ -82,6 +82,8 @@ describe('P4 local authentication', () => {
             kind: 'welcome', connectionId: expect.any(String), host: 'local-contract-host', isOwner: true, workspaceId: null,
             // P10.1e's version handshake, additive; a host given no build says 'dev'.
             protocol: protocol.REMOTE_PROTOCOL, build: 'dev',
+            // Tynn #894: the host's track, schema, window floor and capabilities, for the two-way negotiation.
+            track: 'host', schema: protocol.REMOTE_SCHEMA, minSchema: expect.stringMatching(/^\d{4}\.\d{2}\.\d{2}$/), capabilities: expect.arrayContaining(['unsupported-result@1']),
             // Tynn #688: the welcome says whether the principal may write; the owner may.
             readonly: false,
         });

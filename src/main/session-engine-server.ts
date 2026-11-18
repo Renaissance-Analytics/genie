@@ -517,6 +517,9 @@ export class SessionEngineServer {
         const parsed = parseEngineFrame(text);
         if (!parsed.ok) {
             if (!conn.authed) conn.transport.close();
+            // A window's call this host does not know (Tynn #894: a client-only update keeps an older host): answered with
+            // its id, so the window's call settles instead of waiting forever.
+            else if (parsed.code === 'unsupported' && parsed.id !== undefined) conn.transport.send(JSON.stringify({ kind: 'result', id: parsed.id, ok: false, reason: parsed.reason, code: 'unsupported' }));
             else this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`);
             return;
         }

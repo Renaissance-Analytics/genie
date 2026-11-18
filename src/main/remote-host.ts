@@ -28,6 +28,7 @@ import {
     type ServerTransport,
     type WireMessage,
 } from '../core/remote-protocol.js';
+import { CAP_UNSUPPORTED_RESULT, SUPPORT_WINDOW_DAYS, negotiate, offerOf, remoteOffer, supports, type HostUpdateAnswer, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
 import type { Device, DeviceStore } from './remote-devices.js';
 import { guestRefusal, pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
@@ -196,7 +197,17 @@ interface Connection {
      * TUI, and, once its window lost the baton or left, why it may type no more.
      */
     companion: { parentId: string; terminalId: string; started: boolean; revoked: string | null } | null;
+    /** What this connection and this host agreed in hello/welcome (Tynn #894); `null` until then, or outside the window. */
+    negotiated: Negotiated | null;
+    /**
+     * Outside the support window (Tynn #894): why, in words naming both schemas. The connection is UPDATE-ONLY: it may read
+     * `host.version` and ask `host.update`, and every other call is refused with this reason and `code: 'version'`.
+     */
+    outside: string | null;
 }
+
+/** The host-update port's stand-in until the launcher step wires it (Tynn #894). */
+const stubHostUpdate = (hostName: string) => async (): Promise<HostUpdateAnswer> => ({ started: false, stub: true, reason: `${hostName} cannot update itself from here yet: host updates are wired to the launcher in a later step` });
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
 const PHONE_REFUSES = (method: string): boolean => method.startsWith('terminals.');
@@ -256,6 +267,15 @@ export class RemoteHost {
     readonly #hostName: string;
     /** This Genie's build, said in `welcome` with the wire's protocol (P10.1e). */
     readonly #build: string;
+    /**
+     * This host's track, build, schema, window floor and capabilities, said in `welcome` and negotiated with each hello
+     * (Tynn #894). Read at each hello: the catalog's elements are capabilities, and a plugin turned on adds one.
+     */
+    readonly #offer: () => ProtocolOffer;
+    /** Asks for this host's update (Tynn #894): a stub until the launcher step wires it. */
+    readonly #requestUpdate: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer>;
+    /** CONFERENCE MODE: several owners asking at once start one update, and every one of them hears its answer. */
+    #updating: Promise<HostUpdateAnswer> | null = null;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
     readonly #devices: DeviceStore;
@@ -302,8 +322,12 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void; protocol?: ProtocolOffer | (() => ProtocolOffer); requestUpdate?: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer> }) {
         this.#api = deps.api;
+        const protocol = deps.protocol;
+        const build = deps.build ?? 'dev';
+        this.#offer = typeof protocol === 'function' ? protocol : protocol ? () => protocol : () => remoteOffer('host', build);
+        this.#requestUpdate = deps.requestUpdate ?? stubHostUpdate(deps.hostName);
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
         this.#build = deps.build ?? 'dev';
@@ -591,7 +615,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null, negotiated: null, outside: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -649,6 +673,16 @@ export class RemoteHost {
     async #onFrame(connection: Connection, text: string): Promise<void> {
         const parsed = parseMessage(text);
         if (!parsed.ok) {
+            /*
+             * A CALL THIS HOST DOES NOT KNOW (Tynn #894) is answered with its id, so the caller's promise settles: a newer
+             * client asking an older host. A client that did not negotiate `unsupported-result` (an older Genie) hears the
+             * connection-level refusal it already reads first (its own skew check), then the result.
+             */
+            if (connection.auth !== null && parsed.code === 'unsupported' && parsed.id !== undefined) {
+                if (!supports(connection.negotiated, CAP_UNSUPPORTED_RESULT)) this.#refuse(connection, parsed.reason, false);
+                this.#send(connection, { kind: 'result', id: parsed.id, ok: false, reason: parsed.reason, code: 'unsupported' });
+                return;
+            }
             this.#refuse(connection, parsed.reason, connection.auth === null);
             return;
         }
@@ -746,6 +780,16 @@ export class RemoteHost {
             const refused = connection.local ? TICKET_FOREIGN : this.#redeem(connection, message.companion);
             if (refused !== null) { connection.auth = null; connection.deviceId = null; return this.#refuse(connection, refused, true); }
         }
+        /*
+         * THE VERSIONS, BOTH WAYS (Tynn #894), once the connection is somebody: this host's offer against the client's.
+         * Outside the fixed window the connection is still admitted, UPDATE-ONLY, so the client can read the host's version
+         * and trigger its update (the owner, 2026-11-18); nothing else answers it. Per connection: several people connected
+         * at once each negotiate for themselves.
+         */
+        const offer = this.#offer();
+        const agreed = negotiate(offer, offerOf(message));
+        connection.negotiated = agreed.ok ? agreed.negotiated : null;
+        connection.outside = agreed.ok ? null : `${this.#hostName}: ${agreed.reason}`;
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -757,9 +801,15 @@ export class RemoteHost {
             // The mode the person here set (Tynn #732): a window that comes back on view only takes no baton.
             ...(!connection.local && this.#viewOnly.has(connection.auth.label) ? { viewOnly: true as const } : {}),
             ...(token ? { token } : {}),
-            // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
+            // The version handshake (P10.1e), additive: an old client reads the fields above as it always has. Both ways
+            // since Tynn #894: the host's floor and capabilities too, so the client negotiates the same answer.
             protocol: REMOTE_PROTOCOL,
             build: this.#build,
+            ...(offer.track ? { track: offer.track } : {}),
+            schema: offer.schema,
+            minSchema: offer.minSchema,
+            capabilities: offer.capabilities,
+            ...(connection.outside !== null ? { compatible: false as const, code: 'version' as const, reason: connection.outside } : {}),
         });
         this.#listen();
         if (!connection.local) this.#changed();
@@ -769,6 +819,10 @@ export class RemoteHost {
         const auth = connection.auth!;
         const ok = (value: unknown): WireMessage => ({ kind: 'result', id, ok: true, value });
         const refuse = (reason: string): WireMessage => ({ kind: 'result', id, ok: false, reason });
+        // UPDATE-ONLY outside the support window (Tynn #894): the version and the update, nothing else. The update is
+        // `host.update` (the launcher's, later) or this host's own updater today (`updates.*`, the upgrade class, Tynn #822).
+        const updating = method === 'host.version' || method === 'host.update' || (!(CONTROL_METHOD_LIST as readonly string[]).includes(method) && capabilityOf(method as RemoteMethod) === 'upgrade');
+        if (connection.outside !== null && !updating) return { kind: 'result', id, ok: false, reason: connection.outside, code: 'version' };
 
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
         // A local window takes over through its own window opener (genie:take-over), never this door.
@@ -901,6 +955,21 @@ export class RemoteHost {
                 if (!auth.isOwner) return refuse(`only the host owner may unlock ${this.#hostName}`);
                 this.unlock(connection.id);
                 return ok({ locked: false });
+            // THE HOST'S VERSION AND WINDOW (Tynn #894), read at any time, so a client sees a host to update while connected.
+            case 'host.version': {
+                const offer = this.#offer();
+                return ok({ track: offer.track, build: offer.build ?? this.#build, schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities, windowDays: SUPPORT_WINDOW_DAYS });
+            }
+            /*
+             * A CLIENT TRIGGERS THE HOST'S UPDATE (Tynn #894; the owner, 2026-11-18). The owner's, from any of their devices;
+             * never a share-link guest's. Not a write on the baton: in conference mode anyone's owner device may ask while
+             * someone else drives, and several asking at once start one update, each told its answer.
+             */
+            case 'host.update': {
+                if (!auth.isOwner) return refuse(`only ${this.#hostName}'s owner may update it`);
+                const running = this.#updating ?? (this.#updating = this.#requestUpdate({ label: auth.label, connectionId: connection.id }).finally(() => { this.#updating = null; }));
+                try { return ok(await running); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
             case 'agent.watch':
                 if (connection.local) return this.#watchLocalAgent(connection, String(args[0] ?? ''), true) ? ok({ watching: true }) : refuse('this host does not offer agent details');
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));

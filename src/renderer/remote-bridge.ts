@@ -13,6 +13,7 @@ import { deckActionForWire } from '../core/deck-answer-wire.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
 import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
+import { hostUpdate, negotiate, offerOf, remoteOffer, type HostUpdateAnswer, type HostUpdateView, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
@@ -62,6 +63,15 @@ export interface RemoteState {
     readonly hostBuild?: string | null;
     /** The host runs a Genie older than this client needs (Tynn #651); the link was closed for it. */
     readonly skew?: DroneSkew | null;
+    /**
+     * What this client and the host agreed (Tynn #894): the schema both speak and only the capabilities both said. Absent
+     * until the welcome; `null` outside the support window. A feature the host lacks is read here (`supports`).
+     */
+    readonly protocol?: Negotiated | null;
+    /** The host's version against this client's (Tynn #894): on the welcome, and again on `checkHost`. */
+    readonly hostUpdate?: HostUpdateView | null;
+    /** `false`: outside the support window; the link stays open UPDATE-ONLY (`checkHost`, `requestHostUpdate`). */
+    readonly compatible?: boolean;
 }
 
 export interface RemoteClient {
@@ -82,6 +92,13 @@ export interface RemoteClient {
     /** `force`: Take control from whoever drives (Tynn #529); without it, a take never takes control from someone driving. */
     takeBaton(options?: { force?: boolean }): Promise<{ ok: true } | { ok: false; reason: string }>;
     releaseBaton(): Promise<void>;
+    /**
+     * Ask the host to update (Tynn #894; the owner, 2026-11-18: the client triggers host updates). Works outside the support
+     * window too. Never takes the baton: in conference mode it is any owner device's to ask.
+     */
+    requestHostUpdate(): Promise<{ ok: true; value: HostUpdateAnswer } | { ok: false; reason: string }>;
+    /** Read the host's version and window again, at any time while linked; `hostUpdate` in the state follows. */
+    checkHost(): Promise<HostUpdateView>;
     /** The person has read the last refusal. */
     clearRefusal(): void;
     refreshBaton(): Promise<void>;
@@ -123,6 +140,8 @@ export interface RemoteOptions {
      * host that cannot answer it. A call it refuses as "not a bridge method" is the same skew. Absent = any host, as before.
      */
     readonly minBuild?: string;
+    /** This client's offer (Tynn #894); absent = this build's (`remoteOffer('client')`). Tests set it to move the window. */
+    readonly protocol?: ProtocolOffer;
 }
 
 /**
@@ -167,7 +186,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
 
     const pending = new Map<number, (r: Result) => void>();
+    /** Which method each pending call asked: an older host's bare refusal names the method, never the id (Tynn #894). */
+    const pendingMethods = new Map<number, string>();
     let nextId = 0;
+    const offer = options.protocol ?? remoteOffer('client');
     let closed = false;
     const events = new Map<string, Set<(payload: unknown) => void>>();
     const on = (channel: string, listener: (payload: unknown) => void): (() => void) => {
@@ -197,7 +219,21 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 // An older host than this client needs is not a connection (Tynn #651): nothing is asked of it.
                 const tooOld = options.minBuild !== undefined ? welcomeSkew(m, options.minBuild) : null;
                 if (tooOld) { setState({ hostBuild }); skewed(tooOld); return; }
-                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, readonly: m.readonly === true, viewOnly: m.viewOnly === true, token: m.token ?? null, pairing: null, hostBuild, skew: null });
+                /*
+                 * TWO-WAY VERSIONS (Tynn #894): the same negotiation the host ran, and what the host's version means here.
+                 * Outside the fixed window (either side's word) this is not a connection, said with both schemas; the link
+                 * stays open UPDATE-ONLY, so the person can still trigger the host's update. Nothing else is asked of it.
+                 */
+                const hostOffer = offerOf(m);
+                const agreed = negotiate(offer, hostOffer);
+                const view = hostUpdate(offer, hostOffer);
+                if (!agreed.ok || m.compatible === false) {
+                    const reason = !agreed.ok ? `${m.host}: ${agreed.reason}` : typeof m.reason === 'string' ? m.reason : `${m.host} is outside this Genie's support window`;
+                    setState({ host: m.host, isOwner: m.isOwner, hostBuild, lastRefusal: reason, protocol: null, compatible: false, hostUpdate: { ...view, compatible: false } });
+                    resolveReady({ ok: false, reason });
+                    return;
+                }
+                setState({ protocol: agreed.negotiated, compatible: true, hostUpdate: view, connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, readonly: m.readonly === true, viewOnly: m.viewOnly === true, token: m.token ?? null, pairing: null, hostBuild, skew: null });
                 resolveReady({ ok: true });
                 // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
                 if (options.drive === true && options.companion === undefined && auth.kind !== 'local') {
@@ -214,6 +250,22 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 // A call the host does not know: an older host than this client needs, said as such (Tynn #651).
                 const unknown = options.minBuild !== undefined ? refusalSkew(m.reason) : null;
                 if (unknown) { skewed({ build: state.hostBuild ? shownBuild(state.hostBuild) : null, method: unknown.method }); return; }
+                /*
+                 * AN OLDER HOST'S BARE REFUSAL (Tynn #894): a host from before protocol 2 refuses a method it does not know
+                 * without the call's id. The calls that asked that method are settled with it, so nothing hangs; the link
+                 * stays, since every other method still works.
+                 */
+                const lacked = state.connected ? refusalSkew(m.reason) : null;
+                if (lacked) {
+                    for (const [id, method] of [...pendingMethods]) {
+                        if (method !== lacked.method) continue;
+                        const waiter = pending.get(id);
+                        pending.delete(id);
+                        pendingMethods.delete(id);
+                        waiter?.({ ok: false, reason: `${state.host ?? 'the host'} does not have ${method}: it runs an older Genie` });
+                    }
+                    return;
+                }
                 if (state.pairing) setState({ pairing: null });
                 if (!state.connected) resolveReady({ ok: false, reason: m.reason });
                 else setState({ lastRefusal: m.reason });
@@ -222,6 +274,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             case 'result': {
                 const waiter = pending.get(m.id);
                 pending.delete(m.id);
+                pendingMethods.delete(m.id);
                 waiter?.(m.ok ? { ok: true, value: m.value } : { ok: false, reason: m.reason });
                 return;
             }
@@ -241,9 +294,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         setState({ connected: false, driving: false });
         for (const waiter of pending.values()) waiter({ ok: false, reason: 'the connection closed' });
         pending.clear();
+        pendingMethods.clear();
     });
 
-    transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}), ...(options.companion ? { companion: options.companion } : {}) }));
+    transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}), ...(options.companion ? { companion: options.companion } : {}), ...(offer.track ? { track: offer.track } : {}), ...(offer.build ? { build: offer.build } : {}), schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities }));
 
     /** A refusal for the person to see; one for lack of the baton says Take control is what it needs. */
     const refused = (reason: string): void => setState({ lastRefusal: reason, needsBaton: reason.endsWith(BATON_REFUSAL) });
@@ -254,9 +308,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             const id = ++nextId;
             const frame = JSON.stringify({ kind: 'call', id, method, args });
             pending.set(id, resolve);
+            pendingMethods.set(id, method);
             try { transport.send(frame); }
             catch (error) {
                 pending.delete(id);
+                pendingMethods.delete(id);
                 // Delivery is uncertain: refuse this request, never replay it. Reads still reject in read() below.
                 try { console.error(`[remote] Could not send ${method}.`, error); } catch { /* Reporting must not reject the call. */ }
                 resolve({ ok: false, reason: 'the connection closed' });
@@ -875,6 +931,16 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         onState: (l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; },
         takeBaton: (opts) => (opts?.force === true ? control('baton.take', { force: true }) : control('baton.take')),
         releaseBaton: async () => { await control('baton.release'); },
+        requestHostUpdate: async () => {
+            const r = await call('host.update');
+            return r.ok ? { ok: true as const, value: r.value as HostUpdateAnswer } : { ok: false as const, reason: r.reason };
+        },
+        checkHost: async () => {
+            const view = hostUpdate(offer, offerOf(await read<Record<string, unknown>>('host.version')));
+            const next = state.compatible === false ? { ...view, compatible: false } : view;
+            setState({ hostUpdate: next });
+            return next;
+        },
         refreshBaton,
         clearRefusal: () => setState({ lastRefusal: null, needsBaton: false }),
         lock: () => control('host.lock'),

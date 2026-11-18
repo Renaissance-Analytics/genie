@@ -1,8 +1,9 @@
+import { hostHashOf } from './update-kind.js';
 import type { RowsPatch } from './agent-push-wire.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { LiveSession } from './roster.js';
 import type { TimedEvent } from './stream-view.js';
-import { parseFrame, type Frame } from './remote-protocol.js';
+import { parseFrame, type Frame, type FrameRefusal } from './remote-protocol.js';
 
 /**
  * THE AGENT ENGINE ON THE WIRE (the host split, phase 1 — `.ai/plans/genie-2-host-split-2026-10-31.md` in the envelope).
@@ -222,7 +223,7 @@ export const isEngineMethod = (m: unknown): m is EngineMethod => typeof m === 's
 export type EngineFrame = Frame<EngineMethod>;
 
 /** A frame of the engine protocol, or why not: the remote bridge's parser over this table. */
-export function parseEngineFrame(text: string): { ok: true; message: EngineFrame } | { ok: false; reason: string } {
+export function parseEngineFrame(text: string): { ok: true; message: EngineFrame } | FrameRefusal {
     return parseFrame(text, isEngineMethod);
 }
 
@@ -349,7 +350,10 @@ export type HostDecision = { readonly kind: 'start' } | { readonly kind: 'adopt'
 export function hostDecision(record: HostRecord | null, alive: (pid: number) => boolean, want: { protocol: number; build: string }): HostDecision {
     if (record === null || !alive(record.pid)) return { kind: 'start' };
     if (record.protocol !== want.protocol) return { kind: 'replace', record, why: `protocol ${record.protocol}, this window speaks ${want.protocol}` };
-    if (record.build !== want.build) return { kind: 'replace', record, why: `build ${record.build}, this window is ${want.build}` };
+    // The same host by its hash, whatever the version (Tynn #413): a client-only update's window adopts the host that kept running.
+    if (record.build !== want.build && !(hostHashOf(record.build) !== null && hostHashOf(record.build) === hostHashOf(want.build))) {
+        return { kind: 'replace', record, why: `build ${record.build}, this window is ${want.build}` };
+    }
     return { kind: 'adopt', record };
 }
 

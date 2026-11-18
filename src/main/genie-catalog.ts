@@ -139,6 +139,23 @@ export const TYNN_PAGE_ELEMENT: ElementDefinition = {
     payload: {},
 };
 
+/**
+ * THE UPDATER (Tynn #413, host split P5b and P6). A host-service on BOTH sides: genie-host checks, downloads and applies
+ * updates, window or not (updates-host.ts, through its updater helper); this machine's window shows the offer and sends the
+ * person's check, download, install and channel. `engine.updates` and `updates.event` are the only channel between them.
+ */
+export const UPDATER_ELEMENT: ElementDefinition = {
+    id: 'genie.updater',
+    kind: 'host-service',
+    version: BUILTIN_VERSION,
+    packageId: BUILTIN_PACKAGE_ID,
+    source: 'builtin',
+    docs: { name: 'Updates', description: 'Genie checks for updates and downloads them with every window closed; an update is installed when the person asks. One that changes only the window leaves genie-host and every agent running.' },
+    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.updates'], events: ['updates.event'] } },
+    permissions: { capabilities: [], network: [] },
+    payload: { start: 'updates.start', stop: 'updates.stop', health: 'updates.state', settingsSection: 'updates' },
+};
+
 export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclaration {
     return {
         id: BUILTIN_PACKAGE_ID,
@@ -158,7 +175,7 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
                 // GApps v2 decision 3: a tool that acts as the person, or waits on their approval, is never granted to an app.
                 ...(PERSON_ONLY_TOOLS.has(t.name) ? { grantable: false } : {}),
             },
-        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT, RELAY_MEMBER_ELEMENT, RELAY_HOST_ELEMENT, TYNN_PAGE_ELEMENT]),
+        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT, RELAY_MEMBER_ELEMENT, RELAY_HOST_ELEMENT, TYNN_PAGE_ELEMENT, UPDATER_ELEMENT]),
     };
 }
 

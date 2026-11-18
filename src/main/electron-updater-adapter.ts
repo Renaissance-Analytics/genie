@@ -55,8 +55,15 @@ export function createElectronUpdaterPort(autoUpdater: ElectronUpdaterClient, co
             // `isUpdateAvailable` is the library's own verdict (version comparison included);
             // `result` is null when the updater is disabled (dev run without a feed).
             if (!result || !result.isUpdateAvailable) return null;
-            // The version only: its notes come from GitHub's releases API (core/update-notes.ts), not the feed's HTML.
-            return { version: result.updateInfo.version };
+            // The version, and which genie-host it carries (Tynn #413, scripts/feed-host-identity.mjs); its notes come from
+            // GitHub's releases API (core/update-notes.ts), not the feed's HTML.
+            const info = result.updateInfo as typeof result.updateInfo & { genieHostHash?: unknown; genieEngineProtocol?: unknown };
+            // Said only when the feed says it: a feed without them is a full update (core/update-kind.ts).
+            return {
+                version: result.updateInfo.version,
+                ...(typeof info.genieHostHash === 'string' ? { hostHash: info.genieHostHash } : {}),
+                ...(typeof info.genieEngineProtocol === 'number' ? { engineProtocol: info.genieEngineProtocol } : {}),
+            };
         },
         async download(onProgress) {
             const onProgressEvent = (p: { percent: number }) => { onProgress(p.percent); };
