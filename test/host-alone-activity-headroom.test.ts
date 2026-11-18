@@ -211,8 +211,12 @@ describe('the wiring', () => {
         // Both, through one function: its own board and the window's, each with the stamp of whose reading it is (Tynn #753).
         expect(host).toMatch(/const offerReading = \(provider: string, room: Headroom, stamp\?: ReadingStamp\): void => \{ headroomFeed\.offer\(provider, room, stamp\); engineHostOptions\.onHeadroom\(provider, room, stamp\); \};/);
         // Every reading goes there: unstamped as it came, stamped once the attribution says whose it is (held meanwhile).
-        expect(host).toMatch(/onHeadroom: \(provider, room, stamp\) => \{\s*if \(!stamp\) \{ offerReading\(provider, room, stamp\); return; \}\s*const shown = readingAttribution\.stamp\(provider, room, stamp\);\s*if \(shown\) offerReading\(provider, room, shown\);\s*\}/);
-        expect(host).toMatch(/if \(ended\.held\) offerReadingNow\?\.\(provider, ended\.held\.room, ended\.held\.stamp\);/);
+        // Since Tynn #854 that stamping lives in identity-watch.ts (headroomArrival, identityReadHooks), composed here.
+        const watch = src('src/main/identity-watch.ts');
+        expect(host).toMatch(/onHeadroom: headroomArrival\(\{ watch: identityWatch, attribution: readingAttribution, offer: offerReading \}\)/);
+        expect(watch).toMatch(/if \(!stamp\) \{ p\.offer\(provider, room, stamp\); return; \}[\s\S]*?const shown = p\.attribution\.stamp\(provider, room, stamp\);\s*if \(shown\) p\.offer\(provider, room, shown\);/);
+        expect(watch).toMatch(/if \(ended\.held\) p\.offer\(provider, ended\.held\.room, ended\.held\.stamp\);/);
+        expect(host).toMatch(/offer: \(provider, room, stamp\) => \{ if \(stamp\) offerReadingNow\?\.\(provider, room, stamp\); \}/);
         expect(host).toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null/);
         expect(host).toMatch(/headroom: headroomFeed/);
     });
