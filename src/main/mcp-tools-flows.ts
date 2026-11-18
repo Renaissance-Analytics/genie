@@ -1,3 +1,4 @@
+import type { StopAnswer } from './flow-scheduler.js';
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import { flowNodes } from '../core/flow-form.js';
@@ -32,6 +33,10 @@ import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 export interface FlowsPort {
     readonly store: Pick<import('./flows-host.js').FlowsApi, 'list' | 'get' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove'>;
     readonly runNow: (flowId: string) => Promise<FlowRun>;
+    /** Stop a flow's run in flight (Tynn #833). Absent = this Genie cannot stop runs. */
+    readonly stopRun?: (flowId: string, by: Actor) => Promise<StopAnswer>;
+    /** The person's approval for an agent's action (the ApprovalQueue gate); absent = nobody to ask. */
+    readonly approve?: (caller: Caller, action: string, detail: string) => Promise<'allowed' | 'denied'>;
 }
 
 export interface FlowToolsDeps {

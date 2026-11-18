@@ -87,6 +87,8 @@ export interface FlowRun {
     readonly log?: readonly string[];
     /** A run Genie quit under, resumed at the next launch from the step it had reached (genie#1204). */
     readonly resumed?: true;
+    /** A run a person or an agent STOPPED (Tynn #833): `you`, or the agent's name. Absent on a run Genie's quit stopped. */
+    readonly stoppedBy?: string;
 }
 
 /** A run in flight, kept on disk as it goes (genie#1204 (e)): if Genie quits under it, the next launch records it `stopped`. */

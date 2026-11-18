@@ -1,3 +1,4 @@
+import type { StopAnswer } from './flow-scheduler.js';
 import type { Actor, ArmResult, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 import type { FlowScheduler } from './flow-scheduler.js';
 import { schedulesIn } from './flow-store.js';
@@ -21,7 +22,7 @@ const WINDOW_CALLS = new Set(['create', 'update', 'arm', 'disarm', 'remove', 'ru
 /** The flows as a window, compose and the `flows` tool use them: the store itself, or the host's through the replica. */
 export type FlowsApi = Pick<FlowsReplica, 'get' | 'list' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove' | 'onChange' | 'onRun'>;
 /** The scheduler as a window uses it: run one now, and how many are running (the Deck's signal). */
-export type FlowSchedulerApi = Pick<FlowsReplica, 'runNow' | 'inFlightCount'>;
+export type FlowSchedulerApi = Pick<FlowsReplica, 'runNow' | 'inFlightCount' | 'stopRun'>;
 
 export class FlowsService {
     #store: FlowStore | null = null;
@@ -99,6 +100,8 @@ export class FlowsReplica {
     async disarm(id: string, by: Actor): Promise<FlowRecord> { return (await this.#call('disarm', [id, by])) as FlowRecord; }
     async remove(id: string): Promise<boolean> { return (await this.#call('remove', [id])) as boolean; }
     async runNow(id: string): Promise<FlowRun> { return (await this.#call('runNow', [id])) as FlowRun; }
+    /** Stop the flow's run in flight (Tynn #833). Stub. */
+    async stopRun(_id: string, _by: Actor): Promise<StopAnswer> { return { ok: false, reason: 'not yet' }; }
 
     onChange(listener: () => void): () => void {
         this.#changeListeners.add(listener);

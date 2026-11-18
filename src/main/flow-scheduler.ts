@@ -2,7 +2,7 @@ import { nextCronAfter } from '../core/cron.js';
 import { matchesFileTrigger, type FileAddedProps, type FileTriggerConfig } from '../core/file-trigger.js';
 import type { NodeOutcome } from '../core/flow-canvas.js';
 import type { RunObserver, RunResume } from './flow-runner.js';
-import type { FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule } from './flow-store.js';
+import type { FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule, Actor } from './flow-store.js';
 
 /**
  * FLOWS (§6.6) — the scheduler. ONE timer, set to the nearest due among the ARMED flows'
@@ -59,7 +59,18 @@ import type { FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome
  * reported with the flow's name, never left as a rejection nobody holds.
  */
 
-export type RunResult = { readonly outcome: 'ran' } | { readonly outcome: 'failed' | 'held'; readonly reason: string; readonly steps?: readonly FlowRunStep[] };
+export type RunResult = { readonly outcome: 'ran' } | { readonly outcome: 'failed' | 'held'; readonly reason: string; readonly steps?: readonly FlowRunStep[] }
+    | { readonly outcome: 'stopped'; readonly reason: string; readonly stoppedBy: string; readonly steps?: readonly FlowRunStep[] };
+
+/** What a Stop answers (Tynn #833): it stopped the run, or why it did not (no run going). */
+export type StopAnswer = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+/** How the scheduler can end a run it started (Tynn #833): aborted, with who stopped it. */
+export interface RunControl {
+    readonly signal: AbortSignal;
+    /** Who stopped it, once it is stopped: `you` (the person) or an agent's name. */
+    stoppedBy(): string | null;
+}
 
 export interface FlowSchedulerDeps {
     readonly store: FlowStore;
@@ -70,7 +81,7 @@ export interface FlowSchedulerDeps {
      * Execute one run of a flow. `trigger` is the schedule that fired, or the flow's first schedule for a
      * Run now (`null` when it has none). Answers the outcome; resolving with nothing means it ran.
      */
-    readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume) => Promise<RunResult | void>;
+    readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume, control?: RunControl) => Promise<RunResult | void>;
     /** SAFE MODE (Tynn #386): while on, no schedule is armed, no file starts a flow and no interrupted run resumes. */
     readonly safeMode?: () => boolean;
 }
@@ -112,6 +123,11 @@ export class FlowScheduler {
     }
 
     /** A QUIT: the timer is cancelled and nothing plans one again. Runs in flight are left to `settled()`. */
+    /** STOP A RUN (Tynn #833). Stub. */
+    async stopRun(_flowId: string, _by: Actor): Promise<StopAnswer> {
+        return { ok: false, reason: 'no run of this flow is going (not running)' };
+    }
+
     stop(): void {
         this.#stopped = true;
         this.#offChange();

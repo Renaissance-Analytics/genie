@@ -12,6 +12,13 @@ export interface FlowPillsProps {
     readonly workspaceId?: string | null | undefined;
     /** Opens the flow (and its run). */
     readonly onOpen: (flowId: string) => void;
+    /** Stops the flow's run (Tynn #833). Absent = no Stop is offered. */
+    readonly onStop?: ((flowId: string) => void) | undefined;
+}
+
+/** THE PILL'S STOP (Tynn #833). Stub. */
+export function StopFlowButton(_props: { pill: FlowPill; onStop: (flowId: string) => void }) {
+    return null;
 }
 
 const STATE_WORDS: Record<FlowPill['state'], string> = { running: 'running', paused: 'paused at its limit', failed: 'failed', held: 'held' };
