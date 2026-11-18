@@ -123,13 +123,16 @@ describe('every place Genie shows a provider wears its logo, not its name', () =
     const view = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
         renderToStaticMarkup(<AgentView agent={agent} session={running} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} {...props} />);
 
-    it('the Agent view header: the chip is the logo and the engine — `ACP` / `pty` — with no provider word', () => {
+    // The one bar (the owner on beta.64: as few words as possible): the chip is the logo; the engine is its tooltip.
+    it('the Agent view\'s bar: the chip is the logo, no provider word; the engine — `ACP` / `pty` — on hover', () => {
         const chip = element(view(), 'data-provider-chip="claude"');
         expect(chip).toContain('data-provider-logo="claude"');
-        expect(visible(chip)).toBe('ACP');
+        expect(visible(chip)).toBe('');
+        expect(chip).toMatch(/title="[^"]*· ACP"/);
         const observed = element(view({ agent: { ...agent, provider: 'aider', fidelity: 'observed' }, session: null }), 'data-provider-chip="aider"');
         expect(observed).toContain('data-provider-logo="aider"');
-        expect(visible(observed)).toBe('A pty');
+        expect(visible(observed)).toBe('A');
+        expect(observed).toMatch(/title="[^"]*· pty"/);
     });
 
     it('signed out: the header’s login is the logo and `Log in` — the provider is the logo, the sentence is on hover', () => {

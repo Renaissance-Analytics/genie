@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { stripPick } from './helpers/strip-pick.js';
 import { tabStrip, workspaceViewRoute } from '../src/core/workspace-tabs.js';
 import { formatRoute, parseRoute } from '../src/core/route.js';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
@@ -31,8 +32,7 @@ describe('the strip', () => {
         // The strip lists Files before ArtBoard.
         expect(html.indexOf('data-workspace-tab="files"')).toBeLessThan(html.indexOf('data-workspace-tab="artboard"'));
         const strip = WorkspaceTabs({ designed: { tabs: [] }, agents: [], current: { kind: 'view', view: 'home' }, canDesign: true, hasSettings: true, onView: (v) => opened.push(v), onAdd: () => {}, onOpenAgent: () => {} });
-        const tabsEl = (strip.props.children as Array<{ props: Record<string, unknown> } | null>).flat().find((c) => typeof c?.props?.['onTabChange'] === 'function');
-        (tabsEl!.props['onTabChange'] as (value: string) => void)('artboard');
+        stripPick(strip)('artboard');
         expect(opened).toEqual(['artboard']);
     });
 });

@@ -1,11 +1,15 @@
+import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { LiveSession } from '../src/core/roster.js';
 import { routeWorkspace } from '../src/core/route.js';
+import { workspaceViewRoute } from '../src/core/workspace-tabs.js';
 import type { RailItem } from '../src/core/rail-view.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
 import { Sidebar } from '../src/renderer/components/Sidebar.js';
+import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
 import { control } from './helpers/control-markup.js';
+import { stripPick } from './helpers/strip-pick.js';
 
 /**
  * WORKSPACE ↔ AGENT NAVIGATION, PART 1 (Tynn #805; the owner, 2026-10-17: "the workspace and agent views need to have
@@ -46,14 +50,23 @@ describe('the sidebar keeps your place', () => {
     });
 });
 
-describe('the agent’s header leads back', () => {
-    it('its workspace’s name is a link to that workspace', () => {
+describe('the agent’s bar leads back', () => {
+    /*
+     * The crumb "Tynn.ai /" was the way back until the one bar (the owner on beta.64: no row duplicating the tab name).
+     * The agent's bar IS its workspace's strip, so the way back is that strip's Dashboard tab, one click, always there.
+     */
+    it('its workspace’s Dashboard tab is in the agent’s bar, and picking it opens that workspace', () => {
         const agent = { id: 'a1', name: 'atlas', provider: 'claude', fidelity: 'declared' as const, cwd: '/w/tynn', instructions: null };
         const idle = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as LiveSession;
-        const html = renderToStaticMarkup(<AgentView agent={agent} session={idle} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} />);
-        expect(html).toMatch(/<button[^>]*data-crumb="tynn"[^>]*data-nav="genie:\/\/workspace\/tynn"|<button[^>]*data-nav="genie:\/\/workspace\/tynn"[^>]*data-crumb="tynn"/);
-        // A react-fancy Breadcrumbs crumb (its own <button>, not a Button); the "/" is the separator, outside the crumb.
-        expect(control(html, 'data-crumb="tynn"')).toMatchObject({ tag: 'button', fancy: false, text: 'Tynn.ai' });
-        expect(control(html, 'data-crumb="tynn"')!.open).toContain('data-react-fancy-breadcrumbs-item=""');
+        const opened: string[] = [];
+        const strip = (trailing: ReactNode) => <WorkspaceTabs designed={{ tabs: [] }} agents={[{ id: 'a1', name: 'atlas', state: 'idle' }]} current={{ kind: 'agent', id: 'a1' }} canDesign hasSettings onView={(v) => opened.push(workspaceViewRoute('tynn', v))} onAdd={() => {}} onOpenAgent={() => {}} trailing={trailing} />;
+        const html = renderToStaticMarkup(<AgentView agent={agent} session={idle} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} bar={strip} />);
+        const bar = html.slice(html.indexOf('data-top-bar'), html.indexOf('data-view-body'));
+        expect(control(bar, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true, text: 'Dashboard' });
+        // Picking it: react-fancy Tabs' onTabChange with that tab's value; the strip asks for the workspace's home view.
+        const el = WorkspaceTabs({ designed: { tabs: [] }, agents: [], current: { kind: 'agent', id: 'a1' }, canDesign: true, hasSettings: true, onView: (v) => opened.push(workspaceViewRoute('tynn', v)), onAdd: () => {}, onOpenAgent: () => {} });
+        stripPick(el)('home');
+        expect(opened).toEqual(['genie://workspace/tynn']);
     });
 });
+

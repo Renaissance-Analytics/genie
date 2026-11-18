@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { stripPick } from './helpers/strip-pick.js';
 import { tabStrip } from '../src/core/workspace-tabs.js';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace } from '../src/renderer/components/Workspace.js';
@@ -33,8 +34,7 @@ describe('the strip', () => {
         // Pressing a tab is react-fancy Tabs' onTabChange with that tab's value; the strip turns it into the view (or the agent).
         const agentsOpened: string[] = [];
         const strip = WorkspaceTabs({ designed: { tabs: [] }, agents: [{ id: 'a1', name: 'atlas', state: 'idle' }], current: { kind: 'view', view: 'home' }, canDesign: true, hasSettings: true, onView: (v) => opened.push(v), onAdd: () => {}, onOpenAgent: (id) => agentsOpened.push(id) });
-        const tabsEl = (strip.props.children as Array<{ props: Record<string, unknown> } | null>).flat().find((c) => typeof c?.props?.['onTabChange'] === 'function');
-        const pick = tabsEl!.props['onTabChange'] as (value: string) => void;
+        const pick = stripPick(strip);
         pick('files');
         pick('agent:a1');
         expect(opened).toEqual(['files']);
