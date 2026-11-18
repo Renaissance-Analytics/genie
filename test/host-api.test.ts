@@ -372,7 +372,7 @@ describe('the phone’s files, attachments and wanted agents', () => {
         const docx = { name: 'Letterhead.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', bytes: new Uint8Array([0x50, 0x4b, 3, 4, 0, 0]) };
         const { f, seen, api } = withFiles();
         const started: string[] = [];
-        f.deps.startForWork = async (r) => { started.push(r.id); return { ok: true }; };
+        f.deps.startForWork = async (r) => { started.push(r.id); return { ok: true, started: true }; };
 
         // No save on this host: refused, naming the file.
         const none = await api.invoke('prompt', ['agent_a', 'use this', [docx]]) as { ok: boolean; reason?: string };
