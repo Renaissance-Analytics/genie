@@ -96,6 +96,7 @@ describe('service commands in the existing Processes surface (#633)', () => {
     it.each(['running', 'stopped'] as const)('CONTROL: ordinary kept %s process retains its existing actions', (state) => {
         const { commandRun: _commandRun, startedAt: _startedAt, ...ordinary } = running;
         const html = row(markup({ ...ordinary, state, durable: true }));
-        expect(buttonTexts(html)).toEqual(state === 'running' ? ['Stop', 'More actions'] : ['Start', 'More actions']);
+        // Tynn #860: and its Log, last.
+        expect(buttonTexts(html)).toEqual(state === 'running' ? ['Stop', 'More actions', 'Log'] : ['Start', 'More actions', 'Log']);
     });
 });

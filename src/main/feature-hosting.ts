@@ -44,7 +44,7 @@ function withLogTails(services: HostingFeatureServices, rows: readonly HostedPro
 }
 
 /** The process log the person opened (Tynn #860): read whole from the host at every snapshot, so it follows the output. */
-async function openProcessLog(state: FeatureState, ports: HostingFeaturePorts): Promise<{ processLog?: NonNullable<FeatureData['hosting']>['processLog'] }> {
+async function openProcessLog(state: FeatureState, ports: HostingFeaturePorts): Promise<Record<string, never> | { processLog: NonNullable<NonNullable<FeatureData['hosting']>['processLog']> }> {
     const id = state.processLogOpen ?? null;
     if (id === null || !ports.processes) return {};
     const log = await ports.processes.log(id);

@@ -13,6 +13,8 @@ import type { ProcessSpec, ProcessStatus } from '../src/main/process-supervisor.
 import { processTools } from '../src/main/mcp-tools-processes.js';
 import { applyHostingFeatureAction, hostingFeatureSnapshot } from '../src/main/feature-hosting.js';
 import type { HostedProcess } from '../src/main/process-book.js';
+import { applyPersonalFeatureAction } from '../src/main/feature-personal.js';
+import { addressOf, routeOfAddress, type AddressContext } from '../src/core/address.js';
 
 /**
  * EVERYTHING THAT RUNS HAS A LOG THE PERSON CAN READ (Tynn #860). The owner, 2026-11-18: "anything that executes tasks
@@ -251,13 +253,13 @@ describe('the Log button reads the kept output in Hosting (Tynn #860)', () => {
     const ports = { processes: { list: () => [row], owns: (id: string) => id === 'p1', log: async (id: string) => (id === 'p1' ? { text: 'all of it', lines: 1, dropped: 0 } : null) } } as never;
 
     it('CONTROL: a stopped row keeps the output the book put on it when the supervisor has none', async () => {
-        const snap = await hostingFeatureSnapshot(services, {}, ports);
+        const snap = await hostingFeatureSnapshot(services, {} as never, ports);
         expect(snap.hosting!.processes[0]!.log).toMatchObject({ text: 'from before' });
     });
 
     it('`hosting.openProcessLog` opens the whole kept log in the snapshot; `hosting.closeProcessLog` closes it', async () => {
         const next: Record<string, unknown> = {};
-        expect(await applyHostingFeatureAction(services, { kind: 'hosting.openProcessLog', processId: 'p1' }, {}, next as never, ports)).toBe(true);
+        expect(await applyHostingFeatureAction(services, { kind: 'hosting.openProcessLog', processId: 'p1' }, {} as never, next as never, ports)).toBe(true);
         const snap = await hostingFeatureSnapshot(services, next as never, ports);
         expect(snap.hosting!.processLog).toEqual({ processId: 'p1', text: 'all of it', lines: 1, dropped: 0 });
         const closed: Record<string, unknown> = {};
@@ -273,5 +275,17 @@ describe('a flow run opens in its run review (Tynn #860)', () => {
         expect(sameFlowWindow('app://index.html#genie://flow/flow_a', 'genie://flow/flow_a?run=2')).toBe(true);
         expect(sameFlowWindow('app://index.html#genie://flow/flow_a?run=1', 'genie://flow/flow_a')).toBe(true);
         expect(sameFlowWindow('app://index.html#genie://flow/flow_ab', 'genie://flow/flow_a')).toBe(false);
+    });
+
+    it('Review opens the editor window on genie://flow/<id>?run=<n>, and the window reads that run back through its address', async () => {
+        const opened: string[] = [];
+        const ports = { openFlowEditor: (route: string) => { opened.push(route); } } as never;
+        await applyPersonalFeatureAction({} as never, { kind: 'flows.openEditor', flowId: 'flow_a', run: 3 }, {} as never, {} as never, ports, 'person' as never);
+        // CONTROL: Open (no run) is the flow as before.
+        await applyPersonalFeatureAction({} as never, { kind: 'flows.openEditor', flowId: 'flow_a' }, {} as never, {} as never, ports, 'person' as never);
+        expect(opened).toEqual(['genie://flow/flow_a?run=3', 'genie://flow/flow_a']);
+        const ctx: AddressContext = { workstation: 'alphar', workspaces: [{ id: 'moic-suite', name: 'moic', path: '/w/moic' }], agents: [], tabsOf: () => [] };
+        expect(parseRoute(routeOfAddress('genie://flow/flow_a?run=3', ctx)!)).toMatchObject({ surface: 'flow', flowId: 'flow_a', run: 3 });
+        expect(addressOf(parseRoute('genie://flow/flow_a?run=3'), ctx)).toBe('genie://flow/flow_a?run=3');
     });
 });

@@ -724,7 +724,7 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                                 <span className="ml-auto flex shrink-0 items-center gap-1.5">
                                     {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
                                     <RowMenu items={acts.menu} onRun={run} />
-                                    <LogButton processId={p.id} onAction={onAction} />
+                                    {logButton(p.id, onAction)}
                                 </span>
                                 {p.commandRun || (p.log && p.log.lines > 0) ? (
                                     <details data-process-log={p.id} className="basis-full">
@@ -755,8 +755,9 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
  * A process's Log (Tynn #860): opens its whole kept output, earlier Genies' included, and a scheduled task's runs. An icon
  * button like the row's others (Tynn #708: icons, named by their label), always last on the line.
  */
-function LogButton({ processId, onAction }: { processId: string; onAction: SurfaceProps['onAction'] }) {
-    return <Button type="button" variant="circle" size="sm" icon="file-text" aria-label="Log" title="Log" data-process-log-open={processId} onClick={() => onAction({ kind: 'hosting.openProcessLog', processId })} />;
+function logButton(processId: string, onAction: SurfaceProps['onAction']) {
+    // Drawn in place (no component of its own): the row's buttons stay in the row's element tree, as scheduledRow's do.
+    return <Button type="button" variant="circle" size="sm" icon="file-text" aria-label="Log" title="Log" data-open-log={processId} onClick={() => onAction({ kind: 'hosting.openProcessLog', processId })} />;
 }
 
 const RUN_WORD: Record<string, string> = { ok: 'Ran', failed: 'Failed', skipped: 'Skipped' };
@@ -871,7 +872,7 @@ function scheduledRow({ p, up, now, onAction, workspace = null }: { p: NonNullab
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
                 {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
                 <RowMenu items={acts.menu} onRun={run} />
-                <LogButton processId={p.id} onAction={onAction} />
+                {logButton(p.id, onAction)}
             </span>
             <span className="basis-full text-xs text-[var(--fg-3)]">
                 {describeSchedule(s.cron)} · Next run: {formatNextRun(s.nextRunAt, now)} · Last run: {formatLastRun(s.lastRunAt, s.lastRunStatus, now)}

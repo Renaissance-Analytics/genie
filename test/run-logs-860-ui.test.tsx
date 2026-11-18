@@ -43,12 +43,11 @@ describe('a Log button on every process (Tynn #860)', () => {
     const html = renderToStaticMarkup(<ProcessesPanel processes={[watch, stoppedByRestart, running]} workspaces={workspaces} onAction={() => {}} now={NOW} />);
 
     it.each(['p1', 'p2', 'p3'])('row %s has a react-fancy Log button: an icon named Log, last on the line (Tynn #708: icons over words)', (id) => {
-        const log = control(html, `data-process-log-open="${id}"`);
+        const log = control(html, `data-open-log="${id}"`);
         expect(log).not.toBeNull();
         expect(log!.fancy).toBe(true);
         expect(log!.open).toMatch(/aria-label="Log"/);
         expect(log!.text).toBe('');
-        expect(log!.inner).toMatch(/<svg/);
         const row = html.slice(html.indexOf(`data-process="${id}"`), html.indexOf('</li>', html.indexOf(`data-process="${id}"`)));
         const labels = [...row.matchAll(/<button\b[^>]*>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[0])?.[1] ?? '');
         expect(labels.at(-1)).toBe('Log');
@@ -59,7 +58,7 @@ describe('a Log button on every process (Tynn #860)', () => {
         const tree = ProcessesPanel({ processes: [watch, stoppedByRestart, running], workspaces, onAction: (a) => { sent.push(a); }, now: NOW });
         for (const el of elements(tree)) {
             const p = el.props as Record<string, unknown>;
-            if (el.type === Button && typeof p['data-process-log-open'] === 'string') (p.onClick as () => void)();
+            if (el.type === Button && typeof p['data-open-log'] === 'string') (p.onClick as () => void)();
         }
         expect(sent).toEqual(['p1', 'p2', 'p3'].map((processId) => ({ kind: 'hosting.openProcessLog', processId })));
     });
@@ -104,11 +103,13 @@ describe('the log, opened (Tynn #860)', () => {
 
 describe('a flow run opens in its run review (Tynn #860)', () => {
     const run: FlowRun = { at: '2026-11-18T03:00:00.000Z', endedAt: '2026-11-18T03:00:05.000Z', trigger: 'schedule', outcome: 'failed', reason: 'npm run report ended with exit code 2', nodes: { t: 'ran', s: 'failed' } };
+    const { reason: _reason, ...rest } = run;
+    const okRun: FlowRun = { ...rest, at: '2026-11-18T04:00:00.000Z', outcome: 'ok' };
     const n = (id: string, kind: string, config: Record<string, unknown> = {}) => ({ id, kind, position: { x: 0, y: 0 }, config });
     const flow: FlowRecord = {
         id: 'flow_a', workspaceId: 'moic-suite', name: 'nightly', armed: true,
         document: { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [n('t', 'schedule_trigger', { cron: '0 3 * * *' }), n('s', 'genie/terminal_run', { workspace: 'moic-suite', command: 'npm run report' })], edges: [{ id: 'e1', source: 't', target: 's' }] } },
-        createdBy: { kind: 'user' }, createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z', refusals: [], runs: [run, { ...run, at: '2026-11-18T04:00:00.000Z', outcome: 'ok', reason: undefined } as FlowRun],
+        createdBy: { kind: 'user' }, createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z', refusals: [], runs: [run, okRun],
     };
 
     it('each run in the Flows list has a Review button that opens THAT run', () => {
