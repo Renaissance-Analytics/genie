@@ -42,6 +42,8 @@ export interface PlaywrightToolDeps {
     readonly resolveCaller: (key: string) => Caller | null;
     readonly port: PlaywrightToolPort;
     readonly approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    /** Whether the caller's workspace is trusted (Tynn #846 review): an agent in one not yet trusted installs nothing. Absent = trusted. */
+    readonly trusted?: (workspaceId: string) => boolean;
 }
 
 const ok = (payload: Record<string, unknown>): McpToolResult => ({ text: JSON.stringify({ ok: true, ...payload }), isError: false });

@@ -28,6 +28,8 @@ export interface PlaywrightHostDeps {
      * answers something falsy when Genie will not install by itself (switched off). Absent = nothing is installed from here.
      */
     readonly installer?: { ensure(version: string): unknown; installing(): readonly string[] } | undefined;
+    /** Whether the workspace is trusted (Tynn #846 review): one not yet trusted triggers no install. Absent = trusted. */
+    readonly trusted?: ((workspaceId: string) => boolean) | undefined;
 }
 
 export class PlaywrightHost {
