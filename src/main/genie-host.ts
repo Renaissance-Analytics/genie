@@ -208,6 +208,7 @@ import { GAppServer } from './gapp-server.js';
 import { setOfferedFlowKinds } from '../core/flow-canvas.js';
 import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
+import { catalogCapabilities, remoteOffer } from '../core/protocol-version.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -1033,6 +1034,10 @@ async function main(): Promise<void> {
         hostName: hostname(),
         transport: remoteHub,
         build,
+        // THE HOST'S OFFER (Tynn #894), read at each hello: its track and build, the wire's schema and the fixed window's
+        // floor, and the catalog's elements as capabilities, so a client sees which elements this host has. `host.update`
+        // answers with RemoteHost's stub until the launcher step wires it.
+        protocol: () => remoteOffer('host', build, catalogCapabilities(catalogService.snapshot().definitions)),
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).

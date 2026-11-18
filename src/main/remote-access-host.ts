@@ -5,6 +5,7 @@ import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
+import type { ProtocolOffer } from '../core/protocol-version.js';
 import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 
 /**
@@ -112,6 +113,8 @@ export interface RemoteAccessHostOptions {
     readonly now?: () => number;
     readonly confirm?: PairConfirm & Pick<PairApprovals, 'requests' | 'answer' | 'onChange'>;
     readonly build?: string;
+    /** This host's protocol offer, read at each hello (Tynn #894); absent = this build's, with no catalog elements. */
+    readonly protocol?: () => ProtocolOffer;
 }
 
 export class RemoteAccessHost {
@@ -140,6 +143,7 @@ export class RemoteAccessHost {
             transport: options.transport,
             now,
             ...(options.build ? { build: options.build } : {}),
+            ...(options.protocol ? { protocol: options.protocol } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }

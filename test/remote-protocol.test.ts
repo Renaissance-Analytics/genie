@@ -18,7 +18,8 @@ describe('messages', () => {
         expect(parseMessage('not json')).toEqual({ ok: false, reason: 'not JSON' });
         expect(parseMessage(JSON.stringify({ kind: 'dance' }))).toEqual({ ok: false, reason: 'unknown message kind "dance"' });
         expect(parseMessage(JSON.stringify({ kind: 'call', id: 'x', method: 'snapshot', args: [] }))).toEqual({ ok: false, reason: 'a call needs a numeric id, a method and an args array' });
-        expect(parseMessage(JSON.stringify({ kind: 'call', id: 1, method: 'eval', args: [] }))).toEqual({ ok: false, reason: '"eval" is not a bridge method' });
+        // Tynn #894: refused, and kept with its id so the receiver answers that call instead of leaving it to hang.
+        expect(parseMessage(JSON.stringify({ kind: 'call', id: 1, method: 'eval', args: [] }))).toEqual({ ok: false, reason: '"eval" is not a bridge method', id: 1, method: 'eval', code: 'unsupported' });
     });
 });
 

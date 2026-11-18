@@ -189,6 +189,8 @@ describe('the fixed window: outside it, update-only', () => {
         expect(snapshot).toMatchObject({ ok: false, code: 'version' });
         expect(String(snapshot.reason)).toContain('2026.12.01');
         expect(await c.call('host.version')).toMatchObject({ ok: true, value: { track: 'host', schema: '2026.12.31', minSchema: '2026.12.01', windowDays: 30 } });
+        // The host's own updater (Tynn #822's updates.*) still answers: today's way to update the host is not cut off.
+        expect(await c.call('updates.check')).not.toMatchObject({ code: 'version' });
         expect(c.closed()).toBe(false);
     });
 

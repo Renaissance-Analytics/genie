@@ -1,4 +1,3 @@
-import { REMOTE_PROTOCOL } from './remote-protocol.js';
 
 /**
  * A DRONE ON AN OLDER GENIE, NAMED (Tynn #651; the owner's screenshot, 2026-11-12). A 61.2 Pilot connecting to a beta.60
@@ -68,7 +67,8 @@ function splitVersion(v: string): [number[], string[] | null] {
 export function welcomeSkew(welcome: { readonly protocol?: unknown; readonly build?: unknown }, min: string = DRONE_MIN_BUILD): DroneSkew | null {
     const build = typeof welcome.build === 'string' && welcome.build.trim() !== '' ? shownBuild(welcome.build) : null;
     if (build === null) return { build: null };
-    if (typeof welcome.protocol !== 'number' || welcome.protocol < REMOTE_PROTOCOL) return { build };
+    // Any numbered wire (Tynn #894): REMOTE_PROTOCOL rose to 2 for schemas, and protocol 1 is still spoken; the schema judges the rest.
+    if (typeof welcome.protocol !== 'number' || welcome.protocol < 1) return { build };
     if (!VERSION.test(build)) return null;
     return compareVersions(build, min) < 0 ? { build } : null;
 }
