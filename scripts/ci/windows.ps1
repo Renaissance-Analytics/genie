@@ -470,6 +470,19 @@ function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
     Start-Process powershell -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded -WindowStyle Hidden -PassThru
 }
 
+# NOTHING OF GENIE OUTLIVES ITS ROW (Tynn #916). ui-lag's teardown left a Genie window running on every Windows gate: its
+# app.quit() opened the quit prompt, which blocks main, and genie-host's hang watchdog then started a NEW window that no
+# row owned. It ran beside every later row, and a row that leaves Genie running is not a clean start for the next. So after
+# each row (the shared app's rows excepted, and the unit row, whose processes are its tests'), what is still running of
+# Genie is named, the row fails on it, and it is ended. On a test VM every such process is the run's own.
+function Find-GenieLeftovers {
+    @(Get-Process -Name 'electron', 'Genie', 'genie-host', 'genie-launch' -ErrorAction SilentlyContinue)
+}
+function Stop-GenieLeftovers($procs) {
+    foreach ($p in @($procs)) { taskkill /PID $p.Id /T /F *> $null }
+    Start-Sleep -Seconds 1
+}
+
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 # THE MACHINE BESIDE EVERY ROW (Tynn #660): scripts/ci/machine-sampler.ps1 writes one MACHINE line every ~2 s for the
@@ -551,6 +564,16 @@ function Invoke-Row([string]$name) {
         # The watchdog and its tree; not what it already ended.
         if (-not $watch.HasExited) { taskkill /PID $watch.Id /T /F *> $null }
     }
+    $leftover = ''
+    if (-not $script:App -and $name -ne 'unit') {
+        $left = @(Find-GenieLeftovers)
+        if ($left.Count -gt 0) {
+            $leftover = (@($left | ForEach-Object { "$($_.Name) $($_.Id)" })) -join ', '
+            Add-Content -Path $log -Value "LEFT RUNNING after the row: $leftover"
+            Stop-GenieLeftovers $left
+            $ok = $false
+        }
+    }
     # A ROW THAT ENDS BEFORE ITS CEILING CANNOT READ AS TIMED OUT: the mark must exist as a file, hold this row's token,
     # and the ceiling's time must have passed. A scalar test each, never Test-Path of a list (an array of results reads
     # as true however they came out).
@@ -577,7 +600,7 @@ function Invoke-Row([string]$name) {
             Write-Output "--- the end of smoke-out\$($_.Name)"
             Get-Content $_.FullName -Tail 40
         }
-        $script:RowLine = "ROW $name FAIL $secs"
+        $script:RowLine = if ($leftover) { "ROW $name FAIL $secs (left Genie running: $leftover)" } else { "ROW $name FAIL $secs" }
     }
 }
 
