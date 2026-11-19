@@ -1822,12 +1822,12 @@ async function main(): Promise<void> {
     };
     phoneApi = hostAloneApi({
         hostName: hostname(),
-        // The sign-ins (Tynn #896): the provider's own login, started here for the caller, whose window shows it.
-        signIns,
         features: hostFeatures,
         registry: phoneRegistry,
         engine: () => host,
         cwdFor: phoneCwd,
+        // The sign-ins (Tynn #896): the provider's own login, started here for the caller, whose window shows it.
+        signIns,
         // ANY FILE IN A MESSAGE (Tynn #829), with no window connected: saved into the agent's workspace on this host.
         saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(hostRegistry.workspace(record.workspaceId), hostUntrustedNow(record)), files, now: new Date() }),
         startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {
