@@ -169,9 +169,11 @@ describe('main’s own protocol client: hello, one call, close, over the tray’
 
     it('with no door listening at all (main not composed yet) the call is refused, never left waiting', async () => {
         const { ownProtocolClient } = await ownModule();
-        const answer = await ownProtocolClient({ timeoutMs: 2_000 }).call('logins.provider' as RemoteMethod, ['claude']);
+        // A timeout far past the test's own: only an answer at once passes.
+        const answer = await ownProtocolClient({ timeoutMs: 600_000 }).call('logins.provider' as RemoteMethod, ['claude']);
         expect(answer).toMatchObject({ ok: false });
-    });
+        expect((answer as { reason: string }).reason).toMatch(/starting/);
+    }, 3_000);
 
     it('its door is not a listener: it has no address, and opens connections only when main calls', async () => {
         const { ownProtocolClient } = await ownModule();
@@ -190,6 +192,16 @@ describe('main’s own protocol client: hello, one call, close, over the tray’
         own.door.onConnection((c) => { pre.push(c.preAuth); c.close(); });
         await own.call('logins.provider' as RemoteMethod, ['claude']);
         expect(pre).toEqual([{ kind: 'local', label: TRAY, isOwner: true, workspaceId: null, readonly: false, window: 'main' }]);
+    });
+});
+
+describe('what the tray logs when a sign-in does not start', () => {
+    it('a refused call, or an answer that says it could not start, is said in words; a started one is not', async () => {
+        const { callRefusal } = (await ownModule()) as unknown as { callRefusal: (a: CallAnswer) => string | null };
+        expect(callRefusal({ ok: false, reason: 'still starting' })).toBe('still starting');
+        expect(callRefusal({ ok: true, value: { ok: false, reason: 'no such login' } })).toBe('no such login');
+        expect(callRefusal({ ok: true, value: { ok: true, terminalId: 't1', route: 'login/claude/t1' } })).toBeNull();
+        expect(callRefusal({ ok: true, value: null })).toBeNull();
     });
 });
 

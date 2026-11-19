@@ -45,6 +45,7 @@ describe('the capability table', () => {
         expect(capabilityOf('providerLogin')).toBe('write');
         expect(capabilityOf('logins.design')).toBe('write');
         expect(capabilityOf('accounts.switch')).toBe('write');
+        expect(capabilityOf('logins.provider')).toBe('write');
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
@@ -113,7 +114,8 @@ describe('the capability table', () => {
         // 169 with `accounts.list` (a read), `accounts.act` and `accounts.dismissOffer` (writes): the account chips on the one
         // protocol, for every client of the owner's (client/host split step 2a, Tynn #895).
         // 171 since `logins.design` and `accounts.switch` (Tynn #896): the design sign-in and a switch of account, writes.
-        expect(REMOTE_METHODS.length).toBe(171);
+        // 172 with `logins.provider` (Tynn #896, 2b-2b): the tray's Log in by provider, a write, the owner's.
+        expect(REMOTE_METHODS.length).toBe(172);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

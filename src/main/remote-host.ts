@@ -1122,8 +1122,8 @@ export class RemoteHost {
 
     /** Who this call came from (Tynn #578): what this host admitted, the door's or the relay's proof, never the hello's say-so. */
     /**
-     * THE SIGN-INS' ONE CHECK (Tynn #896): `providerLogin`, `logins.design` and `accounts.switch` start the provider's own
-     * login on this host, for its OWNER only (a share-link guest is refused, as Take Over from another machine is). STEP 3
+     * THE SIGN-INS' ONE CHECK (Tynn #896): `providerLogin`, `logins.design`, `accounts.switch` and `logins.provider` (the
+     * tray's) start the provider's own login on this host, for its OWNER only (a share-link guest is refused, as Take Over from another machine is). STEP 3
      * adds its step-up here (a second factor from a paired device, the owner's choice of which actions need it), and
      * nowhere else.
      */

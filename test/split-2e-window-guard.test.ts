@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { MOVE_STEPS, WINDOW_CAPABILITIES, WINDOW_ENGINE_INVENTORY } from '../src/core/ipc-inventory.js';
+import { MOVE_STEPS, WINDOW_CAPABILITIES, WINDOW_ENGINE_INVENTORY, WINDOW_PROTOCOL_DOORS } from '../src/core/ipc-inventory.js';
 
 /**
  * CLIENT/HOST SPLIT STEP 2e, THE GUARD (Tynn #898, story #899). A client is a dumb terminal (the owner's ruling): it serves
@@ -91,6 +91,22 @@ describe('the window serves nothing (step 2e)', () => {
         expect(code(read('src/main/main.ts'))).toMatch(/\bconfigureWindowPages\(/);
     });
 
+    // The doors main tunnels to genie-host (Tynn #896, 2b-2b): each is named, and each rides the engine link; none listens.
+    const tunneled = (text: string) => [...code(text).matchAll(/\btunnelDoor\(\s*([\w.]+)\s*,\s*([^)]*\))/g)].map((m) => [m[1]!, m[2]!.replace(/\s+/g, '')] as const);
+    it('every door main tunnels is a protocol door in WINDOW_PROTOCOL_DOORS, carried over its engine link', () => {
+        const doors = tunneled(read('src/main/main.ts'));
+        expect(doors.map(([d]) => d).sort()).toEqual(WINDOW_PROTOCOL_DOORS.map(([d]) => d).sort());
+        for (const [door, link] of doors) expect(link, door).toBe('tunnelLinkOf(agentEngineLink.client)');
+        for (const [, kind] of WINDOW_PROTOCOL_DOORS) expect(kind).toBe('protocol-door');
+        expect(reach).toContain('src/main/own-protocol-client.ts');
+        expect(startersIn(read('src/main/own-protocol-client.ts'))).toEqual([]);
+    });
+
+    it('CONTROL: the door scan reads code, not comments, and names a newcomer', () => {
+        expect(tunneled("// tunnelDoor(old, tunnelLinkOf(x))\nconst t = tunnelDoor(newDoor, tunnelLinkOf(agentEngineLink.client), {});"))
+            .toEqual([['newDoor', 'tunnelLinkOf(agentEngineLink.client)']]);
+    });
+
     it('CONTROL: each starter is seen in code and not in a comment', () => {
         expect(startersIn('const s = createServer(handler);\nhub = transportHub(t);')).toEqual([String(STARTERS[0]), String(STARTERS[3])]);
         expect(startersIn('// createServer(handler)\n/* new RemoteHost( */')).toEqual([]);
@@ -123,8 +139,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
 
     /** Frozen (the coordinator, 2026-11-19): each leaves in the PR that moves it, and nothing joins. */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2b (#896): sign-ins.
-        login: '2b', cancelLogin: '2b', providerAccount: '2b',
+        // 2b (#896): main's provider health. The tray's sign-in moved in 2b-2b.
+        providerAccount: '2b',
         // 2c (#897): the crash report's state and the scratch terminal.
         crashStateView: '2c', onCrashState: '2c', safeModeView: '2c', terminals: '2c',
         // 2f (#912): the question window's answers, and the device link's frames.

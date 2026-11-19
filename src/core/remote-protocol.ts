@@ -52,6 +52,8 @@ export const REMOTE_METHODS = [
     // The machine's design sign-in and a switch of account (Tynn #896): the provider's own login, like providerLogin.
     'logins.design',
     'accounts.switch',
+    // The tray's Log in, by provider (Tynn #896, 2b-2b): the provider's own login, like the others.
+    'logins.provider',
     'prompt',
     'resolvePrompt',
     'addAgent',
@@ -377,6 +379,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     providerLogin: 'write',
     'logins.design': 'write',
     'accounts.switch': 'write',
+    'logins.provider': 'write',
     'features.setBrowserBounds': 'host-only',
     // The host's account book (Tynn #895): reading it is a read; renaming, forgetting and Not now change it. Every client
     // gets them; a share-link guest is refused (remote-host.ts OWNER_ONLY).
@@ -386,12 +389,13 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
 };
 
 /**
- * THE SIGN-INS, NAMED ONCE (Tynn #896): an agent's provider login, the machine's design sign-in and a switch of account.
+ * THE SIGN-INS, NAMED ONCE (Tynn #896): an agent's provider login, the machine's design sign-in, a switch of account and
+ * a login by provider (the tray's Log in, 2b-2b).
  * Each starts the PROVIDER'S OWN login on the host; Genie never reads, writes or relays a credential. They are the host
  * owner's, and RemoteHost checks them in one place (#signInRefusal), where step 3 adds a step-up check (2FA from a
  * paired device) without re-plumbing.
  */
-export const SIGN_IN_METHODS = ['providerLogin', 'logins.design', 'accounts.switch'] as const satisfies readonly RemoteMethod[];
+export const SIGN_IN_METHODS = ['providerLogin', 'logins.design', 'accounts.switch', 'logins.provider'] as const satisfies readonly RemoteMethod[];
 
 export function capabilityOf(method: RemoteMethod): RemoteCapability {
     return CAPABILITIES[method];

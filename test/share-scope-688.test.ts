@@ -152,6 +152,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         // The design sign-in and a switch of account (Tynn #896): the provider's own login, the host owner's.
         row('logins.design', 'refuse'),
         row('accounts.switch', 'refuse', ['claude']),
+        // The tray's Log in by provider (Tynn #896, 2b-2b): the host owner's too.
+        row('logins.provider', 'refuse', ['claude']),
     ],
     terminals: [
         row('terminals.open', 'allow', ['tynn', {}], [['fancy', {}]]),

@@ -702,6 +702,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.signIns ? deps.signIns.design(context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
             case 'accounts.switch':
                 return deps.signIns ? deps.signIns.switchAccount(str(args[0]), args[1], context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
+            // The tray's Log in names a provider, not an agent (Tynn #896, 2b-2b).
+            case 'logins.provider':
+                return deps.signIns ? deps.signIns.loginFor(str(args[0]), context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
             case 'features.setBrowserBounds':
                 throw new Error("features.setBrowserBounds places a view on the host's own window; nothing to do remotely");
             case 'terminals.open': {
