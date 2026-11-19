@@ -162,6 +162,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
     terminals: [
         row('terminals.open', 'allow', ['tynn', {}], [['fancy', {}]]),
         row('terminals.list', 'allow', ['tynn'], [['fancy']]),
+        // The throwaway shell (Tynn #897, 2c-4): the shared workspace's; another's, or Genie's own (null), is not this link's.
+        row('terminals.scratch', 'allow', ['tynn'], [['fancy'], [null]]),
         row('terminals.attach', 'allow', ['tynn', 'term_t'], [['fancy', 'term_f']]),
         // By terminal id: another workspace's terminal, or one the host cannot place, is not this link's.
         row('terminals.write', 'allow', ['term_t', 'ls'], [['term_f', 'ls'], ['term_unknown', 'ls']]),

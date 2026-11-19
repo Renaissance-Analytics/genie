@@ -120,7 +120,8 @@ describe('the capability table', () => {
         // 172 again without the old `addWorkspace` (Tynn #897, 2c-1): it only ever refused.
         // 174 with `crashReport.draft` (a read) and `crashReport.send` (a write), the owner's (Tynn #897, 2c-2).
         // 175 with `providers.chooseProgram` (a write, the owner's): a provider's .exe, picked on the host's disk (Tynn #897, 2c-3).
-        expect(REMOTE_METHODS.length).toBe(175);
+        // 176 with `terminals.scratch` (a write, workspace-scoped; the home one the owner's): the throwaway shell (Tynn #897, 2c-4).
+        expect(REMOTE_METHODS.length).toBe(176);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

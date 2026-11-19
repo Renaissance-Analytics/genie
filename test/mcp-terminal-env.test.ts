@@ -126,9 +126,10 @@ describe('main wires both paths to the one function', () => {
     it('the header’s throwaway Terminal and the agents’ tools call terminalEnvFor in main — counted; the Terminals tab is genie-host’s', () => {
         const main = code('src/main/main.ts');
         // Two: the Terminals tab's port left main with its host API (Tynn #898 step 2d-4b2); genie-host opens those shells.
-        expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(2);
+        // One since 2c-4 (#897): the header's throwaway Terminal is genie-host's too (terminals.scratch, its shellEnv).
+        expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(1);
         // The header's Terminal button (Tynn story #378): a workspace terminal's environment, in a window of its own.
-        expect(main).toMatch(/scratchTerminals\.open\(\{ workspaceId: workspace\.id, cwd: workspace\.path, env: terminalEnvFor\(services, workspace\.id, mcpEnv\(\)\) \}\)/);
+        expect(code('src/main/genie-host.ts')).toMatch(/scratchTerminalFor\(\{ scratch: hostScratch\w*, home: homedir\(\), workspace: \(id\) => hostRegistry\.workspace\(id\) \?\? null, envFor: shellEnv \}/);
         expect(main).toMatch(/terminalEnv: \(workspaceId\) => terminalEnvFor\(composed, workspaceId, mcpEnv\(\)\)/);
         expect(/localTerminals: createNativeTerminalPort\(\{/.test(main)).toBe(false);
         // The Terminals tab: genie-host's port, with the workspace's service variables and Genie's MCP endpoint.
