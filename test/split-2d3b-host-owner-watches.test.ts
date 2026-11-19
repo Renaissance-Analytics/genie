@@ -292,7 +292,7 @@ describe('local uploads on genie-host', () => {
         let accept!: (c: ServerConnection) => void;
         const access = await RemoteAccessHost.open({
             home: dir, hostName: 'alphar', api: hostRemoteApi({ hostName: 'alphar', own: {}, alone: hostAloneApi(ports()) }),
-            transport: { onConnection: (l) => { accept = l; return () => {}; } },
+            transport: { onConnection: (l: (c: ServerConnection) => void) => { accept = l; return () => {}; } },
             ...(createLocalUploads ? { createLocalUploads } : {}),
         } as never);
         const pair = inMemoryPair();
