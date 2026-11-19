@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace' | 'gapps'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'marketplace' | 'gapps'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -281,6 +281,10 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         },
         onHeadroom: (listener) => subscribe((bridge) => bridge.onHeadroom!(listener)),
         accountRetry: (id) => requestBridge((bridge) => bridge.accountRetry!(id)),
+        // The account chips (Tynn #895), as the IPC answered them: nothing known while the link is down, its words, false.
+        accounts: async () => { const r = await requestBridge((bridge) => bridge.accounts!()); return r !== null && 'ok' in r ? null : r; },
+        accountsAct: (action) => requestBridge((bridge) => bridge.accountsAct!(action)),
+        dismissSwitchOffer: async (id) => (await requestBridge((bridge) => bridge.dismissSwitchOffer!(id))) === true,
         agents: {
             restart: (id, kind) => requestAgent((agents) => agents.restart(id, kind)),
             previewDelete: (id, outcome, also) => requestAgent((agents) => agents.previewDelete(id, outcome, also)),

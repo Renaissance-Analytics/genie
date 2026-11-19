@@ -144,6 +144,10 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('tynnNetwork.shares.list', 'refuse', [null]),
         row('tynnNetwork.shares.mint', 'refuse', [{ workspaceId: 'tynn' }]),
         row('tynnNetwork.shares.revoke', 'refuse', ['l1']),
+        // The host owner's provider accounts (Tynn #895): every client of the owner's gets them; a guest is refused.
+        row('accounts.list', 'refuse'),
+        row('accounts.act', 'refuse', [{ kind: 'rename', id: 'acct_1', label: 'Work' }]),
+        row('accounts.dismissOffer', 'refuse', ['offer_1']),
     ],
     terminals: [
         row('terminals.open', 'allow', ['tynn', {}], [['fancy', {}]]),

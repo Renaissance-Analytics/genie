@@ -1974,10 +1974,7 @@ async function boot(): Promise<void> {
         const started = await signIn!(DESIGN_LOGIN);
         return started.ok ? { ok: true } : started;
     });
-    // THE HEADER'S ACCOUNT CHIPS (Tynn #483): every known account with its readings, and the standing offers, read from genie-host.
-    ipcMain.handle('genie:accounts', async () => (await agentEngineLink?.client.accounts()) ?? null);
-    ipcMain.handle('genie:accounts-act', async (_event, raw: unknown) => (await agentEngineLink?.client.accountsAct(raw as never)) ?? { ok: false, reason: 'Genie’s host is not connected yet; try again in a moment.' });
-    ipcMain.handle('genie:switch-offer-dismiss', async (_event, raw: unknown) => typeof raw === 'string' && raw !== '' ? (await agentEngineLink?.client.dismissSwitchOffer(raw)) ?? false : false);
+    // THE HEADER'S ACCOUNT CHIPS (Tynn #483) are protocol methods now (accounts.*, Tynn #895): the host's API answers them.
     // SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps.
     ipcMain.handle('genie:account-switch', async (_event, raw: unknown, rawChoose: unknown) => {
         if (typeof raw !== 'string' || raw === '') return { ok: false, reason: 'No provider named.' };
@@ -2489,6 +2486,13 @@ async function boot(): Promise<void> {
             activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry?.listAgents() ?? [], workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
             headroom: headroomFeed,
             retryPausedAccount: (provider) => { retryPausedAccount?.(provider); },
+            // The account chips (Tynn #895): genie-host's book, asked over the engine link until this window's protocol
+            // connection ends at genie-host itself (client/host split step 2d).
+            accounts: {
+                list: async () => (await agentEngineLink?.client.accounts()) ?? null,
+                act: async (action) => (await agentEngineLink?.client.accountsAct(action)) ?? { ok: false, reason: 'Genie’s host is not connected yet; try again in a moment.' },
+                dismissOffer: async (id) => (await agentEngineLink?.client.dismissSwitchOffer(id)) ?? false,
+            },
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
             subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),

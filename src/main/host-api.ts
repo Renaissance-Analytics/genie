@@ -36,6 +36,7 @@ import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-ap
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { isPromptAction } from '../core/prompt-delivery.js';
+import { answerAccounts, isAccountsMethod, type AccountsPort } from './accounts-protocol.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -278,6 +279,8 @@ export interface HostApiDeps {
         subscribe(listener: (room: Readonly<Record<string, Headroom>>) => void): () => void;
     };
     retryPausedAccount?(provider: string): void;
+    /** The host's account book (Tynn #895): the account chips' read, rename/forget and Not now. Absent = no accounts here. */
+    accounts?: AccountsPort;
     features: {
         /** The admitted caller, so view state can stay with the connection that requested it (Tynn #720). */
         snapshot(context: CallContext): Promise<FeatureData>;
@@ -329,6 +332,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
         if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
+        if (isAccountsMethod(method)) return answerAccounts(deps.accounts, method, args);
         switch (method) {
             case 'appInbox.state':
                 return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };

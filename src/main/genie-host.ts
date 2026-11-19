@@ -50,7 +50,7 @@ import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import { ReadingAttribution } from '../core/reading-attribution.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
 import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
-import { accountsView } from '../core/accounts-view.js';
+import { accountsView, type AccountsSnapshot } from '../core/accounts-view.js';
 import { DesignAuthBook } from '../core/design-auth.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { TrustVerdicts } from './trust-verdict.js';
@@ -137,6 +137,7 @@ import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
 import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
+import { accountsOwnAnswers, type AccountsPort } from './accounts-protocol.js';
 import { RelayHostService } from './relay-host-service.js';
 import { connectOutRefusal, mayBrowse } from '../core/workstation-role.js';
 import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
@@ -1027,6 +1028,8 @@ async function main(): Promise<void> {
     setInterval(() => { void relayHostService.readRole(); }, 5 * 60_000).unref();
     /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
     let phoneApi: HostApi | null = null;
+    /** The account book as every client asks it (Tynn #895): set once its parts are composed, below. */
+    let accountsPortNow: AccountsPort | null = null;
     const phoneReady = new Set<() => void>();
     bootStep('marketplace and gapps', stepAt);
     const remoteAccessHost = await RemoteAccessHost.open({
@@ -1041,7 +1044,9 @@ async function main(): Promise<void> {
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
-            own: { 'updates.state': async () => updatesService.dump(), takeOver: async (args) => takeOverService.start(args[0]) },
+            own: { 'updates.state': async () => updatesService.dump(), takeOver: async (args) => takeOverService.start(args[0]),
+                // The account chips (Tynn #895): this host's book, for every client, window or not.
+                ...accountsOwnAnswers(() => accountsPortNow) },
             takeOverEnded: (terminalId) => takeOverService.ended(terminalId),
             window: {
                 connected: () => (engineRef?.newestLocalWindow() ?? null) !== null,
@@ -1100,6 +1105,10 @@ async function main(): Promise<void> {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
     };
+    // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
+    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() });
+    // ...the same book on the one protocol (Tynn #895), answered here for every client.
+    accountsPortNow = { list: () => accountsSnapshot(), act: (action) => accountsAct(action), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
     // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
     // readings are held, then shown under the account found; the first after a sign-in or a new active account keeps no earlier
     // window. A new active account tells the window, which re-reads its account chips.
@@ -1147,7 +1156,7 @@ async function main(): Promise<void> {
         switchOffers: { offers: () => switchOffersNow?.offers() ?? [], dismiss: (id) => switchOffersNow?.dismiss(id) ?? false },
         // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
         accountsAct: (action) => accountsAct(action),
-        accounts: () => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() }),
+        accounts: () => accountsSnapshot(),
         refreshAccountIdentity: provider => isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve(),
         token,
         build,
