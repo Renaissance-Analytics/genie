@@ -53,13 +53,14 @@ async function open(reenter = false) {
 }
 
 describe('the published folded outcome settles its joined turn only (Tynn #692)', () => {
-    it('pins exactly 0.43.0 and its registry integrity in both manifests', () => {
+    it('pins exactly 0.44.0 and its registry integrity in both manifests', () => {
         const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
         const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.43.0');
-        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.43.0');
-        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.43.0',
-            integrity: 'sha512-AYDQgHglrxNf1XQp9O5tY5403GafFnl9EGOnalQSgrpAusjmckSIdC3VfUJK3I/LwWMD8wx5mn7dZAE+x1FPSQ==' });
+        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.44.0');
+        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.44.0');
+        // 0.44.0 (Tynn #926): G-313's unsolicited turn end and G-314's ping / lastFrameAt / Codex running.
+        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.44.0',
+            integrity: 'sha512-PBKfo3LlBBhKw1TwPdIF6y4n0sZS+992kJkYjN6ErPzua1wMg4BZYIqLj/WoT4uKXj5Nu9OEi4W7Efb+nUhm0A==' });
     });
     it('has no usage-result fallback or owed-end counting after adopting typed outcomes', () => {
         const source = readFileSync('src/core/session.ts', 'utf8');
