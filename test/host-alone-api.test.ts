@@ -144,7 +144,9 @@ describe('genie-host answers the phone itself', () => {
 
     it('with no feature services, a read and any action but the Deck answer are refused as this host cannot (step 2e-3), never by a window', async () => {
         const api = hostAloneApi(ports(engine(true)));
-        await expect(api.invoke('features.snapshot', [])).rejects.toThrow('this host cannot read its features');
+        // An admitted caller (host-api refuses a read with none before the features are asked).
+        const phone = { connectionId: 'c1', label: 'phone', origin: 'device', profile: 'mobile', isOwner: true, workspaceId: null, readonly: false } as const;
+        await expect(api.invoke('features.snapshot', [], phone)).rejects.toThrow('this host cannot read its features');
         await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('this host cannot run settings.set');
         await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.not.toThrow(/window|open Genie/);
     });
