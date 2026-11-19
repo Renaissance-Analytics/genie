@@ -107,6 +107,8 @@ export interface HostMcp {
     /** A session's Genie MCP entry: the endpoint, its token and this agent's caller key. */
     sessionServers(record: AgentRecord): McpServer[];
     endpoint(): { url: string; token: string } | null;
+    /** Settled once the server has started, or failed to (said in `status`): what writing a workspace's config waits for. */
+    ready(): Promise<void>;
     status(): { endpoint: { url: string; token: string } | null; verified: Verification | null; tools: McpToolRow[] };
     /**
      * One of the host's own tools, asked by the WINDOW for a caller it knows (a flow's step, P3.1): run here with that
@@ -237,6 +239,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         },
         sessionServers: (record) => genieMcpServers(server?.endpoint() ?? null, book.keyFor(record.id)),
         endpoint: () => server?.endpoint() ?? null,
+        ready: async () => { await starting; },
         status: () => ({ endpoint: server?.endpoint() ?? null, verified, tools }),
         stop: async () => { await server?.stop().catch(() => undefined); await endpointWrite; },
         refreshTools: () => {

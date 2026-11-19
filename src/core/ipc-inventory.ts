@@ -33,8 +33,8 @@ export const WINDOW_CAPABILITIES = [
 ] as const;
 export type WindowCapability = (typeof WINDOW_CAPABILITIES)[number];
 
-/** The steps of Tynn #898 that still move something onto the one protocol: 2b #896, 2c #897, 2e-2 #914, 2f #912, 2g #913. */
-export const MOVE_STEPS = ['2b', '2c', '2e', '2f', '2g'] as const;
+/** The steps of Tynn #898 that still move something onto the one protocol: 2b #896, 2c #897, 2f #912, 2g #913. */
+export const MOVE_STEPS = ['2b', '2c', '2f', '2g'] as const;
 export type MoveStep = (typeof MOVE_STEPS)[number];
 
 export type IpcDestination = 'protocol-door' | 'browser-process' | 'doctor-process' | `window:${WindowCapability}` | `move:${MoveStep}`;
@@ -164,8 +164,6 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['onCrashState', 'move:2c'],
     ['safeModeView', 'move:2c'],
     ['terminals', 'move:2c'],
-    // 2e-2 (#914): the engine server's features route is retired, with main's invalidate and workspace-file syncs.
-    ['call:engine.features', 'move:2e'],
     // 2f (#912): the question window's answers, and the device link's frames.
     ['call:engine.featureQuestion', 'move:2f'],
     ['deviceLink', 'move:2f'],

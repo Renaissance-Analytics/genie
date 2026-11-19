@@ -20,9 +20,10 @@ describe('the production features owner (Tynn #720)', () => {
             expect(main, removed).not.toContain(removed);
         }
     });
-    it('the engine admits the owning local connection and sends its effects back to that connection', () => {
+    it('the engine sends a tunnelled connection\'s effects back to the window process that owns it; its features route is retired', () => {
         const server = source('session-engine-server');
-        expect(server).toContain("if (method === 'engine.features')");
+        // Every client reaches the features over the one protocol (Tynn #898 step 2e-2): no engine.features route.
+        expect(server).not.toContain("'engine.features'");
         expect(server).toContain('this.#options.features?.dropOwner(conn.id)');
         expect(server).toContain("this.#reverseTo(conn, 'client.featureEffect'");
         const effects = source('feature-window');

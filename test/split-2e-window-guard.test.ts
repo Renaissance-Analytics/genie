@@ -127,8 +127,6 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         login: '2b', cancelLogin: '2b', switchAccount: '2b', providerAccount: '2b', takeOvers: '2b',
         // 2c (#897): the crash report's state and the scratch terminal.
         crashStateView: '2c', onCrashState: '2c', safeModeView: '2c', terminals: '2c',
-        // 2e-2 (#914): the engine server's features route, retired.
-        'call:engine.features': '2e',
         // 2f (#912): the question window's answers, and the device link's frames.
         'call:engine.featureQuestion': '2f', deviceLink: '2f',
         // 2g (#913): the services the window still composes over genie-host's replicas.

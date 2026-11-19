@@ -126,11 +126,13 @@ describe('the workspace sync takes the sign-in from Genie\'s Tynn account', () =
         expect(await syncWith(undefined)).toMatch(FALLBACK);
     });
 
-    it('signing in or out of Tynn writes every workspace\'s protocol again (main), not only at start', async () => {
-        const main = await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        const hook = main.match(/tynnAccount\?\.onChange\(\(\) => \{\r?\n\s*\/\/ THE WORK MODEL[\s\S]*?\r?\n {12}\}\);/)?.[0];
+    // genie-host keeps the workspace agent files since Tynn #898 step 2e-2 (host-workspace-files.ts; its behaviour is held by
+    // test/host-workspace-files.test.ts): every protocol is written again on a sign-in or out, BEFORE the signed-in gate.
+    it('signing in or out of Tynn writes every workspace\'s protocol again (genie-host), not only at start', async () => {
+        const loop = await readFile(new URL('../src/main/host-workspace-files.ts', import.meta.url), 'utf8');
+        const hook = loop.match(/ports\.onTynnChanged\(\(\) => \{[\s\S]*?\r?\n {4}\}\);/)?.[0];
         expect(hook).toBeDefined();
-        expect(hook).toContain('composed.syncAgentDocs(w.path)');
-        expect(hook).not.toContain('status().signedIn) return');
+        expect(hook).toMatch(/for \(const w of ports\.workspaces\(\)\) docs\(w\);\r?\n\s*if \(!ports\.tynnSignedIn\(\)\) return;/);
+        expect(await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8')).not.toMatch(/composed\.syncAgentDocs\(/);
     });
 });

@@ -146,6 +146,7 @@ describe('main wires both paths to the one function', () => {
         expect(main).toMatch(/hosting: composed,/);
         const owner = code('src/main/features-host.ts');
         expect(owner).toMatch(/h\.api\.engines\.onChange\(changed\), h\.api\.sites\.onChange\(changed\)/);
-        expect(code('src/main/genie-host.ts')).toContain('hostFeatures.onChange(() => engine.featuresChanged());');
+        // The tabs redraw through RemoteHost from genie-host's HostFeatures (Tynn #898 step 2e-2).
+        expect(code('src/main/genie-host.ts')).toMatch(/phoneApi = hostAloneApi\(\{\s*hostName: hostname\(\),\s*features: hostFeatures,/);
     });
 });

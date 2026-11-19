@@ -499,7 +499,6 @@ export class SessionEngineServer {
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) this.#options.tynnIssues?.dropOwner(conn.id);
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
-            if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
             // Every protocol connection this window process tunnelled ends with its link (the page reconnects).
             if (was) this.#options.protocol?.dropOwner(conn.id);
@@ -693,12 +692,6 @@ export class SessionEngineServer {
             if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');
             await this.#options.refreshAccountIdentity?.(typeof args[0] === 'string' ? args[0] : '');
             return true;
-        }
-        if (method === 'engine.features') {
-            if (!conn.local || !conn.window) throw new Error('features need this machine’s own window connection');
-            if (!this.#options.features) throw new Error('Genie’s feature services are still starting');
-            return this.#options.features.call(conn.id, String(args[0]), Array.isArray(args[1]) ? args[1] : [], args[2],
-                (connectionId, method, rest) => this.#reverseTo(conn, 'client.featureEffect', [connectionId, method, rest]), (args[3] ?? null) as FeatureBrowser | null);
         }
         if (method === 'engine.remoteAccess') {
             if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
@@ -915,15 +908,6 @@ export class SessionEngineServer {
                 if (!this.#options.stores) throw new Error('This host keeps no stores.');
                 return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);
             }
-            case 'engine.drafts.fileOpen':
-            case 'engine.drafts.fileRead':
-            case 'engine.drafts.fileClose': {
-                if (!this.#connections.has(conn)) throw new Error('the draft file engine connection is closed');
-                const stores = this.#options.stores; if (!stores) throw new Error('this host keeps no chat drafts');
-                if (method === 'engine.drafts.fileOpen') return stores.draftFileOpen(conn.id, args[0]);
-                if (method === 'engine.drafts.fileRead') return stores.draftFileRead(conn.id, args[0], args[1], args[2]);
-                return stores.draftFileClose(conn.id, args[0]);
-            }
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
@@ -1082,10 +1066,6 @@ export class SessionEngineServer {
     /** Features rings go only to the local connection whose views follow the page. */
     tynnFeaturesEvent(owner: string, event: TynnBoardHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnFeatures.event', event);
-    }
-
-    featuresChanged(): void {
-        for (const conn of this.#connections) if (conn.authed && conn.local && conn.window) this.#event(conn, 'features.invalidated', null);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

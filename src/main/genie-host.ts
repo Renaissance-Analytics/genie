@@ -6,6 +6,7 @@ import { HostFeatures } from './features-host.js';
 import { FeatureCallers } from './feature-callers.js';
 import { nativeFeatureToolchain, adoptFeatureEnvironment } from './feature-native-toolchain.js';
 import { featureWorkspaceFiles } from './feature-workspace-files.js';
+import { syncWorkspaceFiles } from './host-workspace-files.js';
 import { AgentFilesHealth } from '../core/agent-files-health.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import { whatsNewFor } from '../core/whats-new.js';
@@ -1779,7 +1780,6 @@ async function main(): Promise<void> {
             ...(hostingStack ? { trustCertificate: () => hostingStack.trustCertificate(), deferTrustCertificate: () => hostingStack.deferTrustCertificate(), syncHosts: () => hostingStack.syncHosts(), deferHosts: () => hostingStack.deferHosts() } : {}),
         },
     });
-    hostFeatures.onChange(() => engine.featuresChanged());
     // A shell sees the workspace's service variables and Genie's MCP endpoint: an agent's, and the person's (Tynn #898).
     const shellEnv = (workspaceId: string): Record<string, string> => {
         const endpoint = mcp?.endpoint() ?? null;
@@ -2199,6 +2199,31 @@ async function main(): Promise<void> {
         osaDir: osaHome,
         log: (line) => { say(line); lifecycleLog(line); },
     });
+    // THE WORKSPACE AGENT FILES, kept here with or without a window (Tynn #898 step 2e-2, host-workspace-files.ts): every
+    // workspace once the MCP server is up, each one added after, and again on a Tynn sign-in or out.
+    {
+        let stopWorkspaceFiles: (() => void) | null = null;
+        let stopped = false;
+        clocks.push({ stop: () => { stopped = true; stopWorkspaceFiles?.(); } });
+        void mcp.ready().then(() => {
+            if (stopped) return;
+            stopWorkspaceFiles = syncWorkspaceFiles({
+                workspaces: () => phoneRegistry.listWorkspaces(),
+                onWorkspacesChanged: (listener) => phoneRegistry.subscribe(() => listener()),
+                tynnSignedIn: () => tynnAccountNow?.status().signedIn === true,
+                onTynnChanged: (listener) => {
+                    let off: (() => void) | null = null, done = false;
+                    void tynnOpening.then((account) => { if (!done) off = account.onChange(listener); }, () => {});
+                    return () => { done = true; off?.(); };
+                },
+                // The same registry the loop lists and follows (phoneRegistry), so a workspace it was told of is found here.
+                tynnProject: (workspaceId) => { const w = phoneRegistry.workspace(workspaceId); return w ? tynnProjectOf(w.path) : null; },
+                syncAgentDocs: (path) => featureFiles.syncAgentDocs(path),
+                syncConfig: (path) => featureConfig(path),
+                log: (line) => { say(line); lifecycleLog(line); },
+            });
+        });
+    }
     host.subscribe(() => { lastBusy = Date.now(); });
     // THE HOST'S SIGN OF LIFE (safe mode): when, and which agents have a session — what the next start reads if this run
     // dies. Small and atomic; unref'd, so it never holds a host that is otherwise done.

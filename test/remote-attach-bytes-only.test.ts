@@ -164,7 +164,9 @@ describe('window delegation and host pick wiring', () => {
         expect(callers).toContain('const context = admittedContext(raw);');
         expect(callers).toContain('const key = JSON.stringify([owner, context.connectionId]);');
         expect(callers).toContain('const scoped = { ...context, connectionId: key };');
-        expect(callers).toContain("case 'picked': service.picked(Array.isArray(args[0]) ? args[0] : [], scoped); return null;");
+        // A pick reaches the host through host-api's features.picked (above); the engine.features route that also carried one is
+        // retired (Tynn #898 step 2e-2).
+        expect(callers).not.toContain("'picked'");
         expect(owner).toMatch(/picked\(paths: readonly unknown\[\], context: CallContext\): void \{\s*this\.#check\(context\);\s*if \(context\.origin === 'local-window'\) this\.#caller\(context\.connectionId\)\.picks\.record\(paths\);\s*\}/);
         expect(source).not.toContain('new HostPicks(');
     });

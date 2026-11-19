@@ -2232,18 +2232,7 @@ async function boot(): Promise<void> {
     // SAFE MODE, genie-host's (Tynn #386).
     windowSafe = WindowSafeMode.open({ link: agentEngineLink.client });
     const engineForStores = agentEngineLink;
-    const composeWith = (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores(),
-        hostFeatureFiles: () => {
-            const call = async (method: string, path: string, source: string) => {
-                if (!agentEngineLink?.live) throw new Error('Genie’s workspace file owner is not connected');
-                const result = await agentEngineLink.client.call('engine.features', [method, [path, source]]);
-                if (!result.ok) throw new Error(result.reason);
-                return result.value;
-            };
-            return { syncAgentDocs: async (path, source = 'start') => { await call('syncAgentDocs', path, source); },
-                syncConfig: async (path, source = 'start') => await call('syncConfig', path, source) as import('../core/integrations.js').SyncResult[] };
-        },
-    });
+    const composeWith = (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() });
     const composed: WindowServices = await composeWith({
         // A workspace's trust verdict moved (genie#1519): the trust step is pushed. genie-host's TrustVerdicts compare its agents.
         onTrustVerdict: () => { requestFeaturePush(); },
@@ -2387,10 +2376,10 @@ async function boot(): Promise<void> {
         },
     });
     windowTunnelNow = windowTunnel;
-    // Browser/UI facts this window owns change genie-host's features: its pane is said, and the features read again.
+    // Browser/UI facts this window owns: its pane and its notice are said down the tunnel, where genie-host reads its
+    // features again (genie-host's own sources invalidate them too: its Tynn and GitHub accounts, its relay role, …).
     const pushFeatures = () => {
         windowTunnel.refreshWindow();
-        if (agentEngineLink?.live === true) void agentEngineLink.client.call('engine.features', ['invalidate', []]);
     };
     requestFeaturePush = pushFeatures;
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
@@ -2675,45 +2664,7 @@ async function boot(): Promise<void> {
             mcpVerified = status?.verified ?? { ok: false, reason: 'genie-host did not start its MCP server' };
             if (status) mcpToolList = status.tools;
         }
-        try {
-            // THE WORKSPACE AGENT FILES (the owner: Genie 2 manages them all and upgrades Genie 1's): every workspace once the
-            // endpoint is live, and every workspace added after — whichever path added it — by watching the registry.
-            const synced = new Set<string>();
-            const syncNew = () => {
-                for (const w of registry?.listWorkspaces() ?? []) {
-                    if (synced.has(w.path)) continue;
-                    synced.add(w.path);
-                    void composed.syncAgentDocs(w.path).catch((error: unknown) => { console.error(`[workspace-files] ${w.id} protocol: ${(error as Error).message}`); });
-                    void composed.syncConfig(w.path).then(
-                        (results) => { for (const r of results) if (!r.ok) console.error(`[workspace-files] ${w.id} ${r.label}: ${r.error ?? "failed"}`); },
-                        (error: unknown) => { console.error(`[workspace-files] ${w.id}: ${(error as Error).message}`); },
-                    );
-                }
-            };
-            syncNew();
-            registry?.subscribe(() => syncNew());
-            tynnAccount?.onChange(() => {
-                // THE WORK MODEL (Tynn story #402): signing in to Tynn, or out, changes what the protocol tells every agent
-                // about where its work is planned, so every workspace's protocol is written again (only a changed file is).
-                for (const w of registry?.listWorkspaces() ?? []) {
-                    void composed.syncAgentDocs(w.path).catch((error: unknown) => { console.error(`[workspace-files] ${w.id} protocol: ${(error as Error).message}`); });
-                }
-            });
-            // SIGNING IN TO TYNN LATER (Genie 1 provisioned on the next activation): every workspace linked to a Tynn
-            // project is synced again, so one with no token yet gets it now. One already carrying a token is not minted again.
-            tynnAccount?.onChange(() => {
-                if (!tynnAccount?.status().signedIn) return;
-                for (const w of registry?.listWorkspaces() ?? []) {
-                    if (tynnProjectFor(w.id) === null) continue;
-                    void composed.syncConfig(w.path).then(
-                        (results) => { for (const r of results) if (!r.ok) console.error(`[workspace-files] ${w.id} ${r.label}: ${r.error ?? 'failed'}`); },
-                        (error: unknown) => { console.error(`[workspace-files] ${w.id}: ${(error as Error).message}`); },
-                    );
-                }
-            });
-        } catch (error) {
-            console.error('[workspace-files] could not start syncing:', error instanceof Error ? error.message : String(error));
-        }
+        // THE WORKSPACE AGENT FILES are genie-host's to keep, window or no window (Tynn #898 step 2e-2: host-workspace-files.ts).
         pushFeatures();
     }
     // RESTORE AFTER A RELAUNCH OR UPGRADE (§7.6): only with the ONE setting on; starts spaced three seconds apart; what the
