@@ -659,7 +659,9 @@ describe('wired: genie-host serves the window, main forwards it', () => {
         expect(main).not.toMatch(/remoteHub\.add\(localDoor\)/);
         expect(main).toMatch(/tunnelDoor\(localDoor, tunnelLinkOf\(/);
         expect(main).toMatch(/onWindowOp: /);
-        expect(main).toMatch(/'engine\.features', \['invalidate'/);
+        // What changed is said down the tunnel; genie-host invalidates its own features (Tynn #898 step 2e-2: no engine.features).
+        expect(main).toMatch(/const pushFeatures = \(\) => \{\r?\n\s*windowTunnel\.refreshWindow\(\);\r?\n\s*\};/);
+        expect(main).not.toMatch(/'engine\.features'/);
         expect(main).toMatch(/notice: \(connectionId\) => /);
         expect(main.match(/rendererNotice = notice;[^\n]*windowTunnelNow\?\.refreshWindow\(\)/g)).toHaveLength(2);
         expect(main).toMatch(/dismiss: async \(\) => \{ rendererNotice = null;[^\n]*windowTunnelNow\?\.refreshWindow\(\)/);
