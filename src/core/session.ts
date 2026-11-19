@@ -2215,14 +2215,22 @@ export class AgentSession {
         if (!now) return { ok: false, reason: 'Genie could not read the machine’s processes. Stop the turn instead.' };
         const targets = callProcesses(now, roots, call.since);
         if (targets.length === 0) return { ok: false, reason: `${call.label} has no process of its own to end (it runs inside the provider). Stop the turn instead.` };
-        const result = await reap(targets, now);
+        // BY IDENTITY, AGAINST A FRESH READING (after #919): a pid is not a process. Each target is ended only if the SAME
+        // process — pid, start time, image — is still in a reading taken after it was chosen; a pid that exited meanwhile
+        // and was handed to someone else's process is skipped (the tree's own `sameProcess` gate, against this reading).
+        const fresh = await read().catch(() => null);
+        if (!fresh) return { ok: false, reason: 'Genie could not read the machine’s processes. Stop the turn instead.' };
+        const same = stillRunning(targets, fresh);
+        if (same.length === 0) return { ok: false, reason: `${call.label}’s processes have already ended.` };
+        const result = await reap(same, fresh);
         if (result.refused && result.killed === 0) return { ok: false, reason: 'the machine refused to end the call’s processes' };
+        const ended = result.killed;
         const at = this.#now();
-        void this.#emitRow({ kind: 'notice', level: 'warning', message: callEndedNotice(call, cause, targets.length, at) });
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: callEndedNotice(call, cause, ended, at) });
         // The agent is told in the turn it is in: a typed message reaches it mid-turn the same way.
         try { this.deliver(callEndedText(call, cause, at), 'genie'); } catch { /* not running: there is no one to tell */ }
         this.#changed();
-        return { ok: true, ended: targets.length };
+        return { ok: true, ended };
     }
 
     /**
