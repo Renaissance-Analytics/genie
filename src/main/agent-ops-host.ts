@@ -596,3 +596,8 @@ export async function diagnose(ports: AgentOpsPorts, agentId: string): Promise<{
         }),
     };
 }
+
+/** RED STUB (Tynn #898 step 2d-4a): TRY AGAIN for a paused account, shared by main and genie-host. */
+export async function retryPausedAgents(_ports: { paused(provider: string): readonly string[]; restart(agentId: string): Promise<{ ok: boolean }>; prompt(agentId: string, text: string): void; touch(): void }, _provider: string): Promise<void> {
+    throw new Error('2d-4a: not built');
+}
