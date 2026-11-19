@@ -212,8 +212,6 @@ export const ENGINE_METHODS = [
     // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
     // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
     'client.elevate',
-    // A remote method genie-host does not own yet, done by the newest local window (Tynn #409): `[method, args]`.
-    'client.remoteInvoke',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];

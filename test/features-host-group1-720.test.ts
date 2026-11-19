@@ -32,10 +32,9 @@ const document = { $schema: FLOW_SCHEMA_URL, version: 1, graph: {
 } };
 const settle = async () => { for (let i = 0; i < 16; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
 let dir: string, workspace: string, settings: SettingsStore, knowledge: KnowledgeStore, inbox: InboxStore, flows: FlowStore;
-let service: HostFeatures, api: ReturnType<typeof hostRemoteApi>, windows: number;
+let service: HostFeatures, api: ReturnType<typeof hostRemoteApi>;
 const offs: Array<() => void> = [];
 const runFlow = vi.fn(async (_id: string) => {}), refreshPlugins = vi.fn(async () => {}), applyRemote = vi.fn(async () => {});
-const invokeWindow = vi.fn(async (method: RemoteMethod) => ({ windowAnswered: method }));
 
 async function outcome(method: RemoteMethod, args: unknown[] = []) {
     return api.invoke(method, args, context).then(value => ({ ok: true as const, value }),
@@ -57,7 +56,7 @@ function changes() {
 }
 
 beforeEach(async () => {
-    vi.clearAllMocks(); windows = 0;
+    vi.clearAllMocks();
     dir = await mkdtemp(join(tmpdir(), 'genie-features-group-one-'));
     workspace = join(dir, 'workspace'); await mkdir(workspace);
     await writeFile(join(workspace, 'project.json'), JSON.stringify({ name: 'fixture', repos: [] }));
@@ -77,8 +76,7 @@ beforeEach(async () => {
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
         features: service,
     } as unknown as HostAlonePorts);
-    api = hostRemoteApi({ hostName: 'fixture-host', own: {}, alone,
-        window: { connected: () => windows > 0, invoke: invokeWindow } });
+    api = hostRemoteApi({ hostName: 'fixture-host', own: {}, alone });
 });
 afterEach(async () => {
     for (const off of offs.splice(0)) off(); service?.close(); knowledge?.close();
@@ -173,10 +171,9 @@ describe('host feature group one with no window (Tynn #720)', () => {
         expect(await outcome('features.soundData', ['sound_question'])).toEqual({ ok: true, value: `data:audio/wav;base64,${bytes.toString('base64')}` });
         expect(await outcome('features.soundData', ['theme'])).toEqual({ ok: true, value: null });
     });
-    it('feature answers remain authoritative with zero, one and two windows', async () => {
+    it('feature answers are genie-host\'s own (Tynn #898: no remote method is sent to a window)', async () => {
         await settings.set('theme', 'light');
-        for (const count of [0, 1, 2, 0]) { windows = count; expect(await read()).toMatchObject({ settings: { values: { theme: 'light' } } }); }
-        expect(invokeWindow).not.toHaveBeenCalled();
+        expect(await read()).toMatchObject({ settings: { values: { theme: 'light' } } });
     });
     it('settings and flow changes publish one owned feature revision each', async () => {
         const events = changes(); await settings.set('theme', 'light'); await settle();
@@ -203,9 +200,7 @@ describe('host feature group one with no window (Tynn #720)', () => {
     it('CONTROL: unrelated host workspace settings preserve their current answer', async () => {
         expect(await outcome('workspaces.settings', ['work'])).toMatchObject({ ok: true, value: { ok: true, values: { app_inbox: true } } });
     });
-    it('CONTROL: a method genie-host does not own yet keeps the window preference (Tynn #898: its own are its own)', async () => {
-        windows = 1;
-        expect(await outcome('host.home', [])).toEqual({ ok: true, value: { windowAnswered: 'host.home' } });
-        expect(invokeWindow).toHaveBeenCalledExactlyOnceWith('host.home', [], context);
+    it('CONTROL: a method outside the features is genie-host\'s too, with no window (Tynn #898 step 2d-2b)', async () => {
+        expect(await outcome('host.home', [])).toMatchObject({ ok: true, value: expect.any(String) });
     });
 });

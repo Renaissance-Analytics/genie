@@ -26,14 +26,11 @@ const listeners: Array<() => void> = [];
 let dir: string, workspace: string, registry: Registry, settings: SettingsStore;
 
 function gate(alone: HostApi | (() => HostApi | null)) {
-    let windows = 0;
-    const invokeWindow = vi.fn(async (method: RemoteMethod) => ({ windowAnswered: method }));
     const windowListeners = new Set<Listener>();
     const api = hostRemoteApi({ hostName: 'fixture-host', own: {}, alone,
-        window: { connected: () => windows > 0, invoke: invokeWindow },
         onEvent: listener => { windowListeners.add(listener); return () => { windowListeners.delete(listener); }; },
     });
-    return { api, invokeWindow, windows: (count: number) => { windows = count; },
+    return { api,
         emitWindow: (channel: string, payload: unknown) => { for (const listener of windowListeners) listener(channel, payload); },
         windowListeners,
     };
@@ -81,25 +78,20 @@ afterEach(async () => {
 });
 
 describe('five workspace methods have one host answer', () => {
-    it.each(rows)('$method stays on the host with zero, one or multiple windows', async ({ method, args }) => {
+    it.each(rows)('$method is answered by the host', async ({ method, args }) => {
         const answer = { hostAnswered: method }, invoke = vi.fn(async () => answer);
         const source = gate({ invoke, onEvent: () => () => {}, workspaceOfAgent: () => null });
-        for (const count of [0, 1, 2, 0]) {
-            source.windows(count); invoke.mockClear();
-            expect(await source.api.invoke(method, args, context)).toEqual(answer);
-            expect(invoke).toHaveBeenCalledExactlyOnceWith(method, args, context);
-            expect(source.invokeWindow).not.toHaveBeenCalled();
-        }
+        expect(await source.api.invoke(method, args, context)).toEqual(answer);
+        expect(invoke).toHaveBeenCalledExactlyOnceWith(method, args, context);
     });
 
     it('an unavailable owned service refuses clearly instead of falling back to a window', async () => {
-        const source = gate(() => null); source.windows(1);
+        const source = gate(() => null);
         await expect(source.api.invoke('workspaces.settings', ['work'], context)).rejects.toThrow(/still starting/);
-        expect(source.invokeWindow).not.toHaveBeenCalled();
     });
 
-    it('the real host settings store persists set/read/reset while a window is connected', async () => {
-        const source = gate(ownedApi()); source.windows(1);
+    it('the real host settings store persists set/read/reset', async () => {
+        const source = gate(ownedApi());
         expect(await source.api.invoke('workspaces.setSetting', ['work', 'app_inbox', false], context)).toEqual({ ok: true });
         expect(await source.api.invoke('workspaces.settings', ['work'], context)).toMatchObject({
             ok: true, values: { app_inbox: false }, overridden: ['app_inbox'],
@@ -107,31 +99,24 @@ describe('five workspace methods have one host answer', () => {
         expect((await SettingsStore.open(dir)).workspaceValues('work')).toEqual({ app_inbox: false });
         expect(await source.api.invoke('workspaces.resetSetting', ['work', 'app_inbox'], context)).toEqual({ ok: true });
         expect((await SettingsStore.open(dir)).workspaceValues('work')).toEqual({});
-        expect(source.invokeWindow).not.toHaveBeenCalled();
     });
 
-    it('a real invalid-setting refusal keeps its reason and writes nothing with a window connected', async () => {
-        const source = gate(ownedApi()); source.windows(1);
+    it('a real invalid-setting refusal keeps its reason and writes nothing', async () => {
+        const source = gate(ownedApi());
         expect(await source.api.invoke('workspaces.setSetting', ['work', 'not_a_setting', true], context)).toEqual({
             ok: false, reason: 'not_a_setting is not a setting Genie knows',
         });
         expect(settings.workspaceValues('work')).toEqual({});
-        expect(source.invokeWindow).not.toHaveBeenCalled();
     });
 
-    it('CONTROL: genie-host\'s other families are its own with a window or without (Tynn #898); what it does not own yet uses the window', async () => {
+    it('CONTROL: genie-host\'s other families are its own too (Tynn #898), host.home included (step 2d-2b)', async () => {
         const invoke = vi.fn(async () => 'host answer');
         const source = gate({ invoke, onEvent: () => () => {}, workspaceOfAgent: () => null });
-        for (const method of ['workspaces.tynnBoard', 'workspaces.hibernate', 'agents.models', 'features.act'] as const) {
-            for (const count of [1, 0]) {
-                invoke.mockClear(); source.invokeWindow.mockClear(); source.windows(count);
-                expect(await source.api.invoke(method, [], context)).toBe('host answer');
-                expect(invoke).toHaveBeenCalledExactlyOnceWith(method, [], context);
-                expect(source.invokeWindow).not.toHaveBeenCalled();
-            }
+        for (const method of ['workspaces.tynnBoard', 'workspaces.hibernate', 'agents.models', 'features.act', 'host.home'] as const) {
+            invoke.mockClear();
+            expect(await source.api.invoke(method, [], context)).toBe('host answer');
+            expect(invoke).toHaveBeenCalledExactlyOnceWith(method, [], context);
         }
-        source.windows(1);
-        expect(await source.api.invoke('host.home', [], context)).toEqual({ windowAnswered: 'host.home' });
     });
 });
 
@@ -154,18 +139,15 @@ describe('one host-owned workspace settings signal', () => {
         expect(heard.mock.calls.filter(([channel]) => channel === SETTINGS_EVENT)).toEqual([]);
     });
 
-    it('host settings signals survive window attach, replacement and detach exactly once', () => {
+    it('host settings signals are delivered exactly once', () => {
         const events = hostEvents(), source = gate(events.api), heard = vi.fn();
         listeners.push(source.api.onEvent(heard));
-        for (const count of [0, 1, 2, 0]) {
-            source.windows(count); heard.mockClear();
-            events.emit(SETTINGS_EVENT, 'work');
-            expect(heard.mock.calls).toEqual([[SETTINGS_EVENT, 'work']]);
-        }
+        events.emit(SETTINGS_EVENT, 'work');
+        expect(heard.mock.calls).toEqual([[SETTINGS_EVENT, 'work']]);
     });
 
     it('a window echo is suppressed; the same signal from the host is delivered', () => {
-        const events = hostEvents(), source = gate(events.api), heard = vi.fn(); source.windows(1);
+        const events = hostEvents(), source = gate(events.api), heard = vi.fn();
         listeners.push(source.api.onEvent(heard));
         source.emitWindow(SETTINGS_EVENT, 'work'); expect(heard).not.toHaveBeenCalled();
         events.emit(SETTINGS_EVENT, 'work');
@@ -173,11 +155,11 @@ describe('one host-owned workspace settings signal', () => {
     });
 
     it('CONTROL: other events come from genie-host with a window connected or not; the window\'s copy is dropped (Tynn #898)', () => {
-        const events = hostEvents(), source = gate(events.api), heard = vi.fn(); source.windows(1);
+        const events = hostEvents(), source = gate(events.api), heard = vi.fn();
         listeners.push(source.api.onEvent(heard));
         events.emit('activity', { source: 'host while connected' });
         source.emitWindow('activity', { source: 'window' });
-        source.windows(0); events.emit('activity', { source: 'host with no window' });
+        events.emit('activity', { source: 'host with no window' });
         expect(heard.mock.calls).toEqual([
             ['activity', { source: 'host while connected' }], ['activity', { source: 'host with no window' }],
         ]);
@@ -187,7 +169,7 @@ describe('one host-owned workspace settings signal', () => {
         const events = hostEvents(), source = gate(events.api), heard = vi.fn();
         const off = source.api.onEvent(heard); listeners.push(off);
         expect(events.subscribers.size).toBe(1); expect(source.windowListeners.size).toBe(1);
-        off(); source.windows(1);
+        off();
         events.emit(SETTINGS_EVENT, 'work'); source.emitWindow(SETTINGS_EVENT, 'work');
         expect(events.subscribers.size).toBe(0); expect(source.windowListeners.size).toBe(0);
         expect(heard).not.toHaveBeenCalled();

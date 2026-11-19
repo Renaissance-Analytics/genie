@@ -91,7 +91,8 @@ import { KeptProcessLogs } from './kept-process-logs.js';
 import { nudgeOnRoster } from './scheduled-nudge.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from './engine-launch.js';
-import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, remoteUpdatesPort, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { shareLinksOver } from './tynn-share-links.js';
 import { AgentShutdownDrain } from '../core/agent-shutdown-drain.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
 import { windowReleased } from './window-release.js';
@@ -1050,12 +1051,8 @@ async function main(): Promise<void> {
                 // The account chips (Tynn #895): this host's book, for every client, window or not.
                 ...accountsOwnAnswers(() => accountsPortNow) },
             takeOverEnded: (terminalId) => takeOverService.ended(terminalId),
-            window: {
-                connected: () => (engineRef?.newestLocalWindow() ?? null) !== null,
-                invoke: (method, args, context) => (engineRef ? engineRef.remoteInvoke(method, args, context) : Promise.reject(new Error('no Genie window is connected'))),
-            },
             onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
-            // The phone's methods and events with every window closed (host-alone-api.ts).
+            // Every remote method and event, window or not (host-alone-api.ts; Tynn #898: none is sent to a window).
             alone: () => phoneApi,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
@@ -1798,7 +1795,14 @@ async function main(): Promise<void> {
             readBytes: (workspaceId, path) => phoneFiles.readBytes(workspaceId, path),
             upload: (workspaceId, dir, name, bytes) => phoneFiles.upload(workspaceId, dir, name, bytes),
         },
-        updates: { state: () => updatesService.dump(), onChange: (listener) => updatesService.onEvent(listener), check: async () => { throw new Error('check for updates from Genie’s window'); }, download: async () => false, install: () => null },
+        // The update actions and the share links are this host's too (Tynn #898 step 2d-2b): its updater, its Tynn account.
+        updates: remoteUpdatesPort(updatesService),
+        shares: shareLinksOver({
+            request: (path, init) => (tynnAccountNow ? tynnAccountNow.request(path, init) : Promise.reject(new Error('this Genie has no Tynn account'))),
+            workstation: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
+            // A revoked link's live guest session is dropped now, not at the next re-check (audit M-c).
+            endSessions: async () => { await relayHostService.call('revalidate', []); },
+        }),
     });
     for (const listener of phoneReady) listener();
     // The tailnet listener starts only now (remote_access on): a phone that connects finds the host's own answers ready.

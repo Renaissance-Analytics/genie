@@ -2,28 +2,23 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
-import { inMemoryPair, type ClientTransport, type ServerConnection } from '../src/core/remote-protocol.js';
+import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
 import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { AgentWindows, connectRemote } from '../src/renderer/remote-bridge.js';
 
 /*
- * A PHONE'S PHOTO SINCE THE HOST SPLIT (Tynn #657). The phone talks to genie-host; genie-host stages the bytes, and a
- * connected window answers the prompt through the engine link's reverse call (`client.remoteInvoke`). Driven end to end on
- * the real chain: the phone's bridge → genie-host's remote host (staging) → the engine link → the window's host API
- * `prompt` → `promptWith`. The bytes the agent gets must be the bytes the phone sent, as bytes, with their names.
+ * A PHONE'S PHOTO SINCE THE HOST SPLIT (Tynn #657). The phone talks to genie-host; genie-host stages the bytes and its own
+ * host API answers the prompt (Tynn #898 step 2d-2b: no call goes to a window, so no bytes cross JSON). Driven end to end
+ * on the real chain: the phone's bridge → genie-host's remote host (staging) → its host API `prompt` → `promptWith`. The
+ * bytes the agent gets must be the bytes the phone sent, as bytes, with their names.
  */
 
-const TOKEN = 'attach-657-token';
 const now = () => 1_000_000;
 
 let home = '';
 let token = '';
-let server: SessionEngineServer;
 let access: RemoteAccessHost;
 const tailnet: Array<(c: ServerConnection) => void> = [];
 const closers: Array<() => void> = [];
@@ -34,11 +29,21 @@ const saves: Array<{ agentId: string; workspaceId: string; names: string[] }> = 
 
 const AGENT = { id: 'agent_a', name: 'atlas', workspaceId: 'ws_1' };
 
-/** The window's own host API, as main.ts builds it, over a fake session host that records what reached `promptWith`. */
-function windowHostApi() {
+/** genie-host's host API (host-alone-api.ts builds the same one), over a fake session host recording `promptWith`. */
+function hostApi() {
+    const none = () => () => {};
     const deps = {
+        // genie-host's API is its remote connections' event source too: what a hello subscribes to (host-api.ts onEvent).
+        snapshot: () => ({ agents: [], workspaces: [], deckItems: [], signals: {} }),
+        subscribeSnapshot: none,
+        subscribeAgentRecords: none,
+        detailFor: () => null,
+        terminals: { onData: none, onExit: none, list: () => [] },
+        features: {},
+        workspaceOps: {},
         find: (id: string) => (id === AGENT.id ? AGENT : null),
         host: {
+            subscribe: none,
             promptWith: async (agentId: string, text: string, attachments: ReadonlyArray<{ name: string; type: string; bytes: unknown }>) => {
                 sent.push({ agentId, text, attachments });
                 return { ok: true };
@@ -72,22 +77,8 @@ beforeEach(async () => {
     access = await RemoteAccessHost.open({
         home, hostName: 'alphar', now,
         transport: { onConnection: (cb) => { tailnet.push(cb); return () => {}; } },
-        api: hostRemoteApi({
-            hostName: 'alphar',
-            own: {},
-            window: { connected: () => server.newestLocalWindow() !== null, invoke: (m, a, c) => server.remoteInvoke(m, a, c) },
-        }),
+        api: hostRemoteApi({ hostName: 'alphar', own: {}, alone: hostApi() }),
     });
-    server = new SessionEngineServer({ token: TOKEN, build: 't' });
-
-    // This machine's window, linked to genie-host, answering what the host does not own with its own host API.
-    const api = windowHostApi();
-    const [h, raw] = memoryPair();
-    server.accept(h, { local: true });
-    const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-    const client = new SessionEngineClient({ onRemoteInvoke: (method, args, context) => api.invoke(method as never, args, context) });
-    expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
-    closers.push(() => t.close());
 });
 
 afterEach(async () => {
@@ -114,7 +105,7 @@ const bytesOf = (n: number, seed: number, head: readonly number[]) => {
     return b;
 };
 
-describe('a phone\'s files in a message, through genie-host and the window (Tynn #657)', () => {
+describe('a phone\'s files in a message, through genie-host (Tynn #657)', () => {
     it('a JPEG, a PNG and a text file reach promptWith as Uint8Array bytes equal to what the phone sent, with their names', async () => {
         const c = await phone();
         // Bigger than one upload chunk, so each crosses in several.
@@ -156,7 +147,7 @@ describe('a phone\'s files in a message, through genie-host and the window (Tynn
         expect(Buffer.from(shot!.bytes).equals(Buffer.from(png))).toBe(true);
     });
 
-    it('a phone\'s file upload reaches the window\'s files.upload as the same bytes', async () => {
+    it('a phone\'s file upload reaches genie-host\'s files.upload as the same bytes', async () => {
         const c = await phone();
         const bytes = bytesOf(200_000, 11, [0xff, 0xd8, 0xff]);
         const r = await c.bridge.files.upload!('ws_1', 'docs', 'IMG_1.jpg', bytes);
@@ -167,7 +158,7 @@ describe('a phone\'s files in a message, through genie-host and the window (Tynn
         expect(Buffer.from(uploads[0]!.bytes as Uint8Array).equals(Buffer.from(bytes))).toBe(true);
     });
 
-    it('control: a text-only message from the phone reaches the window over the same link', async () => {
+    it('control: a text-only message from the phone reaches genie-host over the same link', async () => {
         const c = await phone();
         expect(await c.bridge.prompt(AGENT.id, 'just text')).toEqual({ ok: true });
         expect(sent).toEqual([{ agentId: AGENT.id, text: 'just text', attachments: [] }]);

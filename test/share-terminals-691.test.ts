@@ -44,7 +44,7 @@ describe('what genie-host answers', () => {
     });
 });
 
-/** genie-host's remote API, a window connected that performs what it is asked, and the relay principals over it. */
+/** genie-host's remote API, its own answers performing what they are asked, and the relay principals over it. */
 const LIVE = [{ id: 'term_t', workspaceId: 'tynn' }, { id: 'term_f', workspaceId: 'fancy' }];
 const FOLDERS = [{ id: 'tynn', path: '/w/tynn' }, { id: 'fancy', path: '/w/fancy' }];
 
@@ -72,8 +72,11 @@ beforeEach(async () => {
     const api = hostRemoteApi({
         hostName: 'alphar',
         own: {},
-        window: { connected: () => true, invoke: async (method, args) => { asked.push({ method, args }); return method === 'host.home' ? '/home/owner' : { ok: true }; } },
-        onEvent: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+        alone: {
+            invoke: async (method, args) => { asked.push({ method, args }); return method === 'host.home' ? '/home/owner' : { ok: true }; },
+            onEvent: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+            workspaceOfAgent: () => null,
+        },
         workspaceOfAgent: () => null,
         workspaceOfTerminal: terminalWorkspaceOf({ list: () => LIVE, finished: () => null }),
         workspacePaths: workspaceFolders(() => FOLDERS),

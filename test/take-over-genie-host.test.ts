@@ -266,8 +266,8 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         ...over,
     }) as unknown as HostAlonePorts;
-    const gate = (alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}, more: Record<string, unknown> = {}) =>
-        hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone, ...more } as never);
+    const gate = (alone: HostApi, more: Record<string, unknown> = {}) =>
+        hostRemoteApi({ hostName: 'alphar', own: {}, alone, ...more } as never);
 
     beforeEach(async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie2-take-over-'));
@@ -301,13 +301,11 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         for (const method of ['terminals.open', 'terminals.list', 'terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close'] as const) expect(HOST_ALONE_METHODS.has(method)).toBe(true);
     });
 
-    it('with a window connected genie-host still answers the terminal calls, and the window is not asked (Tynn #898)', async () => {
+    it('genie-host answers the terminal calls itself: no window is asked (Tynn #898)', async () => {
         const t = term();
-        const asked: string[] = [];
-        const api = gate(hostAloneApi(ports(t.api)), { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
-        expect(await api.invoke('terminals.write', ['term_1', 'ls'])).not.toBe('window answered terminals.write');
+        const api = gate(hostAloneApi(ports(t.api)));
+        await api.invoke('terminals.write', ['term_1', 'ls']);
         expect(t.calls).toEqual(['write term_1 ls']);
-        expect(asked).toEqual([]);
     });
 
     it('a Pilot\'s agent detail shows the TUI as Observed', async () => {
@@ -317,18 +315,16 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         expect(await api.invoke('agentDetail', [record.id])).toMatchObject({ takeOver: { terminalId: 'term_1' } });
     });
 
-    it('Take over itself is genie-host\'s, with a window or without', async () => {
+    it('Take over itself is genie-host\'s', async () => {
         const own = vi.fn(async () => ({ ok: true, terminalId: 'term_1', started: true }));
-        for (const connected of [false, true]) {
-            const api = hostRemoteApi({ hostName: 'alphar', own: { takeOver: own }, window: { connected: () => connected, invoke: async () => { throw new Error('the window was asked'); } } });
-            expect(await api.invoke('takeOver', [atlas.id])).toMatchObject({ terminalId: 'term_1' });
-        }
-        expect(own).toHaveBeenCalledTimes(2);
+        const api = hostRemoteApi({ hostName: 'alphar', own: { takeOver: own } });
+        expect(await api.invoke('takeOver', [atlas.id])).toMatchObject({ terminalId: 'term_1' });
+        expect(own).toHaveBeenCalledTimes(1);
     });
 
     it('when a Pilot\'s Take Over window closes, the remote host can end the TUI', () => {
         const ended = vi.fn();
-        const api = gate(hostAloneApi(ports(term().api)), {}, { takeOverEnded: ended });
+        const api = gate(hostAloneApi(ports(term().api)), { takeOverEnded: ended });
         api.takeOverEnded?.('term_1');
         expect(ended).toHaveBeenCalledWith('term_1');
     });

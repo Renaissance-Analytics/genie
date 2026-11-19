@@ -32,7 +32,7 @@ class PrivateTerminals {
  * THE PHONE'S METHODS, ANSWERED BY GENIE-HOST WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2). genie-host runs the
  * SAME host API the window does (host-api.ts `buildHostApi`), over what it owns: the registry's files, its session host,
  * its attention, inbox and approval stores, the workspaces' files. What a phone asks is answered as the window would
- * answer it; anything else is refused with what to do. While a window is open, the window answers, as before.
+ * answer it; anything else is refused with what to do. Window or not, genie-host answers (Tynn #898).
  */
 
 let dir = '';
@@ -173,31 +173,21 @@ describe('genie-host answers the phone itself', () => {
 });
 
 describe('the remote host uses it whether or not a window is connected (Tynn #898)', () => {
-    it('the phone\'s methods: genie-host with a window open and with none; anything it does not own is refused with none', async () => {
-        let windowOpen = true;
+    it('the phone\'s methods, and every other, are genie-host\'s: no window is asked (step 2d-2b)', async () => {
         const alone = hostAloneApi(ports(engine(true)));
-        const api = hostRemoteApi({
-            hostName: 'alphar', own: {},
-            window: { connected: () => windowOpen, invoke: async (method) => ({ fromWindow: method }) },
-            alone,
-        });
+        const api = hostRemoteApi({ hostName: 'alphar', own: {}, alone });
         expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
-        expect(await api.invoke('host.home', [])).toEqual({ fromWindow: 'host.home' });
-        windowOpen = false;
-        expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
-        await expect(api.invoke('host.home', [])).rejects.toThrow('alphar answers host.home only while a Genie window is open there: open Genie on alphar');
+        expect(typeof (await api.invoke('host.home', []))).toBe('string');
         expect([...PHONE_METHODS].sort()).toEqual(['agentDetail', 'agents.restart', 'answerApproval', 'features.act', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'prompt', 'resumeLimit', 'snapshot']);
     });
 
-    it('genie-host\'s own events reach remote connections whether or not a window is connected (Tynn #898)', async () => {
-        let windowOpen = true;
+    it('genie-host\'s own events reach remote connections (Tynn #898)', async () => {
         const alone = { invoke: vi.fn(), onEvent: (l: (c: string, p: unknown) => void) => { emitAlone = l; return () => {}; }, workspaceOfAgent: () => null };
         let emitAlone: (c: string, p: unknown) => void = () => {};
-        const api = hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => windowOpen, invoke: async () => null }, alone });
+        const api = hostRemoteApi({ hostName: 'alphar', own: {}, alone });
         const seen: unknown[] = [];
         api.onEvent((_channel, payload) => { seen.push(payload); });
         emitAlone('snapshot', { n: 1 });
-        windowOpen = false;
         emitAlone('snapshot', { n: 2 });
         expect(seen).toEqual([{ n: 1 }, { n: 2 }]);
     });
@@ -215,7 +205,7 @@ describe('a Pilot connecting to a Drone with no window open (beta.61 blocker, Az
         const devices = await DeviceStore.open(dir, { now: Date.now, random: () => 'pilot-token' });
         let accept!: (c: ServerConnection) => void;
         const drone = new RemoteHost({
-            api: hostRemoteApi({ hostName: 'drone', own: {}, window: { connected: () => false, invoke: async () => null }, alone: hostAloneApi(ports(engine(true), { terminals: terminals as never })) }),
+            api: hostRemoteApi({ hostName: 'drone', own: {}, alone: hostAloneApi(ports(engine(true), { terminals: terminals as never })) }),
             hostName: 'drone', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing,
             transport: { onConnection: (l) => { accept = l; return () => {}; } },
         });

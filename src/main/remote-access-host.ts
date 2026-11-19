@@ -2,11 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
 import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
-import { LOCAL_EVENTS, TYPING_EVENT, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, TYPING_EVENT, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
 import type { ProtocolOffer } from '../core/protocol-version.js';
-import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
+import { HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 
 /**
  * REMOTE ACCESS'S HOST SIDE, IN GENIE-HOST (Tynn #409, host split P5d.1). A phone (over the tailnet) and a Pilot (over the
@@ -15,24 +15,22 @@ import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-ap
  * the baton and the owner's lock. A window reads and drives them through its replica; its own protocol door (local
  * authentication) stays the window's.
  *
- * What genie-host owns it answers itself, for every client, whether or not a window is connected (client/host split step
- * 2d-1, Tynn #898). What it does not own yet is done by the newest LOCAL window, through the engine link's reverse call;
- * with none it is refused with what to do. Step 2d-2 moves the rest here.
+ * genie-host answers every remote method itself, for every client, whether or not a window is connected (client/host
+ * split step 2d, Tynn #898). Since step 2d-2b no remote method is sent to a window: the engine link's reverse call for it
+ * (`client.remoteInvoke`) is gone.
  */
 
-/** What genie-host answers itself, and the window for the rest. */
+/** What genie-host answers for its remote connections. */
 export interface HostRemoteApiPorts {
     readonly hostName: string;
-    /** Methods genie-host performs itself, window or not. */
+    /** Methods genie-host performs itself, ahead of its built answers. */
     readonly own: Partial<Record<RemoteMethod, (args: unknown[]) => Promise<unknown>>>;
-    /** The newest local window, while one is connected: it performs what the host does not own yet. */
-    readonly window: { connected(): boolean; invoke(method: RemoteMethod, args: unknown[], context?: CallContext): Promise<unknown> };
-    /** Events for remote connections: the host's own, and those a connected window forwards. */
+    /** Events for remote connections: the host's own, and what someone types in a connected window (Tynn #730). */
     readonly onEvent?: (listener: (channel: string, payload: unknown) => void) => () => void;
     /**
-     * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, #898; host-alone-api.ts): every method it owns, and every event, come from
-     * here whether or not a window is connected. A getter: genie-host builds it once its session host is up; until then a
-     * connected window answers and its events are passed on.
+     * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, #898; host-alone-api.ts): every method, and every event, come from here
+     * whether or not a window is connected. A getter: genie-host builds it once its session host is up; until then a call
+     * is told to try again in a moment, and a connected window's events are passed on.
      */
     readonly alone?: HostApi | (() => HostApi | null);
     readonly onAloneReady?: (listener: () => void) => () => void;
@@ -48,7 +46,6 @@ export interface HostRemoteApiPorts {
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
-    const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
     const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
     return {
         get ownsFeatures() { return alone()?.ownsFeatures === true; },
@@ -57,21 +54,12 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             const own = ports.own[method];
             if (own) return own(args);
             const owned = alone();
-            if (owned?.ownsFeatures && featureMethod(method)) return owned.invoke(method, args, context);
-            // These reads and writes share the host's store: never a window, not even at boot (Tynn #666).
-            if (HOST_WORKSPACE_READ_METHODS.has(method)) {
-                if (!owned) throw new Error(`${ports.hostName}'s workspace services are still starting; try again in a moment`);
-                return owned.invoke(method, args, context);
-            }
-            // WHAT GENIE-HOST OWNS, IT ANSWERS (Tynn #898): for every client, whether or not a window is connected. Still
-            // being built at boot, a connected window answers meanwhile.
-            if (HOST_ALONE_METHODS.has(method)) {
-                if (owned) return owned.invoke(method, args, context);
-                if (ports.window.connected()) return ports.window.invoke(method, args, context);
+            // These reads and writes share the host's store (Tynn #666); the rest are genie-host's too (Tynn #898).
+            if (!owned) {
+                if (HOST_WORKSPACE_READ_METHODS.has(method)) throw new Error(`${ports.hostName}'s workspace services are still starting; try again in a moment`);
                 throw new Error(`${ports.hostName}'s services are still starting; try again in a moment`);
             }
-            if (ports.window.connected()) return ports.window.invoke(method, args, context);
-            throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
+            return owned.invoke(method, args, context);
         },
         onEvent: (listener, options) => {
             /*

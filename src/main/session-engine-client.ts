@@ -1,5 +1,4 @@
 import type { AccountRecord } from '../core/accounts.js';
-import { decodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
@@ -43,7 +42,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { GateView } from '../core/rate-limit-gate.js';
-import { forwardedCallContext, type CallContext, type ClientTransport } from '../core/remote-protocol.js';
+import type { ClientTransport } from '../core/remote-protocol.js';
 import type { LiveSession } from '../core/roster.js';
 import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -125,8 +124,6 @@ export interface EngineClientOptions {
     readonly onToolSignal?: (signal: unknown) => void;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
-    /** A remote method genie-host does not own yet (Tynn #409): done here, by this window's own host API. Absent = refused. */
-    readonly onRemoteInvoke?: (method: string, args: unknown[], context: CallContext) => Promise<unknown>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
     readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -558,12 +555,6 @@ export class SessionEngineClient {
             if (method === 'client.elevate') {
                 if (!this.#options.elevate) throw new Error('this window runs no elevation');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
-                this.#transport?.send(JSON.stringify(reply));
-                return;
-            }
-            if (method === 'client.remoteInvoke') {
-                if (!this.#options.onRemoteInvoke) throw new Error('this window answers no remote calls');
-                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), decodeRemoteInvokeArgs(String(args[0]), Array.isArray(args[1]) ? args[1] : []), forwardedCallContext(args[2])) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }

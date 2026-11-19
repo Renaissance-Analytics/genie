@@ -26,7 +26,6 @@ beforeEach(async () => {
     const api = hostRemoteApi({
         hostName: 'alphar',
         own: { snapshot: async () => SNAPSHOT, 'workspaces.confirmAdd': async () => ({ ok: true }) },
-        window: { connected: () => false, invoke: async () => { throw new Error('no window'); } },
         workspaceOfAgent: (id) => AGENTS.find((a) => a.id === id)?.workspaceId ?? null,
     });
     host = await RemoteAccessHost.open({ home, hostName: 'alphar', api, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } }, now: () => 1_000_000 });

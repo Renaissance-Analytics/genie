@@ -51,8 +51,8 @@ function ports(over: Record<string, unknown> = {}, life: Record<string, unknown>
     } as unknown as HostAlonePorts;
 }
 
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
-    return hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone });
+function gate(alone: HostApi): HostApi {
+    return hostRemoteApi({ hostName: 'alphar', own: {}, alone });
 }
 const reopened = async () => { const r = new Registry(new Store(dir)); await r.load({ name: 'alphar', healthy: true }); return r; };
 
@@ -216,19 +216,17 @@ describe('repositories, governs, default agent, colour', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected genie-host still answers, and the window is not asked (Tynn #898)', async () => {
+    it('genie-host answers it itself: no window is asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports());
         const invoke = vi.spyOn(alone, 'invoke');
-        const asked: string[] = [];
-        const api = gate(alone, { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
-        expect(await api.invoke('workspaces.hibernate', ['tynn'])).not.toBe('window answered workspaces.hibernate');
+        const api = gate(alone);
+        await api.invoke('workspaces.hibernate', ['tynn']);
         expect(invoke).toHaveBeenCalledWith('workspaces.hibernate', ['tynn'], undefined);
-        expect(asked).toEqual([]);
     });
 
     it('a family not moved yet still says to open a window (CONTROL)', async () => {
         const api = gate(hostAloneApi(ports()));
-        await expect(api.invoke('workspaces.tynnBoardChanges', ['tynn', {}, null, []])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('workspaces.tynnBoardChanges', ['tynn', {}, 'c1', []])).rejects.toThrow('open Genie on alphar');
     });
 });
 
