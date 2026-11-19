@@ -53,7 +53,6 @@ function ownedApi(): HostApi {
     return hostAloneApi({
         hostName: 'fixture-host', registry, settings, engine: () => engine, cwdFor: () => workspace,
         startRefusal: () => null, models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
-        windowConnected: () => false,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true,
             list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null, headroom: { view: () => ({}), subscribe: () => () => {} },

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
 import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
-import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
+import { TYPING_EVENT, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
 import type { ProtocolOffer } from '../core/protocol-version.js';
@@ -15,9 +15,9 @@ import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-ap
  * the baton and the owner's lock. A window reads and drives them through its replica; its own protocol door (local
  * authentication) stays the window's.
  *
- * What genie-host answers itself is answered with every window closed. What it does not own yet is done by the newest
- * LOCAL window, through the engine link's reverse call; with none it is refused with what to do. Later P5d stories move
- * each family here (Tynn #551, #553).
+ * What genie-host owns it answers itself, for every client, whether or not a window is connected (client/host split step
+ * 2d-1, Tynn #898). What it does not own yet is done by the newest LOCAL window, through the engine link's reverse call;
+ * with none it is refused with what to do. Step 2d-2 moves the rest here.
  */
 
 /** What genie-host answers itself, and the window for the rest. */
@@ -30,9 +30,9 @@ export interface HostRemoteApiPorts {
     /** Events for remote connections: the host's own, and those a connected window forwards. */
     readonly onEvent?: (listener: (channel: string, payload: unknown) => void) => () => void;
     /**
-     * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, host-alone-api.ts): the five workspace read/settings methods and their
-     * settings-change signal always come from here. Other families use this only while no window is connected.
-     * A getter: genie-host builds it once its session host is up.
+     * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, #898; host-alone-api.ts): every method it owns, and every event, come from
+     * here whether or not a window is connected. A getter: genie-host builds it once its session host is up; until then a
+     * connected window answers and its events are passed on.
      */
     readonly alone?: HostApi | (() => HostApi | null);
     readonly onAloneReady?: (listener: () => void) => () => void;
@@ -49,7 +49,6 @@ export interface HostRemoteApiPorts {
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
     const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
-    const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
     return {
         get ownsFeatures() { return alone()?.ownsFeatures === true; },
         releaseCaller: context => alone()?.releaseCaller?.(context),
@@ -58,25 +57,26 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             if (own) return own(args);
             const owned = alone();
             if (owned?.ownsFeatures && featureMethod(method)) return owned.invoke(method, args, context);
-            // These reads and writes share the host's store even while a window is connected (Tynn #666).
-            if (HOST_WORKSPACE_READ_METHODS.has(method)) {
-                const answers = alone();
-                if (!answers) throw new Error(`${ports.hostName}'s workspace services are still starting; try again in a moment`);
-                return answers.invoke(method, args, context);
+            // WHAT GENIE-HOST OWNS, IT ANSWERS (Tynn #666, #898): for every client, whether or not a window is connected.
+            if (HOST_WORKSPACE_READ_METHODS.has(method) || HOST_ALONE_METHODS.has(method)) {
+                if (owned) return owned.invoke(method, args, context);
+                // Still being built at boot: a connected window answers meanwhile.
+                if (ports.window.connected()) return ports.window.invoke(method, args, context);
+                throw new Error(`${ports.hostName}'s services are still starting; try again in a moment`);
             }
             if (ports.window.connected()) return ports.window.invoke(method, args, context);
-            const answers = HOST_ALONE_METHODS.has(method) ? alone() : null;
-            if (answers) return answers.invoke(method, args, context);
             throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
         },
         onEvent: (listener, options) => {
-            // A window's replica can echo this change. Only the owned store's signal counts (Tynn #666).
-            const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed' && !(alone()?.ownsFeatures && featureEvent(channel))) listener(channel, payload); }) ?? (() => {});
-            // Other families keep their existing window/no-window event source.
+            /*
+             * GENIE-HOST'S OWN EVENTS (Tynn #898): once its answers are built, every event comes from them, window or not.
+             * They are the same API's events (host-api.ts), so a window's copy would only repeat them. The one exception is
+             * what someone types in a window (Tynn #730): nothing stores it, so the window's relay is passed on. Before
+             * genie-host's answers exist, the window's events are passed as they were.
+             */
+            const offWindow = ports.onEvent?.((channel, payload) => { if (!alone() || channel === TYPING_EVENT) listener(channel, payload); }) ?? (() => {});
             let offAlone: (() => void) | null = null;
-            const bind = () => { if (!offAlone) offAlone = alone()?.onEvent((channel, payload) => {
-                if (channel === 'workspace-settings-changed' || (alone()?.ownsFeatures && featureEvent(channel)) || !ports.window.connected()) listener(channel, payload);
-            }, options) ?? null; };
+            const bind = () => { if (!offAlone) offAlone = alone()?.onEvent(listener, options) ?? null; };
             const offReady = ports.onAloneReady?.(bind); bind();
             return () => { offWindow(); offReady?.(); offAlone?.(); };
         },

@@ -95,7 +95,6 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
         },
         models: { get: async () => ({ models: [] }) as never },
         providerInstalled: () => true,
-        windowConnected: () => false,
         tynnTab: { board: () => ({ signedIn: () => false, projectFor: () => null, request: async () => ({ ok: false, status: 404, json: async () => null }) }), readPage: async () => ({ ok: false, state: 'error', reason: 'n/a' }) },
         workspaceLifecycle: { terminals: () => null, supervisor: () => null, engines: () => null, reverifyTrust: async () => {}, github: () => null, tynn: () => null, defaultEnvFile: () => '', stagingDirectory: () => '' },
         colors: { set: async () => ({ ok: true as const }) },
@@ -171,8 +170,8 @@ describe('genie-host answers the phone itself', () => {
     });
 });
 
-describe('the remote host uses it only while no window is connected', () => {
-    it('the phone\'s methods: the window while one is open, genie-host while none; anything else is refused with none', async () => {
+describe('the remote host uses it whether or not a window is connected (Tynn #898)', () => {
+    it('the phone\'s methods: genie-host with a window open and with none; anything it does not own is refused with none', async () => {
         let windowOpen = true;
         const alone = hostAloneApi(ports(engine(true)));
         const api = hostRemoteApi({
@@ -180,24 +179,25 @@ describe('the remote host uses it only while no window is connected', () => {
             window: { connected: () => windowOpen, invoke: async (method) => ({ fromWindow: method }) },
             alone,
         });
-        expect(await api.invoke('snapshot', [])).toEqual({ fromWindow: 'snapshot' });
+        expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
+        expect(await api.invoke('addAgent', ['tynn', {}])).toEqual({ fromWindow: 'addAgent' });
         windowOpen = false;
         expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
         await expect(api.invoke('addAgent', ['tynn', {}])).rejects.toThrow('alphar answers addAgent only while a Genie window is open there: open Genie on alphar');
         expect([...PHONE_METHODS].sort()).toEqual(['agentDetail', 'agents.restart', 'answerApproval', 'features.act', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'prompt', 'resumeLimit', 'snapshot']);
     });
 
-    it('genie-host\'s own events reach remote connections only while no window is connected (a window forwards its own)', async () => {
+    it('genie-host\'s own events reach remote connections whether or not a window is connected (Tynn #898)', async () => {
         let windowOpen = true;
         const alone = { invoke: vi.fn(), onEvent: (l: (c: string, p: unknown) => void) => { emitAlone = l; return () => {}; }, workspaceOfAgent: () => null };
         let emitAlone: (c: string, p: unknown) => void = () => {};
         const api = hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => windowOpen, invoke: async () => null }, alone });
-        const seen: string[] = [];
-        api.onEvent((channel) => { seen.push(channel); });
-        emitAlone('snapshot', {});
+        const seen: unknown[] = [];
+        api.onEvent((_channel, payload) => { seen.push(payload); });
+        emitAlone('snapshot', { n: 1 });
         windowOpen = false;
         emitAlone('snapshot', { n: 2 });
-        expect(seen).toEqual(['snapshot']);
+        expect(seen).toEqual([{ n: 1 }, { n: 2 }]);
     });
 });
 

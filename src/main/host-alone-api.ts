@@ -101,8 +101,6 @@ export interface HostAlonePorts {
     /** An approval's note, delivered to the agent as your message. */
     readonly deliverToAgent: (agentId: string, text: string) => boolean | Promise<boolean>;
     readonly files: NonNullable<HostApiDeps['files']>;
-    /** A window is connected: it answers, so genie-host builds no activity feed nobody it serves will read. */
-    readonly windowConnected: () => boolean;
     /** Each provider's latest rate-limit reading, kept by genie-host whether or not a window is open. */
     readonly headroom: NonNullable<HostApiDeps['headroom']>;
     /** The host's terminals, as a Take Over window on a Pilot reads and types into its own. */
@@ -163,7 +161,8 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
     ports.engine()?.subscribe((id) => settingApplier.changed(id as AgentId));
     const activityFeeds = new ActivityFeeds({
         host: {
-            subscribe: (listener) => ports.engine()?.subscribe((id) => { if (!ports.windowConnected()) listener(id); }) ?? (() => {}),
+            // Built whether or not a window is connected (Tynn #898): every remote client reads genie-host's feeds.
+            subscribe: (listener) => ports.engine()?.subscribe((id) => listener(id)) ?? (() => {}),
             ledgerFor: (id) => ports.engine()?.ledgerFor(id) ?? [],
             probe: (id) => ports.engine()?.probe(id) ?? null,
         },

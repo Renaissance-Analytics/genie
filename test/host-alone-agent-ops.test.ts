@@ -84,7 +84,6 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         },
         models: { get: async (provider: string, options?: { refresh?: boolean }) => { calls.push(`models ${provider} ${options?.refresh === true}`); return { models: [{ id: 'opus' }] }; } },
         providerInstalled: (provider: string) => provider === 'codex',
-        windowConnected: () => false,
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
@@ -246,13 +245,15 @@ describe('they do what the window\'s do', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected the window answers, and genie-host is not asked (CONTROL)', async () => {
+    it('with a window connected genie-host still answers, and the window is not asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports(engine()));
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('agents.setMode', [atlas.id, 'automated'])).toBe('window answered agents.setMode');
-        expect(invoke).not.toHaveBeenCalled();
-        expect(registry.find(atlas.id)?.mode).toBe('manual');
+        const asked: string[] = [];
+        const api = gate(alone, { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
+        expect(await api.invoke('agents.setMode', [atlas.id, 'automated'])).not.toBe('window answered agents.setMode');
+        expect(invoke).toHaveBeenCalledWith('agents.setMode', [atlas.id, 'automated'], undefined);
+        expect(asked).toEqual([]);
+        expect(registry.find(atlas.id)?.mode).toBe('automated');
     });
 
     it('the caller\'s context travels with the call', async () => {
