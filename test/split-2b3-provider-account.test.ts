@@ -35,7 +35,7 @@ interface RecoveryPorts {
     later(run: () => void, ms: number): () => void;
 }
 /** Dynamic: new in this step, so each case goes red on its own. */
-const recoveryModule = async () => { const file: string = '../src/main/host-mcp-recovery.js'; return import(file) as Promise<{ hostMcpRecovery: (ports: RecoveryPorts) => Recovery; withMcpRecovery: (pass: (agentId: string, reports: readonly McpServerReport[]) => void, recovery: Recovery) => (agentId: string, reports: readonly McpServerReport[]) => void }>; };
+const recoveryModule = async () => { const file: string = '../src/main/host-mcp-recovery.js'; return import(file) as Promise<{ hostMcpRecovery: (ports: RecoveryPorts) => Recovery; withMcpRecovery: <Id extends string>(pass: (agentId: Id, reports: readonly McpServerReport[]) => void, recovery: Recovery) => (agentId: Id, reports: readonly McpServerReport[]) => void }>; };
 
 const ok = (name: string): McpServerReport => ({ name, status: 'connected', toolCount: 4 } as McpServerReport);
 const failed = (name: string): McpServerReport => ({ name, status: 'failed', error: 'tools/list timed out' } as McpServerReport);
@@ -89,6 +89,8 @@ describe('genie-host recovers a session that came up without its genie or tynn s
         r.heard('agent_a', [failed('genie')]);
         r.heard('agent_a', [failed('genie')]);
         r.heard('agent_a', [ok('genie'), ok('tynn')]);
+        // Cancelled, not left to fire later on a report that is no longer the latest.
+        expect(f.timers.filter((t) => t.live)).toHaveLength(0);
         f.advance(MCP_RECOVERY_SPACING_MS);
         expect(f.restarts).toEqual(['agent_a']);
         r.heard('agent_a', [failed('tynn')]);

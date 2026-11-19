@@ -141,8 +141,8 @@ describe('a provider’s model list is asked of genie-host, which has the superv
     it('the window asks no provider itself; genie-host answers from one cache', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         expect(main).not.toMatch(/realListModels/);
-        expect(main).toMatch(/const hostModels = agentEngineLink\.client;/);
-        expect(main).toMatch(/models: \{ get: \(provider, options\) => hostModels\.providerModels\(provider, options\) \}/);
+        // main keeps no agent operations to ask a model list for (Tynn #896, 2b-3): genie-host's own answer it.
+        expect(main).not.toMatch(/hostModels|agentOpsPorts\(/);
         const host = readFileSync('src/main/genie-host.ts', 'utf8');
         expect(host.match(/new ProviderModelCache\(provider => realListModels\(provider, accounts\.activeFor\(provider\)\)\)/g)).toHaveLength(1);
         expect(host).toMatch(/providerModels: \(provider, refresh\) => providerModels\.get\(provider, \{ refresh \}\)/);

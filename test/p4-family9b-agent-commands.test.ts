@@ -167,6 +167,7 @@ describe('the IPC path is gone', () => {
         expect(read('core/ipc-inventory.ts')).not.toContain(`'genie:${name}'`);
     });
     it('a command before the agent host is up is refused in words', () => {
-        expect(read('main/main.ts')).toMatch(/Genie’s agents are not running yet/);
+        // By the host's adapter, which every client's command reaches (Tynn #896, 2b-3: the window keeps no agent operations).
+        expect(read('main/agent-ops-api.ts')).toMatch(/Genie’s agents are not running yet/);
     });
 });

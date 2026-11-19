@@ -63,7 +63,7 @@ export function hostMcpRecovery(ports: HostMcpRecoveryPorts): HostMcpRecovery {
 }
 
 /** The session host's `onMcpServers`: the engine's own (a linked window still hears it), then the host's recovery. */
-export function withMcpRecovery(pass: (agentId: string, reports: readonly McpServerReport[]) => void, recovery: HostMcpRecovery): (agentId: string, reports: readonly McpServerReport[]) => void {
+export function withMcpRecovery<Id extends string>(pass: (agentId: Id, reports: readonly McpServerReport[]) => void, recovery: HostMcpRecovery): (agentId: Id, reports: readonly McpServerReport[]) => void {
     return (agentId, reports) => {
         pass(agentId, reports);
         recovery.heard(agentId, reports);
