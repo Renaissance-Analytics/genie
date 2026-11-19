@@ -75,8 +75,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // Take over from another machine (Tynn #529 part A): this machine's Take Over window, and its ticket read once.
     ['genie:remote-takeover-open', 'window:take-over-window'],
     ['genie:takeover-ticket', 'window:take-over-window'],
-    // 2c (#897): a scratch shell opened on the host's terminals with the workspace's env.
-    ['genie:scratch-terminal-open', 'move:2c'],
     ['genie:files-open-external', 'window:os-shell'],
     ['genie:files-reveal', 'window:os-shell'],
     // The picker is the window's; its copy step moves to the host in P5.

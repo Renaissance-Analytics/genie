@@ -97,8 +97,6 @@ describe('P4 IPC inventory', () => {
      * it, and a row on it cannot be re-labelled a window capability while its handler is still registered.
      */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2c (#897): the scratch terminal (the crash report, Add workspace and the provider's program have moved).
-        'genie:scratch-terminal-open': '2c',
         // 2f (#912): the question window's answers and reads, the device/relay frame path, the relay browser open, host-wait's act.
         'question:answer': '2f', 'question:dismiss': '2f', 'question:files': '2f', 'question:file': '2f', 'question:visuals': '2f',
         'genie:device-open': '2f', 'genie:relay-open': '2f', 'genie:relay-send': '2f', 'genie:relay-close': '2f',

@@ -153,6 +153,8 @@ export interface HostApiDeps {
     crashReports?: { draft(): { text: string }; send(text: string, notes: string): Promise<unknown> };
     /** A provider's program (Tynn #577; #897 2c-3), kept by genie-host (host-provider-programs.ts). Absent = said in words. */
     providerPrograms?: import('./host-provider-programs.js').HostProviderPrograms;
+    /** The throwaway shell (Tynn #897, 2c-4), opened by genie-host in the caller's window (scratch-terminal.ts). Absent = said in words. */
+    scratchTerminals?: { open(workspaceId: string | null, context?: CallContext): import('./scratch-terminal.js').ScratchAnswer };
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -726,6 +728,11 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (typeof args[0] !== 'string' || !isAcpProvider(args[0])) return { ok: false, reason: 'No provider named.' };
                 if (typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'No program chosen.' };
                 return deps.providerPrograms.choose(args[0], args[1]);
+            // The throwaway shell (Tynn #378, #761; #897 2c-4): the workspace's, or Genie's own for null. Who may is RemoteHost's.
+            case 'terminals.scratch':
+                if (!deps.scratchTerminals) return { ok: false, reason: 'this host cannot open a scratch terminal' };
+                if (args[0] !== null && args[0] !== undefined && typeof args[0] !== 'string') return { ok: false, reason: 'No workspace named.' };
+                return deps.scratchTerminals.open(typeof args[0] === 'string' ? args[0] : null, context);
             // The tray's Log in names a provider, not an agent (Tynn #896, 2b-2b).
             case 'logins.provider':
                 return deps.signIns ? deps.signIns.loginFor(str(args[0]), context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };

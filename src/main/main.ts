@@ -104,7 +104,6 @@ import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { scheduleScratchSweep } from './scratch-area.js';
-import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { callRefusal, ownProtocolClient } from './own-protocol-client.js';
 import { ActivityFeeds } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
@@ -666,8 +665,6 @@ let filesWatch: { watch(viewId: string, workspace: { id: string; path: string },
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
 /** genie-host's, read through its replica. */
 let takeOvers: TakeOverReplica | null = null;
-/** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
-let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
 /**
@@ -744,18 +741,14 @@ function requestQuit(answer?: 'shut-down'): void {
  * for that route. Closing it ends the take-over — the window IS the session.
  */
 function openTakeOverWindow(route: string, activation: Activation): Promise<'closed' | 'raised'> {
-    const terminalId = route.split('/').pop() ?? '';
     const request = { activation, reason: `take-over window ${route}`, ledger: activationLedger, label: 'takeover' };
     for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed() && !remoteTakeOverWindows.has(w) && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return Promise.resolve('raised'); }
     }
     const win = takeOverWindow(route, request, null);
     // Settled when it closes: a Take Over TUI's or a sign-in's window is asked by genie-host (windowOps), which ends the TUI
-    // or cancels the sign-in then (Tynn #896, #479): the person left the step.
-    return new Promise((resolve) => win.on('closed', () => {
-        scratchTerminals?.windowClosed(terminalId);
-        resolve('closed');
-    }));
+    // or cancels the sign-in then (Tynn #896, #479), or ends a scratch terminal (#897, 2c-4): the person left the step.
+    return new Promise((resolve) => win.on('closed', () => resolve('closed')));
 }
 
 /**
@@ -1690,8 +1683,6 @@ async function boot(): Promise<void> {
      * it; the window is the session, so closing it closes the terminal. The registry reads
      * the host's probe to draw the Observed row. Nothing here manages the TUI.
      */
-    const terminalsForTakeOver = terminals;
-    scratchTerminals = new ScratchTerminals({ terminals: terminalsForTakeOver, openWindow: (route) => openTakeOverWindow(route, 'user-gesture') });
     // MAIN'S DECK LIVENESS ONLY (askerLive, below; Tynn #896 → #912): a question from a Take Over TUI is not stale. Its
     // registry's deck is redrawn as each TUI starts and ends. 2f retires this once the deck is the host's.
     takeOvers = agentEngineLink.client.takeOvers();
@@ -1752,14 +1743,7 @@ async function boot(): Promise<void> {
     // THE SIGN-INS (Tynn #896) are protocol calls answered by genie-host (host-sign-ins.ts): the provider's own login, opened
     // on the window that asked (windowOps terminal.window), for the host's owner. Genie never handles a credential.
 
-    // THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace's folder, with the workspace's
-    // environment (the same `terminalEnvFor` as a workspace terminal), in a window of its own; closing it ends it.
-    ipcMain.handle('genie:scratch-terminal-open', (_event, rawWorkspaceId: unknown) => {
-        if (!scratchTerminals) return { ok: false, reason: 'Terminals are not ready yet.' };
-        const workspace = typeof rawWorkspaceId === 'string' ? registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null : null;
-        if (!workspace) return { ok: false, reason: 'That workspace is not open in Genie.' };
-        return scratchTerminals.open({ workspaceId: workspace.id, cwd: workspace.path, env: terminalEnvFor(services, workspace.id, mcpEnv()) });
-    });
+    // THE HEADER'S TERMINAL BUTTON (Tynn story #378) is genie-host's since 2c-4 (#897): terminals.scratch, in this window.
     // RIGHT-CLICK A FILE (Tynn #841): the host OS's own app for it, or its file manager — a path confined to the workspace.
     ipcMain.handle('genie:files-open-external', async (_event, workspaceId: unknown, path: unknown) => {
         const abs = typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.absolute(workspaceId, path) ?? null : null;
@@ -2668,10 +2652,9 @@ async function boot(): Promise<void> {
         onDesignLogin: () => {
             void ownProtocol.call('logins.design', []).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] Claude Design login:', why); });
         },
+        // Genie's own (null): genie-host opens it in the home folder and asks this window process to show it (#897, 2c-4).
         onScratchTerminal: () => {
-            if (!scratchTerminals) return;
-            const r = openScratchTerminal({ scratch: scratchTerminals, home: homedir() });
-            if (!r.ok) console.error('[genie] scratch terminal:', r.reason);
+            void ownProtocol.call('terminals.scratch', [null]).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] scratch terminal:', why); });
         },
         onOpen: () => { revealMainWindow('tray: Open'); },
         onSettings: () => { revealMainWindow('Settings'); showToPerson({ activation: 'user-gesture', route: 'genie://settings', reason: 'Settings' }); },

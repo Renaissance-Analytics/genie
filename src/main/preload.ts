@@ -54,11 +54,6 @@ const bridge: PreloadBridge = {
 
     popOutTerminals: (workspaceId) => ipcRenderer.invoke('genie:terminals-popout', workspaceId) as Promise<void>,
 
-    scratchTerminal: (workspaceId) =>
-        ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<
-            { ok: true; terminalId: string } | { ok: false; reason: string }
-        >,
-
     // A known remote host in its own window (Tynn #819).
     remoteWindows: {
         open: (url, name) => ipcRenderer.invoke('genie:remote-open-window', url, name) as Promise<void>,
