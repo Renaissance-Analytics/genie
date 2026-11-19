@@ -4,6 +4,7 @@ import { planSteps } from './agent-view.js';
 import { isSleeping } from './agent-status.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
+import type { ProviderStopState } from './provider-stops.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
 import type { AttachmentRef, StreamEvent, ToolKind } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
@@ -130,7 +131,16 @@ export function waitingStepLabel(step: string): string {
 }
 
 
-export type ProviderStopView = { readonly code: string; readonly words: string; readonly count: number };
+/** The stop line's provider stop: Genie's sentence and count, and the provider's own message and details for the quote (#921). */
+export type ProviderStopView = ProviderStopState;
+
+function providerStopView(stop: ProviderStopState): ProviderStopView {
+    return {
+        code: stop.code, words: stop.words, count: stop.count,
+        ...(stop.providerMessage ? { providerMessage: stop.providerMessage } : {}),
+        ...(stop.providerDetails && stop.providerDetails.length > 0 ? { providerDetails: stop.providerDetails } : {}),
+    };
+}
 
 export interface ChatContext {
     text: string;
@@ -183,7 +193,7 @@ export function chatContext(detail: ChatDetail): ChatContext {
     if (s.failure !== null) {
         // A failure the PROVIDER's stop explains (Tynn #859): the red line says what it means and how often, not the bare code.
         const stop = s.providerStop && s.providerStop.code === s.failure.reason ? s.providerStop : null;
-        return { text: `Broken · ${s.failure.reason}`, tone: 'bad', ...(stop ? { stop: { code: stop.code, words: stop.words, count: stop.count } } : {}) };
+        return { text: `Broken · ${s.failure.reason}`, tone: 'bad', ...(stop ? { stop: providerStopView(stop) } : {}) };
     }
     // COMING UP (q_04ce323c): its first message waits for the start, and the line says why.
     if (s.running && s.starting === true && s.turnState !== 'working') return { text: 'Starting', tone: 'muted' };

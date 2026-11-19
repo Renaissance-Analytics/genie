@@ -53,13 +53,13 @@ async function open(reenter = false) {
 }
 
 describe('the published folded outcome settles its joined turn only (Tynn #692)', () => {
-    it('pins exactly 0.42.0 and its registry integrity in both manifests', () => {
+    it('pins exactly 0.43.0 and its registry integrity in both manifests', () => {
         const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
         const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.42.0');
-        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.42.0');
-        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.42.0',
-            integrity: 'sha512-BEykRQ7xYGP39iGvXIS9AIsMY5nKJqMB0zVHnIYosq+/Ko+cjg8JOyUiM2+PdWqcK1gs/8K2Ggt8waY1uKWF7g==' });
+        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.43.0');
+        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.43.0');
+        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.43.0',
+            integrity: 'sha512-AYDQgHglrxNf1XQp9O5tY5403GafFnl9EGOnalQSgrpAusjmckSIdC3VfUJK3I/LwWMD8wx5mn7dZAE+x1FPSQ==' });
     });
     it('has no usage-result fallback or owed-end counting after adopting typed outcomes', () => {
         const source = readFileSync('src/core/session.ts', 'utf8');

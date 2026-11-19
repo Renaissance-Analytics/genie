@@ -38,6 +38,7 @@ import { draftChange, typingTail } from '../../core/typing-mirror.js';
 import { applyChatInsert, type ChatInsert, type DraftHandle } from '../../core/plan-pill.js';
 import { TurnStop } from './TurnStop.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
+import { ProviderQuote } from './ProviderQuote.js';
 import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js';
 
 /**
@@ -861,10 +862,12 @@ function ChatFlyoutBody({
                         <Icon name="circle-alert" size="xs" />
                         {thread.context.stop ? (
                             // A PROVIDER STOP, in words (Tynn #859): what it means and what to do, and how often it has happened.
-                            <span data-chat-stop={thread.context.stop.code} className="whitespace-normal font-sans">
+                            <div data-chat-stop={thread.context.stop.code} className="min-w-0 whitespace-normal font-sans">
                                 {thread.context.stop.words}
                                 {thread.context.stop.count > 1 ? <span data-chat-stop-count="" className="ml-2 rounded-full border border-[var(--danger)] px-1.5 font-mono">{thread.context.stop.count} times</span> : null}
-                            </span>
+                                {/* The provider's own words (Tynn #921): a quote marked as the provider's, never Genie's sentence. */}
+                                <ProviderQuote message={thread.context.stop.providerMessage} details={thread.context.stop.providerDetails} />
+                            </div>
                         ) : (
                             <span>{thread.context.text.replace(/^Broken · /, '')}</span>
                         )}

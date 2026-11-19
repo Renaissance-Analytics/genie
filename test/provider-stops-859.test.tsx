@@ -77,7 +77,7 @@ describe('the stop codes, in words', () => {
     });
 
     it('every code prism-acp sorts (Codex and Claude) and every ACP stop is in the table, with a meaning and a what-to-do', () => {
-        // prism-acp 0.42.0 src/turn-failure.ts CODEX_KINDS / CLAUDE_KINDS, and src/claude/driver.ts StopReason.
+        // prism-acp 0.43.0 src/turn-failure.ts CODEX_KINDS / CLAUDE_KINDS, and src/claude/driver.ts StopReason.
         const codex = ['usageLimitExceeded', 'rateLimitExceeded', 'serverOverloaded', 'unauthorized', 'cyberPolicy', 'contextWindowExceeded'];
         const claude = ['rate_limit', 'overloaded', 'authentication_failed', 'oauth_org_not_allowed', 'cloud_credential_error', 'billing_error', 'account_on_hold', 'verification_required'];
         const acp = ['refusal', 'max_tokens', 'max_turn_requests'];
@@ -94,9 +94,10 @@ describe('the stop codes, in words', () => {
         }
     });
 
-    it('the provider\'s own message, when one is given, is quoted', () => {
-        const stop = explainProviderStop('cyberPolicy', 'This request was flagged for potentially high-risk cyber activity.');
-        expect(stop.words).toContain('"This request was flagged for potentially high-risk cyber activity."');
+    it('the provider\'s own message, when one is given, is kept as its own quoted field (Tynn #921), not in Genie\'s words', () => {
+        const stop = explainProviderStop('cyberPolicy', { providerMessage: 'This request was flagged for potentially high-risk cyber activity.' });
+        expect(stop.providerMessage).toBe('This request was flagged for potentially high-risk cyber activity.');
+        expect(stop.words).not.toContain('This request was flagged');
     });
 
     it('the note for the agent is ONE short line naming the stop and its meaning, with the count from the second time', () => {
