@@ -14,8 +14,8 @@ import type { TerminalHost } from './terminal-host.js';
  * GENIE-HOST'S OWN LOCAL PORTS (Tynn #898 step 2d-3a, story #905). The families this machine's window asks of its host
  * (the file panel and the Repository panel, chat drafts, the ArtBoard, the window's own terminals, the Marketplace and
  * the GApp book) built from what genie-host owns, so its answers (host-alone-api.ts) serve them with no window in
- * between. The window's main process builds the same ports over the same functions (main.ts `buildHostApi`), reaching
- * these parts through the engine link; at 2d-4 it stops, and the window is served here.
+ * between. They are the only ones: since step 2d-4b this machine's window is served here too, through its tunnel, and
+ * since 2d-4b2 its main process builds no host API of its own.
  *
  * What only a window can do stays the window's: an app's own window and a workspace's preview of one are Electron
  * windows. Since step 2d-4b they open in the window that asked (`appWindow`); with no window to ask, refused in words.

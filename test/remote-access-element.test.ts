@@ -36,7 +36,7 @@ describe('genie.remote-access in the catalog', () => {
         });
         const service = new RemoteAccessService(access, {
             switch: { apply: async () => { listener.on = true; }, restart: async () => {}, stop: async () => { listener.on = false; } },
-            newestWindow: () => null, windowEvent: () => {}, send: () => {},
+            send: () => {},
         });
         const handler = (name: string) => name.slice('remoteAccess.'.length);
         const payload = REMOTE_ACCESS_ELEMENT.payload as { start: string; stop: string; health: string };

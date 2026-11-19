@@ -268,10 +268,12 @@ describe('the crossing', () => {
     });
 
     it('is wired through the window and the host (source guard)', () => {
+        // genie-host answers gapps.open by asking the window that called to open it (Tynn #898 steps 2d-4b and 2d-4b2).
         const main = readFileSync(join('src', 'main', 'main.ts'), 'utf8');
-        expect(main).toMatch(/gapps: \(\) => withGappWindows\(agentEngineLink\?\.client\)/);
+        expect(main).toMatch(/openApp: async \(packageId, preview\) => \{[^}]*await gappWindowsNow\.open\(packageId, preview \? \{ preview: true \} : undefined\);/);
         expect(main).toMatch(/gapp-preload\.cjs/);
         const host = readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8');
+        expect(host).toMatch(/await engineRef\.windowOp\(binding\.owner, preview \? 'gapps\.preview' : 'gapps\.open', \[packageId\]\);/);
         expect(host).toMatch(/gappSessions: gappSessions\(gappBook, gappServer, /);
         const engine = readFileSync(join('src', 'main', 'session-engine-server.ts'), 'utf8');
         expect(engine).toMatch(/new GAppSessionOwner/);

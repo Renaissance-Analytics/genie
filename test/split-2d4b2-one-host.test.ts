@@ -100,5 +100,7 @@ describe('the typing relay is gone: genie-host publishes what a Pilot types itse
         expect(access).not.toMatch(/readonly onEvent\?: \(listener: \(channel: string, payload: unknown\) => void\) => \(\) => void;/);
         const host = await source('src/main/genie-host.ts');
         expect(host).not.toMatch(/remoteWindowEvents|newestWindow:|windowEvent:/);
+        // No window is "the one whose events remote connections follow" any more.
+        expect(await source('src/main/session-engine-server.ts')).not.toMatch(/newestLocalWindow/);
     });
 });

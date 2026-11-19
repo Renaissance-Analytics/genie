@@ -260,9 +260,10 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         expect(operation).toHaveBeenCalledExactlyOnceWith('agent_a', null);
     });
     // The retired mutations all touched the registry on completion, including refusal/throw.
-    // Check the composition root retains that hook on the existing protocol adapters.
+    // Check the composition root retains that hook on the existing protocol adapters: genie-host's answers, which serve
+    // every client since main stopped building a host API (Tynn #898 step 2d-4b2).
     it.each(['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setIssueWatch', 'setPermissions', 'setModel'])('%s retains the native completion refresh in the shared adapter', (method) => {
-        expect(readFileSync('src/main/main.ts', 'utf8')).toContain('agentOps: agentOpsApi(agentOps, () => registry?.touch(), () => host)');
+        expect(readFileSync('src/main/host-alone-api.ts', 'utf8')).toContain('agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine())');
         const adapter = readFileSync('src/main/agent-ops-api.ts', 'utf8');
         const line = adapter.slice(adapter.indexOf('export function agentOpsApi')).split('\n').find((line) => line.trimStart().startsWith(`${method}:`));
         expect(line !== undefined).toBe(true);

@@ -228,11 +228,12 @@ describe('the gate', () => {
 describe('the wiring', () => {
     const src = (path: string) => readFileSync(path, 'utf8');
 
-    it('the window and genie-host answer through the same code', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) {
-            expect(src(file), file).toContain('workspaceLifecyclePorts(');
-            expect(src(file), file).toContain('workspaceLifecycleApi(');
-        }
+    it('genie-host answers every client through that code; the window keeps the same ports for its own work', () => {
+        expect(src('src/main/host-alone-api.ts')).toContain('workspaceLifecyclePorts(');
+        expect(src('src/main/host-alone-api.ts')).toContain('workspaceLifecycleApi(');
+        // main builds no host API (Tynn #898 step 2d-4b2): it answers no lifecycle call, and uses the ports itself.
+        expect(src('src/main/main.ts')).toContain('workspaceLifecyclePorts(');
+        expect(src('src/main/main.ts')).not.toContain('workspaceLifecycleApi(');
     });
 
     it('genie-host gives it what it owns: its supervisor, engines, trust, accounts and colours', () => {

@@ -25,15 +25,9 @@ const context: CallContext = { connectionId: 'fixture-connection', origin: 'rela
 const listeners: Array<() => void> = [];
 let dir: string, workspace: string, registry: Registry, settings: SettingsStore;
 
+/** genie-host's remote API over its own answers: no window relays events into it (Tynn #898 step 2d-4b2). */
 function gate(alone: HostApi | (() => HostApi | null)) {
-    const windowListeners = new Set<Listener>();
-    const api = hostRemoteApi({ hostName: 'fixture-host', own: {}, alone,
-        onEvent: listener => { windowListeners.add(listener); return () => { windowListeners.delete(listener); }; },
-    });
-    return { api,
-        emitWindow: (channel: string, payload: unknown) => { for (const listener of windowListeners) listener(channel, payload); },
-        windowListeners,
-    };
+    return { api: hostRemoteApi({ hostName: 'fixture-host', own: {}, alone }) };
 }
 
 function hostEvents() {
@@ -146,32 +140,23 @@ describe('one host-owned workspace settings signal', () => {
         expect(heard.mock.calls).toEqual([[SETTINGS_EVENT, 'work']]);
     });
 
-    it('a window echo is suppressed; the same signal from the host is delivered', () => {
-        const events = hostEvents(), source = gate(events.api), heard = vi.fn();
-        listeners.push(source.api.onEvent(heard));
-        source.emitWindow(SETTINGS_EVENT, 'work'); expect(heard).not.toHaveBeenCalled();
-        events.emit(SETTINGS_EVENT, 'work');
-        expect(heard.mock.calls).toEqual([[SETTINGS_EVENT, 'work']]);
-    });
-
-    it('CONTROL: other events come from genie-host with a window connected or not; the window\'s copy is dropped (Tynn #898)', () => {
+    it('CONTROL: other events come from genie-host, with a window connected or not (Tynn #898)', () => {
         const events = hostEvents(), source = gate(events.api), heard = vi.fn();
         listeners.push(source.api.onEvent(heard));
         events.emit('activity', { source: 'host while connected' });
-        source.emitWindow('activity', { source: 'window' });
         events.emit('activity', { source: 'host with no window' });
         expect(heard.mock.calls).toEqual([
             ['activity', { source: 'host while connected' }], ['activity', { source: 'host with no window' }],
         ]);
     });
 
-    it('CONTROL: unsubscribe releases both sources and prevents later delivery', () => {
+    it('CONTROL: unsubscribe releases genie-host\'s source and prevents later delivery', () => {
         const events = hostEvents(), source = gate(events.api), heard = vi.fn();
         const off = source.api.onEvent(heard); listeners.push(off);
-        expect(events.subscribers.size).toBe(1); expect(source.windowListeners.size).toBe(1);
+        expect(events.subscribers.size).toBe(1);
         off();
-        events.emit(SETTINGS_EVENT, 'work'); source.emitWindow(SETTINGS_EVENT, 'work');
-        expect(events.subscribers.size).toBe(0); expect(source.windowListeners.size).toBe(0);
+        events.emit(SETTINGS_EVENT, 'work');
+        expect(events.subscribers.size).toBe(0);
         expect(heard).not.toHaveBeenCalled();
     });
 });

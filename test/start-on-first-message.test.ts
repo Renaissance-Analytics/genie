@@ -47,9 +47,12 @@ describe('main: opening shows, a message starts', () => {
         const prompt = between("case 'prompt':", "case 'resolvePrompt':");
         expect(prompt).toMatch(/await deps\.startForYourMessage\(r\)/);
         expect(prompt.indexOf('startForYourMessage(')).toBeLessThan(prompt.indexOf('promptWith('));
-        expect(main).toMatch(/startForYourMessage: \(record\) => startForYours\(record\)/);
+        // The host API's dependency, as genie-host's answers give it (Tynn #898 step 2d-4b2: main builds no host API).
+        const hostAlone = readFileSync(new URL('../src/main/host-alone-api.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+        expect(hostAlone).toMatch(/startForYourMessage: \(record\) => startForYourMessage\(\{\s*startForWork: startOnDemand,/);
+        expect(hostAlone).toMatch(/const startOnDemand = \(record: Parameters<HostApiDeps\['cwdFor'\]>\[0\]\) => startForWork\(\{/);
         // …and that is the shared rule (main/start-on-demand.ts), not a start of its own: the person's message rule
-        // (a new driver when the run's own stopped itself, prism-acp 0.37.0) over `startOnDemand`.
+        // (a new driver when the run's own stopped itself, prism-acp 0.37.0) over `startOnDemand`; main keeps it too.
         expect(main).toMatch(/const startForYours = \(record: AgentRecord\): Promise<StartForWork> => startForYourMessage\(\{\s*startForWork: startOnDemand,/);
         expect(main).toMatch(/const startOnDemand = \(record: AgentRecord\): Promise<StartForWork> => startForWork\(/);
     });

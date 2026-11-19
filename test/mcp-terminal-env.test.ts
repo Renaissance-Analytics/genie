@@ -18,8 +18,10 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * AN AGENT'S TERMINAL GETS THE ENV THE PERSON'S DOES. The Terminals tab opens a shell with the workspace's service
  * engines (DB_*, REDIS_URL…) and Genie's endpoint (GENIE_MCP_URL / GENIE_MCP_TOKEN); `manageTerminals create` opened
  * one with NEITHER (main.ts handed the agent path `terminals.open(options)` untouched) — so a migration an agent ran in
- * its own terminal could not reach the database the person's shell reached. Both paths now take their env from ONE
- * function, `terminalEnvFor` (hosting-actions.ts).
+ * its own terminal could not reach the database the person's shell reached. In the window, the agents' tools and the
+ * header's throwaway Terminal take their env from ONE function, `terminalEnvFor` (hosting-actions.ts). The Terminals
+ * tab's shells are genie-host's since Tynn #898 step 2d-4b2 (host-local-ports.ts), and take the same env there: the
+ * workspace's service engines, its Playwright variables and Genie's endpoint (genie-host.ts `shellEnv`).
  */
 
 const atlas: Caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'example', workspacePath: '/w/example' };
@@ -121,14 +123,20 @@ describe('main wires both paths to the one function', () => {
     // Comment lines dropped by LINE, CRLF-safe: a guard that matched a comment would pass on prose.
     const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
-    it('the Terminals tab, the header’s throwaway Terminal and the agents’ tools all call terminalEnvFor — counted', () => {
+    it('the header’s throwaway Terminal and the agents’ tools call terminalEnvFor in main — counted; the Terminals tab is genie-host’s', () => {
         const main = code('src/main/main.ts');
-        expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(3);
+        // Two: the Terminals tab's port left main with its host API (Tynn #898 step 2d-4b2); genie-host opens those shells.
+        expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(2);
         // The header's Terminal button (Tynn story #378): a workspace terminal's environment, in a window of its own.
         expect(main).toMatch(/scratchTerminals\.open\(\{ workspaceId: workspace\.id, cwd: workspace\.path, env: terminalEnvFor\(services, workspace\.id, mcpEnv\(\)\) \}\)/);
         expect(main).toMatch(/terminalEnv: \(workspaceId\) => terminalEnvFor\(composed, workspaceId, mcpEnv\(\)\)/);
-        expect(/localTerminals: createNativeTerminalPort\(\{/.test(main)).toBe(true);
-        expect(/environment: id => terminalEnvFor\(services, id, mcpEnv\(\)\)/.test(main)).toBe(true);
+        expect(/localTerminals: createNativeTerminalPort\(\{/.test(main)).toBe(false);
+        // The Terminals tab: genie-host's port, with the workspace's service variables and Genie's MCP endpoint.
+        expect(/localTerminals: createNativeTerminalPort\(\{/.test(code('src/main/host-local-ports.ts'))).toBe(true);
+        expect(/environment: sources\.terminalEnv,/.test(code('src/main/host-local-ports.ts'))).toBe(true);
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/terminalEnv: shellEnv,/);
+        expect(host).toMatch(/return \{ \.\.\.engine\.serviceEnvFor\(workspaceId\), \.\.\.playwrightHost\.envFor\(workspaceId\), \.\.\.\(endpoint \? \{ GENIE_MCP_URL: endpoint\.url, GENIE_MCP_TOKEN: endpoint\.token \} : \{\}\) \};/);
         // The env is no longer assembled by hand anywhere in main.
         expect(main).not.toMatch(/\.\.\.serviceEnv/);
     });

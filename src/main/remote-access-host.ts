@@ -5,7 +5,7 @@ import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import type { LocalUploads } from './local-uploads.js';
 import { DeviceStore, type Device } from './remote-devices.js';
-import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
+import { RemoteHost, type HostApi } from './remote-host.js';
 import type { ProtocolOffer } from '../core/protocol-version.js';
 import { HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 
@@ -95,8 +95,6 @@ export interface RemoteAccessStatus {
     readonly devices: Device[];
     readonly connections: ReturnType<RemoteHost['connections']>;
     readonly pairRequests: ReturnType<PairApprovals['requests']>;
-    /** What the connections want of the window's events (Tynn #662); absent from an older host = everything. */
-    readonly wants?: EventWants;
 }
 
 export interface RemoteAccessHostOptions {
@@ -155,7 +153,7 @@ export class RemoteAccessHost {
 
     status(): RemoteAccessStatus {
         const r = this.remote;
-        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), pinEnded: r.pinEnded(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests(), wants: r.wanted() };
+        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), pinEnded: r.pinEnded(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests() };
     }
 
     issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {

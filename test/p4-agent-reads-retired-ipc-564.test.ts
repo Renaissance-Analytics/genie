@@ -53,7 +53,9 @@ describe('family 9a has one read/watch path after the paired acceptance (Tynn #5
             for (const listener of listeners) listener('after-unsubscribe');
         }
         expect(heard).not.toHaveBeenCalled();
-        // The composition root supplies the real inbox hook, rather than keeping it on the deleted native producer.
-        expect(source('src/main/main.ts')).toMatch(/subscribeAgentChat:\s*\(\w+\)\s*=>\s*wireInboxChatUpdates\(composed\.inbox,\s*\w+\)/);
+        // genie-host's answers (every client's since Tynn #898 step 2d-4b2) supply the real inbox hook, rather than keeping
+        // it on the deleted native producer; genie-host hands them its own inbox.
+        expect(source('src/main/host-alone-api.ts')).toMatch(/subscribeAgentChat:\s*\(listener: \(agentId: string\) => void\)\s*=>\s*wireInboxChatUpdates\(\{ onMessagesChanged: \(l\) => ports\.inbox\.onMessagesChanged!\(l\) \},\s*listener\)/);
+        expect(source('src/main/genie-host.ts')).toMatch(/phoneApi = hostAloneApi\(\{[^]*?\n\s*inbox: own\.inbox,\r?\n/);
     });
 });

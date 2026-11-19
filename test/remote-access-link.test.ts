@@ -61,8 +61,6 @@ beforeEach(async () => {
     });
     const service = new RemoteAccessService(access, {
         switch: { apply: async () => {}, restart: async () => {}, stop: async () => {} },
-        newestWindow: () => server.newestLocalWindow(),
-        windowEvent: () => {},
         send: (owner, event) => server.remoteAccessEvent(owner, event),
     });
     server = new SessionEngineServer({ token: TOKEN, build: 't', remoteAccess: service });

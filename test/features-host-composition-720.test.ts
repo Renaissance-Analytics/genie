@@ -27,10 +27,9 @@ describe('the production features owner (Tynn #720)', () => {
         expect(effects).toContain('contentsFor(connectionId)');
         expect(effects).not.toContain('getAllWindows');
     });
-    it('the window follows owned invalidations and releases callers instead of holding feature data', () => {
-        const replica = source('feature-replica');
-        for (const method of ['snapshot', 'act', 'picked', 'soundData', 'releaseCaller', 'onInvalidated']) expect(replica).toContain(method);
-        expect(replica).not.toContain('FeatureState');
+    it('the window holds no feature data: genie-host’s answers serve its features and follow their invalidations', () => {
+        // The window's feature replica went with main's host API (Tynn #898 step 2d-4b2): its protocol is genie-host's.
+        expect(source('main')).not.toContain('featureReplica');
         expect(source('host-api')).toContain('deps.features.onInvalidated');
     });
 });

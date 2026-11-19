@@ -105,8 +105,8 @@ describe('the interrupt reaches the session as an interrupt, on every route', ()
         expect(read('src/renderer/local-session.ts')).toMatch(/cancelTurn: \(id, intent\) => answered\(\(b\) => b\.cancelTurn\(id, intent\)\)/);
         expect(read('src/renderer/remote-bridge.ts')).toMatch(/cancelTurn: \(agentId, intent\) => answer<[^>]*>\('cancelTurn', agentId, intent\)/);
         expect(read('src/main/host-api.ts')).toContain('deps.host.cancel(r.id, cancelIntent(args[1]))');
-        // The host API's dependency, as main.ts gives it.
-        expect(read('src/main/main.ts')).toMatch(/cancel: \(id, intent\) => agentsUp\(\)\.cancel\(id, 'you', intent\)/);
+        // The host API's dependency, as genie-host's answers give it (Tynn #898 step 2d-4b2: main builds no host API).
+        expect(read('src/main/host-alone-api.ts')).toMatch(/cancel: \(id, intent\) => engine\(\)\.cancel\(id, 'you', intent\)/);
     });
 
     it('BEHAVIOUR: the engine carries a window\'s intent to SessionHost.cancel (engine.cancel, window to genie-host)', async () => {

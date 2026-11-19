@@ -1,3 +1,4 @@
+import type { CallContext } from '../src/core/remote-protocol.js';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,6 @@ import { versionDir } from '../src/core/toolchain-defaults.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
 import { FeatureCallers } from '../src/main/feature-callers.js';
-import { featureReplica } from '../src/main/feature-replica.js';
 import { featureWindow } from '../src/main/feature-window.js';
 import { adoptFeatureEnvironment } from '../src/main/feature-native-toolchain.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
@@ -36,7 +36,18 @@ describe('the production feature route (Tynn #720)', () => {
             const [host, window] = memoryPair(); server.accept(host, { local: true });
             expect(await client.connect(window, 'fixture')).toMatchObject({ ok: true });
             closers.push(() => window.close());
-            const replica = featureReplica(() => client, () => view);
+            // The engine route's own calls, as a window that asks it makes them: the method, its args, the admitted context and
+            // the window's browser pane. (The window's replica that wrapped them went with main's host API, Tynn #898 2d-4b2.)
+            const call = async <T>(method: string, args: unknown[], context?: CallContext): Promise<T> => {
+                const result = await client.call('engine.features', [method, args, context, context ? view : null]);
+                if (!result.ok) throw new Error(result.reason);
+                return result.value as T;
+            };
+            const replica = {
+                snapshot: (context: CallContext) => call<{ knowledge: { query: string } }>('snapshot', [], context),
+                act: (action: unknown, context: CallContext) => call<{ browser: { url: string | null } }>('act', [action], context),
+                releaseCaller: (context: CallContext) => { void call('releaseCaller', [], context).catch(() => {}); },
+            };
             const context = { ...groupTwoContext, origin: 'local-window' as const, connectionId: 'same-local-id', label: owner };
             return { replica, context, effect };
         };

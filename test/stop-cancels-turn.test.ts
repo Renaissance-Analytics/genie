@@ -280,13 +280,14 @@ const source = (path: string): string => readFileSync(new URL(path, import.meta.
 
 describe('the wiring — every turn Stop reaches cancel; "Stop agent" still stops', () => {
     it('the host API maps cancelTurn to host.cancel (never host.stop), every window through the door (P4 family 9b)', () => {
-        const main = source('../src/main/main.ts');
+        // genie-host's answers give the host API its engine (Tynn #898 step 2d-4b2: main builds no host API of its own).
+        const hostAlone = source('../src/main/host-alone-api.ts');
         const api = source('../src/main/host-api.ts');
         const cancel = api.slice(api.indexOf("case 'cancelTurn':"), api.indexOf("case 'prompt':"));
         // With its intent since Tynn #672 part 3: a Stop latches, an interrupt-and-send does not (test/interrupt-does-not-latch-stop.test.ts).
         expect(cancel).toContain('deps.host.cancel(r.id, cancelIntent(args[1]))');
         expect(cancel).not.toContain('.stop(');
-        expect(main.match(/cancel: \(id, intent\) => agentsUp\(\)\.cancel\(id, 'you', intent\)/g) ?? []).toHaveLength(1);
+        expect(hostAlone.match(/cancel: \(id, intent\) => engine\(\)\.cancel\(id, 'you', intent\)/g) ?? []).toHaveLength(1);
         // Control: the session-ending case is still there, still stopping.
         expect(api.slice(api.indexOf("case 'stopAgent':"), api.indexOf("case 'resumeLimit':"))).toContain('deps.host.stop(r.id)');
         expect(source('../src/renderer/local-session.ts')).toMatch(/cancelTurn: \(id, intent\) => answered\(\(b\) => b\.cancelTurn\(id, intent\)\)/);

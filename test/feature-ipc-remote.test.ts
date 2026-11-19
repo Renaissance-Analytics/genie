@@ -13,7 +13,8 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * section: the PIN on this screen, the paired devices, who is connected and who is driving, the lock,
  * and the share-link roster. Minting a link SERVES its URL exactly once: it is in the answer to the
  * mint and in no snapshot after — a link is a credential you cannot unsend. The RemoteHost is
- * composed with the rest; the transport is a port (an in-memory pair here).
+ * genie-host's (Tynn #898 step 2d-4b2: a client serves no remote connection): the window reads and drives it through its
+ * replica, over a real RemoteAccessService; the transport is a port (an in-memory pair here).
  */
 
 const pty: PtyPort = {
@@ -31,8 +32,7 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-remote-'));
     services = await composeServices({
         userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
-        hostName: 'alphar',
-        remoteTransport: { onConnection: (cb) => { accept = cb; return () => {}; } },
+        remoteHost: { hostName: 'alphar', transport: { onConnection: (cb) => { accept = cb; return () => {}; } } },
     });
 });
 

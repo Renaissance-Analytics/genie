@@ -42,7 +42,7 @@ let dir: string;
 let services: ComposedServices;
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-firewall-685-'));
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, hostName: 'alphar', remoteTransport: { onConnection: () => () => {} } });
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, remoteHost: { hostName: 'alphar', transport: { onConnection: () => () => {} } } });
 });
 afterEach(async () => {
     await services.shutdown();

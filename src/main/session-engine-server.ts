@@ -426,11 +426,6 @@ export class SessionEngineServer {
         return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
     }
 
-    /** The newest local window's connection: the one whose events remote connections follow. */
-    newestLocalWindow(): string | null {
-        return [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1)?.id ?? null;
-    }
-
     /** Remote access's status (to every local window) or a bridged connection's frame (to the window that owns it). */
     remoteAccessEvent(owner: string | null, event: unknown): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && (owner === null || conn.id === owner)) this.#event(conn, 'remoteAccess.event', event);

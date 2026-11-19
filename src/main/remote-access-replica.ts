@@ -5,17 +5,11 @@ import type { RemoteAccessEvent, RemoteAccessStatus } from './remote-access-host
 import type { Device } from './remote-devices.js';
 import { type RemoteHost } from './remote-host.js';
 
-/** Whether a status's connections want an agent's detail (Tynn #662): a status that does not say (an older host) wants all. */
-function wantedIn(status: RemoteAccessStatus, agentId: string): boolean {
-    const w = status.wants;
-    return w === undefined || (w.remote && (w.all || w.agents.includes(agentId)));
-}
-
 /**
  * REMOTE ACCESS, READ AND DRIVEN FROM A WINDOW (Tynn #409, host split P5d.1): the client side of `genie.remote-access`.
  * The listener, the paired devices, the PIN, the pair prompts, the baton and the lock are genie-host's
  * (remote-access-host.ts); Settings → Workstation reads them here and drives them through `engine.remoteAccess`. The
- * window's own events reach remote connections through `forwardEvents`.
+ * window forwards no events: it is one of genie-host's connections (Tynn #898 step 2d-4b).
  */
 
 /** What Settings → Workstation reads of remote access: genie-host's (this replica) or, on the emergency path, the window's own. */

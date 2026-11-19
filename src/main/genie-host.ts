@@ -1,5 +1,6 @@
 import './process-start.js';
 import './close-inherited-fds.js';
+// ^ FIRST but for process-start, which opens nothing: close inherited handles before a contributor opens its own.
 import { featureDownload } from './feature-download.js';
 import { HostFeatures } from './features-host.js';
 import { FeatureCallers } from './feature-callers.js';
@@ -243,7 +244,6 @@ import { setProviderChoiceFile } from './provider-choice.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
-// ^ FIRST but for process-start, which opens nothing: close inherited handles before a contributor opens its own.
 
 /**
  * GENIE-HOST — the per-user host process (the host split, phase 1: `.ai/plans/genie-2-host-split-2026-10-31.md`).

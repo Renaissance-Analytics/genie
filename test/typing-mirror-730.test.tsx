@@ -7,8 +7,7 @@ import { inMemoryPair, LOCAL_EVENTS, parseMessage, TYPING_EVENT, type CallContex
 import { draftChange, readTypingEvent, TYPING_FADE_MS, TYPING_SEND_MS, TYPING_SHOWN_CHARS, TypingBoard, TypingSender, typingTail, type TypingEvent } from '../src/core/typing-mirror.js';
 import type { ChatDraft } from '../src/core/chat-drafts.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
-import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from '../src/main/remote-access-host.js';
-import { RemoteAccessReplica } from '../src/main/remote-access-replica.js';
+import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.js';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
 
 /**
@@ -159,13 +158,11 @@ const OWNER: PreAuth = { label: 'Pilot laptop', isOwner: true, workspaceId: null
 const GUEST_HERE: PreAuth = { label: 'Guest tablet', isOwner: false, workspaceId: 'ws_shop', readonly: false };
 const GUEST_ELSEWHERE: PreAuth = { label: 'Other tablet', isOwner: false, workspaceId: 'ws_other', readonly: false };
 const KAI = { id: 'agent_kai', workspaceId: 'ws_shop', provider: 'claude', name: 'kai' };
-const WINDOW = 'conn_window';
 const LOCAL_WINDOW: CallContext = { connectionId: 'conn_1', origin: 'local-window', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'client-box' };
 
-type Listener = (channel: string, payload: unknown) => void;
 
-/** The client's window process's own host API (main.ts `remoteApiNow`), real, over fakes of the parts it reads. */
-function windowHostApi() {
+/** genie-host's own answers (host-alone-api.ts builds this same host API), real, over fakes of the parts it reads. */
+function hostAnswers() {
     const none = () => () => {};
     const deps = {
         snapshot: () => ({ agents: [], workspaces: [{ id: 'ws_shop', path: '/w/shop', agentsKnown: true }], deckItems: [], signals: {} }),
@@ -187,44 +184,26 @@ function windowHostApi() {
 let home = '';
 let access: RemoteAccessHost;
 let connections: Array<(c: ServerConnection) => void> = [];
-let windowApi: ReturnType<typeof windowHostApi>;
-/** genie-host's own answers (host-alone-api.ts builds the same host API): every remote call goes to them (Tynn #898). */
-let hostApi: ReturnType<typeof windowHostApi>;
-let localHeard: unknown[] = [];
-/** What genie-host's own answers publish on the local channel: where a Pilot's typing lands until step 2d-4. */
-let hostLocalHeard: unknown[] = [];
+/** genie-host's own answers: every client's call goes to them, this machine's window's too (Tynn #898 step 2d-4b). */
+let hostApi: ReturnType<typeof hostAnswers>;
+/** What this machine's window hears on its local channel: genie-host publishes it there, the window being its connection. */
+let windowHeard: unknown[] = [];
 
 beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie-730-typing-'));
     connections = [];
-    localHeard = [];
-    hostLocalHeard = [];
-    windowApi = windowHostApi();
-    hostApi = windowHostApi();
-    hostApi.onEvent((channel, payload) => { if (channel === LOCAL_EVENTS.typing) hostLocalHeard.push(payload); });
-    // The client's own window hears its local channel (main's RemoteHost sends it to this machine's windows).
-    windowApi.onEvent((channel, payload) => { if (channel === LOCAL_EVENTS.typing) localHeard.push(payload); });
-    const remoteWindowEvents = new Set<Listener>();
+    windowHeard = [];
+    hostApi = hostAnswers();
+    hostApi.onEvent((channel, payload) => { if (channel === LOCAL_EVENTS.typing) windowHeard.push(payload); });
     const api = hostRemoteApi({
         hostName: 'client-box',
         own: {},
-        // genie-host answers every remote call itself (Tynn #898 step 2d-2b); a window's typing still reaches remote
-        // connections through its relay (onEvent below).
+        // genie-host answers every client's call itself (Tynn #898 step 2d-2b): a Pilot's, a guest's, and this machine's
+        // window's, which has been one of its connections since step 2d-4b. No window relays anything.
         alone: hostApi,
-        onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
         workspaceOfAgent: (agentId) => (agentId === KAI.id ? 'ws_shop' : null),
     });
     access = await RemoteAccessHost.open({ home, hostName: 'client-box', api, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } }, now: () => 1_000_000 });
-    let service: RemoteAccessService | null = null;
-    const replica = new RemoteAccessReplica('client-box', (method, args) => service!.call(WINDOW, method, args));
-    service = new RemoteAccessService(access, {
-        switch: { apply: async () => {}, restart: async () => {}, stop: async () => {} },
-        newestWindow: () => WINDOW,
-        windowEvent: (channel, payload) => { for (const l of [...remoteWindowEvents]) l(channel, payload); },
-        send: (owner, event) => { if (owner === null || owner === WINDOW) replica.deliver(event); },
-    });
-    replica.forwardEvents((listener) => windowApi.onEvent(listener));
-    await replica.refresh();
 });
 afterEach(async () => { await access.close(); await rm(home, { recursive: true, force: true }); });
 
@@ -268,26 +247,25 @@ describe('the whole path: the Pilot’s typing on the client, and the client’s
         const id = p.call('agents.typing', KAI.id, 'hello', 'window-pilot');
         await settle();
         expect(p.result(id)?.ok).toBe(false);
-        expect(localHeard).toEqual([]);
-        expect(hostLocalHeard).toEqual([]);
+        expect(windowHeard).toEqual([]);
     });
 
     /*
-     * Since step 2d-1 genie-host's own answers take the Pilot's typing and publish it, named, on their local channel. This
-     * machine's window is not yet one of genie-host's connections (its renderer is served by main's RemoteHost), so it
-     * hears it only from step 2d-4, when the window connects to genie-host's RemoteHost (Tynn #898).
+     * Since step 2d-1 genie-host's own answers take the Pilot's typing and publish it, named, on their local channel; since
+     * step 2d-4b this machine's window is one of genie-host's connections, so that is where the window hears it (Tynn #898).
+     * The end-to-end proof, through the window's tunnel, is split-2d4b-window-tunnel's.
      */
-    it('the driving Pilot’s typing is taken by genie-host and published, named, as it is typed', async () => {
+    it('the driving Pilot’s typing is taken by genie-host and reaches this machine’s window, named, as it is typed', async () => {
         const p = await drivingPilot();
         const id = p.call('agents.typing', KAI.id, 'can you see', 'window-pilot');
         await settle();
         expect(p.result(id)?.ok).toBe(true);
-        expect(hostLocalHeard).toEqual([{ agentId: KAI.id, text: 'can you see', source: 'window-pilot', label: 'Pilot laptop' }]);
+        expect(windowHeard).toEqual([{ agentId: KAI.id, text: 'can you see', source: 'window-pilot', label: 'Pilot laptop' }]);
     });
 
     it('the client’s typing reaches the Pilot (the host’s own window is named by nobody: null)', async () => {
         const p = await drivingPilot();
-        await windowApi.invoke('agents.typing', [KAI.id, 'yes I see it', 'window-client'], LOCAL_WINDOW);
+        await hostApi.invoke('agents.typing', [KAI.id, 'yes I see it', 'window-client'], LOCAL_WINDOW);
         await settle();
         expect(p.typing()).toEqual([{ agentId: KAI.id, text: 'yes I see it', source: 'window-client', label: null }]);
     });
@@ -296,7 +274,7 @@ describe('the whole path: the Pilot’s typing on the client, and the client’s
         const g = visitor(GUEST_HERE);
         g.hello();
         await settle();
-        await windowApi.invoke('agents.typing', [KAI.id, 'for the shop', 'window-client'], LOCAL_WINDOW);
+        await hostApi.invoke('agents.typing', [KAI.id, 'for the shop', 'window-client'], LOCAL_WINDOW);
         await settle();
         expect(g.typing()).toEqual([{ agentId: KAI.id, text: 'for the shop', source: 'window-client', label: null }]);
     });
@@ -305,17 +283,17 @@ describe('the whole path: the Pilot’s typing on the client, and the client’s
         const g = visitor(GUEST_ELSEWHERE);
         g.hello();
         await settle();
-        await windowApi.invoke('agents.typing', [KAI.id, 'not yours', 'window-client'], LOCAL_WINDOW);
+        await hostApi.invoke('agents.typing', [KAI.id, 'not yours', 'window-client'], LOCAL_WINDOW);
         await settle();
         expect(g.typing()).toEqual([]);
     });
 
     it('CONTROL: typing on an agent the host does not have is relayed to nobody', async () => {
         const p = await drivingPilot();
-        await windowApi.invoke('agents.typing', ['agent_nobody', 'lost', 'window-client'], LOCAL_WINDOW);
+        await hostApi.invoke('agents.typing', ['agent_nobody', 'lost', 'window-client'], LOCAL_WINDOW);
         await settle();
         expect(p.typing()).toEqual([]);
-        expect(localHeard).toEqual([]);
+        expect(windowHeard).toEqual([]);
     });
 });
 

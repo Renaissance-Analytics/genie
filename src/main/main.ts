@@ -127,7 +127,6 @@ import { RemoteQuestions } from './remote-questions.js';
 import { readQuestionVisuals } from './question-visuals.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
-import { thisMachineWorkstationIds } from './this-machine.js';
 import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { readV1Inbox } from './v1-inbox.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
@@ -202,7 +201,6 @@ import type { AttentionStore } from './attention-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
-import type { GAppBookApi, GAppsApi } from '../core/gapps.js';
 import { gappWindowsElectron } from './gapp-windows-electron.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
@@ -1194,8 +1192,6 @@ let keyring: LinuxKeyring | KeyringReplica | null = null;
 let registerWorkstationNow: (() => Promise<void>) | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
-/** Every Tynn workstation id this machine holds (this-machine.ts); replaced once the identity store is open. */
-let thisMachineIds: () => Promise<ReadonlySet<string>> = () => Promise.resolve(new Set(tynnWorkstationNow?.registered ? [tynnWorkstationNow.workstationId] : []));
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
@@ -1304,24 +1300,6 @@ const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); retur
 let browserPane: BrowserPane | null = null;
 /** Installed apps' windows (Tynn #595): this process opens them, on sessions the host mints. */
 let gappWindowsNow: ReturnType<typeof gappWindowsElectron> | null = null;
-/** Who to tell when the host's GApp book changes (Tynn #596): this window's pages, through whichever link is up. */
-const gappsChangedListeners = new Set<() => void>();
-let offGappsChanged: (() => void) | null = null;
-function followGappsChanged(client: { onGappsChanged(listener: () => void): () => void }): void {
-    const tell = () => { for (const listener of [...gappsChangedListeners]) listener(); };
-    offGappsChanged?.();
-    offGappsChanged = client.onGappsChanged(tell);
-    tell(); // A new link may have missed changes.
-}
-function withGappWindows(client: { gapps(): GAppBookApi } | undefined): GAppsApi | null {
-    if (!client) return null;
-    return {
-        ...client.gapps(),
-        open: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id); },
-        preview: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id, { preview: true }); },
-        onChanged: (listener) => { gappsChangedListeners.add(listener); return () => { gappsChangedListeners.delete(listener); }; },
-    };
-}
 /**
  * THE GENIE BROWSER IS ITS OWN PROCESS (the host split, P2b), asked through the host, which starts it. This window builds no
  * browser window, for this machine's sites or another workstation's (Tynn #585). The site panels are webviews here by design.
@@ -1606,7 +1584,6 @@ async function boot(): Promise<void> {
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
-                followGappsChanged(client);
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
@@ -2509,9 +2486,6 @@ async function boot(): Promise<void> {
     // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
     // duplicate, on the next registration — once.
     const genie1Identity = async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), identityCipher);
-    // THIS MACHINE, ALL OF IT (this-machine.ts): this launch's registration, the identity Genie 2 stored for this Tynn,
-    // and the one Genie 1 registered from the userData Genie 2 shares — "Your workstations" never lists any of them.
-    thisMachineIds = () => machineIdentity.identity(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
     // THIS MACHINE'S STABLE KEY (genie#1278 W2): the OS machine id, never sent raw (machine-key.ts).
     const machineKey = (): Promise<string | null> => readMachineId({
         platform: process.platform,

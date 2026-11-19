@@ -136,7 +136,7 @@ describe('a restored draft never takes the caret (genie#1235)', () => {
 describe('wiring', () => {
     const strip = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-    it('main keeps the drafts: opens the store after the registry has loaded, prunes deleted agents when the roster changes, answers the window', () => {
+    it('main keeps the drafts: opens the store after the registry has loaded, prunes deleted agents when the roster changes; genie-host answers the window', () => {
         const main = strip('../src/main/main.ts');
         expect(main).toMatch(/const drafts = agentEngineLink\.client\.stores\(\)\.drafts;/);
         expect(main.indexOf('client.stores().drafts')).toBeGreaterThan(main.indexOf('await registry.load('));
@@ -144,7 +144,10 @@ describe('wiring', () => {
         expect(main).toMatch(/rosterPruner\(\{ ids: draftAgents, prune: \(ids\) => drafts\.prune\(ids\)/);
         expect(main).toMatch(/registry\.subscribe\(\(\) => draftPruner\.changed\(\)\)/);
         for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(main).not.toContain(`'genie:chat-drafts-${ch}'`);
-        expect(main).toMatch(/chatDrafts:\s*engineDraftsPort\(drafts,/);
+        // The window's draft calls are answered by genie-host over its own store (Tynn #898 step 2d-4b2): main answers none.
+        expect(main).not.toMatch(/chatDrafts:/);
+        expect(strip('../src/main/host-local-ports.ts')).toMatch(/chatDrafts: \{\s*all: \(\) => sources\.drafts\.all\(\),/);
+        expect(strip('../src/main/genie-host.ts')).toMatch(/const drafts = await ChatDraftStore\.open\(home\);[^]*local: \{ \.\.\.hostLocalPorts\(\{[^]*?\n\s*drafts,\n/);
     });
 
     it('the page composes local draft calls; the preload retires them and remote clients have no draft port', () => {
