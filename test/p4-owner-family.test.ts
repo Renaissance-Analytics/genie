@@ -244,8 +244,8 @@ describe('native paths retired and P5/window boundaries pinned', () => {
     });
     it('connect links remain window ports and relay clients remain P5 with exact sender ownership', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inv = readFileSync('src/core/ipc-inventory.ts', 'utf8');
-        expect(inv).toContain("['genie:connect-link', 'window-port']"); expect(main).toContain("ipcMain.handle('genie:connect-link'"); expect(preload).toContain("ipcRenderer.invoke('genie:connect-link'");
-        for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(inv).toContain(`['genie:${channel}', 'later:P5 relay client moves into genie-host']`);
+        expect(inv).toContain("['genie:connect-link', 'move:2b']"); expect(main).toContain("ipcMain.handle('genie:connect-link'"); expect(preload).toContain("ipcRenderer.invoke('genie:connect-link'");
+        for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(inv).toContain(`['genie:${channel}', 'move:2f']`);
         expect(main).toContain("ipcMain.handle('genie:relay-open', async (event, workstationId: unknown)"); expect(main).toContain("ipcMain.handle('genie:device-open', async (event, url: unknown)");
         expect(main.match(/deviceChannels\.get\(channel\) === event\.sender/g)).toHaveLength(2); expect(main.match(/c\.sender === event\.sender/g)).toHaveLength(1);
         for (const event of ['relay-open-step', 'relay-message', 'relay-closed']) { expect(main).toContain(`'genie:${event}'`); expect(preload).toContain(`'genie:${event}'`); }

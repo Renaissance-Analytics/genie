@@ -30,7 +30,7 @@ describe('family 9a has one read/watch path after the paired acceptance (Tynn #5
     it('CONTROL: the window still has its native overlay-color read and the protocol frame door', () => {
         expect(source('src/main/main.ts')).toContain("ipcMain.handle('genie:window-overlay-colors-current'");
         expect(source('src/main/preload.ts')).toContain("ipcRenderer.invoke('genie:window-overlay-colors-current'");
-        expect(source('src/core/ipc-inventory.ts')).toContain("['genie:window-overlay-colors-current', 'window-port']");
+        expect(source('src/core/ipc-inventory.ts')).toContain("['genie:window-overlay-colors-current', 'window:chrome']");
         expect(source('src/main/preload.ts')).toContain('LOCAL_FRAME_CHANNELS.toHost');
     });
 

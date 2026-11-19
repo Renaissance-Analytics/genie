@@ -155,7 +155,7 @@ describe('one resolution', () => {
         const app = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
         const view = readFileSync(new URL('../src/renderer/components/AgentView.tsx', import.meta.url), 'utf8');
         expect(main).toMatch(/ipcMain\.handle\('genie:provider-choose-program'/);
-        expect(inventory).toContain("['genie:provider-choose-program', 'window-port']");
+        expect(inventory).toContain("['genie:provider-choose-program', 'move:2c']");
         expect(app).toContain('onChooseProviderProgram');
         expect(view).toContain('<ProviderProgramChoice');
     });
