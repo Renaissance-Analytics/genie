@@ -11,7 +11,6 @@ import { takeOverRouteOf } from '../src/core/take-over-route.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { hostRemoteApi } from '../src/main/remote-access-host.js';
-import { openCallersTerminalWindow } from '../src/main/host-terminal-windows.js';
 import { windowOpsHandler } from '../src/main/window-tunnel.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 
@@ -27,6 +26,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const src = (path: string) => readFileSync(resolve(root, path), 'utf8');
 /** Comment LINES go (the repo's source-guard convention); never a block regex. */
 const code = (text: string) => text.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
+/** Dynamic: the module is new in this step, so each case goes red on its own rather than the file failing to load. */
+const openCallersTerminalWindow = async (...args: unknown[]): Promise<boolean> => { const file: string = '../src/main/host-terminal-windows.js'; const m = await import(file); return m.openCallersTerminalWindow(...args); };
 const settled = async () => { for (let i = 0; i < 5; i += 1) await new Promise<void>((r) => setImmediate(r)); };
 const context = (connectionId: string, origin: CallContext['origin'] = 'local-window'): CallContext =>
     ({ connectionId, origin, profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'x' });
@@ -40,7 +41,7 @@ describe('genie-host opens the asking window\'s terminal window and ends the TUI
     it('a tunnelled caller: its own window process is asked, with the route', async () => {
         const p = ports({ c1: 'win-1' }, async () => 'closed');
         const closed = vi.fn();
-        expect(openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed)).toBe(true);
+        expect(await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed)).toBe(true);
         expect(p.asked).toEqual([{ owner: 'win-1', op: 'terminal.window', args: [takeOverRouteOf('term_1')] }]);
         await settled();
         expect(closed).toHaveBeenCalledExactlyOnceWith('closed');
@@ -49,7 +50,7 @@ describe('genie-host opens the asking window\'s terminal window and ends the TUI
     it('a window already open on it is raised, and the TUI is NOT ended', async () => {
         const p = ports({ c1: 'win-1' }, async () => 'raised');
         const closed = vi.fn();
-        openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed);
+        await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed);
         await settled();
         expect(closed).not.toHaveBeenCalled();
     });
@@ -57,15 +58,15 @@ describe('genie-host opens the asking window\'s terminal window and ends the TUI
     it('a window process that is gone before it closes reports failed', async () => {
         const p = ports({ c1: 'win-1' }, async () => { throw new Error('the caller’s own window is no longer connected'); });
         const closed = vi.fn();
-        openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed);
+        await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed);
         await settled();
         expect(closed).toHaveBeenCalledExactlyOnceWith('failed');
     });
 
-    it('CONTROL: a caller no window of this machine carries (another machine, no context) is not asked', () => {
+    it('CONTROL: a caller no window of this machine carries (another machine, no context) is not asked', async () => {
         const p = ports({ c1: 'win-1' }, async () => 'closed');
-        expect(openCallersTerminalWindow(p.ports, context('c9', 'device'), takeOverRouteOf('term_1'), () => {})).toBe(false);
-        expect(openCallersTerminalWindow(p.ports, undefined, takeOverRouteOf('term_1'), () => {})).toBe(false);
+        expect(await openCallersTerminalWindow(p.ports, context('c9', 'device'), takeOverRouteOf('term_1'), () => {})).toBe(false);
+        expect(await openCallersTerminalWindow(p.ports, undefined, takeOverRouteOf('term_1'), () => {})).toBe(false);
         expect(p.asked).toEqual([]);
     });
 });
