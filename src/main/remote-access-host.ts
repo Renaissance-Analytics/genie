@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
 import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
-import { TYPING_EVENT, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, TYPING_EVENT, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
 import type { ProtocolOffer } from '../core/protocol-version.js';
@@ -49,6 +49,7 @@ export interface HostRemoteApiPorts {
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
     const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
+    const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
     return {
         get ownsFeatures() { return alone()?.ownsFeatures === true; },
         releaseCaller: context => alone()?.releaseCaller?.(context),
@@ -57,10 +58,15 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             if (own) return own(args);
             const owned = alone();
             if (owned?.ownsFeatures && featureMethod(method)) return owned.invoke(method, args, context);
-            // WHAT GENIE-HOST OWNS, IT ANSWERS (Tynn #666, #898): for every client, whether or not a window is connected.
-            if (HOST_WORKSPACE_READ_METHODS.has(method) || HOST_ALONE_METHODS.has(method)) {
+            // These reads and writes share the host's store: never a window, not even at boot (Tynn #666).
+            if (HOST_WORKSPACE_READ_METHODS.has(method)) {
+                if (!owned) throw new Error(`${ports.hostName}'s workspace services are still starting; try again in a moment`);
+                return owned.invoke(method, args, context);
+            }
+            // WHAT GENIE-HOST OWNS, IT ANSWERS (Tynn #898): for every client, whether or not a window is connected. Still
+            // being built at boot, a connected window answers meanwhile.
+            if (HOST_ALONE_METHODS.has(method)) {
                 if (owned) return owned.invoke(method, args, context);
-                // Still being built at boot: a connected window answers meanwhile.
                 if (ports.window.connected()) return ports.window.invoke(method, args, context);
                 throw new Error(`${ports.hostName}'s services are still starting; try again in a moment`);
             }
@@ -72,9 +78,13 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
              * GENIE-HOST'S OWN EVENTS (Tynn #898): once its answers are built, every event comes from them, window or not.
              * They are the same API's events (host-api.ts), so a window's copy would only repeat them. The one exception is
              * what someone types in a window (Tynn #730): nothing stores it, so the window's relay is passed on. Before
-             * genie-host's answers exist, the window's events are passed as they were.
+             * genie-host's answers exist, the window's events are passed as they were, except the two genie-host always owns:
+             * the workspace settings signal (Tynn #666) and, once it owns them, the features.
              */
-            const offWindow = ports.onEvent?.((channel, payload) => { if (!alone() || channel === TYPING_EVENT) listener(channel, payload); }) ?? (() => {});
+            const offWindow = ports.onEvent?.((channel, payload) => {
+                if (channel === 'workspace-settings-changed' || (alone()?.ownsFeatures && featureEvent(channel))) return;
+                if (!alone() || channel === TYPING_EVENT) listener(channel, payload);
+            }) ?? (() => {});
             let offAlone: (() => void) | null = null;
             const bind = () => { if (!offAlone) offAlone = alone()?.onEvent(listener, options) ?? null; };
             const offReady = ports.onAloneReady?.(bind); bind();

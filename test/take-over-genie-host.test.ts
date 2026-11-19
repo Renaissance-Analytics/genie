@@ -303,11 +303,13 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         await expect(api.invoke('terminals.list', ['tynn'])).rejects.toThrow('open Genie on alphar');
     });
 
-    it('with a window connected the window answers the terminal calls (CONTROL)', async () => {
+    it('with a window connected genie-host still answers the terminal calls, and the window is not asked (Tynn #898)', async () => {
         const t = term();
-        const api = gate(hostAloneApi(ports(t.api)), { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('terminals.write', ['term_1', 'ls'])).toBe('window answered terminals.write');
-        expect(t.calls).toEqual([]);
+        const asked: string[] = [];
+        const api = gate(hostAloneApi(ports(t.api)), { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
+        expect(await api.invoke('terminals.write', ['term_1', 'ls'])).not.toBe('window answered terminals.write');
+        expect(t.calls).toEqual(['write term_1 ls']);
+        expect(asked).toEqual([]);
     });
 
     it('a Pilot\'s agent detail shows the TUI as Observed', async () => {
