@@ -49,7 +49,7 @@ describe('main opens the Take Over window and hands it its ticket once', () => {
     });
 
     it('preload exposes the opener and the one read', () => {
-        expect(preload).toMatch(/openTakeOver: \(url, terminalId, ticket, name\) => ipcRenderer\.invoke\('genie:remote-takeover-open', url, terminalId, ticket, name\)/);
+        expect(preload).toMatch(/openTakeOver: \(url, terminalId, ticket, name, route\) => ipcRenderer\.invoke\('genie:remote-takeover-open', url, terminalId, ticket, name, route\)/);
         expect(preload).toMatch(/takeOverTicket: \(\) => ipcRenderer\.invoke\('genie:takeover-ticket'\)/);
     });
 });

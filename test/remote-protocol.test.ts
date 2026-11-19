@@ -41,7 +41,10 @@ describe('the capability table', () => {
         expect(capabilityOf('addWorkspace')).toBe('host-only');
         // Tynn #529 part A: Take over from another machine is a write — it needs the baton — and its window opens THERE.
         expect(capabilityOf('takeOver')).toBe('write');
-        expect(capabilityOf('providerLogin')).toBe('host-only');
+        // Sign-ins (Tynn #896): the provider's own login, started on the host for the owner's client, which opens its window.
+        expect(capabilityOf('providerLogin')).toBe('write');
+        expect(capabilityOf('logins.design')).toBe('write');
+        expect(capabilityOf('accounts.switch')).toBe('write');
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
@@ -109,7 +112,8 @@ describe('the capability table', () => {
         // 166 with `agents.typing` (what a composer holds, relayed to the other windows on the agent, Tynn #730): a write, agent-scoped.
         // 169 with `accounts.list` (a read), `accounts.act` and `accounts.dismissOffer` (writes): the account chips on the one
         // protocol, for every client of the owner's (client/host split step 2a, Tynn #895).
-        expect(REMOTE_METHODS.length).toBe(169);
+        // 171 since `logins.design` and `accounts.switch` (Tynn #896): the design sign-in and a switch of account, writes.
+        expect(REMOTE_METHODS.length).toBe(171);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

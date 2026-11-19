@@ -140,6 +140,11 @@ export interface HostApiDeps {
      * `window: false`); the person's machine opens its own window on it. `ended`: that window closed. Absent = Take over
      * is refused with where to do it, as before.
      */
+    /**
+     * SIGN-INS (Tynn #896): the provider's own login, started on this host for the caller, whose window shows it
+     * (host-sign-ins.ts). Absent = this host cannot start one, said in words.
+     */
+    signIns?: import('./host-sign-ins.js').HostSignIns;
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -311,6 +316,9 @@ const TYNN_NO_ACTION = { ok: false, state: 'error', reason: 'name a workspace an
 const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));
 const num = (v: unknown): number | undefined => (typeof v === 'number' && v > 0 ? Math.floor(v) : undefined);
 const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+
+/** A host with no sign-ins wired (a test's, or one still starting) says so. */
+export const SIGN_IN_UNAVAILABLE = 'this host cannot start a sign-in';
 
 export function buildHostApi(deps: HostApiDeps): HostApi {
     const agent = (id: unknown): AgentRecord | null => deps.find(str(id));
@@ -687,8 +695,13 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'takeOver':
                 if (!deps.takeOver) throw new Error('takeOver opens a window on the host; do it there');
                 return deps.takeOver.start(str(args[0]));
+            // The provider's own login, for the host's owner (RemoteHost checks that); Genie never handles a credential.
             case 'providerLogin':
-                throw new Error('providerLogin opens the provider login in a window on the host; do it there');
+                return deps.signIns ? deps.signIns.providerLogin(str(args[0]), context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
+            case 'logins.design':
+                return deps.signIns ? deps.signIns.design(context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
+            case 'accounts.switch':
+                return deps.signIns ? deps.signIns.switchAccount(str(args[0]), args[1], context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
             case 'features.setBrowserBounds':
                 throw new Error("features.setBrowserBounds places a view on the host's own window; nothing to do remotely");
             case 'terminals.open': {

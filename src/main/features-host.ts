@@ -59,7 +59,6 @@ export interface HostFeaturePresentation extends Pick<FeaturePorts, 'rendererNot
         forward(): void | Promise<void>;
         reload(): void | Promise<void>;
     };
-    readonly login?: (provider: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly githubOpen?: NonNullable<FeaturePorts['githubAccount']>['openPage'];
     readonly tailscaleInstall?: NonNullable<FeaturePorts['tailscale']>['install'];
 }
@@ -97,6 +96,11 @@ export interface HostFeaturesPorts {
     readonly presentation?: (context: CallContext) => HostFeaturePresentation | null;
     readonly system?: Pick<FeaturePorts, 'safeMode' | 'hangNotice'>;
     readonly deck?: HostFeatureDeckPorts;
+    /**
+     * A feature's login (toolchain.login, Tynn #896): the provider's own login, started on this host for this caller, whose
+     * window shows it (host-sign-ins.ts). Absent = this host cannot start one.
+     */
+    readonly signIn?: (provider: string, context: CallContext) => Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
@@ -231,7 +235,11 @@ export class HostFeatures {
         const machine = this.ports.machine?.effectsFor?.(context) ?? this.ports.machine?.effects;
         const tc = machine?.toolchain;
         const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,
-            login: async provider => ui?.login ? ui.login(provider) : { ok: false, reason: 'no login is wired into this Genie' },
+            login: async provider => {
+                const started = await this.ports.signIn?.(provider, context);
+                if (!started) return { ok: false, reason: 'this host cannot start a sign-in' };
+                return started.ok ? { ok: true } : { ok: false, reason: started.reason };
+            },
             checking: run => {
                 if (this.#closed) return;
                 if (run) this.#checkRuns.set(token, run); else this.#checkRuns.delete(token);
@@ -392,7 +400,7 @@ const OWN_WINDOW = 'this feature action needs its caller’s own admitted local 
 function needsPresentation(action: FeatureAction): boolean {
     // Site opening keeps the shared hosting handler's canonical no-browser refusal; it receives only this caller's port.
     return action.kind === 'flows.openEditor' || action.kind === 'flows.newFlow'
-        || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss' || action.kind === 'toolchain.login'
+        || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss'
         || action.kind === 'integrations.githubOpen' || action.kind === 'tailscale.install'
         || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && typeof action.item?.id === 'string' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));
 }

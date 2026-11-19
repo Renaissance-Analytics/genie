@@ -88,6 +88,7 @@ import { withElements } from '../core/workspace-elements.js';
 import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { openCallersTerminalWindow, type TerminalWindowPorts } from './host-terminal-windows.js';
+import { hostSignIns } from './host-sign-ins.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
 import { ProcessBook } from './process-book.js';
 import { KeptProcessLogs } from './kept-process-logs.js';
@@ -1105,7 +1106,8 @@ async function main(): Promise<void> {
             own: { 'updates.state': async () => updatesService.dump(), ...ownTakeOver,
                 // The account chips (Tynn #895): this host's book, for every client, window or not.
                 ...accountsOwnAnswers(() => accountsPortNow) },
-            takeOverEnded: (terminalId) => takeOverService.ended(terminalId),
+            // Another machine's Take Over window closed: its TUI ends, or its sign-in is cancelled (Tynn #896).
+            takeOverEnded: (terminalId) => { takeOverService.ended(terminalId); logins?.cancel(terminalId); },
             // Every remote method and event, window or not (host-alone-api.ts; Tynn #898: none is sent to a window).
             alone: () => phoneApi,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
@@ -1140,6 +1142,15 @@ async function main(): Promise<void> {
     // Switching accounts = the provider's own login in its one home; no agent is touched (Tynn #753). Composed once the sessions exist.
     let switchAccount: ((provider: string) => AccountSwitchStart) | null = null;
     let switchFlow: AccountSwitchFlow | null = null;
+    // SIGN-INS FOR WHOEVER ASKED (Tynn #896): the provider's own login, started here; this machine's window that asked
+    // opens it (terminal.window) and its closing cancels the login. Another machine's opens its own with a ticket.
+    const signIns = hostSignIns({
+        login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
+        switchLogin: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
+        providerOf: (agentId) => hostRegistry.find(agentId)?.provider ?? null,
+        cancel: (terminalId) => logins?.cancel(terminalId),
+        openWindow: (context, route, closed) => openCallersTerminalWindow(terminalWindowPorts, context, route, { startedHere: false, ended: closed }),
+    });
     // Switch offers (Tynn #481): made from the rate-limit board, composed with it below.
     let switchOffersNow: SwitchOfferService | null = null;
     let headroomFeedNow: HeadroomFeed | null = null;
@@ -1769,7 +1780,7 @@ async function main(): Promise<void> {
             own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
-    hostFeatures = new HostFeatures({ lifecycleLog, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
+    hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
         roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
         mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
         runFlow: id => hostFlows.runNow(id), stopFlow: id => hostFlows.stopRun(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),
@@ -1815,6 +1826,8 @@ async function main(): Promise<void> {
         registry: phoneRegistry,
         engine: () => host,
         cwdFor: phoneCwd,
+        // The sign-ins (Tynn #896): the provider's own login, started here for the caller, whose window shows it.
+        signIns,
         // ANY FILE IN A MESSAGE (Tynn #829), with no window connected: saved into the agent's workspace on this host.
         saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(hostRegistry.workspace(record.workspaceId), hostUntrustedNow(record)), files, now: new Date() }),
         startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {

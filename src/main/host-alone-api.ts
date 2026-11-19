@@ -1,5 +1,5 @@
 import type { AgentId } from '../core/identity.js';
-import type { RemoteMethod } from '../core/remote-protocol.js';
+import { SIGN_IN_METHODS, type RemoteMethod } from '../core/remote-protocol.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import { agentDetailFor } from './agent-detail.js';
 import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
@@ -96,7 +96,9 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
 ]);
 
 /** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
-export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_AGENT_WRITE_METHODS, ...HOST_WORKSPACE_READ_METHODS, ...HOST_WORKSPACE_LIFECYCLE_METHODS, ...HOST_TYNN_TAB_METHODS, ...HOST_LAST_METHODS]);
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_AGENT_WRITE_METHODS, ...HOST_WORKSPACE_READ_METHODS, ...HOST_WORKSPACE_LIFECYCLE_METHODS, ...HOST_TYNN_TAB_METHODS, ...HOST_LAST_METHODS,
+    // The sign-ins (Tynn #896): the provider's own login, started by genie-host for whoever asked.
+    ...SIGN_IN_METHODS]);
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
@@ -117,6 +119,8 @@ export interface HostAlonePorts {
     readonly providerInstalled: AgentOpsWiring['providerInstalled'];
     /** What the provider's status call last said (Tynn #698). Absent = not measured here, so nothing is claimed. */
     readonly signedIn?: AgentOpsWiring['signedIn'];
+    /** The sign-ins (Tynn #896, host-sign-ins.ts): the provider's own login for whoever asked. Absent = this host cannot. */
+    readonly signIns?: HostApiDeps['signIns'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -258,6 +262,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         ...(ports.saveUploads ? { saveUploads: ports.saveUploads } : {}),
+        ...(ports.signIns ? { signIns: ports.signIns } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

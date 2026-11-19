@@ -124,7 +124,7 @@ describe('the window\'s engine link carries only the link, window capabilities, 
     /** Frozen (the coordinator, 2026-11-19): each leaves in the PR that moves it, and nothing joins. */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
         // 2b (#896): sign-ins.
-        login: '2b', cancelLogin: '2b', switchAccount: '2b', providerAccount: '2b',
+        login: '2b', cancelLogin: '2b', providerAccount: '2b',
         // 2c (#897): the crash report's state and the scratch terminal.
         crashStateView: '2c', onCrashState: '2c', safeModeView: '2c', terminals: '2c',
         // 2f (#912): the question window's answers, and the device link's frames.

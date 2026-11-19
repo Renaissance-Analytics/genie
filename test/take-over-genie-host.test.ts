@@ -338,7 +338,8 @@ describe('the wiring', () => {
         expect(host).toContain('new TakeOverService(');
         // Every client's call, the window's too (Tynn #896): started here, with who asked.
         expect(host).toMatch(/takeOver: async \(args, context\) => \{\s*const started = takeOverService\.start\(args\[0\]\);/);
-        expect(host).toMatch(/takeOverEnded: \(terminalId\) => takeOverService\.ended\(terminalId\)/);
+        // Another machine's window closing ends its TUI, or cancels its sign-in (Tynn #896).
+        expect(host).toMatch(/takeOverEnded: \(terminalId\) => \{ takeOverService\.ended\(terminalId\); logins\?\.cancel\(terminalId\); \}/);
         expect(host).toMatch(/takeOver: takeOverService,/);
         expect(host).toMatch(/phoneRegistry\.setObservedProbe\(/);
         expect(host).toMatch(/takeOverCaller: \(id\) => takeOverHost\.callerFor\(id\)/);

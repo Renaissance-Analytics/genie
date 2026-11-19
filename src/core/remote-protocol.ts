@@ -49,6 +49,9 @@ export const REMOTE_METHODS = [
     'cancelTurn',
     'resumeLimit',
     'providerLogin',
+    // The machine's design sign-in and a switch of account (Tynn #896): the provider's own login, like providerLogin.
+    'logins.design',
+    'accounts.switch',
     'prompt',
     'resolvePrompt',
     'addAgent',
@@ -369,8 +372,11 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     addWorkspace: 'host-only',
     // Tynn #529 part A: from another machine, the TUI starts here and its window opens THERE — a write, on the baton.
     takeOver: 'write',
-    // A provider's login opens a window on the host, for the person at it: like Take Over.
-    providerLogin: 'host-only',
+    // SIGN-INS (Tynn #896, the coordinator's ruling 2026-11-19): the host starts the provider's own login; the client that
+    // asked opens its window, as for Take Over. Writes, for the host's owner only (remote-host.ts #signInRefusal).
+    providerLogin: 'write',
+    'logins.design': 'write',
+    'accounts.switch': 'write',
     'features.setBrowserBounds': 'host-only',
     // The host's account book (Tynn #895): reading it is a read; renaming, forgetting and Not now change it. Every client
     // gets them; a share-link guest is refused (remote-host.ts OWNER_ONLY).
@@ -378,6 +384,14 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'accounts.act': 'write',
     'accounts.dismissOffer': 'write',
 };
+
+/**
+ * THE SIGN-INS, NAMED ONCE (Tynn #896): an agent's provider login, the machine's design sign-in and a switch of account.
+ * Each starts the PROVIDER'S OWN login on the host; Genie never reads, writes or relays a credential. They are the host
+ * owner's, and RemoteHost checks them in one place (#signInRefusal), where step 3 adds a step-up check (2FA from a
+ * paired device) without re-plumbing.
+ */
+export const SIGN_IN_METHODS = ['providerLogin', 'logins.design', 'accounts.switch'] as const satisfies readonly RemoteMethod[];
 
 export function capabilityOf(method: RemoteMethod): RemoteCapability {
     return CAPABILITIES[method];

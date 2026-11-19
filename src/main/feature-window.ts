@@ -17,7 +17,6 @@ export function featureWindow(door: LocalProtocolDoor, ports: HostFeaturePresent
                 case 'openExternal': if (ports.openExternal) return ports.openExternal(String(args[0])); break;
                 case 'openInBrowser':
                     browser(); if (ports.openInBrowser) return ports.openInBrowser(String(args[0])); break;
-                case 'login': if (ports.login) return ports.login(String(args[0])); break;
                 case 'rendererNotice.dismiss': if (ports.rendererNotice) return ports.rendererNotice.dismiss(); break;
                 case 'mainErrors.deckItems': if (ports.mainErrors?.deckItems) return ports.mainErrors.deckItems(); break;
                 case 'mainErrors.dismiss': if (ports.mainErrors) return ports.mainErrors.dismiss(String(args[0])); break;

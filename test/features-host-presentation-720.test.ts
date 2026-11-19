@@ -62,7 +62,7 @@ describe('host features present only in the requesting window (Tynn #720)', () =
         expect(answer.toolchain?.refusals ?? []).toEqual([]);
     });
     it('a login refusal stays on its row with its actual reason', async () => {
-        Object.assign(f.a, { login: async () => ({ ok: false, reason: 'fixture caller login closed' }) });
+        f.signInState.refusal = 'fixture caller login closed';
         await f.answer({ kind: 'toolchain.check', force: true });
         const answer = await f.answer({ kind: 'toolchain.login', tool: 'codex' });
         expect(answer.toolchain?.refusals).toEqual([{ tool: 'codex', reason: 'fixture caller login closed' }]);
