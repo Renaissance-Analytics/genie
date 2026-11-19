@@ -80,8 +80,13 @@ describe('the input (core/question-visuals.ts)', () => {
                 if (URL_ATTRS.has(name) && /^(https?:)?\/\//.test(url)) found.push(`remote ${name}=${url}`);
             }
         }
-        const csp = doc.head.querySelectorAll('meta[http-equiv="Content-Security-Policy"]');
-        if (csp.length !== 1) found.push(`${csp.length} CSP metas in <head>`);
+        // Counted in the whole document: a bare <meta> before <html> belongs in <head> by the spec's tree builder, which
+        // happy-dom does not follow there; the CONTROL below holds our own output to <head> explicitly.
+        const csp = doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]');
+        if (csp.length !== 1) found.push(`${csp.length} CSP metas`);
+        // A parser's view is not enough for an unclosed tag (happy-dom drops `<script>` with no end), so the text is read too.
+        const tag = /<(script|iframe|frame|frameset|object|embed|applet|noscript|template|base|link)\b/i.exec(html);
+        if (tag) found.push(`text <${tag[1]!.toLowerCase()}`);
         for (const meta of doc.querySelectorAll('meta[http-equiv]')) {
             if (meta.getAttribute('http-equiv') !== 'Content-Security-Policy') found.push(`http-equiv=${meta.getAttribute('http-equiv')}`);
         }
@@ -90,7 +95,7 @@ describe('the input (core/question-visuals.ts)', () => {
 
     const BYPASSES: Record<string, string> = {
         'a tag joined from two halves': '<p>x</p><scr<script>ipt>alert(1)',
-        'a closed tag joined from two halves': '<scr<script>x</script>ipt>alert(1)</script>',
+        'a closed tag joined from two halves': '<scr<script>ipt>alert(1)</scr</script>ipt>',
         'a handler joined from two halves': '<a o onclick="x"nclick="alert(1)">x</a>',
         'a javascript: URL joined from two halves': '<a hr href="javascript:x"ef="javascript:alert(1)">x</a>',
         'a remote source joined from two halves': '<img sr src="https://a.test/x"c="https://track.test/p.gif">',
@@ -125,6 +130,9 @@ describe('the input (core/question-visuals.ts)', () => {
         expect(clean).toContain('<img src="data:image/png;base64,AA" alt="logo">');
         expect(clean).toContain('<div class="card" style="padding:4px">Kept</div>');
         expect(violations(clean)).toEqual([]);
+        const doc = new (new Window().DOMParser)().parseFromString(clean, 'text/html');
+        expect(doc.head.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').length, 'the policy is in <head>').toBe(1);
+        expect(doc.title).toBe('Mock');
     });
 
     it('a question carries at most 6 visuals; an ask at most 12; a stored visual is well-formed', () => {
