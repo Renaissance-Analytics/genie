@@ -74,7 +74,7 @@ describe('the input (core/question-visuals.ts)', () => {
             for (const attr of Array.from(el.attributes)) {
                 const name = attr.name.toLowerCase();
                 // What a URL resolver sees: tabs and newlines anywhere are dropped, leading spaces and controls too.
-                const url = attr.value.replace(/[\u0000- ]/g, '').toLowerCase();
+                const url = (attr.value ?? '').replace(/[\u0000- ]/g, '').toLowerCase();
                 if (name.startsWith('on')) found.push(`${name}=`);
                 if (/^(javascript|vbscript):|^data:text\/html/.test(url)) found.push(`${name}=${url}`);
                 if (URL_ATTRS.has(name) && /^(https?:)?\/\//.test(url)) found.push(`remote ${name}=${url}`);
