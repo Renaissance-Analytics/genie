@@ -13,6 +13,7 @@
  */
 import { geniePageSource, isMainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { pageSpan } from './local-door-span.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -101,13 +102,16 @@ function browserProbe() {
     const attach = () => {
         if (!window.genieLocalProtocol) return;
         clearInterval(timer);
-        const state = window.__doorCdp = { total: 0, frames: [], welcome: null, handle: null, next: 1_000_000, connections: new Map(), probeCalls: [] };
+        const state = window.__doorCdp = { total: 0, frames: [], welcome: null, handle: null, next: 1_000_000, connections: new Map(), probeCalls: [], perHandle: new Map() };
         window.genieLocalProtocol.onFrame((action, handle, text) => {
             let frame = null;
             if (action === 'frame') { try { frame = JSON.parse(text); } catch { /* measured as a frame nonetheless */ } }
             state.total++;
-            state.frames.push({ seq: state.total, action, handle, bytes: new TextEncoder().encode(text).length, frame, reason: action === 'closed' ? text : null });
-            if (state.frames.length > 32) state.frames.shift();
+            // n: this frame's ordinal on its connection, the socket's own count of what it sent there (Tynn #917).
+            const n = (state.perHandle.get(handle) ?? 0) + 1; state.perHandle.set(handle, n);
+            if (state.perHandle.size > 32) state.perHandle.delete(state.perHandle.keys().next().value);
+            state.frames.push({ seq: state.total, action, handle, n, bytes: new TextEncoder().encode(text).length, frame, reason: action === 'closed' ? text : null });
+            if (state.frames.length > 256) state.frames.shift();
             if (frame?.kind === 'welcome') {
                 state.welcome = frame; state.handle = handle;
                 state.connections.set(handle, frame.connectionId);
@@ -243,8 +247,24 @@ async function quietFrames(label, from, to, nativeDelta) {
     demand(unexpected.length===0,`${label}: zero agent/activity/snapshot/terminal or unknown frames; unexpected ${JSON.stringify(unexpected)}`);
     demand(excluded.length === probeCalls.length && new Set(excluded.map(key)).size === probeCalls.length && expected.size === probeCalls.length,
         `${label}: probe reply count ${excluded.length} must equal issued agentDetail call count ${probeCalls.length}, with one result per connection-scoped ID`);
-    demand(nativeDelta===frames.length,`${label}: actual native socket and page counts agree on the recorded pushes and exact probe replies`);
+    demand(nativeDelta===frames.length,`${label}: actual native socket and page counts agree on the recorded pushes and exact probe replies (native ${nativeDelta}, page ${frames.length})`);
     return { channels: permitted.map(frame=>frame.channel), excluded: excluded.length, probeCalls: probeCalls.length, page: to-from, native: nativeDelta };
+}
+/**
+ * THE INTERVAL IS THE SOCKET'S (Tynn #917). The page's running total and the socket's count were read one after the other,
+ * so a push sent between the two reads was on one side only (measured: "native 26, page 27", 2 of 15 runs). Here both ends
+ * are the socket's own counts on `connectionId`, and the page's side is found by each frame's ordinal on that connection
+ * (scripts/local-door-span.mjs), once the page has received the last frame the socket counted.
+ */
+async function nativeInterval(label, connectionId, startSummary, endSummary) {
+    const sent = (summary) => summary.records.find((r) => r.connectionId === connectionId)?.frames;
+    const nativeFrom = sent(startSummary), nativeTo = sent(endSummary);
+    demand(Number.isSafeInteger(nativeFrom) && Number.isSafeInteger(nativeTo), `${label}: the socket counted connection ${connectionId} at both ends`);
+    const handle = await main.evaluate(`[...window.__doorCdp.connections].find(([, id]) => id === ${JSON.stringify(connectionId)})?.[0] ?? null`);
+    demand(handle, `${label}: the page knows the handle of connection ${connectionId}`);
+    const span = await until(`${label}: the page received the socket's frame ${nativeTo}`,
+        async () => pageSpan(await main.evaluate('window.__doorCdp.frames.map((f) => ({ seq: f.seq, handle: f.handle, n: f.n }))'), handle, nativeFrom, nativeTo), 8_000);
+    return quietFrames(label, span.from, span.to, nativeTo - nativeFrom);
 }
 const forceUpdateCheck = () => inspector.evaluate(`(() => {
     const { Menu, BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
@@ -615,14 +635,13 @@ try {
         demand((await main.evaluate("window.genieTest.workspaces.settings('tynn')"))?.ok,'app bridge result positive control before absence');
         demand(await main.evaluate(`window.__doorCdp.total > ${gaugeStart}`),'the observer sees a result on the app connection');
         // A real ordinary app read of the SAME method must fail this very classifier. It has no probe ID receipt.
-        const appReadStart = await main.evaluate('window.__doorCdp.total'), appReadNativeStart = await nativeSummary();
+        const appReadNativeStart = await nativeSummary();
         await main.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)})`);
-        const appReadEnd = await main.evaluate('window.__doorCdp.total'), appReadNativeEnd = await nativeSummary();
+        const appReadNativeEnd = await nativeSummary();
         const appReadConnection = (await welcome(main)).connectionId;
         let appReadRefusal = null;
         try {
-            await quietFrames('app-originated agentDetail positive control', appReadStart, appReadEnd,
-                appReadNativeEnd.records.find(r=>r.connectionId===appReadConnection).frames-appReadNativeStart.records.find(r=>r.connectionId===appReadConnection).frames);
+            await nativeInterval('app-originated agentDetail positive control', appReadConnection, appReadNativeStart, appReadNativeEnd);
         } catch (error) {
             if (error.message.includes('unexpected') && error.message.includes('"method":"agentDetail"')) appReadRefusal = error.message;
             else throw error;
@@ -631,17 +650,15 @@ try {
         log(`CONTROL app-originated agentDetail remains forbidden: ${appReadRefusal}`);
         await sleep(500);
         const beforeTicks = Math.max(...count(await ticks()));
-        const frameStart = await main.evaluate('window.__doorCdp.total');
         const appWelcome = await welcome(main);
         const nativeStart = await nativeSummary();
         await until('eight more provider ticks',async()=>Math.max(...count(await ticks()))>=beforeTicks+8,20_000);
         const afterTicks = Math.max(...count(await ticks()));
-        const frameEnd = await main.evaluate('window.__doorCdp.total');
-        const w = await welcome(main), nativeEnd = await nativeSummary();
+        const nativeEnd = await nativeSummary(), w = await welcome(main);
         demand(w.connectionId===appWelcome.connectionId, 'the app connection is unchanged throughout streaming');
         demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app connection stays ready');
         demand(nativeEnd.records.some(r=>r.connectionId===w.connectionId&&!r.closed),'native connection remains live');
-        const beforeWatch = await quietFrames('unwatched streaming',frameStart,frameEnd,nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames-nativeStart.records.find(r=>r.connectionId===w.connectionId).frames);
+        const beforeWatch = await nativeInterval('unwatched streaming', w.connectionId, nativeStart, nativeEnd);
         // Positive activity gauge on that SAME app connection, then a second absence interval.
         const activityAgent = await main.evaluate(`(window.genieTest ?? window.genie).addAgent('tynn',{name:${JSON.stringify(`door-activity-${process.pid}`)},purpose:'Native activity subscription positive control',provider:'codex'})`);
         demand(activityAgent?.ok, `activity control agent added: ${activityAgent?.reason??'no result'}`); agents.push(activityAgent.id);
@@ -661,11 +678,10 @@ try {
             demand(watched.records.find(r=>r.connectionId===w.connectionId).frames>nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames,'native socket also measures watched activity frames');
         } finally { await main.evaluate('window.__doorActivityOff?.(); delete window.__doorActivityOff; true'); }
         await sleep(500);
-        const unwatchTicks = Math.max(...count(await ticks())), unwatchStart = await main.evaluate('window.__doorCdp.total'), unwatchNative = await nativeSummary();
+        const unwatchTicks = Math.max(...count(await ticks())), unwatchNative = await nativeSummary();
         await until('eight more unwatched provider ticks',async()=>Math.max(...count(await ticks()))>=unwatchTicks+8,20_000);
         const unwatchEnd = await nativeSummary();
-        const unwatchFrameEnd = await main.evaluate('window.__doorCdp.total');
-        const afterWatch = await quietFrames('streaming after unwatch',unwatchStart,unwatchFrameEnd,unwatchEnd.records.find(r=>r.connectionId===w.connectionId).frames-unwatchNative.records.find(r=>r.connectionId===w.connectionId).frames);
+        const afterWatch = await nativeInterval('streaming after unwatch', w.connectionId, unwatchNative, unwatchEnd);
         demand((await welcome(main)).connectionId===w.connectionId,'unwatch keeps the same app connection');
         return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; forbidden frames=0 before/after watch; app-originated agentDetail refusal positive; watched local-activity positive; permitted before=${JSON.stringify(beforeWatch)} after=${JSON.stringify(afterWatch)}`;
     });
@@ -674,11 +690,11 @@ try {
         demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'),'app owns its ready connection');
         await main.evaluate('window.__doorUpdateStates=[]; window.__doorUpdateOff=window.genieTest.updates.subscribe(s=>window.__doorUpdateStates.push({phase:s.phase,checkedAt:s.checkedAt,notesPending:s.changelog===null})); true');
         try {
-            const start = await main.evaluate('window.__doorCdp.total'), nativeStart = await nativeSummary();
+            const nativeStart = await nativeSummary();
             demand(await forceUpdateCheck(),'real application-menu update check fired');
             await until('forced check pushed checking then a settled state',()=>main.evaluate('window.__doorUpdateStates.some(s=>s.phase==="checking")&&window.__doorUpdateStates.at(-1)?.phase!=="checking"&&typeof window.__doorUpdateStates.at(-1)?.checkedAt==="number"&&!window.__doorUpdateStates.at(-1)?.notesPending'),30_000);
-            const end = await main.evaluate('window.__doorCdp.total'), nativeEnd = await nativeSummary();
-            const observed = await quietFrames('forced update',start,end,nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames-nativeStart.records.find(r=>r.connectionId===w.connectionId).frames);
+            const nativeEnd = await nativeSummary();
+            const observed = await nativeInterval('forced update', w.connectionId, nativeStart, nativeEnd);
             demand(observed.channels.includes('local-updates'),'forced check produced an actual local-updates frame');
             demand((await welcome(main)).connectionId===w.connectionId,'forced check used the unchanged app connection');
             return `app connection ${w.connectionId}; actual menu check; forbidden frames=0; permitted ${JSON.stringify(observed)}`;
