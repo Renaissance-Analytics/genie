@@ -16,8 +16,12 @@ import { MOVE_STEPS, WINDOW_CAPABILITIES, WINDOW_ENGINE_INVENTORY } from '../src
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
-/** Comments go, strings stay: a mention in a comment is not a call. */
-const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+/**
+ * Comment LINES go (the repo's source-guard convention): a line that starts with //, /* or * is not code. Never a block
+ * regex: a "/*" inside a comment or a string (main.ts has one) opens a block that swallows real code, and the guard
+ * would read less than is there. Stripping by line can only read more.
+ */
+const code = (text: string) => text.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
 
 /** The files a module loads by VALUE (type-only imports load nothing at run time), followed from `entry`. */
 export function valueReach(entry: string, readText: (path: string) => string | null = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null)): Set<string> {
@@ -142,6 +146,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
     });
 
     it('CONTROL: the scanner reads members and raw calls, not comments or import paths, and the ratchet notices a newcomer', () => {
+        // A "/*" in a line comment opens nothing: the uses after it are still read (main.ts:2469 hid two that way).
+        expect(engineUses("// Genie 1 (#1/*): its sign-in\nconst a = agentEngineLink.client.github();\n/* a real block */\nlink.client.workstation();")).toEqual(['github', 'workstation']);
         expect(engineUses("import { X } from './session-engine-client.js';\n// client.flows()\nagentEngineLink.client.hosting();\nvoid client.call('engine.thing', []);\nlink?.client?.heartbeat(b);"))
             .toEqual(['call:engine.thing', 'heartbeat', 'hosting']);
         expect(ratchet([['newThing', 'move:2g']], []).joined).toEqual(['newThing']);
