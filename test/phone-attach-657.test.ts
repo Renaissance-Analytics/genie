@@ -31,9 +31,19 @@ const AGENT = { id: 'agent_a', name: 'atlas', workspaceId: 'ws_1' };
 
 /** genie-host's host API (host-alone-api.ts builds the same one), over a fake session host recording `promptWith`. */
 function hostApi() {
+    const none = () => () => {};
     const deps = {
+        // genie-host's API is its remote connections' event source too: what a hello subscribes to (host-api.ts onEvent).
+        snapshot: () => ({ agents: [], workspaces: [], deckItems: [], signals: {} }),
+        subscribeSnapshot: none,
+        subscribeAgentRecords: none,
+        detailFor: () => null,
+        terminals: { onData: none, onExit: none, list: () => [] },
+        features: {},
+        workspaceOps: {},
         find: (id: string) => (id === AGENT.id ? AGENT : null),
         host: {
+            subscribe: none,
             promptWith: async (agentId: string, text: string, attachments: ReadonlyArray<{ name: string; type: string; bytes: unknown }>) => {
                 sent.push({ agentId, text, attachments });
                 return { ok: true };
