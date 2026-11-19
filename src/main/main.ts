@@ -46,14 +46,10 @@ import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile } from 'node:fs/promises';
-import { agentOpsPorts } from './agent-ops-api.js';
-import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
-import { restartAgent, retryPausedAgents, SettingApplier } from './agent-ops-host.js';
 import { isAcpProvider } from '../core/engine.js';
 import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
-import { agentShells } from '../core/agent-shells.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
@@ -86,8 +82,7 @@ import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '..
 import { wordTynnRefusal } from './drone-refusal.js';
 import { appInboxCardState, restartAppSource } from './host-owner-ops.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
-import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
-import { registeredEnvFile, startRefusal } from './workspace-ops-host.js';
+import { registeredEnvFile } from './workspace-ops-host.js';
 import { mkdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
@@ -106,7 +101,6 @@ import { Session as InspectorSession } from 'node:inspector';
 import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
-import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { loginTerminalOf } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
@@ -170,7 +164,6 @@ import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART } from '../core/upgrade-drain.js';
 import { restoreAfterRelaunch } from './relaunch-restore.js';
 import { WindowSafeMode } from './window-safe-mode.js';
-import { windowWake } from './window-wake.js';
 import { recordShutdown } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
 import { type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
@@ -179,7 +172,7 @@ import { fileExporter } from './file-export.js';
 import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
 import { workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
-import { HUMAN, agentCapFrom } from '../core/inbox.js';
+import { HUMAN } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteAccess } from './remote-access.js';
 import { gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
@@ -509,54 +502,16 @@ function watchTrayOnly(): void {
     }
 }
 
-const mcpRecovery = new McpRecovery();
-const mcpRecheck = new Map<string, ReturnType<typeof setTimeout>>();
-/** The latest report per agent: a spaced recheck acts on what is true THEN, never on the report that scheduled it. */
-const mcpLatest = new Map<string, readonly McpServerReport[]>();
-/** Set where the agent operations are built: a graceful restart on the same conversation. */
-let restartForMcp: ((agentId: AgentId) => Promise<void>) | null = null;
-function recoverMissingMcp(agentId: AgentId, reports: readonly McpServerReport[]): void {
-    mcpLatest.set(agentId, reports);
-    const missing = missingServers(reports, GENIE_MANAGED_MCP);
-    if (missing.length === 0) {
-        mcpRecovery.healthy(agentId);
-        const pending = mcpRecheck.get(agentId);
-        if (pending) { clearTimeout(pending); mcpRecheck.delete(agentId); }
-        return;
-    }
-    const said = missing.map((m) => `${m.name} (${m.why})`).join(', ');
-    const decision = mcpRecovery.decide(agentId, Date.now());
-    if (decision.action === 'restart') {
-        host?.notice(agentId, `This session came up without ${said}. Genie is restarting it on the same conversation to reconnect (attempt ${decision.attempt} of ${MCP_RECOVERY_ATTEMPTS}).`);
-        void restartForMcp?.(agentId);
-    } else if (decision.action === 'wait') {
-        if (!mcpRecheck.has(agentId)) mcpRecheck.set(agentId, setTimeout(() => { mcpRecheck.delete(agentId); recoverMissingMcp(agentId, mcpLatest.get(agentId) ?? []); }, Math.max(0, decision.untilMs - Date.now())));
-    } else if (decision.action === 'give-up') {
-        host?.notice(agentId, `Still without ${said} after ${decision.attempts} restarts. Genie has stopped retrying; restart this agent once the server answers.`);
-    }
-}
-
 /**
- * TYNN IS BACK (genie#1234). An agent in a Tynn-linked workspace starts without its `tynn` server when Genie is signed
- * out or Tynn is unreachable; when the account signs in, the agents that went without it — and any whose unverified stored
- * key Tynn now refuses — are restarted on the same conversation (the graceful restart `restartForMcp` uses), so nobody
- * has to restart them or Genie. One recovery at a time: two quick account changes must not restart an agent twice.
+ * TYNN IS BACK (genie#1234) is genie-host's: it hears the account itself and restarts its own agents, window or no window
+ * (host-tynn-recovery.ts). All it cannot hear is that this window's one-time move of the secrets has finished, so the
+ * window says so, once per move (Tynn #896, 2b-3).
  */
 let tynnRecovering = false;
-function recoverTynnAgents(asked: { secretsMoved?: boolean } = {}): void {
-    if (tynnRecovering || !services || (!asked.secretsMoved && !tynnAccount?.status().signedIn)) return;
-    // With a host, the host hears the account itself and restarts its own agents, with or without this window (host-tynn-recovery.ts). All it
-    // cannot hear is that this window's one-time move has finished.
-    if (!agentEngineLink || !asked.secretsMoved) return;
+function recoverTynnAgents(): void {
+    if (tynnRecovering || !services || !agentEngineLink) return;
     tynnRecovering = true;
-    const named = agentEngineLink.client.tynn().recovery(asked);
-    void named.then((ids) => {
-        for (const id of ids) {
-            if (!host?.probe(id as AgentId)) continue;
-            host?.notice(id as AgentId, 'Tynn is available again. Genie is restarting this session on the same conversation to bring its Tynn tools up to date.');
-            void restartForMcp?.(id as AgentId);
-        }
-    }).catch((error: unknown) => {
+    void agentEngineLink.client.tynn().recovery({ secretsMoved: true }).catch((error: unknown) => {
         console.error(`[tynn] agents could not be brought back to Tynn: ${error instanceof Error ? error.message : String(error)}`);
     }).finally(() => { tynnRecovering = false; });
 }
@@ -579,8 +534,6 @@ function alertAccountPaused(provider: string): void {
     n.show();
 }
 
-/** `Try again` for a paused login (set where the agent operations are built): every agent it stopped, brought back. */
-let retryPausedAccount: ((provider: string) => void) | null = null;
 /** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
 let registry: Registry | null = null;
 /** Each workspace's colour (genie#1300): read from and written to its project.json. */
@@ -767,8 +720,6 @@ let activityFeeds: ActivityFeeds | null = null;
 let askerLivenessKnown = false;
 /** The Dashboard's comms cell (§4.1): AgentInbox traffic since the session started, bounded to the newest 2000 mails. */
 const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.involving(agentId as AgentId, 2000) : null));
-/** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
-let settingApplier: SettingApplier | null = null;
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b). */
 let updates: (Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> & { prepareQuit?: () => Promise<unknown>; forceDrain?: () => boolean | Promise<boolean>; cancelDrain?: () => void | Promise<void> }) | null = null;
 /** Repeated quit requests cannot skip the pending safe-point wait or overwrite its final record. */
@@ -1301,12 +1252,6 @@ let publishBrowserFacts: () => void = () => {};
  * Where "latest" comes from, per tool (toolchain-prober.ts `latestIndex`): every command it runs goes through the same
  * platform routing as the probe and the update, so on Windows `npm outdated -g` reaches npm.cmd through cmd.exe.
  */
-/** Each provider CLI, measured (Tynn #698): what this process's "installed" and "signed in" read, and the Toolchain's agent rows. */
-const providerHealth = new ProviderHealthBook(async provider => {
-    const account = await agentEngineLink?.client.providerAccount(provider);
-    if (!account) throw new Error('The provider account book is unavailable; reconnect Genie’s host.');
-    return checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), account);
-});
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
 const toolchainDataDir = (): string => join(genieRoot(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
@@ -1445,14 +1390,6 @@ async function boot(): Promise<void> {
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
         onHeadroom: (provider: string, room: Headroom, stamp?: ReadingStamp) => headroomFeed.offer(provider, room, stamp),
-        // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
-        // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
-        // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
-        onMcpServers: (agentId: AgentId, reports: readonly McpServerReport[]) => {
-            recoverMissingMcp(agentId, reports);
-            // Kept on the agent's record, so its Settings can list its servers while it is not running (Tynn #628).
-            void registry?.noteMcpSeen(agentId, reports.map((r) => r.name)).catch(() => undefined);
-        },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
         serviceEnvFor: (workspaceId: string) => services?.engines.envFor(workspaceId) ?? {},
         /**
@@ -1808,33 +1745,6 @@ async function boot(): Promise<void> {
     // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
     ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
 
-    /*
-     * START ON FIRST MESSAGE (the owner, 2026-11-01, q_04ce323c: "opening an agent must NOT start it"). One rule for every
-     * sender of work — the composer, a remote window's prompt, a flow (main/start-on-demand.ts): a session here is used as
-     * it is; an agent with none is started, unless its workspace is asleep or the agent cap refuses, said by name.
-     */
-    const startOnDemand = (record: AgentRecord): Promise<StartForWork> => startForWork({
-        probe: (id) => host?.probe(id) ?? null,
-        start: (r, cwd) => (host ? host.start(r, cwd) : { ok: false, reason: 'Genie’s agents are not running yet' }),
-        cwdFor,
-        startRefusal: (r) => startRefusal(workspaceOps, r, {
-            running: registry!.agentsOf(r.workspaceId).filter((a) => host?.probe(a.id)?.running === true).length,
-            cap: agentCapFrom(services?.settings.snapshotFor(r.workspaceId) ?? {}),
-        }),
-    }, record);
-    // THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): the same rule, and a new driver through the one
-    // Restart when the run's own stopped itself. `agentOps` is read when a message comes, never while main is wiring up.
-    // A command before the agent host is up is refused in words, where the caller shows them (Tynn #563).
-    const agentsUp = (): NonNullable<typeof host> => {
-        if (!host) throw new Error('Genie’s agents are not running yet');
-        return host;
-    };
-    const startForYours = (record: AgentRecord): Promise<StartForWork> => startForYourMessage({
-        startForWork: startOnDemand,
-        needsNewDriver: (id) => host?.needsNewDriver(id) ?? false,
-        restart: (id) => restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch()),
-        notice: (id, message) => host?.notice(id, message) ?? false,
-    }, record);
 
     /*
      * The terminal handlers. Every argument is `unknown` and narrowed here — the renderer is
@@ -1842,48 +1752,10 @@ async function boot(): Promise<void> {
      * looked up in the registry: an unknown workspace is refused, and there is no way to name
      * an agent through this surface.
      */
-    /*
-     * AGENT OPERATIONS (§6.2). The plans live in core/agent-ops.ts, the sequencing in
-     * agent-ops-host.ts; these ports are the real registry, session host and filesystem.
-     * `signedIn` answers true: Genie has no provider sign-in probe yet, and a false "not signed
-     * in" would send people to a login they already have. `linkedSystems` is empty until the
-     * Tynn identity layer is wired — so a delete plan lists no external system, honestly.
-     */
-    const hostModels = agentEngineLink.client;
-    // Measured once as the agents come up, so a switch or a diagnosis here reads a check rather than claiming nothing.
-    void providerHealth.refreshAll();
-    const agentOps = agentOpsPorts({
-        registry: () => registry,
-        engine: () => host,
-        // A provider's models are asked of genie-host (beta.61.1): it has the process supervisor a provider launch needs.
-        models: { get: (provider, options) => hostModels.providerModels(provider, options) },
-        cwdFor,
-        finished: () => services?.attention.finished() ?? [],
-        providerInstalled: (provider) => providerHealth.installed(provider),
-        signedIn: (provider) => providerHealth.signedIn(provider),
-        applyOnStart: (id) => settingApplier!.requested(id),
-        // Start is the restart now (genie#1238): what Start always obeyed — an asleep workspace, the agent cap — it obeys.
-        startRefusal: (record) => startRefusal(workspaceOps, record, {
-            running: registry!.agentsOf(record.workspaceId).filter((a) => host?.probe(a.id)?.running === true).length,
-            cap: agentCapFrom(services?.settings.snapshotFor(record.workspaceId) ?? {}),
-        }),
-    });
-    // Background tasks die with the process: a setting waits for the agent's to end (the Shells tab's own count).
-    settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
     // GENIE'S SCRATCH (P7): this process's folder under `<root>/cache/tmp`, made on first use with no process-table read;
     // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
     const scratch = scratchArea(genieRoot());
     scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
-    restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
-    // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
-    retryPausedAccount = (provider) => {
-        void retryPausedAgents({
-            paused: (p) => host?.pausedAgents(p) ?? [],
-            restart: (id) => restartAgent(agentOps, id, 'graceful'),
-            prompt: (id, text) => { host?.prompt(id as AgentId, text, 'genie'); },
-            touch: () => { registry?.touch(); },
-        }, provider).catch(() => {});
-    };
     // THE SIGN-INS (Tynn #896) are protocol calls answered by genie-host (host-sign-ins.ts): the provider's own login, opened
     // on the window that asked (windowOps terminal.window), for the host's owner. Genie never handles a credential.
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
@@ -2214,18 +2086,6 @@ async function boot(): Promise<void> {
         v1Services: { database: v1DatabaseFile() },
         // Genie 1's FLOWS (its `flows` table), brought over ONCE as DISARMED canvas flows (main/v1-flows.ts, genie#1204).
         v1Flows: { database: v1DatabaseFile() },
-        // What a flow's agent prompt reaches (flow-runner.ts): the live sessions, late-bound — a prompt to an agent mid-turn
-        // goes as a typed message does (Tynn #826), and one no run can take is kept for the agent's next Restart.
-        agentSessions: {
-            session: (id) => host?.probe(id as AgentId) ?? null,
-            // A flow's prompt is work: an agent not running is started for it (q_04ce323c), under the same refusals.
-            start: async (id) => { const record = registry?.find(id as AgentId); return record ? (await startOnDemand(record)).ok : false; },
-            rows: (id) => host?.rowsFor(id as AgentId) ?? [],
-            prompt: (id, text, by) => host?.prompt(id as AgentId, text, by) ?? false,
-            deliver: async (id, text, by) => { const handed = await host?.handOff(id as AgentId, text, by); return handed ? { id: handed.queued } : null; },
-            keep: async (id, text, by) => { if (!host) throw new Error('no agent host to keep the prompt for'); await host.recordOwed(id as AgentId, text, by); },
-            subscribe: (listener) => host?.subscribe((agentId) => listener(agentId)) ?? (() => {}),
-        },
         // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.
         caddyBin: caddyCopy?.path ?? null,
         // A started site is `starting` until its port answers, then running and routed (parity audit #9; Genie 1's
@@ -2262,7 +2122,7 @@ async function boot(): Promise<void> {
         onSecretsMoved: () => {
             void githubAccount?.reload().catch(() => {});
             void registerWorkstationNow?.();
-            void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents({ secretsMoved: true }));
+            void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents());
         },
         // An agent's key is the host's (genie#1457).
         tynnSecrets: linkedAgentSecrets(agentEngineLink.client),
@@ -2386,10 +2246,6 @@ async function boot(): Promise<void> {
     // A move of an older Genie's pairing that finished before this line had nobody to tell.
     void tynnAccount.reload().catch(() => {});
 
-    // Signing in brings back the Tynn tools of the agents that started without them (genie#1234) — and once now, for an
-    // account that signed in while it opened, before anyone was listening.
-    tynnAccount.onChange(() => recoverTynnAgents());
-    recoverTynnAgents();
     afterTynnUrl = pushFeatures;
     // A SIGN-IN THAT WAITED FOR THE KEYRING (linux-keyring.ts): the card's Restart Genie left a note (which sign-in, never
     // a code); with the keyring working now, Tynn's sign-in opens again by itself, so the person is not left to find it.
@@ -2678,19 +2534,6 @@ async function boot(): Promise<void> {
     // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());
-    // MAIL WAKES THE AGENT: started as Start would be (opening starts nothing since q_04ce323c) — an asleep workspace or the agent cap refuses, and the notice waits.
-    // One path for every source that may wake an agent: mail, and IssueWatch's `push`.
-    const wakeAgent = windowWake({
-        safeMode: windowSafeNow,
-        find: (agentId) => (host ? registry?.find(agentId as AgentId) ?? null : null),
-        running: (record) => host?.probe(record.id)?.running === true,
-        refusal: (record) => startRefusal(workspaceOps, record, {
-            running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
-            cap: agentCapFrom(composed.settings.snapshotFor(record.workspaceId) ?? {}),
-        }),
-        start: async (record) => (host ? (await host.start(record, cwdFor(record))).ok : false),
-        log: (line) => console.log(line),
-    });
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
     // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told after the coalescing window — a busy one at its
     // next step, as typed input arrives (genie#1411). An app's message starts a stopped agent only if it is automated and
@@ -2857,8 +2700,6 @@ async function boot(): Promise<void> {
         // Which agents are started, for doctor mode — rewritten only when that set changes.
         const started = host?.startedIds().sort() ?? [];
         if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieRoot(), started); }
-        // A model or tool setting waiting for this agent to be free applies the moment it is.
-        settingApplier?.changed(agentId);
         estate.request('estate');
     });
 
@@ -2923,7 +2764,12 @@ async function boot(): Promise<void> {
         ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) { leftRunning.set(false); requestQuit('shut-down'); } }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
-        onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
+        // TRY AGAIN for a paused account (Tynn #896, 2b-3): genie-host's accountRetry, named by an agent the provider stopped.
+        onAccountRetry: (provider) => {
+            const agent = host?.pausedAgents(provider)[0];
+            if (!agent) return;
+            void ownProtocol.call('accountRetry', [agent]).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] account retry:', why); });
+        },
     };
     trayImages = buildTrayImages(trayIconPath());
     tray = createTray(trayHandlers, trayWaiting > 0 ? trayImages.attention : trayImages.plain);

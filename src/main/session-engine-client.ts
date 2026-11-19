@@ -1,4 +1,3 @@
-import type { AccountRecord } from '../core/accounts.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
@@ -1331,31 +1330,6 @@ export class SessionEngineClient {
         await this.#value('engine.refreshAccountIdentity', [provider], false);
     }
 
-    /**
-     * Sign one account of a provider in (Tynn #479). The host runs the sign-in and owns its terminal; the window only shows it.
-     * Two calls for one account join one sign-in. With no account named, the provider's default account.
-     */
-    async login(provider: string, accountId?: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }> {
-        const reply = await this.call('engine.login', accountId === undefined ? [provider] : [provider, accountId]);
-        if (!reply.ok) return { ok: false, reason: reply.reason };
-        return reply.value as { ok: true; terminalId: string } | { ok: false; reason: string };
-    }
-
-    /** The person closed or cancelled the sign-in window: the host kills its terminal and signs nobody in. */
-    async cancelLogin(accountId: string): Promise<void> {
-        await this.#value('engine.cancelLogin', [accountId], false);
-    }
-
-    /**
-     * SWITCH ACCOUNT (Tynn #753): the host opens the provider's own login in its one home; the answer names the terminal and the
-     * steps to show. No agent is stopped or started again.
-     */
-    async switchAccount(provider: string): Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }> {
-        const reply = await this.call('engine.switchAccount', [provider]);
-        if (!reply.ok) return { ok: false, reason: reply.reason };
-        return reply.value as { ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string };
-    }
-
     /** Rename or forget a known account (Tynn #484); a refusal, or a host that cannot answer, is its reason. */
     async accountsAct(action: AccountsAction): Promise<AccountsActResult> {
         const reply = await this.call('engine.accountsAct', [action]);
@@ -1379,11 +1353,6 @@ export class SessionEngineClient {
     /** Not now on an offer: it goes, and the host does not make it again in that window. */
     async dismissSwitchOffer(id: string): Promise<boolean> {
         return (await this.#value<unknown>('engine.dismissSwitchOffer', [id], false)) === true;
-    }
-
-    /** The persisted legacy account home, or unknown while the host/book cannot answer. */
-    async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null> {
-        return this.#value('engine.providerAccount', [provider], null);
     }
 
     /**

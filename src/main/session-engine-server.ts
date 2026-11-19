@@ -1,4 +1,3 @@
-import type { AccountRecord } from '../core/accounts.js';
 import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
 import type { GithubAccountService } from './github-account-service.js';
@@ -134,13 +133,6 @@ export interface EngineServerOptions {
     readonly pid?: number;
     /** A provider's model list, from the host's one cache (core/provider-models.ts); `refresh` asks the CLI again. */
     readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
-    /** The host book's persisted legacy account; only this machine's window may ask. */
-    readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null;
-    /** A sign-in for one account, run here (Tynn #479). */
-    readonly login?: (provider: string, accountId: string | undefined) => { ok: true; terminalId: string } | { ok: false; reason: string };
-    readonly cancelLogin?: (accountId: string) => void;
-    /** Open the provider's own login in its one home so the person can switch accounts; no agent is touched (Tynn #753). */
-    readonly switchAccount?: (provider: string) => import('./account-switch-host.js').AccountSwitchStart;
     /** The switch offers genie-host keeps (Tynn #481): listed, and dismissed (Not now), by this machine's window only. */
     readonly switchOffers?: { offers(): readonly import('../core/switch-offer.js').SwitchOffer[]; dismiss(id: string): boolean };
     /** Every known account with its readings, and the standing offers (Tynn #483): this machine's window only. No credential. */
@@ -649,27 +641,6 @@ export class SessionEngineServer {
             return this.#options.features.call(conn.id, 'act', [action], { connectionId: 'question-window', origin: 'local-window',
                 profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'this Genie question window' },
                 async () => { throw new Error('the question window provides no other UI effects'); }, null);
-        }
-        if (method === 'engine.providerAccount') {
-            if (!conn.local || !conn.window) throw new Error('Provider account homes need this machine’s own window.');
-            if (!this.#options.providerAccount) throw new Error('The provider account book is unavailable.');
-            const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
-            return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
-        }
-        if (method === 'engine.login') {
-            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
-            if (!this.#options.login) throw new Error('Sign-in is not ready in the host yet.');
-            return this.#options.login(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'string' ? args[1] : undefined);
-        }
-        if (method === 'engine.cancelLogin') {
-            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
-            this.#options.cancelLogin?.(typeof args[0] === 'string' ? args[0] : '');
-            return true;
-        }
-        if (method === 'engine.switchAccount') {
-            if (!conn.local || !conn.window) throw new Error('Switching accounts needs this machine’s own window.');
-            if (!this.#options.switchAccount) throw new Error('Switching accounts is not ready in the host yet.');
-            return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '');
         }
         if (method === 'engine.accountsAct') {
             if (!conn.local || !conn.window) throw new Error('Accounts need this machine’s own window.');
