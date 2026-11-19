@@ -206,11 +206,14 @@ export function explainProviderStop(code: string, said: ProviderSaid | null = nu
 /** How much of the provider's message the agent's note quotes; the person sees all of it on the stop line. */
 const NOTE_QUOTE_CHARS = 400;
 
+/** U+2028 and U+2029, built from their codes: written raw in a regex literal they end it (a parse error). */
+const LINE_SEPARATORS = new RegExp(`[${String.fromCharCode(0x2028, 0x2029)}]`, 'g');
+
 /** The provider's text as ONE JSON string: nothing in it can close the quote or start a line (U+2028/9 escaped too). */
 function quoteUntrusted(text: string): string {
     const chars = Array.from(text);
     const cut = chars.length > NOTE_QUOTE_CHARS ? `${chars.slice(0, NOTE_QUOTE_CHARS).join('')}… (cut)` : text;
-    return JSON.stringify(cut).replace(/[  ]/g, (c) => `\\u${c.charCodeAt(0).toString(16)}`);
+    return JSON.stringify(cut).replace(LINE_SEPARATORS, (c) => `\\u${c.charCodeAt(0).toString(16)}`);
 }
 
 /**
