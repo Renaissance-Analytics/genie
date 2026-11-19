@@ -3,6 +3,7 @@ import { ageLabel, revealOf, type Reveal } from '../../core/reveal.js';
 import { ARC_WINDOW_SECONDS, arcsFor, type Point, type Rect } from '../../core/flight-arcs.js';
 import { FlightPaths } from './FlightPaths.js';
 import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academy/react-fancy';
+import { PlanHover } from './PlanHover.js';
 import { Fragment, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { useNow } from '../use-now.js';
 import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
@@ -353,12 +354,13 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
 
             <div className="flex min-w-0 items-center gap-2">
                 {target?.kind === 'target' ? (
-                    <>
+                    // Hovered, the whole plan (Tynn #918); the step and target stay as they are.
+                    <PlanHover plan={target.plan}>
                         {target.step ? (
                             <span className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">{target.step}</span>
                         ) : null}
                         <span className="truncate text-[var(--fg-2)]">{target.text}</span>
-                    </>
+                    </PlanHover>
                 ) : null}
 
                 {/*

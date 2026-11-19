@@ -24,3 +24,14 @@ export function chatPlanView(steps: readonly { readonly content: string; readonl
     if (items.length === 0) return null;
     return { items, done: steps.length - items.length, of: steps.length };
 }
+
+/**
+ * THE WHOLE PLAN, FOR THE DASHBOARD'S HOVER (Tynn #918; the owner, 2026-11-19: "hovering the plan column must show the
+ * agent's FULL plan"). Every step in the plan's order, done ones included, each with its status and the in-progress one
+ * marked. The steps are the host's (`LiveSession.planSteps`), so every client lists the same plan.
+ */
+export function fullPlanView(steps: readonly { readonly content: string; readonly status: string }[] | null | undefined): ChatPlanView | null {
+    if (!steps || steps.length === 0) return null;
+    const items = steps.map((s): ChatPlanItem => ({ content: s.content, status: s.status, current: s.status === 'in_progress' }));
+    return { items, done: steps.filter((s) => s.status === 'completed').length, of: steps.length };
+}
