@@ -191,7 +191,7 @@ describe('the comms cell — a zero would claim an agent works alone', () => {
 
 describe('the target cell — three mutually exclusive things', () => {
     it('shows a step and a target for a declared agent', () => {
-        expect(targetOf(row())).toEqual({ kind: 'target', step: '4/7', text: 'Passkey enrolment endpoint' });
+        expect(targetOf(row())).toEqual({ kind: 'target', step: '4/7', text: 'Passkey enrolment endpoint', plan: null });
     });
 
     it('replaces the target with the ROUTE TO FIX IT when broken', () => {

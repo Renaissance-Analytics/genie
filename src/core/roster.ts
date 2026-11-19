@@ -203,6 +203,8 @@ export function agentRowFor(
         fixes: session?.failure?.fixes ?? [],
         step: session?.plan ? `${session.plan.step}/${session.plan.of}` : null,
         target: session?.plan?.doing ?? null,
+        // The plan cell's hover lists every step (Tynn #918): the host's own copy, never one a window kept.
+        planSteps: session?.planSteps ?? null,
         // The workspace dashboard's card (q_09d1f4a0): what it was asked, and the tool it is in now.
         asked: session?.asked ?? null,
         tool: session?.tool ?? null,

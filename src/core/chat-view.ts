@@ -195,7 +195,13 @@ export function chatContext(detail: ChatDetail): ChatContext {
     // Waiting on the Claude Design login (#1081): the line's `Log in to Claude Design` fixes it.
     if (s.designLogin) return { text: 'Claude Design login needed', tone: 'warn' };
     // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21).
-    if (s.running && (s.background ?? 0) > 0) return { text: `Working · ${s.background} in the background`, tone: 'ok' };
+    // ...AND ITS PLAN STAYS IN VIEW (Tynn #918): the background count joins the plan's step, never replaces it.
+    if (s.running && (s.background ?? 0) > 0) {
+        const here = `Working · ${s.background} in the background`;
+        if (!s.plan) return { text: here, tone: 'ok' };
+        const planView = chatPlanView(s.planSteps && s.planSteps.length > 0 ? s.planSteps : planSteps(detail.rows));
+        return { text: `${here} · Plan ${s.plan.step}/${s.plan.of}${s.plan.doing ? ` · ${s.plan.doing}` : ''}`, tone: 'ok', ...(planView ? { planView } : {}) };
+    }
     // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
     if (s.running && s.cooling === true) return { text: 'Cooling', tone: 'cool' };
     if (isSleeping(s, Date.now())) return { text: 'Sleeping', tone: 'muted' };

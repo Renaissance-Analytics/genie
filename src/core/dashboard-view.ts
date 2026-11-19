@@ -1,4 +1,5 @@
 import type { AccountPause } from './account-pause.js';
+import { fullPlanView, type ChatPlanView } from './chat-plan.js';
 import { limitTitle, limitWords } from './limit-words.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { CommsLink } from './comms.js';
@@ -87,6 +88,8 @@ export interface AgentRow {
     fixes: readonly string[];
     /** `4/7` — a plan step, when the agent reports one. */
     step: string | null;
+    /** That plan's steps, from the host's snapshot (`LiveSession.planSteps`): the plan cell's hover (Tynn #918). Absent/`null` = none reported. */
+    planSteps?: readonly { readonly content: string; readonly status: string }[] | null | undefined;
     /** What started its current turn, first line (core/turn-now.ts); absent/`null` = not reported. */
     asked?: string | null | undefined;
     /** The tool its turn is in now, by title; absent/`null` = none running, or not reported. */
@@ -304,7 +307,7 @@ export function commsOf(row: AgentRow): CommsCell {
 
 /** What occupies the "current target" column — they are mutually exclusive. */
 export type TargetCell =
-    | { kind: 'target'; step: string | null; text: string }
+    | { kind: 'target'; step: string | null; text: string; /** The whole plan, listed on hover (Tynn #918); `null` = no steps to list. */ plan: ChatPlanView | null }
     | { kind: 'activity'; bars: readonly number[] }
     | { kind: 'fixes'; fixes: readonly string[] }
     | null;
@@ -314,7 +317,7 @@ export function targetOf(row: AgentRow): TargetCell {
     // longer the useful fact.
     if (row.state === 'broken' && row.fixes.length > 0) return { kind: 'fixes', fixes: row.fixes };
     if (row.fidelity === 'observed' && row.activity) return { kind: 'activity', bars: row.activity };
-    if (row.target) return { kind: 'target', step: row.step, text: row.target };
+    if (row.target) return { kind: 'target', step: row.step, text: row.target, plan: fullPlanView(row.planSteps) };
     return null;
 }
 
