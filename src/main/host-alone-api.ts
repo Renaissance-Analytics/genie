@@ -4,7 +4,9 @@ import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import { agentDetailFor } from './agent-detail.js';
 import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
 import { agentOpsApi, agentOpsPorts, type AgentOpsWiring } from './agent-ops-api.js';
-import { restartAgent, SettingApplier } from './agent-ops-host.js';
+import { restartAgent, retryPausedAgents, SettingApplier } from './agent-ops-host.js';
+import { wireInboxChatUpdates } from './agent-push.js';
+import type { InboxStore } from './inbox-store.js';
 import { agentShells } from '../core/agent-shells.js';
 import type { Finished } from './attention-store.js';
 import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
@@ -100,7 +102,7 @@ export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMetho
 export type HostAloneEngine = Pick<SessionHost,
     'probe' | 'start' | 'stop' | 'ended' | 'deliverOwed' | 'cancel' | 'resumeLimit' | 'prompt' | 'promptWith' | 'resolvePrompt' | 'answerApproval'
     | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'historyPending' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'
-    | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput' | 'forgetShown' | 'attachment'>;
+    | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput' | 'forgetShown' | 'attachment' | 'pausedAgents'>;
 
 export interface HostAlonePorts {
     readonly hostName: string;
@@ -119,7 +121,7 @@ export interface HostAlonePorts {
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
     readonly deckItems: DeckAnswerPorts['deckItems'];
-    readonly inbox: DeckAnswerPorts['inbox'] & { involving(id: AgentId, limit: number): readonly InboxMessage[] };
+    readonly inbox: DeckAnswerPorts['inbox'] & { involving(id: AgentId, limit: number): readonly InboxMessage[] } & Partial<Pick<InboxStore, 'onMessagesChanged'>>;
     /** An approval's note, delivered to the agent as your message. */
     readonly deliverToAgent: (agentId: string, text: string) => boolean | Promise<boolean>;
     readonly files: NonNullable<HostApiDeps['files']>;
@@ -260,6 +262,17 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         },
         // ADDING AN AGENT, here (Tynn #898): the same creation a window ran, over genie-host's registry and the disk.
         registerAgent: (workspaceId, input) => createAgent(agentCreate, workspaceId, input),
+        // TRY AGAIN for a paused account (step 2d-4a): genie-host's session host says which agents the provider stopped.
+        retryPausedAccount: (provider) => {
+            void retryPausedAgents({
+                paused: (p) => ports.engine()?.pausedAgents(p) ?? [],
+                restart: (id) => restartAgent(agentOps, id, 'graceful'),
+                prompt: (id, text) => { void ports.engine()?.prompt(id as AgentId, text, 'genie'); },
+                touch: () => registry.touch(),
+            }, provider).catch(() => {});
+        },
+        // A chat follows its mail (step 2d-4a): an arrival or a read receipt refreshes its participants for their watchers.
+        ...(ports.inbox.onMessagesChanged ? { subscribeAgentChat: (listener: (agentId: string) => void) => wireInboxChatUpdates({ onMessagesChanged: (l) => ports.inbox.onMessagesChanged!(l) }, listener) } : {}),
         terminals: ports.terminals,
         uploads: ports.uploads,
         files: ports.files,

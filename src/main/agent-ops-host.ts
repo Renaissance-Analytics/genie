@@ -2,7 +2,7 @@ import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
-import { providerLogin } from '../core/provider-login.js';
+import { ACCOUNT_BACK, providerLogin } from '../core/provider-login.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { buildCarryOver, type CarryOver } from '../core/carry-over.js';
 import type { StreamEvent } from '../core/stream-event.js';
@@ -597,7 +597,14 @@ export async function diagnose(ports: AgentOpsPorts, agentId: string): Promise<{
     };
 }
 
-/** RED STUB (Tynn #898 step 2d-4a): TRY AGAIN for a paused account, shared by main and genie-host. */
-export async function retryPausedAgents(_ports: { paused(provider: string): readonly string[]; restart(agentId: string): Promise<{ ok: boolean }>; prompt(agentId: string, text: string): void; touch(): void }, _provider: string): Promise<void> {
-    throw new Error('2d-4a: not built');
+/**
+ * TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back, and
+ * each one that does is told its account is back. One code for window main and genie-host (Tynn #898 step 2d-4a).
+ */
+export async function retryPausedAgents(ports: { paused(provider: string): readonly string[]; restart(agentId: string): Promise<{ ok: boolean }>; prompt(agentId: string, text: string): void; touch(): void }, provider: string): Promise<void> {
+    await Promise.all(ports.paused(provider).map(async (id) => {
+        try {
+            if ((await ports.restart(id)).ok) ports.prompt(id, ACCOUNT_BACK);
+        } finally { ports.touch(); }
+    }));
 }

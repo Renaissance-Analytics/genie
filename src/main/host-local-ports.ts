@@ -46,7 +46,7 @@ export interface HostLocalSources {
 
 const APP_WINDOW = 'an app’s window opens in a Genie window: open it from Genie on this machine';
 
-export type HostLocalPorts = Required<Pick<HostApiDeps, 'marketplace' | 'gapps' | 'localTerminals' | 'localFiles' | 'artboard' | 'chatDrafts'>>;
+export type HostLocalPorts = Required<Pick<HostApiDeps, 'marketplace' | 'gapps' | 'gappsChanged' | 'localTerminals' | 'localFiles' | 'artboard' | 'chatDrafts'>>;
 
 export function hostLocalPorts(sources: HostLocalSources): HostLocalPorts {
     const panels: PanelsHostDeps = {
@@ -67,6 +67,8 @@ export function hostLocalPorts(sources: HostLocalSources): HostLocalPorts {
     return {
         marketplace: sources.marketplace,
         gapps,
+        // The Apps list follows installs and removals (Tynn #596), as a signal; the window reads the list (step 2d-4a).
+        gappsChanged: { subscribe: (listener) => sources.onGappsChanged(listener) },
         localFiles: {
             files: sources.files,
             editor: () => {
