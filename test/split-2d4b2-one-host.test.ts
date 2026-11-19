@@ -86,7 +86,7 @@ describe('main serves no protocol of its own', () => {
         expect(compose).not.toMatch(/readonly remoteApi\?:/);
         expect(compose).not.toMatch(/readonly remoteTransport\?:/);
         expect(compose).not.toMatch(/openDevices/);
-        expect(compose).toMatch(/readonly remoteAccess: RemoteAccessReplica \| RemoteAccessView;/);
+        expect(compose).toMatch(/readonly remoteAccess: RemoteAccessReplica;/);
         expect(compose).toMatch(/remote: input\.remoteAccess,/);
         expect(compose).toMatch(/pairing: input\.remoteAccess\.pairing,/);
     });
