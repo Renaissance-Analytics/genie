@@ -136,8 +136,11 @@ export interface ServiceAdding {
     readonly consent: { image: string; note: string; form: ServiceForm } | null;
 }
 
-/** Docker's state for the container, or `docker-not-running` when Docker itself is not there to ask (never read as `absent`). */
-export type ServiceStatus = 'running' | 'exited' | 'absent' | 'docker-not-running';
+/**
+ * Docker's state for the container, `docker-not-running` when Docker itself is not there to ask, or `unknown` when Genie
+ * could not ask it (Tynn #922: the spawn host lost, a timeout); neither is ever read as `absent`.
+ */
+export type ServiceStatus = 'running' | 'exited' | 'absent' | 'unknown' | 'docker-not-running';
 
 /** The end of one engine's own output, as `docker logs --tail` gave it when the person asked (H6). */
 export interface ServiceLogs {
@@ -151,7 +154,7 @@ export interface ServiceLogs {
 export interface ServiceView {
     readonly instance: ServiceInstance;
     readonly status: ServiceStatus;
-    /** Only with `docker-not-running`: Docker's own reason (the daemon is down, or Docker is not installed). */
+    /** With `docker-not-running`: Docker's own reason (the daemon is down, or not installed); with `unknown`: why it could not be asked. */
     readonly note?: string;
 }
 

@@ -597,7 +597,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     const enginePorts = {
         available: () => driver.available(),
         instances: () => engines.list(),
-        state: async (id: string) => (await engines.status(id)).state,
+        state: async (id: string) => { const s = await engines.status(id); return s.state === 'unknown' ? { unknown: s.reason } : s.state; },
     };
     // Not awaited: readiness is bounded in tens of seconds and nothing else at boot needs it. The readiness clock is
     // the real one, never `input.now` — a fixed test clock would never reach the deadline.

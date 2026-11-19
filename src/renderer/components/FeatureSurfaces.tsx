@@ -974,7 +974,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                 <div className="flex items-center gap-3">
                                     <span className="text-sm font-medium">{engineName(i)}</span>
                                     <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : workspaceLabel(workspaces, scope.workspaceId)}</Badge>
-                                    <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status}</Badge>
+                                    <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status === 'unknown' ? 'state unknown' : status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
                                     <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
                                     {i.engine === 'custom' && i.image ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
@@ -984,7 +984,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                     </span>
                                 </div>
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
-                                {status === 'docker-not-running' && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
+                                {(status === 'docker-not-running' || status === 'unknown') && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
                                 {confirming === i.id ? <DeleteDataConfirm instance={i} workspaces={workspaces} onAction={onAction} onCancel={() => setConfirming(null)} /> : null}
                                 {services.updating?.serviceId === i.id ? (
                                     <div data-service-update-confirm={i.id} className="flex flex-col gap-2 rounded-md border border-[var(--border-1)] p-3 text-sm">
