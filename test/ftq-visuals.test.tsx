@@ -95,7 +95,7 @@ describe('the input (core/question-visuals.ts)', () => {
 
     const BYPASSES: Record<string, string> = {
         'a tag joined from two halves': '<p>x</p><scr<script>ipt>alert(1)',
-        'a closed tag joined from two halves': '<scr<script>ipt>alert(1)</scr</script>ipt>',
+        'a closed tag joined from two halves': '<scr<link>ipt>alert(1)</scr<link>ipt>',
         'a handler joined from two halves': '<a o onclick="x"nclick="alert(1)">x</a>',
         'a javascript: URL joined from two halves': '<a hr href="javascript:x"ef="javascript:alert(1)">x</a>',
         'a remote source joined from two halves': '<img sr src="https://a.test/x"c="https://track.test/p.gif">',
