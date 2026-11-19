@@ -93,6 +93,8 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
     'openAgent', 'stopAgent', 'cancelTurn', 'resolvePrompt', 'host.listDir', 'host.mkdir', 'host.home',
     'updates.check', 'updates.download', 'updates.install', 'updates.forceDrain',
     'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke',
+    // The crash report (Tynn #897, 2c-2): built from genie-host's own safe mode, crash state, registry and identity.
+    'crashReport.draft', 'crashReport.send',
 ]);
 
 /** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
@@ -121,6 +123,8 @@ export interface HostAlonePorts {
     readonly signedIn?: AgentOpsWiring['signedIn'];
     /** The sign-ins (Tynn #896, host-sign-ins.ts): the provider's own login for whoever asked. Absent = this host cannot. */
     readonly signIns?: HostApiDeps['signIns'];
+    /** The banner's crash report (Tynn #897, 2c-2). Absent = this host cannot send one. */
+    readonly crashReports?: HostApiDeps['crashReports'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -263,6 +267,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         startForWork: startOnDemand,
         ...(ports.saveUploads ? { saveUploads: ports.saveUploads } : {}),
         ...(ports.signIns ? { signIns: ports.signIns } : {}),
+        ...(ports.crashReports ? { crashReports: ports.crashReports } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

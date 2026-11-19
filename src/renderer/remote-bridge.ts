@@ -1,6 +1,7 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
 import { localTerminalClient } from './local-terminal-client.js';
 import type { Headroom } from '../core/headroom.js';
+import type { CrashReportAnswer } from './components/SafeModeBanner.js';
 import type { RepoListing } from '../core/github.js';
 import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
@@ -501,6 +502,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         designLogin: () => answer<SignInResult>('logins.design'),
         designSignIn: () => answer<SignInResult>('logins.design'),
         switchAccount: (provider, choose) => answer<SignInResult>('accounts.switch', provider, choose ?? null),
+        // The banner's crash report (Tynn #897, 2c-2): genie-host's, for its owner, from any machine.
+        crashReport: {
+            draft: () => answer<{ text: string }>('crashReport.draft'),
+            send: (text, notes) => answer<CrashReportAnswer>('crashReport.send', text, notes),
+        },
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.

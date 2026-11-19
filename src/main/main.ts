@@ -36,7 +36,6 @@ import { WHATS_NEW_ROUTE, genieDocsUrl } from '../core/whats-new.js';
 import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import type { TakeOverReplica } from './take-over-replica.js';
-import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
@@ -668,8 +667,6 @@ let filesWatch: { watch(viewId: string, workspace: { id: string; path: string },
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
 /** genie-host's, read through its replica. */
 let takeOvers: TakeOverReplica | null = null;
-/** This workstation's Tynn identity, once known: a crash report is sent with its host proof (Tynn #386 part 4). */
-let crashReportMachine: WorkstationPort | null = null;
 /** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
 let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
@@ -1755,25 +1752,6 @@ async function boot(): Promise<void> {
     scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
     // THE SIGN-INS (Tynn #896) are protocol calls answered by genie-host (host-sign-ins.ts): the provider's own login, opened
     // on the window that asked (windowOps terminal.window), for the host's owner. Genie never handles a credential.
-    // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
-    const crashReports = crashReportHost({
-        view: () => agentEngineLink?.client.safeModeView() ?? null,
-        // The host's latest crash record and the reopened-window notice (Tynn #386): the draft is built from them.
-        record: () => agentEngineLink?.client.crashStateView()?.record ?? null,
-        notice: () => agentEngineLink?.client.crashStateView()?.notice ?? null,
-        agents: () => (registry?.listAgents() ?? []).map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
-        workspaceNames: () => [...(registry?.listWorkspaces() ?? []).flatMap((w) => [w.id, basename(w.path)]), ...(registry?.workspaceSlugs().values() ?? [])],
-        genieVersion: app.getVersion(),
-        os: process.platform,
-        arch: process.arch,
-        tynnHost: TYNN_HOST,
-        identity: async () => (crashReportMachine ? crashReportMachine.identity(TYNN_HOST) : null),
-        authHeader: async () => { if (!crashReportMachine) throw new Error('no workstation identity'); return crashReportMachine.authHeader(TYNN_HOST); },
-        fetch: (url, init) => net.fetch(url, init),
-    });
-    ipcMain.handle('genie:crash-report-draft', () => crashReports.draft());
-    ipcMain.handle('genie:crash-report-send', (_event, text: unknown, notes: unknown) =>
-        typeof text === 'string' && typeof notes === 'string' ? crashReports.send(text, notes) : { ok: false, reason: 'A crash report needs its text.' });
 
     // THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace's folder, with the workspace's
     // environment (the same `terminalEnvFor` as a workspace terminal), in a window of its own; closing it ends it.
@@ -2223,7 +2201,7 @@ async function boot(): Promise<void> {
     // sign-in landing during the launch's own check cannot make two workstations.
     const identityCipher = osCipher(safeStorage, process.platform);
     // THE KEY IS THE HOST'S (P3.4): this window asks it to sign.
-    const machineIdentity: WorkstationPort = crashReportMachine = agentEngineLink.client.workstation();
+    const machineIdentity: WorkstationPort = agentEngineLink.client.workstation();
     // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
     // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
     // duplicate, on the next registration — once.
@@ -2458,13 +2436,7 @@ async function boot(): Promise<void> {
         },
         log: lifecycleLog,
     });
-    // Safe mode reaches every window's snapshot (its banner), and follows the host's changes (a Leave from any window).
-    registry.setSafeMode(() => windowSafe?.view() ?? null);
-    windowSafe?.onChange(() => registry?.touch());
-    // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
-    registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
     registry.setRendererNotice(() => rendererNotice);
-    agentEngineLink?.client.onCrashState(() => registry?.touch());
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.

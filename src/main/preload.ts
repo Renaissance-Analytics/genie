@@ -51,10 +51,6 @@ const bridge: PreloadBridge = {
      * channels carrying the terminal id, so one listener per window serves every terminal;
      * the renderer's reducer keeps what belongs to its workspace.
      */
-    crashReport: {
-        draft: () => ipcRenderer.invoke('genie:crash-report-draft') as Promise<{ text: string }>,
-        send: (text, notes) => ipcRenderer.invoke('genie:crash-report-send', text, notes) as Promise<import('../renderer/components/SafeModeBanner.js').CrashReportAnswer>,
-    },
 
     chooseProviderProgram: (provider) =>
         ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
