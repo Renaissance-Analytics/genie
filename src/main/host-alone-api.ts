@@ -11,6 +11,10 @@ import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
 import { workspaceLifecycleApi, workspaceLifecyclePorts, type CloneOfferOps, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { workspaceSettingsOps } from './workspace-reads-api.js';
 import { workspaceTynnApi } from './workspace-tynn-api.js';
+import { readTynnBoardChanges } from './tynn-board-client.js';
+import type { BoardScope } from '../core/tynn-board.js';
+import { readTynnIssueChanges } from './tynn-issues-client.js';
+import type { HostLocalPorts } from './host-local-ports.js';
 import { buildHostApi, type HostApiDeps, type LocalOwnerDeps } from './host-api.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { nodeAgentConfigFs } from './agent-config-host.js';
@@ -75,7 +79,7 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
     'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer',
 ]);
 
-/** The Tynn tab, read and changed (Tynn #553, P5d.5f). A live view's change reads stay the local window's. */
+/** The Tynn tab, read and changed (Tynn #553, P5d.5f); its live view's change reads too (Tynn #898 step 2d-3a). */
 export const HOST_TYNN_TAB_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['workspaces.tynnBoard', 'workspaces.tynnPage', 'workspaces.tynnIssues', 'workspaces.tynnBoardAction', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction']);
 
 /**
@@ -150,6 +154,11 @@ export interface HostAlonePorts {
     readonly schedule?: HostApiDeps['schedule'];
     /** The owned feature aggregator (Tynn #720), supplied when its measured contributors are composed. */
     readonly features?: HostApiDeps['features'];
+    /**
+     * GENIE-HOST'S OWN LOCAL PORTS (Tynn #898 step 2d-3a; host-local-ports.ts): the file and Repository panels, chat drafts,
+     * the ArtBoard, the window's own terminals, the Marketplace and the GApp book. Absent = those families are refused.
+     */
+    readonly local?: HostLocalPorts;
 }
 
 export function hostAloneApi(ports: HostAlonePorts): HostApi {
@@ -247,11 +256,15 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         uploads: ports.uploads,
         files: ports.files,
         serviceEnvFor: (workspaceId) => ports.serviceEnvFor(workspaceId),
+        ...(ports.local ?? {}),
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
             onSettingsChanged: (listener) => ports.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
             ...workspaceSettingsOps(() => ports.settings),
             ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor, ports.workspaceSave ?? WORKSPACE_SAVE_UNAVAILABLE, ports.cloneOffers),
             ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),
+            // The live tab's reads (P4 family 12): what changed since a cursor, from genie-host's Tynn account (step 2d-3a).
+            tynnBoardChanges: async (id, scope, cursor, ids) => readTynnBoardChanges(await ports.tynnTab.board(), id, (scope ?? {}) as BoardScope, cursor, ids),
+            tynnIssueChanges: async (id, filters, cursor, ids) => readTynnIssueChanges(await ports.tynnTab.board(), id, filters ?? {}, cursor, ids),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
         features: ports.features ?? {

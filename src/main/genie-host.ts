@@ -116,7 +116,7 @@ import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
 import { startRefusal } from './workspace-ops-host.js';
-import { agentCapFrom } from '../core/inbox.js';
+import { agentCapFrom, HUMAN } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
@@ -147,6 +147,7 @@ import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
 import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
+import { hostLocalPorts } from './host-local-ports.js';
 import { Registry } from './registry.js';
 import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -1742,6 +1743,11 @@ async function main(): Promise<void> {
         },
     });
     hostFeatures.onChange(() => engine.featuresChanged());
+    // A shell sees the workspace's service variables and Genie's MCP endpoint: an agent's, and the person's (Tynn #898).
+    const shellEnv = (workspaceId: string): Record<string, string> => {
+        const endpoint = mcp?.endpoint() ?? null;
+        return { ...engine.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
+    };
     phoneApi = hostAloneApi({
         hostName: hostname(),
         features: hostFeatures,
@@ -1795,6 +1801,23 @@ async function main(): Promise<void> {
             readBytes: (workspaceId, path) => phoneFiles.readBytes(workspaceId, path),
             upload: (workspaceId, dir, name, bytes) => phoneFiles.upload(workspaceId, dir, name, bytes),
         },
+        // THE LOCAL FAMILIES (Tynn #898 step 2d-3a): the file and Repository panels, drafts, the ArtBoard, the window's own
+        // terminals, the Marketplace and the GApp book, from what this host owns.
+        local: hostLocalPorts({
+            workspaces: () => hostRegistry.listWorkspaces(),
+            workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null,
+            files: () => phoneFiles,
+            plugins: pluginsService,
+            sendFromPerson: async (agentId, text) => { await own.inbox.send({ from: HUMAN, to: agentId as AgentId, text }); },
+            drafts,
+            terminals: () => terminalHost,
+            trackCwd: () => settings.snapshot().track_cwd,
+            terminalEnv: shellEnv,
+            marketplace: () => marketplaceHost ?? null,
+            gapps: () => (gappBook ? gappsApi(gappBook, gappAsk, gappPreviews ?? undefined) : null),
+            onGappsChanged: (listener) => gappBook?.onChange(listener) ?? (() => {}),
+            say,
+        }),
         // The update actions and the share links are this host's too (Tynn #898 step 2d-2b): its updater, its Tynn account.
         updates: remoteUpdatesPort(updatesService),
         shares: shareLinksOver({
@@ -2071,10 +2094,7 @@ async function main(): Promise<void> {
         processes: { book: hostBook, logs: (id, lines) => processBookNow?.log(id, lines) ?? processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
         terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), onData: (listener) => terminalHost.onData((id, data) => listener(id, data)), scrollbackCap: 1_000_000 },
         // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.
-        terminalEnv: (workspaceId) => {
-            const endpoint = mcp?.endpoint() ?? null;
-            return { ...engine.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
-        },
+        terminalEnv: shellEnv,
         // Tynn #833: an agent's Stop is its own (`by`); a person's flow only through the person's approval on the Deck. Tynn #839: Run now names who pressed it.
         flows: { store: hostFlows, runNow: (id, by) => hostFlows.runNow(id, by), stopRun: (id, by) => flowsService.stopRun(id, by), approve: (caller, action, detail, call) => approvals.gate(caller, action, detail, call) },
         // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
