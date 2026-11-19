@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,8 +65,8 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie-split-2d2-'));
     registry = new Registry(new Store(dir));
     await registry.load({ name: 'alphar', healthy: true });
-    // Real workspaces are folders on the host's disk: adding an agent writes into them.
-    await mkdir(join(dir, 'tynn')); await mkdir(join(dir, 'moic'));
+    // Real workspaces are folders on the host's disk with their project.json: adding an agent writes into them.
+    for (const id of ['tynn', 'moic']) { await mkdir(join(dir, id)); await writeFile(join(dir, id, 'project.json'), JSON.stringify({ name: id }, null, 2)); }
     await registry.addWorkspace({ id: 'tynn', path: join(dir, 'tynn') });
     await registry.addWorkspace({ id: 'moic', path: join(dir, 'moic') });
     atlas = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });

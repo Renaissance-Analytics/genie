@@ -72,6 +72,8 @@ function engine(running = false): HostAloneEngine {
 function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlonePorts {
     return {
         hostName: 'alphar',
+        serviceEnvFor: () => ({}),
+        uploads: { sendFile: async () => ({ ok: false, reason: 'this fixture sends no files' }) },
         registry,
         engine: () => e,
         cwdFor: (r) => (r.workspaceId === 'tynn' ? '/w/tynn' : '/home'),
