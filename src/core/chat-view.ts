@@ -2,6 +2,7 @@ import { limitTitle, limitWords } from './limit-words.js';
 import { chatPlanView, type ChatPlanView } from './chat-plan.js';
 import { planSteps } from './agent-view.js';
 import { isSleeping } from './agent-status.js';
+import { stalledWords } from './hung-call.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import type { ProviderStopState } from './provider-stops.js';
@@ -190,6 +191,8 @@ export function chatContext(detail: ChatDetail): ChatContext {
     // Held for its provider's limit (Tynn #794): until when, never Idle.
     const held = limitWords(s.limit);
     if (held) { const title = limitTitle(s.limit); return { text: `Paused · ${held}`, tone: 'warn', ...(title ? { title } : {}) }; }
+    // ENDED AS STALLED (Tynn #855): the line says so, with how long it was silent.
+    if (s.stalled && s.turnState !== 'working') return { text: stalledWords(s.stalled), tone: 'bad' };
     if (s.failure !== null) {
         // A failure the PROVIDER's stop explains (Tynn #859): the red line says what it means and how often, not the bare code.
         const stop = s.providerStop && s.providerStop.code === s.failure.reason ? s.providerStop : null;

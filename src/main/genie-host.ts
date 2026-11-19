@@ -50,6 +50,7 @@ import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import { ReadingAttribution } from '../core/reading-attribution.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
+import { StalledTurnBook } from '../core/hung-call.js';
 import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
 import { accountsView, type AccountsSnapshot } from '../core/accounts-view.js';
 import { DesignAuthBook } from '../core/design-auth.js';
@@ -1424,6 +1425,8 @@ async function main(): Promise<void> {
     // What a fired alert leaves for a window that is not open (Tynn #748): a Deck item, kept on disk until dismissed or its
     // window resets. The sound is only ever the live signal; opening a window later replays nothing.
     const limitNoticesFile = join(home, 'limit-alert-notices.json');
+    // A TURN ENDED AS STALLED (Tynn #855): its Deck item, with Stop and Restart; the plan keepalive's watchdog records it.
+    const stalledTurns = new StalledTurnBook();
     const limitNotices = new LimitNoticeBook(
         () => { try { return JSON.parse(readFileSync(limitNoticesFile, 'utf8')); } catch { return []; } },
         (notices) => { try { writeFileSync(limitNoticesFile, JSON.stringify(notices)); } catch (error) { say(`rate-limit alerts: could not save the notices: ${error instanceof Error ? error.message : String(error)}`); } },
@@ -1636,7 +1639,7 @@ async function main(): Promise<void> {
         workspaceName: workspaceNameFor,
         approvals: approvals.deckItems(),
         trust: hostingStack?.trustDeckItems() ?? [],
-        notices: [...limitNotices.items(Date.now()), ...playwrightInstaller.items()],
+        notices: [...limitNotices.items(Date.now()), ...playwrightInstaller.items(), ...stalledTurns.items()],
         attention: own.attention,
         inbox: own.inbox,
         agents: phoneAgents(), workspaceColor: path => workspaceColors.colorOf(path),
@@ -1798,7 +1801,7 @@ async function main(): Promise<void> {
         featureChanges.add(listener);
         const offs = [featureTynn.onEvent(listener), featureGithub.onEvent(listener), featureKeyring.onEvent(listener),
             pluginsService.onEvent(listener), catalogService.onEvent(listener), remoteAccessHost.onChange(listener),
-            own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
+            own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), stalledTurns.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
     hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
@@ -1832,6 +1835,18 @@ async function main(): Promise<void> {
         deck: { attention: own.attention, approvals, inbox: own.inbox, deckItems: featureDeckItems,
             limitNotices,
             playwrightNotices: { retry: (id) => playwrightInstaller.retry(id), dismiss: (id) => playwrightInstaller.dismiss(id) },
+            // A stalled turn's Stop / Restart / Dismiss (Tynn #855): on this host's session host; Restart is the one Restart.
+            stalledTurns: { act: async (agentId, action) => {
+                if (!stalledTurns.has(agentId)) return false;
+                if (action === 'stop') await host.stop(agentId as AgentId);
+                if (action === 'restart') {
+                    if (!phoneApi) throw new Error('Genie’s agents are still starting; try again in a moment');
+                    const restarted = await phoneApi.invoke('agents.restart', [agentId, 'graceful']) as { ok: boolean; reason?: string } | null;
+                    if (restarted && restarted.ok === false) throw new Error(restarted.reason ?? 'the restart was refused');
+                }
+                stalledTurns.clear(agentId);
+                return true;
+            } },
             deliverToAgent: (id, text) => host.deliver(id as AgentId, text, 'you'),
             ...(hostingStack ? { trustCertificate: () => hostingStack.trustCertificate(), deferTrustCertificate: () => hostingStack.deferTrustCertificate(), syncHosts: () => hostingStack.syncHosts(), deferHosts: () => hostingStack.deferHosts() } : {}),
         },
@@ -2215,7 +2230,8 @@ async function main(): Promise<void> {
     cloneWatchTimer.unref();
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
-    planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); } });
+    planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); },
+        stalledTurns, restart: (id) => (phoneApi ? phoneApi.invoke('agents.restart', [id, 'graceful']) : Promise.reject(new Error('Genie’s agents are still starting'))) });
     clocks.push(planKeepalive);
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);

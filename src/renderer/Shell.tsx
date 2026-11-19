@@ -288,6 +288,8 @@ export interface ShellProps {
     /** `Stop this turn` — the Agent view's header and the chat's context line: the turn ends, the agent keeps running. */
     /** `intent`: `stop` (the default) latches the agent until the person acts; `interrupt` does not (Tynn #672 part 3). */
     onCancelTurn?: ((agentId: string, intent?: 'stop' | 'interrupt') => void) | undefined;
+    /** `Stop this call` (Tynn #855): one hung tool call ends, the turn goes on. */
+    onStopToolCall?: ((agentId: string, toolCallId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
     onProviderLogin?: ((agentId: string) => void) | undefined;
@@ -457,6 +459,7 @@ export function Shell({
     onRestartAgent,
     onStopAgent,
     onCancelTurn,
+    onStopToolCall,
     onResumeLimit,
     onProviderLogin,
     onAccountRetry,
@@ -1021,6 +1024,7 @@ export function Shell({
                                 // A read-only share acts on nothing; a provider's login and an account retry are the host's own.
                                 onStop={readOnly ? undefined : onStopAgent}
                                 onCancelTurn={readOnly ? undefined : onCancelTurn}
+                                onStopToolCall={readOnly ? undefined : onStopToolCall}
                                 onResumeLimit={readOnly ? undefined : onResumeLimit}
                                 onProviderLogin={scoped ? undefined : onProviderLogin}
                                 onAccountRetry={scoped ? undefined : onAccountRetry}

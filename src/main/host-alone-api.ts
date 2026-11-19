@@ -90,7 +90,7 @@ export const HOST_TYNN_TAB_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMe
  * the host's folders, the update actions and the share links. genie-host's session host, disk, updater and Tynn account.
  */
 export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
-    'openAgent', 'stopAgent', 'cancelTurn', 'resolvePrompt', 'host.listDir', 'host.mkdir', 'host.home',
+    'openAgent', 'stopAgent', 'cancelTurn', 'stopToolCall', 'resolvePrompt', 'host.listDir', 'host.mkdir', 'host.home',
     'updates.check', 'updates.download', 'updates.install', 'updates.forceDrain',
     'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke',
     // The crash report (Tynn #897, 2c-2): built from genie-host's own safe mode, crash state, registry and identity.
@@ -108,7 +108,7 @@ export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMetho
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
-    'probe' | 'start' | 'stop' | 'ended' | 'deliverOwed' | 'cancel' | 'resumeLimit' | 'prompt' | 'promptWith' | 'resolvePrompt' | 'answerApproval'
+    'probe' | 'start' | 'stop' | 'ended' | 'deliverOwed' | 'cancel' | 'stopToolCall' | 'resumeLimit' | 'prompt' | 'promptWith' | 'resolvePrompt' | 'answerApproval'
     | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'historyPending' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'
     | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput' | 'forgetShown' | 'attachment' | 'pausedAgents'>;
 
@@ -288,6 +288,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             start: (record, cwd) => engine().start(record, cwd),
             stop: (id) => engine().stop(id),
             cancel: (id, intent) => engine().cancel(id, 'you', intent),
+            stopToolCall: (id, toolCallId) => engine().stopToolCall(id, toolCallId, 'you'),
             resumeLimit: (provider, accountId) => engine().resumeLimit(provider, accountId),
             prompt: (id, text, by) => engine().prompt(id, text, by),
             promptWith: (id, text, attachments, by) => engine().promptWith(id, text, attachments, by),

@@ -1,4 +1,5 @@
 import { isOsAgent } from '../core/os-agent.js';
+import type { Liveness, StalledReason } from '../core/hung-call.js';
 import { type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
@@ -1756,6 +1757,34 @@ export class SessionHost {
         return true;
     }
 
+    /**
+     * STOP THIS CALL (Tynn #855): end exactly the processes one running call started; the turn goes on and the agent is told
+     * (`AgentSession.endToolCall`). `cause`: the person's Stop this call, or the no-output timeout.
+     */
+    async stopToolCall(agentId: AgentId, toolCallId: string, cause: 'you' | 'timeout'): Promise<{ ok: true; ended: number } | { ok: false; reason: string }> {
+        const entry = this.#running.get(agentId);
+        if (!entry || !entry.session.running) return { ok: false, reason: 'the agent is not running' };
+        const result = await entry.session.endToolCall(toolCallId, cause);
+        this.#emit(agentId);
+        return result;
+    }
+
+    /** Is the agent's provider there (Tynn #855; `AgentSession.alive`): `dead` with no session. */
+    async checkAlive(agentId: AgentId, timeoutMs = 10_000): Promise<Liveness> {
+        const entry = this.#running.get(agentId);
+        if (!entry) return 'dead';
+        return entry.session.alive(timeoutMs);
+    }
+
+    /** End the agent's turn as stalled (Tynn #855; `AgentSession.endStalled`); `false` with no session or no turn. */
+    endStalled(agentId: AgentId, reason: StalledReason, silentMs: number): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        const ended = entry.session.endStalled(reason, silentMs);
+        if (ended) this.#emit(agentId);
+        return ended;
+    }
+
     /** Whether the agent's last turn ended on the PERSON's Stop (`AgentSession.stoppedByYou`); `false` with no session. */
     stoppedByYou(agentId: AgentId): boolean {
         return this.#running.get(agentId)?.session.stoppedByYou ?? false;
@@ -2246,6 +2275,10 @@ export class SessionHost {
             planSteps: readings.planSteps,
             // The workspace dashboard's card (q_09d1f4a0): what started this turn, and the tool it is in now.
             ...(({ prompt, tool }) => ({ asked: prompt, tool }))(readings.turnNow()),
+            // A HUNG CALL, A HUNG TURN (Tynn #855): the call it is in (command, start), the turn ended as stalled, the last event.
+            call: session.runningCall,
+            stalled: session.stalled,
+            lastEventAt: session.lastEventAt,
             model: readings.model,
             extensions: session.extensions,
             // Both, because each alone is a claim: the driver's declaration, and the driver this session actually holds.

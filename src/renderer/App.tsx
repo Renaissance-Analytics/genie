@@ -2391,6 +2391,8 @@ function DesktopApp({ bridge }: AppProps) {
             onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId, intent) => { void resolvedBridge?.cancelTurn(agentId, intent); }}
+            // Stop this call (Tynn #855): a refusal (no process of its own, not running) is said, never dropped.
+            onStopToolCall={(agentId, toolCallId) => { void resolvedBridge?.stopToolCall?.(agentId, toolCallId).then((r) => { if (!r.ok) showAlert({ title: 'Stop this call', body: r.reason }); }, () => {}); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId).then((r) => { if (r.ok) openCompanion(r, 'Log in'); else showAlert({ title: 'Log in', body: r.reason }); }, () => {}); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}

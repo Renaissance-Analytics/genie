@@ -1,4 +1,5 @@
 import type { AccountPause } from './account-pause.js';
+import { minutesWords, type StalledTurn } from './hung-call.js';
 import { fullPlanView, type ChatPlanView } from './chat-plan.js';
 import { limitTitle, limitWords } from './limit-words.js';
 import type { GateView } from './rate-limit-gate.js';
@@ -94,6 +95,8 @@ export interface AgentRow {
     asked?: string | null | undefined;
     /** The tool its turn is in now, by title; absent/`null` = none running, or not reported. */
     tool?: string | null | undefined;
+    /** Its turn was ended as stalled (Tynn #855): ranked with Broken, said as Stalled. Absent/`null` = not stalled. */
+    stalled?: StalledTurn | null | undefined;
     /** Its last finished turn's handoff (Genie's record of finished turns); absent/`null` = none. */
     handoff?: { text: string; at: number } | null | undefined;
     target: string | null;
@@ -209,6 +212,8 @@ export function statusOf(row: AgentRow): StatusCell {
     // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): only once its turn is over — a refused tool does not end the turn, and an
     // agent still working reads Working. The Agent view, the chat and the tray offer `Log in to Claude Design`.
     if (row.designLogin && (row.state === 'idle' || row.state === 'cooling')) return { word: 'Login needed', detail: 'Claude Design', tone: 'warn' };
+    // ENDED AS STALLED (Tynn #855): the provider stopped answering mid-turn — never Working.
+    if (row.stalled && row.state === 'broken') return { word: 'Stalled', detail: `no events for ${minutesWords(row.stalled.silentMs)}`, tone: 'bad' };
     // The stronger fact than Cooling or Idle: its work is still running.
     if (workingInBackground(row)) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
     switch (row.state) {

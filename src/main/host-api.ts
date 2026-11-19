@@ -126,6 +126,8 @@ export interface HostApiDeps {
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;
+        /** `Stop this call` (Tynn #855): one running call's processes end, the turn goes on (`SessionHost.stopToolCall`). Absent = refused. */
+        stopToolCall?(agentId: AgentRecord['id'], toolCallId: string): Promise<{ ok: true; ended: number } | { ok: false; reason: string }>;
         /** `Resume now`: the login held for its rate limit opens (Tynn #794) — one account's when named (Tynn #478). */
         resumeLimit(provider: string, accountId?: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
@@ -442,6 +444,14 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const r = agent(args[0]);
                 // A remote window's Stop this turn or Interrupt and send: only `interrupt` is an interrupt (Tynn #672 part 3).
                 return r ? deps.host.cancel(r.id, cancelIntent(args[1])) : { ok: false, reason: 'unknown agent' };
+            }
+            case 'stopToolCall': {
+                // Stop this call (Tynn #855): the person's, from any window or phone; the call's own processes only.
+                const r = agent(args[0]);
+                if (!r) return { ok: false, reason: 'unknown agent' };
+                if (typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'Stop this call names the call' };
+                if (!deps.host.stopToolCall) return { ok: false, reason: 'this host cannot stop one call; Stop the turn instead' };
+                return deps.host.stopToolCall(r.id, args[1]);
             }
             case 'prompt': {
                 const r = agent(args[0]);

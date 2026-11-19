@@ -10,6 +10,7 @@ import { extensionsFrom, type ProviderExtensions } from './provider-commands.js'
 import { threadKeyFor, type AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
 import { carriedLabel, type CarryOver } from './carry-over.js';
+import { callEndedNotice, callEndedText, callProcesses, stalledNotice, type Liveness, type RunningCall, type StalledReason, type StalledTurn } from './hung-call.js';
 import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
@@ -58,6 +59,12 @@ export interface SessionDriver {
      * result with its own reading either way (`AgentSession.stop`).
      */
     stop?(options?: { graceMs?: number }): Promise<unknown>;
+    /**
+     * DOES THE PROVIDER ANSWER (Tynn #855; prism-acp G-314, requested): resolves when it answered within `timeoutMs`,
+     * rejects (or never settles) when it did not. Optional: until prism ships it, a live process is `unknown`, never
+     * guessed alive or dead (`AgentSession.alive`).
+     */
+    ping?(timeoutMs: number): Promise<unknown>;
     /**
      * END THE CURRENT TURN AND KEEP THE SESSION — prism-acp's `AgentDriver.cancel?()` (0.14.0, prism-acp-ts#16/#17).
      * The provider is asked to interrupt; the turn then ends through `onTurnEnd` with `stopReason: 'cancelled'`, and the
@@ -164,6 +171,12 @@ export interface TurnOutcomeLike {
         /** prism-acp 0.43.0 (G-311): the provider's own message and allowlisted details. UNTRUSTED; see core/provider-stops.ts. */
         readonly providerMessage?: string; readonly providerDetails?: Readonly<Record<string, string | number>>;
     };
+    /**
+     * A TURN THE PROVIDER STARTED ITSELF ended (prism-acp G-313, Tynn #855): Claude began it with no prompt of Genie's (a
+     * background task finished) and its `result` names none. It ends the turn Genie opened on its activity; it never
+     * settles a prompt of Genie's (no `turnId`), and it is never a queued prompt's turn.
+     */
+    readonly unsolicited?: boolean;
 }
 
 /** How a turn can end that is the provider's stop without being an error (ACP `stopReason`; Tynn #859). */
@@ -530,6 +543,12 @@ export class AgentSession {
      * owner, 2026-10-14).
      */
     #inTurn = false;
+    /** The calls of the turn in flight that have not finished, by id (Tynn #855): what `runningCall` reads. */
+    readonly #calls = new Map<string, { label: string | null; command: string | null; since: number; open: boolean }>();
+    /** When the provider last sent anything (Genie's own stamp; prism G-314's `lastFrameAt` is the same fact from the wire). */
+    #lastEventAt: number | null = null;
+    /** The last turn Genie ended as stalled (Tynn #855); cleared when a turn starts again. */
+    #stalled: StalledTurn | null = null;
     /**
      * Each prompt still waiting for its turn, oldest first: who sent it (`by`, as `prompt` takes it), and what it was, so
      * one Claude DROPS at a Stop (prism-acp 0.37.0, `#dropped`) can be sent again or kept as a draft.
@@ -1458,6 +1477,7 @@ export class AgentSession {
             events: {
                 onUpdate: (update) => {
                     if (this.#ended) { this.#straggler(); return; }
+                    this.#lastEventAt = this.#now();
                     void this.#ingest(update);
                 },
                 onSteerUpdate: (update) => {
@@ -1553,6 +1573,7 @@ export class AgentSession {
                     this.#alive = false;
                     this.#exited = true;
                     this.#inTurn = false;
+                    this.#calls.clear();
                     this.#queued = [];
                     this.#stopAskedBy = null;
                     // Kept as node reported it — the one fact about the END of the process Genie actually has.
@@ -1692,6 +1713,7 @@ export class AgentSession {
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.#driver) throw new Error('session is not started');
         if (by === 'you') this.resumeAfterStop();
+        this.#stalled = null;
         if (this.#held || this.#starting || this.#options.mayTakeWork?.() === false) return this.#queuePrompt(text, by, sent, context);
         this.#send(text, by, sent, true, context);
         return null;
@@ -2115,6 +2137,121 @@ export class AgentSession {
         this.#changed();
     }
 
+    /**
+     * THE CALL THE TURN IS IN NOW (Tynn #855): the newest call of the turn in flight that has not finished, with its command
+     * and when Genie saw it start. `null` = none, or no turn.
+     */
+    get runningCall(): RunningCall | null {
+        if (!this.#inTurn) return null;
+        let newest: RunningCall | null = null;
+        for (const [toolCallId, c] of this.#calls) {
+            if (!c.open || c.label === null) continue;
+            if (newest === null || c.since >= newest.since) newest = { toolCallId, label: c.label, command: c.command, since: c.since };
+        }
+        return newest;
+    }
+
+    /** When the provider last sent anything; `null` = nothing yet this run. */
+    get lastEventAt(): number | null {
+        return this.#lastEventAt;
+    }
+
+    /** The last turn Genie ended as stalled, until a turn starts again (Tynn #855). */
+    get stalled(): StalledTurn | null {
+        return this.#stalled;
+    }
+
+    #trackCall(event: Extract<StreamEvent, { kind: 'tool' }>): void {
+        const c = this.#calls.get(event.toolCallId);
+        const input = event.rawInput;
+        const command = typeof input === 'object' && input !== null && typeof (input as Record<string, unknown>)['command'] === 'string' ? (input as Record<string, string>)['command']! : null;
+        const status = event.status;
+        const open = status === null ? (c?.open ?? false) : status === 'pending' || status === 'in_progress';
+        this.#calls.set(event.toolCallId, {
+            label: c?.label ?? event.title ?? event.name,
+            command: c?.command ?? command,
+            since: c?.since ?? this.#now(),
+            open,
+        });
+    }
+
+    /**
+     * IS THE PROVIDER THERE (Tynn #855): `dead` when its process has gone (the driver says so, or Genie's own record of
+     * its exit); then, when the driver can be asked (`ping`), `alive` if it answers within `timeoutMs` and `unresponsive`
+     * if it does not. A live process Genie cannot ask is `unknown` — never guessed either way.
+     */
+    async alive(timeoutMs: number): Promise<Liveness> {
+        const driver = this.#driver;
+        if (!driver || this.#exited || this.#ended || !this.running) return 'dead';
+        if (typeof driver.ping !== 'function') return 'unknown';
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), timeoutMs); });
+        try {
+            const answer = await Promise.race([driver.ping(timeoutMs).then(() => 'answered' as const), late]);
+            return answer === 'answered' ? 'alive' : 'unresponsive';
+        } catch {
+            return this.running ? 'unresponsive' : 'dead';
+        } finally {
+            if (timer !== undefined) clearTimeout(timer);
+        }
+    }
+
+    /**
+     * STOP THIS CALL (Tynn #855): end exactly the processes the call started — below this run's provider, started since the
+     * call began — and tell the agent, in its running turn, which call ended and why. The turn goes on: the provider sees
+     * its tool fail and carries on. Refused, with why, for a call that is not running or that has no process of its own.
+     */
+    async endToolCall(toolCallId: string, cause: 'you' | 'timeout'): Promise<{ ok: true; ended: number } | { ok: false; reason: string }> {
+        const c = this.#calls.get(toolCallId);
+        if (!this.#inTurn || !c || !c.open || c.label === null) return { ok: false, reason: 'that call is not running' };
+        const call: RunningCall = { toolCallId, label: c.label, command: c.command, since: c.since };
+        const tree = this.#options.processTree ?? systemProcessTree;
+        const read = tree.read ? tree.read.bind(tree) : (): Promise<readonly ProcessInfo[] | null> => Promise.resolve(tree.snapshot());
+        const reap = tree.reap ? tree.reap.bind(tree) : (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): Promise<ReapResult> => Promise.resolve(tree.killTree(targets, now));
+        await (this.#rootsReading ?? Promise.resolve());
+        const roots = this.#roots;
+        if (!roots || roots.length === 0) return { ok: false, reason: 'Genie does not know this agent’s provider process, so it cannot tell which processes are the call’s. Stop the turn instead.' };
+        const now = await read().catch(() => null);
+        if (!now) return { ok: false, reason: 'Genie could not read the machine’s processes. Stop the turn instead.' };
+        const targets = callProcesses(now, roots, call.since);
+        if (targets.length === 0) return { ok: false, reason: `${call.label} has no process of its own to end (it runs inside the provider). Stop the turn instead.` };
+        // BY IDENTITY, AGAINST A FRESH READING (after #919): a pid is not a process. Each target is ended only if the SAME
+        // process — pid, start time, image — is still in a reading taken after it was chosen; a pid that exited meanwhile
+        // and was handed to someone else's process is skipped (the tree's own `sameProcess` gate, against this reading).
+        const fresh = await read().catch(() => null);
+        if (!fresh) return { ok: false, reason: 'Genie could not read the machine’s processes. Stop the turn instead.' };
+        const same = stillRunning(targets, fresh);
+        if (same.length === 0) return { ok: false, reason: `${call.label}’s processes have already ended.` };
+        const result = await reap(same, fresh);
+        if (result.refused && result.killed === 0) return { ok: false, reason: 'the machine refused to end the call’s processes' };
+        const ended = result.killed;
+        const at = this.#now();
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: callEndedNotice(call, cause, ended, at) });
+        // The agent is told in the turn it is in: a typed message reaches it mid-turn the same way.
+        try { this.deliver(callEndedText(call, cause, at), 'genie'); } catch { /* not running: there is no one to tell */ }
+        this.#changed();
+        return { ok: true, ended };
+    }
+
+    /**
+     * END THE TURN AS STALLED (Tynn #855): its provider exited with no word, or did not answer. The turn is over for Genie
+     * — no longer `working`, its calls forgotten — said plainly in the chat, and kept as `stalled` until a turn starts
+     * again. `false` with no turn in flight.
+     */
+    endStalled(reason: StalledReason, silentMs: number): boolean {
+        if (!this.#inTurn) return false;
+        this.#clearCancelWait();
+        this.#closeMessage();
+        this.#calls.clear();
+        this.#inTurn = false;
+        this.#queued = [];
+        this.#turnState = 'idle';
+        this.#stalled = { reason, silentMs, at: this.#now() };
+        void this.#emitRow({ kind: 'notice', level: 'error', message: stalledNotice({ reason, silentMs }) });
+        this.#changed();
+        return true;
+    }
+
     /** A warning Genie says in this agent's chat (the plan keepalive's stop, core/plan-keepalive.ts). Not a prompt. */
     notice(message: string): void {
         void this.#emitRow({ kind: 'notice', level: 'warning', message });
@@ -2435,6 +2572,7 @@ export class AgentSession {
     /** A turn ended: the driver's actual outcome, including its own stop reason and failure. */
     #turnEnded(outcome: TurnOutcomeLike): void {
         this.#clearCancelWait();
+        this.#calls.clear();
         // Two turns are two replies even with nothing between them. Without this a
         // whole conversation would accumulate into one unbounded row.
         this.#closeMessage();
@@ -2459,7 +2597,7 @@ export class AgentSession {
         // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
         // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
         // turn, and it opens nothing, as before.
-        if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
+        if (!this.#inTurn && this.#queued.length > 0 && outcome.unsolicited !== true) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
 
         this.#turns += 1;
         this.#endedThisRun += 1;
@@ -2688,6 +2826,7 @@ export class AgentSession {
         const read = toStreamEvent(update);
         if (!read) return; // Deliberately not a ledger row (e.g. the slash-command menu).
         const event = this.#markSubagentCall(read);
+        if (event.kind === 'tool' && event.toolCallId) this.#trackCall(event);
 
         /*
          * A MESSAGE joins the one being streamed, when it is the same speaker.
@@ -2754,6 +2893,7 @@ export class AgentSession {
             // A prompt queued while the last turn ran is credited to this one (it ran as its own turn); none = nobody's.
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
             this.#inTurn = true;
+            this.#stalled = null;
             this.#turnState = 'working';
             this.#changed();
         }

@@ -143,6 +143,21 @@ describe('invoke', () => {
         expect(f.calls).toEqual(['cancel:agent_a:interrupt', 'cancel:agent_a:stop', 'cancel:agent_a:stop']);
     });
 
+    it('stopToolCall is `Stop this call` (Tynn #855): it reaches host.stopToolCall with the call, never cancel or stop; refusals are said', async () => {
+        const f = fakes();
+        const stops: string[] = [];
+        const api = buildHostApi({ ...f.deps, host: { ...f.deps.host, stopToolCall: async (id, call) => { stops.push(`${id}:${call}`); return { ok: true, ended: 2 }; } } });
+        expect(await api.invoke('stopToolCall', ['agent_a', 't1'])).toEqual({ ok: true, ended: 2 });
+        expect(stops).toEqual(['agent_a:t1']);
+        expect(f.calls).toEqual([]);
+        expect(await api.invoke('stopToolCall', ['nope', 't1'])).toEqual({ ok: false, reason: 'unknown agent' });
+        expect(await api.invoke('stopToolCall', ['agent_a'])).toEqual({ ok: false, reason: 'Stop this call names the call' });
+        expect(stops).toHaveLength(1);
+        // A host with no stopToolCall refuses in words, and never falls back to stopping the turn.
+        expect(await buildHostApi(f.deps).invoke('stopToolCall', ['agent_a', 't1'])).toMatchObject({ ok: false, reason: expect.stringMatching(/Stop the turn instead/) });
+        expect(f.calls).toEqual([]);
+    });
+
     it('resumeLimit is `Resume now` (Tynn #794): it opens the AGENT’S PROVIDER login, once; an unknown agent is refused', async () => {
         const f = fakes();
         const api = buildHostApi(f.deps);
