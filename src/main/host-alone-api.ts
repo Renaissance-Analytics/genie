@@ -15,6 +15,7 @@ import { readTynnBoardChanges } from './tynn-board-client.js';
 import type { BoardScope } from '../core/tynn-board.js';
 import { readTynnIssueChanges } from './tynn-issues-client.js';
 import type { HostLocalPorts } from './host-local-ports.js';
+import type { HostOwnerOps } from './host-owner-ops.js';
 import { buildHostApi, type HostApiDeps, type LocalOwnerDeps } from './host-api.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { nodeAgentConfigFs } from './agent-config-host.js';
@@ -151,14 +152,21 @@ export interface HostAlonePorts {
     readonly updates?: HostApiDeps['updates'];
     /** genie-host's share links (Tynn #839, #898 step 2d-2b): over its Tynn account, a revoke re-checks its relay sessions. */
     readonly shares?: LocalOwnerDeps['tynnNetwork']['shares'];
+    /**
+     * GENIE-HOST'S OWNER OPERATIONS (Tynn #898 step 2d-3b; host-owner-ops.ts): the Apps and scripts card, the remembered
+     * device hosts, "Your workstations" and a role change, over its app door, device link, Tynn account and relay role.
+     * Absent = refused in words, as before.
+     */
+    readonly owner?: HostOwnerOps;
     readonly schedule?: HostApiDeps['schedule'];
     /** The owned feature aggregator (Tynn #720), supplied when its measured contributors are composed. */
     readonly features?: HostApiDeps['features'];
     /**
      * GENIE-HOST'S OWN LOCAL PORTS (Tynn #898 step 2d-3a; host-local-ports.ts): the file and Repository panels, chat drafts,
-     * the ArtBoard, the window's own terminals, the Marketplace and the GApp book. Absent = those families are refused.
+     * the ArtBoard, the window's own terminals, the Marketplace and the GApp book; and its watches (step 2d-3b,
+     * host-local-watches.ts): the file panel's and the live Tynn tab's. Absent = those families are refused.
      */
-    readonly local?: HostLocalPorts;
+    readonly local?: Partial<HostLocalPorts> & Pick<HostApiDeps, 'filesWatch' | 'tynnWatch'>;
 }
 
 export function hostAloneApi(ports: HostAlonePorts): HostApi {
@@ -281,8 +289,10 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry.listAgents(), workspaceId), subscribe: (listener) => activityFeeds.subscribe(listener) },
         headroom: ports.headroom,
         updates: ports.updates ?? null,
-        // Of the owner's operations, a remote client reaches only the share links (the rest are `local`, refused before).
-        ...(ports.shares ? { localOwner: windowOnly<LocalOwnerDeps>('owner operations', { tynnNetwork: windowOnly<LocalOwnerDeps['tynnNetwork']>('tynnNetwork', { shares: ports.shares }) }) } : {}),
+        // THE OWNER'S OPERATIONS (step 2d-3b): genie-host's own, with its share links. With no owner port, only the share links.
+        ...(ports.owner
+            ? { localOwner: { ...ports.owner, tynnNetwork: { ...ports.owner.tynnNetwork, shares: ports.shares ?? windowOnly<LocalOwnerDeps['tynnNetwork']['shares']>('tynnNetwork.shares') } } }
+            : ports.shares ? { localOwner: windowOnly<LocalOwnerDeps>('owner operations', { tynnNetwork: windowOnly<LocalOwnerDeps['tynnNetwork']>('tynnNetwork', { shares: ports.shares }) }) } : {}),
     };
     return { ...buildHostApi(deps), ...(ports.features ? { ownsFeatures: true } : {}) };
 }
