@@ -77,7 +77,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:design-login', 'move:2b'],
     ['genie:design-sign-in', 'move:2b'],
     ['genie:provider-login', 'move:2b'],
-    ['genie:take-over', 'move:2b'],
     // Take over from another machine (Tynn #529 part A): this machine's Take Over window, and its ticket read once.
     ['genie:remote-takeover-open', 'window:take-over-window'],
     ['genie:takeover-ticket', 'window:take-over-window'],
@@ -153,12 +152,14 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['browserCall', 'window:feature-effect'],
     ['onBrowserEvent', 'window:feature-effect'],
     ['gappSessions', 'window:gapp-window'],
-    // 2b (#896): sign-ins and Take Over.
+    // 2b (#896): sign-ins.
     ['login', 'move:2b'],
     ['cancelLogin', 'move:2b'],
     ['switchAccount', 'move:2b'],
     ['providerAccount', 'move:2b'],
-    ['takeOvers', 'move:2b'],
+    // 2f (#912): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
+    // 2026-11-19). Take Over itself is the protocol's since 2b-1 (#896).
+    ['takeOvers', 'move:2f'],
     // 2c (#897): the crash report's state, and the scratch terminal.
     ['crashStateView', 'move:2c'],
     ['onCrashState', 'move:2c'],

@@ -17,7 +17,6 @@ import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
-import { agentDetailFor } from './agent-detail.js';
 import { browserConnectionFor } from '../core/browser-connection.js';
 import { drivablePages } from './page-navigation-electron.js';
 import { isGenHost } from './relay-site.js';
@@ -36,14 +35,13 @@ import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl } from '../core/whats-new.js';
 import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
-import { TakeOverReplica } from './take-over-replica.js';
+import type { TakeOverReplica } from './take-over-replica.js';
 import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AgentId, type AgentRecord } from '../core/identity.js';
-import type { AgentDetail } from '../renderer/bridge.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
@@ -797,20 +795,21 @@ function requestQuit(answer?: 'shut-down'): void {
  * Loads the same renderer with the take-over route in its hash; `App` renders only the pane
  * for that route. Closing it ends the take-over — the window IS the session.
  */
-function openTakeOverWindow(route: string, activation: Activation): void {
+function openTakeOverWindow(route: string, activation: Activation): Promise<'closed' | 'raised'> {
     const terminalId = route.split('/').pop() ?? '';
     const request = { activation, reason: `take-over window ${route}`, ledger: activationLedger, label: 'takeover' };
     for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed() && !remoteTakeOverWindows.has(w) && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
+        if (!w.isDestroyed() && !remoteTakeOverWindows.has(w) && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return Promise.resolve('raised'); }
     }
     const win = takeOverWindow(route, request, null);
-    win.on('closed', () => {
+    // Settled when it closes: a Take Over TUI's window is asked by genie-host (windowOps), which ends the TUI then (Tynn #896).
+    return new Promise((resolve) => win.on('closed', () => {
         // A sign-in's window closing is the person leaving the step: the host kills and removes its terminal (Tynn #479).
         const login = loginTerminalOf(route);
         if (login !== null) void agentEngineLink?.client.cancelLogin(login);
-        takeOvers?.windowClosed(terminalId);
         scratchTerminals?.windowClosed(terminalId);
-    });
+        resolve('closed');
+    }));
 }
 
 /**
@@ -838,18 +837,6 @@ function takeOverWindow(route: string, request: ActivationRequest, remote: { sea
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     void loadWindowPage(win.webContents, 'index', remote ? { search: remote.search, hash: route } : { hash: route }).catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
     return win;
-}
-
-/**
- * TAKE OVER (§1): the agent's TUI in a workspace terminal. `window: true` is this machine's click, with a window here;
- * `window: false` is another machine's (Tynn #529 part A), whose own Take Over window attaches over the link.
- */
-async function takeOverHere(raw: unknown, options: { window: boolean }): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }> {
-    if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
-    // genie-host decides and starts it (Tynn #553); only the window, if one is wanted here, is this process's to open.
-    const started = await takeOvers.start(raw);
-    if (started.ok && options.window) openTakeOverWindow(`genie://takeover/${started.terminalId}`, 'user-gesture');
-    return started;
 }
 
 /**
@@ -1258,18 +1245,6 @@ function cwdFor(record: AgentRecord): string {
     return workspace?.path ?? app.getPath('userData');
 }
 
-function detailFor(agentId: AgentId): AgentDetail | null {
-    // One builder for the window and genie-host (Tynn #551): a phone sees the same agent whichever answered.
-    return agentDetailFor({
-        registry: { find: (id) => registry?.find(id) ?? null, listAgents: () => registry?.listAgents() ?? [], defaultAgentOf: (id) => registry?.defaultAgentOf(id) ?? null },
-        engine: host,
-        cwdFor,
-        takeOver: (id) => takeOvers?.probe(id) ?? null,
-        providerSignedIn: (provider) => providerHealth.signedIn(provider),
-        ...(services ? { mail: (id: AgentId, limit: number) => services!.inbox.involving(id, limit) } : {}),
-    }, agentId);
-}
-
 let services: WindowServices | null = null;
 /** Settles when the services are composed: an agent's launch asks them about its workspace first. */
 let servicesComposed: (value: WindowServices) => void = () => {};
@@ -1362,6 +1337,8 @@ const windowOps = windowOpsHandler({
         if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.');
         await gappWindowsNow.open(packageId, preview ? { preview: true } : undefined);
     },
+    // A Take Over terminal genie-host started for this window (Tynn #896): its window, here, for as long as it is open.
+    openTerminalWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
 });
 /** The ForceTheQuestion window's controller (question-window.ts); set once the services are composed. */
 let questionWindow: QuestionWindow | null = null;
@@ -1783,10 +1760,10 @@ async function boot(): Promise<void> {
      */
     const terminalsForTakeOver = terminals;
     scratchTerminals = new ScratchTerminals({ terminals: terminalsForTakeOver, openWindow: (route) => openTakeOverWindow(route, 'user-gesture') });
+    // MAIN'S DECK LIVENESS ONLY (askerLive, below; Tynn #896 → #912): a question from a Take Over TUI is not stale. Its
+    // registry's deck is redrawn as each TUI starts and ends. 2f retires this once the deck is the host's.
     takeOvers = agentEngineLink.client.takeOvers();
     const takeOversNow = takeOvers;
-    theRegistry.setObservedProbe((id) => takeOversNow.probe(id as AgentId));
-    // A window opened after a Pilot's Take over sees it; the Observed row follows each TUI starting and ending.
     takeOversNow.onChange(() => { theRegistry.touch(); });
     void takeOversNow.refresh().catch((error: unknown) => console.error(`[take over] ${error instanceof Error ? error.message : String(error)}`));
 
@@ -1967,7 +1944,6 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:crash-report-draft', () => crashReports.draft());
     ipcMain.handle('genie:crash-report-send', (_event, text: unknown, notes: unknown) =>
         typeof text === 'string' && typeof notes === 'string' ? crashReports.send(text, notes) : { ok: false, reason: 'A crash report needs its text.' });
-    ipcMain.handle('genie:take-over', (_event, raw: unknown) => takeOverHere(raw, { window: true }));
 
     // THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace's folder, with the workspace's
     // environment (the same `terminalEnvFor` as a workspace terminal), in a window of its own; closing it ends it.
@@ -2556,7 +2532,7 @@ async function boot(): Promise<void> {
         const flowCallers = new FlowCallers((id) => registry?.workspace(id)?.path ?? null);
         // A caller genie-host vouched for, for a tool it forwarded here (P3.1): its session keys are the host's now.
         const vouchedCallers = new Map<string, Caller>();
-        const resolveCaller = (terminalId: string) => vouchedCallers.get(terminalId) ?? flowCallers.callerFor(terminalId) ?? takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
+        const resolveCaller = (terminalId: string) => vouchedCallers.get(terminalId) ?? flowCallers.callerFor(terminalId) ?? sessionCaller(terminalId);
         // The stores agents write to: genie-host's when it runs — its own tools write them there, and in this window they
         // are never reached (hostOnly says so if anything tries).
         // Every agent, the OS agent included: a tool finds its caller here (genie-tool-deps.ts `toolRoster`, Tynn story #385).
@@ -2643,7 +2619,6 @@ async function boot(): Promise<void> {
                 return {
                     workspaceNames: Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? w.id])),
                     userActive: powerMonitor.getSystemIdleTime() < 120,
-                    callers: takeOvers?.callers() ?? {},
                 };
             };
             let pushTimer: ReturnType<typeof setTimeout> | null = null;

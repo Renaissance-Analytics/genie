@@ -120,14 +120,14 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         const snapshot = vi.fn(async () => ({ workspaces: null }));
         const hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
-        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke) }, takeOver: hibernate } as unknown as PreloadBridge;
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke) }, popOutTerminals: hibernate } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.workspaces, row)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(oldInvoke).not.toHaveBeenCalled();
-        expect(await bridge.takeOver('sample')).toEqual({ ok: false, reason: 'agent still working' });
+        expect(await bridge.popOutTerminals!('sample')).toEqual({ ok: false, reason: 'agent still working' });
         expect(hibernate).toHaveBeenCalledExactlyOnceWith('sample');
     });
     it.each(rows)('$name retires its matching native handler, preload forwarding and inventory row', (row) => {

@@ -64,11 +64,6 @@ const bridge: PreloadBridge = {
         send: (text, notes) => ipcRenderer.invoke('genie:crash-report-send', text, notes) as Promise<import('../renderer/components/SafeModeBanner.js').CrashReportAnswer>,
     },
 
-    takeOver: (agentId) =>
-        ipcRenderer.invoke('genie:take-over', agentId) as Promise<
-            { ok: true; terminalId: string } | { ok: false; reason: string }
-        >,
-
     chooseProviderProgram: (provider) =>
         ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
 

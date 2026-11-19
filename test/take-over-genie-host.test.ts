@@ -336,17 +336,19 @@ describe('the wiring', () => {
     it('genie-host owns it: the Pilot\'s call, its end, the window\'s link, the Observed row and the tools\' caller', () => {
         const host = src('src/main/genie-host.ts');
         expect(host).toContain('new TakeOverService(');
-        expect(host).toMatch(/own: \{[^\n]*takeOver: async \(args\) => takeOverService\.start\(args\[0\]\)/);
+        // Every client's call, the window's too (Tynn #896): started here, with who asked.
+        expect(host).toMatch(/takeOver: async \(args, context\) => \{\s*const started = takeOverService\.start\(args\[0\]\);/);
         expect(host).toMatch(/takeOverEnded: \(terminalId\) => takeOverService\.ended\(terminalId\)/);
         expect(host).toMatch(/takeOver: takeOverService,/);
         expect(host).toMatch(/phoneRegistry\.setObservedProbe\(/);
         expect(host).toMatch(/takeOverCaller: \(id\) => takeOverHost\.callerFor\(id\)/);
     });
 
-    it('a window with a genie-host asks it, and opens only its own window', () => {
+    it('the window starts no Take Over: genie-host asks it to open the window (Tynn #896), and only its deck reads the replica', () => {
         const main = src('src/main/main.ts');
+        expect(main).not.toMatch(/takeOvers\??\.start\(/);
+        expect(main).toMatch(/openTerminalWindow: \(route\) => openTakeOverWindow\(route, 'user-gesture'\)/);
         expect(main).toContain('agentEngineLink.client.takeOvers()');
-        expect(main).toMatch(/await takeOvers\.start\(raw\)/);
     });
 
     it('the tools\' caller is found with no window having told the host', () => {

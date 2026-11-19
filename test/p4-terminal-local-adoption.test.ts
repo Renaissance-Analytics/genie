@@ -158,7 +158,7 @@ it('the adoption removes all six native handlers/preload calls and both native b
         expect(IPC_INVENTORY.some(([registered]) => registered === channel)).toBe(false);
     }
     for (const event of ['data', 'exit']) { const channel = `genie:terminal-${event}`; expect(main.includes(`'${channel}'`)).toBe(false); expect(preload.includes(`'${channel}'`)).toBe(false); }
-    expect(IPC_INVENTORY).toContainEqual(['genie:scratch-terminal-open', 'move:2c']); expect(IPC_INVENTORY).toContainEqual(['genie:take-over', 'move:2b']);
+    expect(IPC_INVENTORY).toContainEqual(['genie:scratch-terminal-open', 'move:2c']); expect(IPC_INVENTORY.map(([c]) => c)).not.toContain('genie:take-over');
 });
 it.each([
     ['undefined', (): unknown => undefined],

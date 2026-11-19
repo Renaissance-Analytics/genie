@@ -802,8 +802,6 @@ export class RemoteHost {
         if (connection.outside !== null && !updating) return { kind: 'result', id, ok: false, reason: connection.outside, code: 'version' };
 
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
-        // A local window takes over through its own window opener (genie:take-over), never this door.
-        if (connection.local && method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; this window does it itself`);
 
         // A TAKE OVER WINDOW (Tynn #529 part A): reads as any window; types into its one terminal while its window drives.
         const companion = connection.companion;
@@ -1099,8 +1097,9 @@ export class RemoteHost {
             if (method === 'features.act') return ok(this.#actReply(connection, value));
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
-            // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
-            if (method === 'takeOver') {
+            // The TUI started (or was open): a ticket for another machine's own Take Over window, which presents it (Tynn #529
+            // A). This machine's windows need none: genie-host asks the caller's window process to open it (Tynn #896).
+            if (method === 'takeOver' && !connection.local) {
                 const started = value as { ok?: unknown; terminalId?: unknown; started?: unknown } | null;
                 if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true) });
             }

@@ -434,6 +434,7 @@ describe('window-local operations, done in the window’s process', () => {
         trash: async (path) => { log.push(`trash ${path}`); },
         workspaces: () => [{ path: ws }],
         openApp: async (id, preview) => { log.push(`open ${id} ${preview}`); },
+        openTerminalWindow: async (route) => { log.push(`terminal ${route}`); return 'closed' as const; },
     });
 
     it('the OS trash, for a file inside a registered workspace', async () => {

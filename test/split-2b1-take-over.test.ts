@@ -40,33 +40,36 @@ describe('genie-host opens the asking window\'s terminal window and ends the TUI
 
     it('a tunnelled caller: its own window process is asked, with the route', async () => {
         const p = ports({ c1: 'win-1' }, async () => 'closed');
-        const closed = vi.fn();
-        expect(await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed)).toBe(true);
+        const ended = vi.fn();
+        expect(await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), { startedHere: false, ended })).toBe(true);
         expect(p.asked).toEqual([{ owner: 'win-1', op: 'terminal.window', args: [takeOverRouteOf('term_1')] }]);
         await settled();
-        expect(closed).toHaveBeenCalledExactlyOnceWith('closed');
+        expect(ended).toHaveBeenCalledOnce();
     });
 
     it('a window already open on it is raised, and the TUI is NOT ended', async () => {
         const p = ports({ c1: 'win-1' }, async () => 'raised');
-        const closed = vi.fn();
-        await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed);
+        const ended = vi.fn();
+        await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), { startedHere: true, ended });
         await settled();
-        expect(closed).not.toHaveBeenCalled();
+        expect(ended).not.toHaveBeenCalled();
     });
 
-    it('a window process that is gone before it closes reports failed', async () => {
+    it('a window never shown ends a TUI this ask started, and leaves one already open to whoever has it', async () => {
         const p = ports({ c1: 'win-1' }, async () => { throw new Error('the caller’s own window is no longer connected'); });
-        const closed = vi.fn();
-        await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), closed);
+        const mine = vi.fn(), theirs = vi.fn();
+        await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_1'), { startedHere: true, ended: mine });
+        await openCallersTerminalWindow(p.ports, context('c1'), takeOverRouteOf('term_2'), { startedHere: false, ended: theirs });
         await settled();
-        expect(closed).toHaveBeenCalledExactlyOnceWith('failed');
+        expect(mine).toHaveBeenCalledOnce();
+        expect(theirs).not.toHaveBeenCalled();
     });
 
     it('CONTROL: a caller no window of this machine carries (another machine, no context) is not asked', async () => {
         const p = ports({ c1: 'win-1' }, async () => 'closed');
-        expect(await openCallersTerminalWindow(p.ports, context('c9', 'device'), takeOverRouteOf('term_1'), () => {})).toBe(false);
-        expect(await openCallersTerminalWindow(p.ports, undefined, takeOverRouteOf('term_1'), () => {})).toBe(false);
+        const terminal = { startedHere: true, ended: () => {} };
+        expect(await openCallersTerminalWindow(p.ports, context('c9', 'device'), takeOverRouteOf('term_1'), terminal)).toBe(false);
+        expect(await openCallersTerminalWindow(p.ports, undefined, takeOverRouteOf('term_1'), terminal)).toBe(false);
         expect(p.asked).toEqual([]);
     });
 });
