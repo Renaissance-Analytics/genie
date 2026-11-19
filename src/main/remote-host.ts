@@ -1004,6 +1004,8 @@ export class RemoteHost {
         // Only the owner changes the host itself — a guest of the whole host included.
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
+        // Genie's own scratch terminal (null: the home folder, the tray's) is the host owner's (Tynn #897, 2c-4).
+        if (!auth.isOwner && method === 'terminals.scratch' && (args[0] ?? null) === null) return refuse(`Genie’s own terminal on ${this.#hostName} is its owner’s; open the workspace’s`);
         const signIn = this.#signInRefusal(connection, method);
         if (signIn) return refuse(signIn);
         // A guest browses inside what it was given; the owner, the whole disk (Genie 1's approved scope, Tynn #835).
@@ -1103,10 +1105,10 @@ export class RemoteHost {
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for another machine's own Take Over window, which presents it (Tynn #529
             // A). This machine's windows need none: genie-host asks the caller's window process to open it (Tynn #896).
-            if ((method === 'takeOver' || isSignIn(method)) && !connection.local) {
+            if ((method === 'takeOver' || isSignIn(method) || method === 'terminals.scratch') && !connection.local) {
                 const started = value as { ok?: unknown; terminalId?: unknown; started?: unknown } | null;
                 // A sign-in's login terminal is this ask's: its companion closing cancels the login (genie-host takeOverEnded).
-                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true || isSignIn(method)) });
+                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true || isSignIn(method) || method === 'terminals.scratch') });
             }
             return ok(value);
         } catch (error) {

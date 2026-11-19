@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'marketplace' | 'gapps' | 'crashReport' | 'chooseProviderProgram'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'marketplace' | 'gapps' | 'crashReport' | 'chooseProviderProgram' | 'scratchTerminal'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -295,6 +295,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         },
         // A provider's program (Tynn #897, 2c-3): the path this window picked on the host's disk, kept by genie-host.
         chooseProviderProgram: (provider, path) => requestBridge((bridge) => bridge.chooseProviderProgram!(provider, path)),
+        // The throwaway shell (Tynn #897, 2c-4): genie-host opens it and asks this window's process to show it.
+        scratchTerminal: (workspaceId) => requestBridge((bridge) => bridge.scratchTerminal!(workspaceId)),
         // The account chips (Tynn #895), as the IPC answered them: nothing known while the link is down, its words, false.
         accounts: async () => { const r = await requestBridge((bridge) => bridge.accounts!()); return r !== null && 'ok' in r ? null : r; },
         accountsAct: (action) => requestBridge((bridge) => bridge.accountsAct!(action)),

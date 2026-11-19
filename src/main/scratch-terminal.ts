@@ -1,4 +1,5 @@
 import { OS_WORKSPACE } from './registry.js';
+import type { CallContext } from '../core/remote-protocol.js';
 import type { TerminalOptions } from './terminal-host.js';
 
 /**
@@ -29,8 +30,39 @@ export function openScratchTerminal(options: ScratchTerminalOptions): { ok: true
  */
 export interface ScratchTerminalsOptions {
     terminals: { open(options: TerminalOptions): { id: string }; close(id: string): boolean };
-    openWindow: (route: string) => void;
+    /** Opens the terminal's window for whoever asked (genie-host: the caller's window process, Tynn #897 2c-4). */
+    openWindow: (route: string, terminalId: string, context?: CallContext) => void;
 }
+
+/** What `terminals.scratch` answers (Tynn #897, 2c-4): the terminal and its window's route, which another machine opens itself. */
+export type ScratchAnswer = { ok: true; terminalId: string; route: string } | { ok: false; reason: string };
+
+export interface HostScratchPorts {
+    scratch: Pick<ScratchTerminals, 'open'>;
+    /** The person's home folder: Genie's own scratch terminal (the tray's) opens there. */
+    home: string;
+    /** A workspace this host has; null = none by that id. */
+    workspace: (id: string) => { id: string; path: string } | null;
+    /** A workspace shell's environment: its service variables and Genie's MCP endpoint (genie-host's shellEnv). */
+    envFor: (workspaceId: string) => Readonly<Record<string, string>>;
+}
+
+/**
+ * `terminals.scratch(workspaceId | null)`, answered by genie-host (Tynn #897, 2c-4): the workspace's throwaway shell, in its
+ * folder with its environment, or for null Genie's own in the home folder (the tray's). Who may ask is RemoteHost's.
+ */
+export function scratchTerminalFor(ports: HostScratchPorts, workspaceId: string | null, context?: CallContext): ScratchAnswer {
+    let opened: { ok: true; terminalId: string } | { ok: false; reason: string };
+    if (workspaceId === null) opened = ports.scratch.open({ workspaceId: OS_WORKSPACE, cwd: ports.home }, context);
+    else {
+        const workspace = ports.workspace(workspaceId);
+        if (!workspace) return { ok: false, reason: 'That workspace is not open in Genie.' };
+        opened = ports.scratch.open({ workspaceId: workspace.id, cwd: workspace.path, env: ports.envFor(workspace.id) }, context);
+    }
+    return opened.ok ? { ok: true, terminalId: opened.terminalId, route: scratchRoute(opened.terminalId) } : opened;
+}
+
+const scratchRoute = (terminalId: string): string => `genie://takeover/${terminalId}`;
 
 export class ScratchTerminals {
     readonly #options: ScratchTerminalsOptions;
@@ -41,7 +73,7 @@ export class ScratchTerminals {
         this.#options = options;
     }
 
-    open(where: { workspaceId: string; cwd: string; env?: Readonly<Record<string, string>> | undefined }): { ok: true; terminalId: string } | { ok: false; reason: string } {
+    open(where: { workspaceId: string; cwd: string; env?: Readonly<Record<string, string>> | undefined }, context?: CallContext): { ok: true; terminalId: string } | { ok: false; reason: string } {
         let opened: { id: string };
         try {
             opened = this.#options.terminals.open({
@@ -57,7 +89,7 @@ export class ScratchTerminals {
             return { ok: false, reason: `The terminal could not start: ${(error as Error).message}` };
         }
         this.#open.add(opened.id);
-        this.#options.openWindow(`genie://takeover/${opened.id}`);
+        this.#options.openWindow(scratchRoute(opened.id), opened.id, context);
         return { ok: true, terminalId: opened.id };
     }
 

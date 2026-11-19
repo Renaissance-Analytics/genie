@@ -19,7 +19,7 @@ import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRul
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
-import { hostname, uptime } from 'node:os';
+import { homedir, hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
@@ -248,6 +248,7 @@ import { setThreadStoreSlowLog } from '../core/thread-store.js';
 import { supervisorFailureWords } from '../core/supervisor-failure.js';
 import { providerChoiceFile, setProviderChoiceFile } from './provider-choice.js';
 import { hostProviderPrograms } from './host-provider-programs.js';
+import { ScratchTerminals, scratchTerminalFor } from './scratch-terminal.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
@@ -614,6 +615,15 @@ async function main(): Promise<void> {
      * TAKE OVER, for every client (Tynn #896): the TUI starts here; this machine's window that asked is asked to open its
      * window on it, and the TUI ends when that window closes. Another machine's gets a ticket (RemoteHost).
      */
+    /*
+     * THE THROWAWAY SHELL (Tynn #378, #761; #897 2c-4): disposable, on this host's terminal host; this machine's window that
+     * asked opens its window (terminal.window) and its closing ends it. Another machine's opens its own with a ticket, and
+     * that window closing (or the ticket going unused) ends it too (takeOverEnded).
+     */
+    const hostScratchTerminals: ScratchTerminals = new ScratchTerminals({
+        terminals: terminalHost,
+        openWindow: (route, terminalId, context) => { openCallersTerminalWindow(terminalWindowPorts, context, route, { startedHere: true, ended: () => hostScratchTerminals.windowClosed(terminalId) }); },
+    });
     const ownTakeOver: Partial<Record<RemoteMethod, (args: unknown[], context?: CallContext) => Promise<unknown>>> = {
         takeOver: async (args, context) => {
             const started = takeOverService.start(args[0]);
@@ -1110,7 +1120,7 @@ async function main(): Promise<void> {
                 // The account chips (Tynn #895): this host's book, for every client, window or not.
                 ...accountsOwnAnswers(() => accountsPortNow) },
             // Another machine's Take Over window closed: its TUI ends, or its sign-in is cancelled (Tynn #896).
-            takeOverEnded: (terminalId) => { takeOverService.ended(terminalId); logins?.cancel(terminalId); },
+            takeOverEnded: (terminalId) => { takeOverService.ended(terminalId); logins?.cancel(terminalId); hostScratchTerminals.windowClosed(terminalId); },
             // Every remote method and event, window or not (host-alone-api.ts; Tynn #898: none is sent to a window).
             alone: () => phoneApi,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
@@ -1841,6 +1851,8 @@ async function main(): Promise<void> {
         signIns,
         // A PROVIDER'S PROGRAM (Tynn #577; #897 2c-3): the .exe the owner picked on this host's disk, from any of their
         // windows, written to this host's own choice file (the one its agents start from); the provider is read again.
+        // The throwaway shell (Tynn #897, 2c-4): a workspace's with its shell environment, or Genie's own in the home folder.
+        scratchTerminals: { open: (workspaceId, context) => scratchTerminalFor({ scratch: hostScratchTerminals, home: homedir(), workspace: (id) => hostRegistry.workspace(id) ?? null, envFor: shellEnv }, workspaceId, context) },
         providerPrograms: hostProviderPrograms({
             file: () => providerChoiceFile(),
             refresh: (provider) => { void providerHealth.refresh(provider); },

@@ -509,6 +509,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         },
         // A provider's program (Tynn #577; #897 2c-3): picked on the host's disk with this window's picker, kept by the host.
         chooseProviderProgram: (provider, path) => answer<{ ok: true } | { ok: false; reason: string }>('providers.chooseProgram', provider, path),
+        // The throwaway shell (Tynn #897, 2c-4): the host's; this window opens its companion window with the ticket.
+        scratchTerminal: (workspaceId) => answer<{ ok: true; terminalId: string; route?: string; ticket?: string } | { ok: false; reason: string }>('terminals.scratch', workspaceId),
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.
