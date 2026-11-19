@@ -142,7 +142,14 @@ describe('genie-host answers the phone itself', () => {
         expect(calls).toEqual(['answerApproval allow go ahead', 'resumeLimit claude undefined', 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
     });
 
-    it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {
+    it('with no feature services, a read and any action but the Deck answer are refused as this host cannot (step 2e-3), never by a window', async () => {
+        const api = hostAloneApi(ports(engine(true)));
+        await expect(api.invoke('features.snapshot', [])).rejects.toThrow('this host cannot read its features');
+        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('this host cannot run settings.set');
+        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.not.toThrow(/window|open Genie/);
+    });
+
+    it('the Deck answer for a question is answered in the host\'s attention store; any other feature action is refused', async () => {
         let held: never[] = [];
         // The host's own Deck holds the question (Tynn #861): the answer is resolved there.
         const api = hostAloneApi(ports(engine(true), { deckItems: () => held }));
@@ -150,7 +157,7 @@ describe('genie-host answers the phone itself', () => {
         held = [item as never];
         await api.invoke('features.act', [{ kind: 'deck.answer', item, optionId: 'yes' }]);
         expect(calls).toContain('answer q_1 [["yes"]]');
-        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('this host cannot run settings.set');
     });
 
     it('the phone\'s file browser lists the workspace through the host\'s files', async () => {
