@@ -283,7 +283,48 @@ describe('the owner operations are genie-host\'s', () => {
     });
 
     it('CONTROL: with no owner port the owner operations are still refused in words, not an open door', async () => {
-        await expect(hostRemoteApi({ hostName: 'alphar', own: {}, alone: hostAloneApi(ports()) }).invoke('tynnNetwork.workstations', [])).rejects.toThrow('open Genie on alphar');
+        await expect(hostRemoteApi({ hostName: 'alphar', own: {}, alone: hostAloneApi(ports()) }).invoke('tynnNetwork.workstations', [])).rejects.toThrow('this host cannot reach its Tynn network');
+    });
+});
+
+/*
+ * STEP 2e-3 (Tynn #898, story #915): A MISSING MEMBER IS ABSENT, AND REFUSED POLITELY. genie-host's windowOnly Proxy gave
+ * every missing member a throwing function, so host-api's optional checks (`owner().deviceLink?.hosts()`,
+ * `if (!deps.workspaceOps.previewAdd)`) never saw it absent, and what answered said "only while a Genie window is open
+ * there", which no window can cure since every client is served by genie-host. Nothing gains a refusal (the owner): the
+ * refusals that were there say "this host cannot …", and an optional member that is absent gets host-api's own answer.
+ */
+describe('a member genie-host lacks is absent, and refused as "this host cannot …" (step 2e-3)', () => {
+    const noOwner = () => hostAloneApi(ports());
+
+    it('with no owner port, the app keys and the Tynn network are refused as this host cannot, not by a window or a TypeError', async () => {
+        await expect(noOwner().invoke('appInbox.state', ['tynn'])).rejects.toThrow('this host cannot manage app keys');
+        await expect(noOwner().invoke('tynnNetwork.workstations', [])).rejects.toThrow('this host cannot reach its Tynn network');
+    });
+
+    it('with no owner port, the optional device link is absent: host-api answers no remembered hosts', async () => {
+        expect(await noOwner().invoke('deviceLink.hosts', [])).toEqual([]);
+        expect(await noOwner().invoke('deviceLink.forget', ['wss://beta:7443'])).toBe(false);
+    });
+
+    it('with an owner port and no share links, a share-link read answers in the shares API\'s own words', async () => {
+        const { s } = owner({ rows: [] });
+        const api = hostAloneApi(ports({ owner: hostOwnerOps(s), shares: undefined }));
+        expect(await api.invoke('tynnNetwork.shares.list', [null])).toEqual({ ok: false, reason: 'this host cannot share links' });
+        expect(await api.invoke('tynnNetwork.shares.revoke', ['l1'])).toEqual({ ok: false, reason: 'this host cannot share links' });
+    });
+
+    it('CONTROL: what is given still answers: the share links with no owner port, and no port at all is the old refusal', async () => {
+        expect(await noOwner().invoke('tynnNetwork.shares.list', [null])).toEqual({ ok: true, links: [] });
+        await expect(hostAloneApi(ports({ shares: undefined })).invoke('appInbox.state', ['tynn'])).rejects.toThrow('this host has no local owner operations');
+    });
+
+    it('no genie-host answer sends anyone to a window, and no Proxy invents members', () => {
+        const alone = readFileSync('src/main/host-alone-api.ts', 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+        expect(alone).not.toMatch(/only while a Genie window is open/);
+        expect(alone).not.toMatch(/open Genie on/);
+        expect(alone).not.toMatch(/windowOnly/);
+        expect(alone).not.toMatch(/new Proxy\(/);
     });
 });
 

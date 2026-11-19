@@ -171,19 +171,34 @@ export interface HostAlonePorts {
     readonly local?: Partial<HostLocalPorts> & Pick<HostApiDeps, 'filesWatch' | 'tynnWatch'>;
 }
 
+/** No share links on this host: each answers in the shares API's own shape (Tynn #898 step 2e-3). */
+const NO_SHARE_LINKS: LocalOwnerDeps['tynnNetwork']['shares'] = {
+    list: async () => ({ ok: false, reason: 'this host cannot share links' }),
+    mint: async () => ({ ok: false, reason: 'this host cannot share links' }),
+    revoke: async () => ({ ok: false, reason: 'this host cannot share links' }),
+};
+const cannot = (what: string) => (): never => { throw new Error(`this host cannot ${what}`); };
+/** No owner port: the Apps and scripts card's keys are refused in words, method by method. */
+const NO_APP_KEYS: LocalOwnerDeps['appInbox'] = {
+    state: cannot('manage app keys'), workspaceExists: cannot('manage app keys'), createKey: cannot('manage app keys'),
+    scriptKeys: cannot('manage app keys'), revokeKey: cannot('manage app keys'), rotate: cannot('manage app keys'),
+    revokeSource: cannot('manage app keys'), allowSource: cannot('manage app keys'), restartSource: cannot('manage app keys'),
+};
+/** No owner port: its Tynn account and relay role are refused in words; the share links are what is given. */
+const NO_TYNN_NETWORK: Omit<LocalOwnerDeps['tynnNetwork'], 'shares'> = {
+    hasAccount: cannot('reach its Tynn network'), signedIn: cannot('reach its Tynn network'), role: cannot('reach its Tynn network'),
+    workstations: cannot('reach its Tynn network'), setRole: cannot('reach its Tynn network'), rereadRole: cannot('reach its Tynn network'),
+};
+
 export function hostAloneApi(ports: HostAlonePorts): HostApi {
     const { hostName, registry } = ports;
-    const needsWindow = (what: string) => `${hostName} answers ${what} only while a Genie window is open there: open Genie on ${hostName}`;
-    /** A dependency only a window has: every member refuses, except the subscriptions given (which the events wire up). */
-    const windowOnly = <T extends object>(what: string, given: Partial<T> = {}): T => new Proxy(given, {
-        // A given method keeps its object (beta.61 blocker): genie-host's terminals are a class with private state, and a
-        // method called on the proxy instead read `#dataListeners` from it and threw, so a Pilot's hello heard nothing.
-        get: (target, key) => {
-            if (!(key in target)) return typeof key === 'string' ? () => { throw new Error(needsWindow(`${what}.${key}`)); } : undefined;
-            const value = (target as Record<string | symbol, unknown>)[key];
-            return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-        },
-    }) as T;
+    /*
+     * WHAT GENIE-HOST LACKS IS ABSENT (Tynn #898 step 2e-3). There is no Proxy inventing members: an optional member that is
+     * missing is missing, so host-api's own check answers ("this host cannot preview adding a folder", `deviceLink?.hosts()`
+     * answering none), and the compiler holds every required one. A whole family with no port (the owner's operations
+     * without an owner port) is refused by each method in words: "this host cannot …". Nothing here sends anyone to a
+     * window, because every client is served by genie-host and no window could cure it.
+     */
     const engine = (): HostAloneEngine => {
         const e = ports.engine();
         if (!e) throw new Error(`Genie’s agents on ${hostName} are still starting; try again in a moment`);
@@ -278,7 +293,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         files: ports.files,
         serviceEnvFor: (workspaceId) => ports.serviceEnvFor(workspaceId),
         ...(ports.local ?? {}),
-        workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
+        workspaceOps: {
             onSettingsChanged: (listener) => ports.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
             ...workspaceSettingsOps(() => ports.settings),
             ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor, ports.workspaceSave ?? WORKSPACE_SAVE_UNAVAILABLE, ports.cloneOffers),
@@ -286,15 +301,15 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             // The live tab's reads (P4 family 12): what changed since a cursor, from genie-host's Tynn account (step 2d-3a).
             tynnBoardChanges: async (id, scope, cursor, ids) => readTynnBoardChanges(await ports.tynnTab.board(), id, (scope ?? {}) as BoardScope, cursor, ids),
             tynnIssueChanges: async (id, filters, cursor, ids) => readTynnIssueChanges(await ports.tynnTab.board(), id, filters ?? {}, cursor, ids),
-        }),
+        },
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
         features: ports.features ?? {
             // Optional subscription hooks must really be absent, not synthesized as throwing window methods.
             // Production supplies HostFeatures; this legacy Deck-only fallback owns no feature change source.
-            snapshot: async () => { throw new Error(needsWindow('features.snapshot')); },
+            snapshot: async () => { throw new Error('this host cannot read its features'); },
             // The Deck's answer only (the phone's Deck, deck-answer.ts); the phone reads nothing back from it.
             act: async (action: FeatureAction) => {
-                if (action.kind !== 'deck.answer' && action.kind !== 'deck.answerForm') throw new Error(needsWindow(`features.act ${action.kind}`));
+                if (action.kind !== 'deck.answer' && action.kind !== 'deck.answerForm') throw new Error(`this host cannot run ${action.kind}`);
                 await answerDeck(action, { deckItems: ports.deckItems, attention: ports.attention, approvals: ports.approvals, inbox: ports.inbox, deliverToAgent: ports.deliverToAgent });
                 return {} as FeatureData;
             },
@@ -304,8 +319,8 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         updates: ports.updates ?? null,
         // THE OWNER'S OPERATIONS (step 2d-3b): genie-host's own, with its share links. With no owner port, only the share links.
         ...(ports.owner
-            ? { localOwner: { ...ports.owner, tynnNetwork: { ...ports.owner.tynnNetwork, shares: ports.shares ?? windowOnly<LocalOwnerDeps['tynnNetwork']['shares']>('tynnNetwork.shares') } } }
-            : ports.shares ? { localOwner: windowOnly<LocalOwnerDeps>('owner operations', { tynnNetwork: windowOnly<LocalOwnerDeps['tynnNetwork']>('tynnNetwork', { shares: ports.shares }) }) } : {}),
+            ? { localOwner: { ...ports.owner, tynnNetwork: { ...ports.owner.tynnNetwork, shares: ports.shares ?? NO_SHARE_LINKS } } }
+            : ports.shares ? { localOwner: { appInbox: NO_APP_KEYS, tynnNetwork: { ...NO_TYNN_NETWORK, shares: ports.shares } } } : {}),
     };
     return { ...buildHostApi(deps), ...(ports.features ? { ownsFeatures: true } : {}) };
 }
