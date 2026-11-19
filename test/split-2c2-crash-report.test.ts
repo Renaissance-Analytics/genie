@@ -105,7 +105,7 @@ describe('genie-host builds the report from its own pieces; every bridge asks it
 
     it('the wire bridge asks crashReport.draft / crashReport.send, so another machine’s owner has it too', () => {
         const remote = code(src('src/renderer/remote-bridge.ts'));
-        expect(remote).toMatch(/crashReport: \{\s*draft: async \(\) => \{ const r = await answer<\{ text: string \}>\('crashReport\.draft'\)/);
+        expect(remote).toMatch(/crashReport: \{\s*draft: async \(\) => \{ const r = await call\('crashReport\.draft'\)/);
         expect(remote).toMatch(/send: \(text, notes\) => answer<CrashReportAnswer>\('crashReport\.send', text, notes\)/);
         expect(code(src('src/renderer/bridge.ts'))).toMatch(/crashReport: local\.crashReport/);
     });

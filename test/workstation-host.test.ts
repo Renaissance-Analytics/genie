@@ -323,7 +323,9 @@ describe('where it is wired', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('with a host, main asks it; only its own engine holds a key here', () => {
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        expect(main).toMatch(/crashReportMachine = agentEngineLink\.client\.workstation\(\)/);
+        // The crash report signs with genie-host's own identity now (Tynn #897, 2c-2); main keeps the replica for its own uses.
+        expect(main).toMatch(/const machineIdentity: WorkstationPort = agentEngineLink\.client\.workstation\(\)/);
+        expect(main).not.toMatch(/crashReportMachine/);
         expect(main).toMatch(/sources: \(\) => workstationSealedSources\(/);
         expect(strip(readFileSync('src/main/genie-host.ts', 'utf8'))).toMatch(/new WorkstationService\(/);
         expect(strip(readFileSync('src/main/workstation-replica.ts', 'utf8'))).not.toMatch(/privateKeyPem/);
