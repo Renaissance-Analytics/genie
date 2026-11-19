@@ -8,6 +8,7 @@ import { NO_FILES, NO_TERMINALS } from '../src/renderer/bridge.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
 import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Workspace.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
+import { markupText } from './helpers/markup-text.js';
 
 /*
  * ONE TOP BAR FOR EVERY VIEW (the owner on beta.64, 2026-11-17: "you still have two different workspace views happening.
@@ -96,7 +97,7 @@ describe('one bar, on top, the same in both views', () => {
             const open = b.slice(b.lastIndexOf('<button', at), b.indexOf('>', at) + 1);
             expect(open, name).toMatch(/aria-label="[^"]+"/);
             const inner = b.slice(b.indexOf('>', at) + 1, b.indexOf('</button>', at));
-            expect(inner.replace(/<[^>]+>/g, '').replace(/[⌘⇧A-Z]+$/, '').trim(), name).toBe('');
+            expect(markupText(inner).replace(/[⌘⇧A-Z]+$/, '').trim(), name).toBe('');
         }
         const w = bar(ws());
         expect(w).toContain('data-action="open-scratch-terminal"');

@@ -80,21 +80,91 @@ export const MOCKUP_CSP = `<meta http-equiv="Content-Security-Policy" content="d
  * inline styles and `<style>` blocks.
  */
 export function sanitizeMockupHtml(html: string): string {
+    // TO A FIXED POINT (CodeQL js/incomplete-multi-character-sanitization, #122-#124). One pass is not enough: removing a
+    // match joins the text either side of it, and that join can be a new match (`<scr<script>ipt>` → `<script>`,
+    // `<a o onclick="x"nclick=…>` → `<a onclick=…>`). So the pass repeats until it changes nothing. Every step only REMOVES
+    // a non-empty span, so each pass that changes the page shortens it and the loop must end; and when a pass changes
+    // nothing, no pattern matches anywhere in what is returned — which is the claim, for every pattern at once.
     let s = html;
-    // Elements removed with their content.
-    s = s.replace(/<(script|iframe|object|embed|frameset|frame|applet|noscript|template)\b[\s\S]*?<\/\1\s*>/gi, '');
-    // ...and any left unclosed or self-closing.
-    s = s.replace(/<\/?(script|iframe|object|embed|frameset|frame|applet|noscript|template|base|link)\b[^>]*>/gi, '');
-    // A refresh (or any http-equiv of the page's own) goes; ours is added below.
-    s = s.replace(/<meta\b[^>]*http-equiv[^>]*>/gi, '');
-    // Every inline handler: on…="…", on…='…', on…=bare.
-    s = s.replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
-    // javascript:, vbscript: and data:text/html in any attribute.
-    s = s.replace(/\s+([a-z:-]+)\s*=\s*("|')\s*(?:javascript|vbscript|data:text\/html)[^"']*\2/gi, '');
-    s = s.replace(/\s+([a-z:-]+)\s*=\s*(?:javascript|vbscript):[^\s>]*/gi, '');
+    for (let pass = 0; ; pass += 1) {
+        if (pass === MAX_SANITIZE_PASSES) return `${MOCKUP_CSP}<pre>${escapeHtml(html)}</pre>`;
+        const next = sanitizePass(s);
+        if (next === s) break;
+        s = next;
+    }
+    // The policy goes FIRST, after a doctype (a doctype not first is quirks mode): a parser puts a <meta> before <html> into
+    // <head> whatever follows, where a `<head>` found by a regex might be in a comment, a <title> or an attribute.
+    const doctype = /^(?:\s|<!--[\s\S]*?-->)*<!doctype\b[^>]*>/i.exec(s)?.[0] ?? '';
+    return `${doctype}${MOCKUP_CSP}${s.slice(doctype.length)}`;
+}
+
+/**
+ * Nesting deeper than this is not a page anyone drew: each level costs one pass, so a crafted page could make the fixed
+ * point quadratic. Past it the page is shown as its source text, which is safe and says what happened.
+ */
+const MAX_SANITIZE_PASSES = 32;
+
+const REMOVED_ELEMENTS = 'script|iframe|object|embed|frameset|frame|applet|noscript|template';
+/** Elements removed with their content. */
+const REMOVED_WITH_CONTENT = new RegExp(`<(${REMOVED_ELEMENTS})\\b[\\s\\S]*?<\\/\\1\\s*>`, 'gi');
+/** ...and any left unclosed or self-closing, and the tags that point the page elsewhere. */
+const REMOVED_TAG = new RegExp(`<\\/?(?:${REMOVED_ELEMENTS}|base|link)\\b[^>]*>`, 'gi');
+/** A page's own http-equiv (a refresh above all); ours is added after. The attribute rule below catches what this misses. */
+const PAGE_META = /<meta\b[^>]*http-equiv[^>]*>/gi;
+/**
+ * An attribute, as the parser starts one: after whitespace, a `/`, or straight after a quoted value. Tried at EVERY such
+ * position, not only after the last attribute it matched, so nothing hides inside a value it kept. An unquoted value stops
+ * at a quote, so a dropped `on…=x"…` leaves `"…`, which is no handler.
+ */
+const ATTRIBUTE = /([^\s"'<>\/=]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>"']*)/y;
+const ATTRIBUTE_START = /[\s\/"']/;
+const URL_ATTRIBUTES = new Set(['src', 'srcset', 'href', 'xlink:href', 'action', 'formaction', 'poster', 'background', 'ping', 'data']);
+
+function sanitizePass(input: string): string {
+    const s = input.replace(REMOVED_WITH_CONTENT, '').replace(REMOVED_TAG, '').replace(PAGE_META, '');
+    let out = '';
+    let i = 0;
+    while (i < s.length) {
+        if (i > 0 && ATTRIBUTE_START.test(s[i - 1]!)) {
+            ATTRIBUTE.lastIndex = i;
+            const m = ATTRIBUTE.exec(s);
+            if (m && dropAttribute(m[1]!, m[2]!)) {
+                i += m[0].length;
+                continue;
+            }
+        }
+        out += s[i];
+        i += 1;
+    }
+    return out;
+}
+
+/** Whether an attribute goes: a handler, a page's own http-equiv, a script or HTML URL, or a remote source. */
+function dropAttribute(rawName: string, rawValue: string): boolean {
+    const name = rawName.toLowerCase();
+    if (name.startsWith('on') || name === 'http-equiv') return true;
+    // The value as a URL resolver reads it: entities decoded, then tabs, newlines, spaces and controls gone.
+    const url = decodeAttributeEntities(rawValue.replace(/^["']|["']$/g, '')).replace(/[\u0000- ]/g, '').toLowerCase();
+    if (/^(?:javascript|vbscript):|^data:text\/html/.test(url)) return true;
     // A remote source: it would load (and report) the moment the page is drawn — the CSP blocks it too; it is said, not kept.
-    s = s.replace(/\s+(src|srcset|href|action|formaction|poster|background)\s*=\s*("|')\s*(?:https?:)?\/\/[^"']*\2/gi, '');
-    return /<head\b[^>]*>/i.test(s) ? s.replace(/<head\b[^>]*>/i, (m) => `${m}${MOCKUP_CSP}`) : `${MOCKUP_CSP}${s}`;
+    if (!URL_ATTRIBUTES.has(name)) return false;
+    return name === 'srcset' ? /https?:|[\\/]{2}/.test(url) : /^(?:https?:|(?:[a-z][a-z0-9+.-]*:)?[\\/]{2})/.test(url);
+}
+
+/** Numeric character references (`;` optional, as a parser allows) and the named ones that spell a URL's punctuation. */
+function decodeAttributeEntities(v: string): string {
+    return v
+        .replace(/&#x([0-9a-f]+);?/gi, (_m, h: string) => safeCodePoint(parseInt(h, 16)))
+        .replace(/&#([0-9]+);?/g, (_m, d: string) => safeCodePoint(parseInt(d, 10)))
+        .replace(/&(colon|tab|newline|sol|bsol|period|amp);/gi, (_m, n: string) => ({ colon: ':', tab: '\t', newline: '\n', sol: '/', bsol: '\\', period: '.', amp: '&' })[n.toLowerCase()]!);
+}
+
+function safeCodePoint(n: number): string {
+    return Number.isInteger(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '�';
+}
+
+function escapeHtml(v: string): string {
+    return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 /**
