@@ -112,7 +112,8 @@ it('versions the counter-bearing engine protocol', async () => {
     const engineFile: string = '../src/core/engine-protocol.js'; expect((await import(engineFile)).ENGINE_PROTOCOL).toBe(4);
 });
 it('classifies TakeOver as the existing window capability it opens', () => {
-    expect(IPC_INVENTORY.find(([channel]) => channel === 'genie:take-over')?.[1]).toBe('move:2b');
+    // Take over is the protocol's since step 2b-1 (Tynn #896): genie-host asks the window to open it (windowOps).
+    expect(IPC_INVENTORY.find(([channel]) => channel === 'genie:take-over')).toBeUndefined();
 });
 
 it('applies a tail at its authoritative endOffset and discards duplicate/overlapping live code units', async () => {

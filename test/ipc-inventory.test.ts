@@ -120,8 +120,8 @@ describe('P4 IPC inventory', () => {
 
     it('CONTROL: the ratchet notices a new still-to-move row and a frozen one re-labelled a window capability', () => {
         expect(ratchet([['genie:new-host-thing', 'move:2b']], []).joined).toEqual(['genie:new-host-thing']);
-        expect(ratchet([['genie:take-over', 'move:2c']], []).joined).toEqual(['genie:take-over']);
-        expect(ratchet([['genie:take-over', 'window:take-over-window']], ['genie:take-over']).relabelled).toEqual(['genie:take-over']);
+        expect(ratchet([['question:answer', 'move:2c']], []).joined).toEqual(['question:answer']);
+        expect(ratchet([['question:answer', 'window:pop-out']], ['question:answer']).relabelled).toEqual(['question:answer']);
         // A frozen channel whose handler is gone needs no row (the stale check removes it): the list shrinks.
         expect(ratchet([], [])).toEqual({ joined: [], relabelled: [] });
     });

@@ -135,7 +135,7 @@ import { relayFetchOver } from './host-relay-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
-import { transportHub } from '../core/remote-protocol.js';
+import { transportHub, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
@@ -605,6 +605,22 @@ async function main(): Promise<void> {
         ownerOf: (connectionId) => protocolTunnels.bindingOf(connectionId)?.owner ?? null,
         windowOp: (owner, op, args) => (engineRef ? engineRef.windowOp(owner, op, args) : Promise.reject(new Error('Genie is still starting; try again in a moment'))),
         log: (line) => lifecycleLog(line),
+    };
+    /**
+     * TAKE OVER, for every client (Tynn #896): the TUI starts here; this machine's window that asked is asked to open its
+     * window on it, and the TUI ends when that window closes. Another machine's gets a ticket (RemoteHost).
+     */
+    const ownTakeOver: Partial<Record<RemoteMethod, (args: unknown[], context?: CallContext) => Promise<unknown>>> = {
+        takeOver: async (args, context) => {
+            const started = takeOverService.start(args[0]);
+            if (started.ok) {
+                openCallersTerminalWindow(terminalWindowPorts, context, takeOverRouteOf(started.terminalId), {
+                    startedHere: started.started === true,
+                    ended: () => takeOverService.ended(started.terminalId),
+                });
+            }
+            return started;
+        },
     };
     const takeOverService = new TakeOverService({
         host: takeOverHost,
@@ -1086,19 +1102,7 @@ async function main(): Promise<void> {
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
-            own: { 'updates.state': async () => updatesService.dump(),
-                // TAKE OVER, for every client (Tynn #896): the TUI starts here; this machine's window that asked is asked to
-                // open its window on it, and the TUI ends when that window closes. Another machine's gets a ticket (RemoteHost).
-                takeOver: async (args, context) => {
-                    const started = takeOverService.start(args[0]);
-                    if (started.ok) {
-                        openCallersTerminalWindow(terminalWindowPorts, context, takeOverRouteOf(started.terminalId), {
-                            startedHere: started.started === true,
-                            ended: () => takeOverService.ended(started.terminalId),
-                        });
-                    }
-                    return started;
-                },
+            own: { 'updates.state': async () => updatesService.dump(), ...ownTakeOver,
                 // The account chips (Tynn #895): this host's book, for every client, window or not.
                 ...accountsOwnAnswers(() => accountsPortNow) },
             takeOverEnded: (terminalId) => takeOverService.ended(terminalId),

@@ -132,9 +132,10 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
     });
     it.each(rows)('$name retires its matching native handler, preload forwarding and inventory row', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
-        expect(main).toContain("ipcMain.handle('genie:take-over'");
-        expect(preload).toContain("'genie:take-over'");
-        expect(inventory).toContain("['genie:take-over', 'move:2b']");
+        // A window port that stays (Take over moved to the protocol in step 2b-1, Tynn #896).
+        expect(main).toContain("ipcMain.handle('genie:terminals-popout'");
+        expect(preload).toContain("'genie:terminals-popout'");
+        expect(inventory).toContain("['genie:terminals-popout', 'window:pop-out']");
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);

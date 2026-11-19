@@ -91,7 +91,8 @@ describe('every main-process activation names its gesture', () => {
         // Four `win` windows since genie#1204 added the flow editor's own window.
         expect(main.match(/onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, (request|\{ activation)/g) ?? []).toHaveLength(4);
         expect(main).toMatch(/function openFlowEditorWindow\(route: string, activation: Activation\): void/);
-        expect(main).toMatch(/function openTakeOverWindow\(route: string, activation: Activation\): void/);
+        // Settled when the window closes: genie-host ends what it started then (Tynn #896).
+        expect(main).toMatch(/function openTakeOverWindow\(route: string, activation: Activation\): Promise<'closed' \| 'raised'>/);
         expect(main).toMatch(/function openFilesWindow\(route: string, activation: Activation\): void/);
     });
 
