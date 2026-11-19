@@ -154,8 +154,10 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // 2f (#912): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
     // 2026-11-19). Take Over itself is the protocol's since 2b-1 (#896).
     ['takeOvers', 'move:2f'],
-    // 2c (#897): the scratch terminal. The crash report is the protocol's since 2c-2 (crashReport.draft/send).
-    ['terminals', 'move:2c'],
+    // 2g (#913), re-labelled from 2c by the coordinator (2026-11-19, 2c-5): the crash report (2c-2) and the scratch terminal
+    // (2c-4) are the protocol's. main's terminals replica is still read by its own MCP tool server (genieToolDeps) and,
+    // synchronously, by the tray count, the Restart/Shut-down list, the quit plan and quit's closeAll: they move with it.
+    ['terminals', 'move:2g'],
     // 2f (#912): the question window's answers, and the device link's frames.
     ['call:engine.featureQuestion', 'move:2f'],
     ['deviceLink', 'move:2f'],
