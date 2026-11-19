@@ -139,8 +139,11 @@ describe('the window\'s engine link carries only the link, window capabilities, 
 
     /** Frozen (the coordinator, 2026-11-19): each leaves in the PR that moves it, and nothing joins. */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2c (#897): the scratch terminal. The crash report moved in 2c-2.
-        terminals: '2c',
+        // Re-labelled 2c -> 2g by the coordinator (2026-11-19, 2c-5): the crash report (2c-2) and the scratch terminal (2c-4)
+        // left; what still reads main's `terminals` replica is main's own MCP tool server (genieToolDeps, 2g) and the tray
+        // count, the Restart/Shut-down list, the quit plan and quit's closeAll. Those read it synchronously, so they move
+        // with the replica in 2g, never as a second copy beside it.
+        terminals: '2g',
         // 2f (#912): the question window's answers, and the device link's frames.
         'call:engine.featureQuestion': '2f', deviceLink: '2f',
         // Re-labelled from 2b by the coordinator (2026-11-19): main's deck liveness until the question window and the tray
