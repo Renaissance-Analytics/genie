@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('genieBrowser', {
     forward: () => ipcRenderer.invoke('browser-window:forward'),
     reload: () => ipcRenderer.invoke('browser-window:reload'),
     setPreset: (id: string) => ipcRenderer.invoke('browser-window:preset', id),
+    // The sites row's "»" (Tynn #900): main pops a native menu over the page and answers the host picked, or null.
+    sitesMenu: (hosts: readonly string[], at: { x: number; y: number }) => ipcRenderer.invoke('browser-window:sites-menu', hosts, at),
     popBack: () => ipcRenderer.invoke('browser-window:pop-back'),
     restart: () => ipcRenderer.invoke('browser-window:restart'),
     setBounds: (bounds: { x: number; y: number; width: number; height: number }) => ipcRenderer.invoke('browser-window:bounds', bounds),

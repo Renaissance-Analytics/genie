@@ -50,3 +50,37 @@ export function sitesThatFit(m: { widths: readonly number[]; available: number; 
     }
     return 0;
 }
+
+/** One entry of the "»" menu (Tynn #900). */
+export interface SitesMenuItem {
+    readonly host: string;
+    readonly label: string;
+    readonly checked: boolean;
+}
+
+/**
+ * THE "»" MENU'S ENTRIES (Tynn #900), built by main from ITS OWN list: the hosts the chrome asked for, in its order, kept
+ * only when main lists them (anything else, a non-string or a repeat is dropped), each labelled as its chip is and the one
+ * on screen checked. The chrome says which sites are hidden; it never adds one.
+ */
+export function sitesMenuItems(m: { requested: unknown; sites: readonly string[]; labels: Readonly<Record<string, string>>; current: string | null }): SitesMenuItem[] {
+    if (!Array.isArray(m.requested)) return [];
+    const listed = new Set(m.sites);
+    const seen = new Set<string>();
+    const out: SitesMenuItem[] = [];
+    for (const host of m.requested) {
+        if (typeof host !== 'string' || !listed.has(host) || seen.has(host)) continue;
+        seen.add(host);
+        out.push({ host, label: m.labels[host] ?? siteLabel(host), checked: host === m.current });
+    }
+    return out;
+}
+
+/** Where the "»" menu opens, in the window's content coordinates: a finite, non-negative point in whole pixels; else null. */
+export function menuAnchor(raw: unknown): { x: number; y: number } | null {
+    const r = raw as { x?: unknown; y?: unknown } | null;
+    if (!r || typeof r !== 'object') return null;
+    const { x, y } = r;
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return null;
+    return { x: Math.round(x), y: Math.round(y) };
+}

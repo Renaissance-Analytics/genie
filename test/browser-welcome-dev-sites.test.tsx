@@ -191,7 +191,7 @@ const presets = [{ id: 'fit', label: 'Fit' }];
 const tab = (id: string) => ({ id, url: `https://${id}.gen/`, title: null, loading: false, canGoBack: false, canGoForward: false, error: null });
 const snap = (over: Partial<BrowserSnapshot> = {}): BrowserSnapshot => ({ notice: null, tabs: [], active: null, presetId: 'fit', presets, sites: ['shop.gen', 'docs.gen'], siteLabels: { 'shop.gen': 'Shop', 'docs.gen': 'Docs' }, ...over });
 const noop = () => {};
-const render = (s: BrowserSnapshot) => renderToStaticMarkup(<GenieBrowserChrome snapshot={s} refusal={null} onNavigate={noop} onOpen={noop} onActivate={noop} onClose={noop} onNewTab={noop} onBack={noop} onForward={noop} onReload={noop} onPreset={noop} />);
+const render = (s: BrowserSnapshot) => renderToStaticMarkup(<GenieBrowserChrome onSitesMenu={async () => null} snapshot={s} refusal={null} onNavigate={noop} onOpen={noop} onActivate={noop} onClose={noop} onNewTab={noop} onBack={noop} onForward={noop} onReload={noop} onPreset={noop} />);
 
 describe('the chrome', () => {
     it('welcome: each site a button by its workspace’s name, and the rule in a few words', () => {

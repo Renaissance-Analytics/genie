@@ -27,6 +27,8 @@ export interface GenieBrowserChromeProps {
     readonly onForward: () => void;
     readonly onReload: () => void;
     readonly onPreset: (id: string) => void;
+    /** The sites row's "»": main's native menu of these hosts at `at`; answers the host picked, or null (Tynn #900). */
+    readonly onSitesMenu: (hosts: readonly string[], at: { x: number; y: number }) => Promise<string | null>;
     readonly onRestart?: () => void;
     /** The page box — its bounds are reported to main, which places the view over it. */
     readonly pageRef?: RefObject<HTMLDivElement | null>;
@@ -111,7 +113,7 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
                 </div>
             </div>
 
-            {s.sites.length > 0 ? <BrowserSitesRow sites={s.sites} labels={s.siteLabels ?? {}} current={onScreenHost} onOpen={p.onOpen} /> : null}
+            {s.sites.length > 0 ? <BrowserSitesRow sites={s.sites} labels={s.siteLabels ?? {}} current={onScreenHost} onOpen={p.onOpen} onMore={p.onSitesMenu} /> : null}
 
             {s.notice ? (
                 <div data-browser-notice="" className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-1 text-[11px] text-[var(--fg-2)]">{s.notice}{s.noticeRestart ? <Button size="xs" type="button" data-browser-restart="" className="ml-2" onClick={p.onRestart}>Restart</Button> : null}</div>
