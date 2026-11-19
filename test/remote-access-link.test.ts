@@ -108,13 +108,13 @@ describe('remote access over the engine link', () => {
         const p = phone();
         await p.hello({ kind: 'token', token });
         await windowOn(false, async () => ({ fromWindow: 'not-local' }));
-        // terminals.list: a family genie-host does not own yet (step 2d-2); its own are answered with or without a window.
-        expect(await p.call('terminals.list')).toMatchObject({ kind: 'result', ok: false, reason: 'alphar answers terminals.list only while a Genie window is open there: open Genie on alphar' });
+        // host.home: a method genie-host does not own yet (step 2d-2b); its own are answered with or without a window.
+        expect(await p.call('host.home')).toMatchObject({ kind: 'result', ok: false, reason: 'alphar answers host.home only while a Genie window is open there: open Genie on alphar' });
         const local = await windowOn(true, async (method) => ({ fromWindow: method }));
-        expect(await p.call('terminals.list')).toMatchObject({ kind: 'result', ok: true, value: { fromWindow: 'terminals.list' } });
+        expect(await p.call('host.home')).toMatchObject({ kind: 'result', ok: true, value: { fromWindow: 'host.home' } });
         local.close();
         await settle();
-        expect(await p.call('terminals.list')).toMatchObject({ kind: 'result', ok: false });
+        expect(await p.call('host.home')).toMatchObject({ kind: 'result', ok: false });
     });
 
     it('a window answering for the host is told who really asked: a phone stays a device (P4, Tynn #578)', async () => {

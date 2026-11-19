@@ -205,7 +205,7 @@ describe('host feature group one with no window (Tynn #720)', () => {
     });
     it('CONTROL: a method genie-host does not own yet keeps the window preference (Tynn #898: its own are its own)', async () => {
         windows = 1;
-        expect(await outcome('terminals.open', ['work', {}])).toEqual({ ok: true, value: { windowAnswered: 'terminals.open' } });
-        expect(invokeWindow).toHaveBeenCalledExactlyOnceWith('terminals.open', ['work', {}], context);
+        expect(await outcome('host.home', [])).toEqual({ ok: true, value: { windowAnswered: 'host.home' } });
+        expect(invokeWindow).toHaveBeenCalledExactlyOnceWith('host.home', [], context);
     });
 });

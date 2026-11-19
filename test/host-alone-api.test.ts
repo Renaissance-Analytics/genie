@@ -72,6 +72,8 @@ function engine(running = false): HostAloneEngine {
 function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlonePorts {
     return {
         hostName: 'alphar',
+        serviceEnvFor: () => ({}),
+        uploads: { sendFile: async () => ({ ok: false, reason: 'this fixture sends no files' }) },
         registry,
         engine: () => e,
         cwdFor: (r) => (r.workspaceId === 'tynn' ? '/w/tynn' : '/home'),
@@ -99,7 +101,7 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
         workspaceLifecycle: { terminals: () => null, supervisor: () => null, engines: () => null, reverifyTrust: async () => {}, github: () => null, tynn: () => null, defaultEnvFile: () => '', stagingDirectory: () => '' },
         colors: { set: async () => ({ ok: true as const }) },
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
-        terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
+        terminals: { open: () => { throw new Error('this fixture opens no terminal'); }, attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
         ...over,
@@ -180,10 +182,10 @@ describe('the remote host uses it whether or not a window is connected (Tynn #89
             alone,
         });
         expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
-        expect(await api.invoke('addAgent', ['tynn', {}])).toEqual({ fromWindow: 'addAgent' });
+        expect(await api.invoke('host.home', [])).toEqual({ fromWindow: 'host.home' });
         windowOpen = false;
         expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
-        await expect(api.invoke('addAgent', ['tynn', {}])).rejects.toThrow('alphar answers addAgent only while a Genie window is open there: open Genie on alphar');
+        await expect(api.invoke('host.home', [])).rejects.toThrow('alphar answers host.home only while a Genie window is open there: open Genie on alphar');
         expect([...PHONE_METHODS].sort()).toEqual(['agentDetail', 'agents.restart', 'answerApproval', 'features.act', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'prompt', 'resumeLimit', 'snapshot']);
     });
 
