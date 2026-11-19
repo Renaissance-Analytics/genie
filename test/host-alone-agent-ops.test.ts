@@ -270,12 +270,13 @@ describe('the wiring', () => {
         expect(host).toMatch(/new Registry\(new HostRegistryStore\(\{ call: \(store, method, args\) => stores\.call\(store, method, args\)/);
     });
 
-    it('genie-host answers every client through the one adapter; the window keeps the same ports for its own restarts', () => {
+    it('genie-host answers every client through the one adapter; the window keeps no agent operations of its own', () => {
         expect(src('src/main/host-alone-api.ts')).toContain('agentOpsApi(');
         expect(src('src/main/host-alone-api.ts')).toContain('agentOpsPorts(');
         // main builds no host API (Tynn #898 step 2d-4b2): it answers no agent operation, and restarts through the ports.
         expect(src('src/main/main.ts')).not.toContain('agentOpsApi(');
-        expect(src('src/main/main.ts')).toContain('agentOpsPorts(');
+        // …and no duplicate ports for restarts of its own (Tynn #896, 2b-3): MCP recovery and Try again are genie-host's.
+        expect(src('src/main/main.ts')).not.toContain('agentOpsPorts(');
         expect(src('src/main/host-alone-api.ts')).not.toContain("windowOnly<HostApiDeps['agentOps']>");
     });
 

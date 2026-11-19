@@ -159,8 +159,6 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['browserCall', 'window:feature-effect'],
     ['onBrowserEvent', 'window:feature-effect'],
     ['gappSessions', 'window:gapp-window'],
-    // 2b (#896): main's provider health. The tray's sign-in is the protocol's since 2b-2b (logins.provider).
-    ['providerAccount', 'move:2b'],
     // 2f (#912): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
     // 2026-11-19). Take Over itself is the protocol's since 2b-1 (#896).
     ['takeOvers', 'move:2f'],

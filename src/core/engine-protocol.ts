@@ -58,15 +58,8 @@ export const ENGINE_METHODS = [
     // A provider's model list, for an agent not running yet (beta.61.1): asked of the provider's CLI by genie-host, which has
     // the process supervisor. `[provider, refresh]`.
     'engine.providerModels',
-    // The persisted legacy account home for this machine's own login/status UI (S3); no credentials.
-    'engine.providerAccount',
     // After a login: ask the provider who the account is now (Tynn #477). `[provider]`.
     'engine.refreshAccountIdentity',
-    // A provider sign-in for one account, run in the host (Tynn #479). `[provider, accountId?]`; `[accountId]` cancels.
-    'engine.login',
-    'engine.cancelLogin',
-    // SWITCH ACCOUNT (Tynn #753): open the provider's own login in its one home, with the steps. No agent is touched. `[provider]`.
-    'engine.switchAccount',
     // SWITCH OFFERS (Tynn #481): the offers genie-host makes when the active account's chosen window is near its limit. `[]`;
     // Not now on one: `[offerId]`.
     'engine.switchOffers',

@@ -1,40 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BROWSER_LINK_LABEL } from '../src/core/engine-protocol.js';
-import { memoryPair } from '../src/core/line-transport.js';
-import { SessionEngineClient, type EngineClientOptions } from '../src/main/session-engine-client.js';
-import { SessionEngineServer, type EngineServerOptions } from '../src/main/session-engine-server.js';
 import { LoginHost } from '../src/main/login-host.js';
 import { TakeOverHost } from '../src/main/take-over-host.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 
 const close: Array<() => void> = [];
 afterEach(() => { for (const fn of close.splice(0)) fn(); vi.unstubAllEnvs(); });
-async function connection(extra: Partial<EngineServerOptions> = {}, local = true, options: EngineClientOptions = {}) {
-    const server = new SessionEngineServer({ token: 'fixture', build: 'fixture', ...extra });
-    const client = new SessionEngineClient(options), [host, window] = memoryPair();
-    server.accept(host, { local }); close.push(() => window.close());
-    expect(await client.connect(window, 'fixture')).toMatchObject({ ok: true });
-    return client;
-}
 
 describe('S3: the persisted home reaches the existing login without opening an account book in the window', () => {
-    it('the local window gets only the persisted legacy id/provider/home and inheritance flag, before agent sessions exist', async () => {
-        const client = await connection({ providerAccount: provider => provider === 'claude'
-            ? { id: 'account_legacy_claude', provider: 'claude', home: '/profile/custom claude', legacy: true, label: 'not needed by login' } as never : null });
-        expect(await client.providerAccount('claude')).toEqual({ id: 'account_legacy_claude', provider: 'claude', home: '/profile/custom claude', legacy: true });
-        expect(await client.providerAccount('unknown')).toBeNull();
-    });
-    it('an unavailable book gives an explicit refusal and the client keeps the account unknown', async () => {
-        const client = await connection();
-        expect(await client.call('engine.providerAccount', ['claude'])).toEqual({ ok: false, reason: 'The provider account book is unavailable.' });
-        expect(await client.providerAccount('claude')).toBeNull();
-    });
-    it.each([['another connection', false, {}], ['the browser', true, { label: BROWSER_LINK_LABEL }]] as const)
-       ('%s keeps its existing scope', async (_name, local, options) => {
-            const client = await connection({ providerAccount: () => { throw new Error('the book must not be read'); } }, local, options);
-            expect(await client.call('engine.providerAccount', ['claude'])).toEqual({ ok: false, reason: 'Provider account homes need this machine’s own window.' });
-        });
+    // The window no longer asks for a provider's account home: its provider health was main's duplicate of genie-host's,
+    // and engine.providerAccount is retired (Tynn #896, 2b-3; test/split-2b3-provider-account.test.ts).
     it('login reports an unknown account visibly before opening a terminal or asking for scratch space', () => {
         const login = new LoginHost({
             accountFor: () => null,
@@ -48,7 +23,7 @@ describe('S3: the persisted home reaches the existing login without opening an a
         const host = source('genie-host'), window = source('main');
         // Tynn #751: ONE active account per provider; every launch and probe reads it, never an agent's own.
         expect(host).toMatch(/activeAccount: provider => isAcpProvider\(provider\) \? accounts\.activeFor\(provider\) : null/);
-        expect(host).toMatch(/providerAccount: provider => isAcpProvider\(provider\) \? accounts\.activeFor\(provider\) : null/);
+        expect(host).not.toMatch(/providerAccount: provider =>/); // retired in 2b-3 (Tynn #896)
         expect(host).toMatch(/realListModels\(provider, accounts\.activeFor\(provider\)\)/);
         expect(host).toMatch(/checkProviderHealth\(provider, realProviderHealthPorts\(execFileRunner\), accounts\.activeFor\(provider\)\)/);
         // Tynn #753: ONE HOME PER PROVIDER, so nothing here builds an environment for an account.

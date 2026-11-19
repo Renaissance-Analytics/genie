@@ -293,11 +293,12 @@ it('does not provision an unlinked or OS agent, refuses unknown workspace bindin
     expect(t.state.minted).toBe(0);
 });
 
-it('production main restarts the agents Tynn recovery names when the account changes, and notes a missing Tynn (genie#1234)', async () => {
+it('genie-host recovers the Tynn agents when the account changes; the window only says its secrets moved, and notes a missing Tynn (genie#1234)', async () => {
     const main = await readFile('src/main/main.ts', 'utf8');
-    expect(/tynnAccount\.onChange\(\(\) => recoverTynnAgents\(\)\)/.test(main), 'an account change asks for recovery').toBe(true);
-    expect(/\n\s*recoverTynnAgents\(\);/.test(main), 'and once after the account opens, signed in before anyone listened').toBe(true);
-    expect(/function recoverTynnAgents[\s\S]*?\.recovery\(asked\)[\s\S]*?restartForMcp/.test(main), 'with the existing graceful restart').toBe(true);
+    const host = await readFile('src/main/genie-host.ts', 'utf8');
+    expect(/account\.onChange\(\(\) => \{ void tynnRecovery\?\.recover\(\); \}\)/.test(host), 'an account change asks the host’s recovery').toBe(true);
+    expect(/tynn\(\)\.recovery\(\{ secretsMoved: true \}\)/.test(main), 'the window says its one-time move finished (Tynn #896, 2b-3)').toBe(true);
+    expect(/tynnAccount\.onChange\(\(\) => recoverTynnAgents\(\)\)|restartForMcp/.test(main), 'the window restarts no agent itself').toBe(false);
     expect(/prepareAgentMcp\(record,\s*signal\)[\s\S]*?tynnNote\(record\.id\)[\s\S]*?notice\(/.test(main), 'the note reaches the chat').toBe(true);
 });
 

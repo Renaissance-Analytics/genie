@@ -2,10 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
 import { afterSignedIn, LoginHost } from '../src/main/login-host.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer, type EngineServerOptions } from '../src/main/session-engine-server.js';
 
 /*
  * TYNN #479 (Accounts S6): a sign-in belongs to ONE ACCOUNT. It was keyed by provider, so signing in B joined A's open
@@ -161,29 +158,5 @@ describe('what a sign-in resumes', () => {
     });
 });
 
-describe('the window asks the host to sign an account in', () => {
-    async function connection(extra: Partial<EngineServerOptions>, local = true) {
-        const server = new SessionEngineServer({ token: 'fixture', build: 'fixture', ...extra });
-        const client = new SessionEngineClient(), [host, window] = memoryPair();
-        server.accept(host, { local });
-        close.push(() => window.close());
-        expect(await client.connect(window, 'fixture')).toMatchObject({ ok: true });
-        return client;
-    }
-    it('login carries the provider and the account to the host and returns its terminal', async () => {
-        const seen: Array<[string, string | undefined]> = [];
-        const client = await connection({ login: (provider, accountId) => { seen.push([provider, accountId]); return { ok: true, terminalId: 't9' }; } });
-        expect(await client.login('claude', B.id)).toEqual({ ok: true, terminalId: 't9' });
-        expect(seen).toEqual([['claude', B.id]]);
-    });
-    it('cancelLogin names the account', async () => {
-        const seen: string[] = [];
-        const client = await connection({ cancelLogin: (accountId) => { seen.push(accountId); } });
-        await client.cancelLogin(B.id);
-        expect(seen).toEqual([B.id]);
-    });
-    it('another connection than this machine’s own window is refused, in words', async () => {
-        const client = await connection({ login: () => { throw new Error('must not start'); } }, false);
-        expect(await client.call('engine.login', ['claude', A.id])).toEqual({ ok: false, reason: 'Sign-in needs this machine’s own window.' });
-    });
-});
+// The window no longer asks the host over the engine link to sign an account in: every client asks over the one protocol
+// (logins.provider and the other sign-ins, Tynn #896), and engine.login / engine.cancelLogin are retired (2b-3).

@@ -40,7 +40,7 @@ describe('main: opening shows, a message starts', () => {
         expect(open).not.toMatch(/\.start\(/);
         expect(open).not.toMatch(/restartAgent\(/);
         // CONTROL: the same reader finds a start where there is one (Doctor's own handler).
-        expect(main).toMatch(/host\.start\(record, cwdFor\(record\)\)/);
+        expect(main).toMatch(/\.start\(record, cwdFor\(record\)\)/);
     });
 
     it('`prompt` (the composer) starts the agent on demand before it delivers', () => {
@@ -51,16 +51,16 @@ describe('main: opening shows, a message starts', () => {
         const hostAlone = readFileSync(new URL('../src/main/host-alone-api.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
         expect(hostAlone).toMatch(/startForYourMessage: \(record\) => startForYourMessage\(\{\s*startForWork: startOnDemand,/);
         expect(hostAlone).toMatch(/const startOnDemand = \(record: Parameters<HostApiDeps\['cwdFor'\]>\[0\]\) => startForWork\(\{/);
-        // …and that is the shared rule (main/start-on-demand.ts), not a start of its own: the person's message rule
-        // (a new driver when the run's own stopped itself, prism-acp 0.37.0) over `startOnDemand`; main keeps it too.
-        expect(main).toMatch(/const startForYours = \(record: AgentRecord\): Promise<StartForWork> => startForYourMessage\(\{\s*startForWork: startOnDemand,/);
-        expect(main).toMatch(/const startOnDemand = \(record: AgentRecord\): Promise<StartForWork> => startForWork\(/);
+        // …and that is the shared rule (main/start-on-demand.ts). The window keeps no copy (Tynn #896, 2b-3): every start is the host's.
+        expect(main).not.toMatch(/startForYourMessage|startForWork|startOnDemand/);
     });
 
-    it('a flow’s prompt can start the agent too (the sessions port flows are given has `start`)', () => {
-        const at = main.indexOf('agentSessions: {');
+    it('a flow’s prompt can start the agent too (genie-host gives its flows a sessions port with `start`)', () => {
+        const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+        const at = host.indexOf('sessions: {');
         expect(at).toBeGreaterThan(-1);
-        expect(main.slice(at, at + 800)).toMatch(/start:\s*(?:async\s*)?\(id\)\s*=>/);
+        expect(host.slice(at, at + 800)).toMatch(/start:\s*(?:async\s*)?\(id\)\s*=>/);
+        expect(main).not.toContain('agentSessions: {');
     });
 });
 

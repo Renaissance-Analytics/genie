@@ -88,6 +88,7 @@ import { withElements } from '../core/workspace-elements.js';
 import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { openCallersTerminalWindow, type TerminalWindowPorts } from './host-terminal-windows.js';
+import { hostMcpRecovery, withMcpRecovery } from './host-mcp-recovery.js';
 import { hostSignIns } from './host-sign-ins.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
 import { ProcessBook } from './process-book.js';
@@ -1240,10 +1241,6 @@ async function main(): Promise<void> {
         protocol: protocolTunnels,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
-        providerAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
-        login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
-        cancelLogin: (accountId) => { logins?.cancel(accountId); },
-        switchAccount: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         switchOffers: { offers: () => switchOffersNow?.offers() ?? [], dismiss: (id) => switchOffersNow?.dismiss(id) ?? false },
         // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
         accountsAct: (action) => accountsAct(action),
@@ -1447,6 +1444,16 @@ async function main(): Promise<void> {
     bootStep('lock identity', stepAt);
     // THE PLAN KEEPALIVE (Tynn #754): built below, once the host exists; a turn that ends before then has nothing to nudge.
     let planKeepalive: HostPlanKeepalive | null = null;
+    // A SESSION WITHOUT ITS GENIE OR TYNN SERVER (genie#1202) is recovered HERE (Tynn #896, 2b-3), window or no window: a
+    // line in its chat, the graceful restart on the same conversation, spaced, given up on in words. The servers it saw are
+    // kept on its record (Tynn #628).
+    const mcpRecovery = hostMcpRecovery({
+        notice: (id, text) => { host.notice(id as AgentId, text); },
+        restart: (id) => trustRestart(id as AgentId),
+        noteSeen: (id, names) => { void phoneRegistryNow?.noteMcpSeen(id as AgentId, names).catch(() => undefined); },
+        now: () => Date.now(),
+        later: (run, ms) => { const timer = setTimeout(run, ms); timer.unref?.(); return () => clearTimeout(timer); },
+    });
     const host = new SessionHost({
         activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         userData: home,
@@ -1484,6 +1491,8 @@ async function main(): Promise<void> {
             },
         },
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
+        // A linked window still hears the report; the recovery is the host's own (above).
+        onMcpServers: withMcpRecovery(engineHostOptions.onMcpServers, mcpRecovery),
         // A reading is stamped with whose it is; one after a while with no read of who is signed in asks again first (#854).
         onHeadroom: headroomArrival({ watch: identityWatch, attribution: readingAttribution, offer: offerReading }),
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.

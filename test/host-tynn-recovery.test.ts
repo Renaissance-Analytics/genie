@@ -512,7 +512,9 @@ describe('where it is wired', () => {
         expect(host).toMatch(/hostTynnRecovery\(/);
         expect(host).toMatch(/\.onChange\(\(\) => [^\n]*recover/);
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        expect(main).toMatch(/!agentEngineLink \|\| !asked\.secretsMoved/);
+        // Only that its one-time move of the secrets finished (Tynn #896, 2b-3): it restarts nothing itself.
+        expect(main).toMatch(/tynn\(\)\.recovery\(\{ secretsMoved: true \}\)/);
+        expect(main).not.toMatch(/restartForMcp/);
     });
 });
 
