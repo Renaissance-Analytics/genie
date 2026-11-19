@@ -36,6 +36,7 @@ import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
 import { isOsAgent, OS_AGENT_POLICY_NOTE } from '../../core/os-agent.js';
 import { TurnStop } from './TurnStop.js';
+import { RunningCall } from './RunningCall.js';
 import type { DeletePlan, ProviderSwitchState } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
 import { approvalPlacement, approvalPolicySentence, budgetFor, parkedDivider, planFor, statePill, tabsFor } from '../../core/agent-view.js';
@@ -319,6 +320,8 @@ export interface AgentViewProps {
      * the agent keeps running. Ending the session is `onStop`, a separate and explicit action.
      */
     onCancelTurn?: ((agentId: string) => void) | undefined;
+    /** `Stop this call` beside the call the turn is in (Tynn #855): only that call ends; the turn goes on, the agent told. */
+    onStopToolCall?: ((agentId: string, toolCallId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
     /** `Log in to <provider>` for a signed-out agent (the owner, 2026-10-18). */
@@ -394,7 +397,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, approvalInToast = false, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, bar, chatInView = false, ops,
-    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onStopToolCall, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -751,6 +754,10 @@ function AgentViewBody({
                             {/* STOP THIS TURN: the TURN ends, the agent keeps running ("Stop agent" is in More). Its slot is kept while
                                 nothing runs, so the icons beside it do not move as turns start and end. */}
                             {onCancelTurn ? (actions.stop ? <TurnStop iconOnly onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : <span aria-hidden="true" data-stop-slot="" className="size-6 shrink-0" />) : null}
+                    {/* THE CALL THE TURN IS IN (Tynn #855): its command and age, and Stop this call — only that call ends. */}
+                    {agent.fidelity === 'declared' && session?.call ? (
+                        <RunningCall call={session.call} now={clock()} onStop={onStopToolCall ? () => onStopToolCall(agent.id, session.call!.toolCallId) : undefined} />
+                    ) : null}
                     {/* SIGNED OUT (the owner, 2026-10-18): the provider's own login, in a window of its own, with what to do. */}
                     {actions.login && onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"

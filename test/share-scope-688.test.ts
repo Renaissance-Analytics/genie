@@ -57,6 +57,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('openAgent', 'allow', [A], [[B]]),
         row('stopAgent', 'allow', [A], [[B]]),
         row('cancelTurn', 'allow', [A, 'stop'], [[B, 'stop']]),
+        // Stop this call (Tynn #855): the shared workspace's agent's call; another workspace's is not this link's.
+        row('stopToolCall', 'allow', [A, 't1'], [[B, 't1']]),
         row('resumeLimit', 'allow', [A], [[B]]),
         // The provider's own login (Tynn #896): the host owner's; a share-link guest is refused.
         row('providerLogin', 'refuse', [A]),

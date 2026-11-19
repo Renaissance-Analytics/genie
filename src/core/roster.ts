@@ -8,6 +8,7 @@ import type { TurnState } from './session.js';
 import type { ProviderExtensions } from './provider-commands.js';
 import type { ProviderStopState } from './provider-stops.js';
 import { isSleeping } from './agent-status.js';
+import type { RunningCall, StalledTurn } from './hung-call.js';
 
 /**
  * RECORD + LIVE SESSION → DASHBOARD ROW.
@@ -115,6 +116,12 @@ export interface LiveSession {
     /** What started this turn and the tool it is in now (core/turn-now.ts); absent or `null` = not reported. */
     asked?: string | null | undefined;
     tool?: string | null | undefined;
+    /** The call the turn is in now, with its command and start (Tynn #855); absent or `null` = none, or an older host. */
+    call?: RunningCall | null | undefined;
+    /** The turn Genie ended as stalled (Tynn #855), until a turn starts again; absent or `null` = none. */
+    stalled?: StalledTurn | null | undefined;
+    /** When the provider last sent anything (Tynn #855); absent or `null` = not known. */
+    lastEventAt?: number | null | undefined;
     /**
      * The model IN USE, as the provider reported it (a notice carrying `particle.academy/model`); the latest report
      * wins. `null` or absent (an older remote host does not send it) = not reported — never the model Genie asked for, which is the agent's setting, not a reading.
@@ -179,6 +186,8 @@ export function agentRowFor(
         session === null ? 'stopped'
         : session.pendingApproval !== null ? 'waiting'
         : session.failure !== null ? 'broken'
+        // ENDED AS STALLED (Tynn #855): never Working, never a quiet Idle either.
+        : session.stalled != null && session.turnState !== 'working' ? 'broken'
         : !session.running || session.turnState === 'stopped' || session.stoppedByYou === true ? 'stopped'
         : session.running && session.turnState === 'working' ? 'working'
         // Between turns: Cooling for COOLING_MS, sorted with Working, so a turn ending does not reorder the board.
@@ -210,6 +219,7 @@ export function agentRowFor(
         // The workspace dashboard's card (q_09d1f4a0): what it was asked, and the tool it is in now.
         asked: session?.asked ?? null,
         tool: session?.tool ?? null,
+        stalled: session?.stalled ?? null,
         // Byte activity, and only for an observed agent. A declared one reports a plan, so
         // there is nothing to measure and nothing to draw.
         activity: null,

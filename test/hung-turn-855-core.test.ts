@@ -166,7 +166,8 @@ describe('the words (Tynn #855)', () => {
         const session = live({ turnState: 'idle', inTurn: false, stalled });
         expect(statePill(session, () => 0, { turns: 14 }).word).toBe('Stalled · no events for 34 min');
         const row = agentRowFor(agentRecord({ id: mintAgentId(), workspaceId: 'w', provider: 'claude', name: 'prism-engine' }), session, () => 0);
-        expect(row.state).toBe('stalled');
+        // Ranked with Broken (it needs the person); no new state on the wire, whose clients know eight.
+        expect(row.state).toBe('broken');
         expect(statusOf(row)).toMatchObject({ word: 'Stalled', detail: 'no events for 34 min', tone: 'bad' });
     });
 });

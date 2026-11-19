@@ -279,6 +279,8 @@ export interface GenieBridge {
      */
     /** `intent`: `stop` (Stop this turn, the default) latches the agent until the person acts; `interrupt` (Interrupt and send) does not. */
     cancelTurn(agentId: string, intent?: 'stop' | 'interrupt'): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `Stop this call` (Tynn #855): ONE running tool call ends — its own processes — and the turn goes on, the agent told. */
+    stopToolCall?(agentId: string, toolCallId: string): Promise<{ ok: true; ended: number } | { ok: false; reason: string }>;
     /** `Resume now`: the agent's provider login, held for its rate limit, opens at once (Tynn #794). */
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */

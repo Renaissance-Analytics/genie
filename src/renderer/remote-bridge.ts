@@ -495,6 +495,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         openAgent: (agentId) => fire('openAgent', agentId),
         stopAgent: (agentId) => fire('stopAgent', agentId),
         cancelTurn: (agentId, intent) => answer<{ ok: true } | { ok: false; reason: string }>('cancelTurn', agentId, intent),
+        stopToolCall: (agentId, toolCallId) => answer<{ ok: true; ended: number } | { ok: false; reason: string }>('stopToolCall', agentId, toolCallId),
         resumeLimit: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('resumeLimit', agentId),
         // SIGN-INS (Tynn #896): the provider's own login, started on the host; the host's owner only.
         providerLogin: (agentId) => answer<SignInResult>('providerLogin', agentId),
