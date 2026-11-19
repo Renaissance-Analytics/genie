@@ -2789,6 +2789,7 @@ export class AgentSession {
             const messageId = typeof update['messageId'] === 'string' ? update['messageId'] : null;
             const sameItem = !open?.messageId || messageId === null || open.messageId === messageId;
             // A SECOND REPLY after rows held beside the first (Tynn #918) is its own row, though nothing named the break.
+            // INTERIM until prism-acp sends Claude's message id (see `startsAnotherReply`).
             const another = open !== null && open.event.kind === 'message' && this.#heldBeside.length > 0 && startsAnotherReply(open.event.text, event.text);
             if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName && sameItem && !another) {
                 open.event = { ...open.event, text: open.event.text + event.text };
@@ -3004,7 +3005,21 @@ function cancelStateUncertain(error: unknown): boolean {
  * keeps the whitespace after a sentence ends; a chunk that opens a sentence straight after a finished one cannot be more
  * of that block. Asked only when rows were held beside the open message (genie#1456): with nothing between them, the
  * pieces are one block's deltas, whatever they say. A cut mid-word or mid-sentence (genie#1456's) never matches.
+ *
+ * INTERIM: a stand-in until prism-acp sends a message id on Claude's chunks, as its Codex driver already does (prism is
+ * asked to log it, as G-311). With an id the `sameItem` check above splits replies exactly, and this rule should go.
+ *
+ * A reply's end, then a new one (each only after rows held beside it):
+ *  - a sentence's end (`. ! ? \u2026 : ;`, a closing quote, bracket or emphasis after it), then a capital or `**`;
+ *  - a closed code block (its fence the last line), then anything but whitespace: inside one block a newline follows a fence;
+ *  - a list item ending in a lowercase word, then a capitalised WORD (`All three`, never `All()`, never `I job` after `C`).
+ * Inside a code block that is still open nothing splits: what it holds is code, not sentences.
  */
 export function startsAnotherReply(open: string, chunk: string): boolean {
-    return /[.!?\u2026:][)"'\u201d\u2019\]*_`]*$/u.test(open) && /^(?:\p{Lu}|\*\*)/u.test(chunk);
+    const fences = (open.match(/^ {0,3}(?:```|~~~)/gm) ?? []).length;
+    if (fences % 2 === 1) return false;
+    if (fences > 0 && /(?:^|\n) {0,3}(?:```|~~~)[ \t]*$/.test(open)) return /^\S/.test(chunk);
+    if (/[.!?\u2026:;][)"'\u201d\u2019\]*_`]*$/u.test(open)) return /^(?:\p{Lu}|\*\*)/u.test(chunk);
+    const last = open.slice(open.lastIndexOf('\n') + 1);
+    return /^\s*(?:[-*+]|\d+[.)])\s/.test(last) && /\p{Ll}$/u.test(open) && /^\p{Lu}\p{Ll}*[\s,.:;!?]/u.test(chunk);
 }
