@@ -156,6 +156,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         // The crash report (Tynn #897, 2c-2): the host owner's.
         row('crashReport.draft', 'refuse'),
         row('crashReport.send', 'refuse', ['the report', 'my notes']),
+        // A provider's program (Tynn #897, 2c-3): the host owner's.
+        row('providers.chooseProgram', 'refuse', ['claude', 'C:\\fixture\\claude.exe']),
     ],
     terminals: [
         row('terminals.open', 'allow', ['tynn', {}], [['fancy', {}]]),
