@@ -95,7 +95,7 @@ function sources(over: Partial<HostLocalSources> = {}) {
         terminals: () => terminals as never,
         trackCwd: () => true,
         terminalEnv: (workspaceId) => ({ GENIE_MCP_URL: `http://mcp/${workspaceId}` }),
-        marketplace: () => marketplace,
+        marketplace: () => marketplace as never,
         gapps: () => book as never,
         onGappsChanged: (listener) => { changed.add(listener); return () => { changed.delete(listener); }; },
         say: () => {},
@@ -158,7 +158,7 @@ describe('genie-host answers the local families itself', () => {
     it('CONTROL, moves at 2d-3b: the owner operations are not genie-host\'s yet', async () => {
         // genie-host always has its share links, so its owner operations exist: only these are not its yet.
         const alone = hostAloneApi(ports({ shares: { list: async () => ({ ok: true, links: [] }), mint: async () => ({ ok: false, reason: 'x' }), revoke: async () => ({ ok: true }) } }));
-        await expect(hostRemoteApi({ hostName: 'alphar', own: {}, alone }).invoke('appInbox.state', ['tynn'])).rejects.toThrow('open Genie on alphar');
+        await expect(hostRemoteApi({ hostName: 'alphar', own: {}, alone }).invoke('tynnNetwork.workstations', [])).rejects.toThrow('open Genie on alphar');
     });
 });
 
