@@ -81,6 +81,8 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     // Tynn #616: "Quit now" / "Upgrade now" during the safe-point wait. No wait in flight here: false, both ways.
     'updates.forceDrain': [],
     headroom: [], accountRetry: ['agent_a'],
+    // Client/host split step 2a (Tynn #895): the account chips, for every client.
+    'accounts.list': [], 'accounts.act': [{ kind: 'rename', id: 'acct_1', label: 'Work' }], 'accounts.dismissOffer': ['offer_1'],
     'inbox.sendFile': ['agent_a', 'hello', 'sample.txt', 'b2s='],
     'files.children': ['work', ''], 'files.open': ['work', 'missing.txt'],
     'files.readMedia': ['work', 'missing.png'], 'files.upload': ['work', '', null],
