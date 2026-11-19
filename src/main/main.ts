@@ -55,7 +55,7 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile } from 'node:fs/promises';
 import { agentOpsApi, agentOpsPorts } from './agent-ops-api.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
-import { restartAgent, SettingApplier } from './agent-ops-host.js';
+import { restartAgent, retryPausedAgents, SettingApplier } from './agent-ops-host.js';
 import type { WatchedReposView } from '../core/issue-watch.js';
 import { isAcpProvider } from '../core/engine.js';
 import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
@@ -130,7 +130,6 @@ import { materializeHostRuntime } from './host-runtime.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
-import { ACCOUNT_BACK } from '../core/provider-login.js';
 import { DESIGN_LOGIN } from '../core/design-login.js';
 import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
@@ -1960,9 +1959,12 @@ async function boot(): Promise<void> {
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
-        for (const id of host?.pausedAgents(provider) ?? []) {
-            void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, ACCOUNT_BACK, 'genie'); }).finally(() => registry?.touch());
-        }
+        void retryPausedAgents({
+            paused: (p) => host?.pausedAgents(p) ?? [],
+            restart: (id) => restartAgent(agentOps, id, 'graceful'),
+            prompt: (id, text) => { host?.prompt(id as AgentId, text, 'genie'); },
+            touch: () => { registry?.touch(); },
+        }, provider).catch(() => {});
     };
     // DESIGN SIGN-IN, one for the machine (Tynn #480): the interactive `claude` in its one home, the person types /design-login.
     ipcMain.handle('genie:design-sign-in', async () => {
