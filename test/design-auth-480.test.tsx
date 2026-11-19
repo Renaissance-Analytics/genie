@@ -120,7 +120,8 @@ describe('S7: wired through', () => {
         expect(host).toMatch(/onDesignLoginEnded: \(\) => \{ designAuth\.apply\(\{ kind: 'login-ended' \}\);/);
         expect(host).toMatch(/onDesignAuth: \(_agentId, event\) => designAuth\.apply\(event\)/);
         expect(host).toMatch(/design: designAuthNow\?\.view\(\)/);
-        expect(source('src/main/main.ts')).toMatch(/ipcMain\.handle\('genie:design-sign-in'/);
-        expect(source('src/main/preload.ts')).toMatch(/designSignIn: \(\) => ipcRenderer\.invoke\('genie:design-sign-in'\)/);
+        // The machine's one design sign-in is genie-host's, for the client that asked (Tynn #896).
+        expect(source('src/main/host-sign-ins.ts')).toMatch(/design: async \(context\) => loginFor\(DESIGN_LOGIN, context\)/);
+        expect(source('src/renderer/remote-bridge.ts')).toMatch(/designSignIn: \(\) => answer<SignInResult>\('logins\.design'\)/);
     });
 });

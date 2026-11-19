@@ -56,7 +56,6 @@ export class FeatureCallers {
             openFlowEditor: route => call<void>('flowEditor', [route]),
             openInBrowser: url => call('openInBrowser', [url]),
             openExternal: url => call<void>('openExternal', [url]),
-            login: provider => call('login', [provider]),
             rendererNotice: { dismiss: () => call('rendererNotice.dismiss') },
             mainErrors: { deckItems: () => call<readonly DeckItem[]>('mainErrors.deckItems'), dismiss: id => call<boolean>('mainErrors.dismiss', [id]),
                 retryHostCopy: id => call('mainErrors.retryHostCopy', [id]), openLog: id => call('mainErrors.openLog', [id]), report: id => call('mainErrors.report', [id]) },

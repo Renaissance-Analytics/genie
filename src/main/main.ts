@@ -702,7 +702,6 @@ let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let signIn: ((provider: string, accountId?: string) => Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>) | null = null;
 // SWITCH ACCOUNT (Tynn #753): the provider's own login in its one home, in a window that shows the steps. The entry the UI calls.
-let switchAccountWindow: ((provider: string, choose?: string) => Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }>) | null = null;
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
@@ -847,10 +846,10 @@ function takeOverWindow(route: string, request: ActivationRequest, remote: { sea
  */
 const takeOverTickets = new Map<number, string>();
 const remoteTakeOverWindows = new Set<BrowserWindow>();
-function openRemoteTakeOverWindow(url: string, terminalId: string, ticket: string, name: string | null): void {
+function openRemoteTakeOverWindow(url: string, terminalId: string, ticket: string, name: string | null, loginRoute: string | null = null): void {
     const search = remoteWindowSearch(url, name);
     if (remoteFromSearch(search) === null) return;
-    const route = takeOverRouteOf(terminalId);
+    const route = loginRoute ?? takeOverRouteOf(terminalId);
     const request = { activation: 'user-gesture' as const, reason: `remote take-over window ${route}`, ledger: activationLedger, label: 'takeover' };
     takeOverWindow(route, request, { search, ticket });
 }
@@ -1883,11 +1882,6 @@ async function boot(): Promise<void> {
         if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider), 'user-gesture');
         return started;
     };
-    switchAccountWindow = async (provider, choose) => {
-        const started = await (agentEngineLink?.client.switchAccount(provider) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
-        if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider, true, choose), 'user-gesture');
-        return started;
-    };
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
@@ -1898,33 +1892,8 @@ async function boot(): Promise<void> {
             touch: () => { registry?.touch(); },
         }, provider).catch(() => {});
     };
-    // DESIGN SIGN-IN, one for the machine (Tynn #480): the interactive `claude` in its one home, the person types /design-login.
-    ipcMain.handle('genie:design-sign-in', async () => {
-        const started = await (signIn?.(DESIGN_LOGIN) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
-        return started.ok ? { ok: true } : started;
-    });
-    ipcMain.handle('genie:design-login', async (_event, raw: unknown) => {
-        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
-        if (!record) return { ok: false, reason: 'No agent named.' };
-        const started = await signIn!(DESIGN_LOGIN);
-        return started.ok ? { ok: true } : started;
-    });
-    // THE HEADER'S ACCOUNT CHIPS (Tynn #483) are protocol methods now (accounts.*, Tynn #895): the host's API answers them.
-    // SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps.
-    ipcMain.handle('genie:account-switch', async (_event, raw: unknown, rawChoose: unknown) => {
-        if (typeof raw !== 'string' || raw === '') return { ok: false, reason: 'No provider named.' };
-        // The account to choose is words for the steps only, kept short and on one line (it goes into a route).
-        const choose = typeof rawChoose === 'string' && rawChoose.trim() && rawChoose.length <= 320 && !/[\x00-\x1f\x7f]/.test(rawChoose) ? rawChoose.trim() : undefined;
-        const started = await (switchAccountWindow?.(raw, choose) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
-        return started.ok ? { ok: true } : started;
-    });
-    ipcMain.handle('genie:provider-login', async (_event, raw: unknown) => {
-        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
-        if (!record) return { ok: false, reason: 'No agent named.' };
-        // The provider's ACTIVE account (Tynn #751): the one every agent runs on.
-        const started = await signIn!(record.provider);
-        return started.ok ? { ok: true } : started;
-    });
+    // THE SIGN-INS (Tynn #896) are protocol calls answered by genie-host (host-sign-ins.ts): the provider's own login, opened
+    // on the window that asked (windowOps terminal.window), for the host's owner. Genie never handles a credential.
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
     const crashReports = crashReportHost({
         view: () => agentEngineLink?.client.safeModeView() ?? null,
@@ -2012,11 +1981,12 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
     // TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): this machine's window on that host's terminal; a drone opens none.
-    ipcMain.handle('genie:remote-takeover-open', (_event, url: unknown, terminalId: unknown, ticket: unknown, name: unknown) => {
+    ipcMain.handle('genie:remote-takeover-open', (_event, url: unknown, terminalId: unknown, ticket: unknown, name: unknown, route: unknown) => {
         if (typeof url !== 'string' || typeof terminalId !== 'string' || typeof ticket !== 'string' || ticket === '') return { ok: false, reason: 'not a Take Over window' };
         const refused = outboundDialRefusal(workstationRoleNow, url);
         if (refused) return { ok: false, reason: refused };
-        openRemoteTakeOverWindow(url, terminalId, ticket, typeof name === 'string' ? name : null);
+        // A sign-in's window shows its steps (Tynn #896): its login route, when it is that same terminal's.
+        openRemoteTakeOverWindow(url, terminalId, ticket, typeof name === 'string' ? name : null, typeof route === 'string' && loginTerminalOf(route) === terminalId ? route : null);
         return { ok: true };
     });
     // The Take Over window's ticket, read ONCE: the read deletes it.
@@ -2773,7 +2743,6 @@ async function boot(): Promise<void> {
         openExternal: async url => { if (!/^https:\/\//i.test(url)) throw new Error('only an HTTPS sign-in page can be opened'); await shell.openExternal(url); },
         openInBrowser: openInBrowserFor('user-gesture'),
         rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); windowTunnelNow?.refreshWindow(); return { ok: true as const }; } },
-        login: async provider => signIn?.(provider) ?? { ok: false, reason: 'Genie’s login window is not ready yet; try again in a moment' },
         browser: {
             snapshot: () => browserPane?.state() ?? { url: null, canGoBack: false, canGoForward: false },
             navigate: async url => { if (!browserPane) throw new Error('this caller has no browser pane'); const shown = await browserPane.show(url); if (!shown.ok) throw new Error(shown.reason); },

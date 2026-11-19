@@ -45,7 +45,7 @@ const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a 
 const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     let wasReady = false;
     const everReady = () => wasReady;
@@ -170,7 +170,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     const answered = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T | { ok: false; reason: string }> => {
         try { return await read(call); } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
     };
-    const agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver'> = {
+    const agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'> = {
         openAgent: (id) => { void read(async (b) => { b.openAgent(id); }).catch(() => {}); },
         stopAgent: (id) => { void read(async (b) => { b.stopAgent(id); }).catch(() => {}); },
         resumeLimit: (id) => answered((b) => b.resumeLimit(id)),
@@ -181,6 +181,11 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         addAgent: (workspaceId, input) => answered((b) => b.addAgent(workspaceId, input)),
         // TAKE OVER (Tynn #896): genie-host starts the TUI and asks this window's process to open its window.
         takeOver: (id) => answered((b) => b.takeOver(id)),
+        // SIGN-INS (Tynn #896): genie-host starts the provider's own login and asks this window's process to open it.
+        providerLogin: (id) => answered((b) => b.providerLogin(id)),
+        designLogin: (id) => answered((b) => b.designLogin!(id)),
+        designSignIn: () => answered((b) => b.designSignIn!()),
+        switchAccount: (provider, choose) => answered((b) => b.switchAccount!(provider, choose)),
     };
     return {
         // P4 family 9a (Tynn #564). Re-watched on every connection: a new one starts with a whole ledger.

@@ -18,7 +18,6 @@ import { GAPP_METHODS } from '../src/core/gapps.js';
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
     addWorkspace: 'addWorkspace opens a folder picker on the host; do it there',
-    providerLogin: 'providerLogin opens the provider login in a window on the host; do it there',
     'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
 };
 const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
@@ -39,7 +38,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.localBegin': [{ kind: 'write', id: 'quiet' }], 'terminals.localChunk': ['ticket', 'x'], 'terminals.localFinish': ['ticket'],
     'terminals.localWatch': ['view', null, 'quiet'], 'terminals.localReady': ['view'], 'terminals.localAck': ['view', 1], 'terminals.localUnwatch': ['view'],
     snapshot: [], agentDetail: ['missing'], openAgent: ['agent_a'], stopAgent: ['agent_a'],
-    cancelTurn: ['agent_a'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'],
+    cancelTurn: ['agent_a'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'], 'logins.design': [], 'accounts.switch': ['claude'],
     prompt: ['agent_a', 'hello'], resolvePrompt: ['agent_a', 'draft_1', 'send'],
     addAgent: ['work', { name: 'new', purpose: 'contract', provider: 'claude' }],
     answerApproval: ['agent_a', 'allow', 'note'],

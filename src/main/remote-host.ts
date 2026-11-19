@@ -20,6 +20,7 @@ import {
     REMOTE_PROTOCOL,
     CONTROL_METHODS as CONTROL_METHOD_LIST,
     ACCOUNTS_METHODS,
+    SIGN_IN_METHODS,
     type BatonEvent,
     type CallContext,
     type CompanionEvent,
@@ -136,6 +137,8 @@ const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'termi
 // 'workspaces.create' too: New can create a repository under the host owner's GitHub and declare it on their Tynn (Add workspace parity 11).
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
 const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke', ...ACCOUNTS_METHODS];
+/** One of the sign-ins (Tynn #896), checked in one place: #signInRefusal. */
+const isSignIn = (method: string): boolean => (SIGN_IN_METHODS as readonly string[]).includes(method);
 
 /** What a guest of ONE workspace may never do, whichever workspace it names: the workstation's roster (Tynn #688). */
 const GUEST_ROSTER_METHODS: readonly string[] = ['workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.setGoverns'];
@@ -1001,6 +1004,8 @@ export class RemoteHost {
         // Only the owner changes the host itself — a guest of the whole host included.
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
+        const signIn = this.#signInRefusal(connection, method);
+        if (signIn) return refuse(signIn);
         // A guest browses inside what it was given; the owner, the whole disk (Genie 1's approved scope, Tynn #835).
         // A guest's picker opens in what it was given, never at the host's home (Tynn #527): the host is not asked.
         if (!auth.isOwner && method === 'host.home') {
@@ -1099,9 +1104,10 @@ export class RemoteHost {
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for another machine's own Take Over window, which presents it (Tynn #529
             // A). This machine's windows need none: genie-host asks the caller's window process to open it (Tynn #896).
-            if (method === 'takeOver' && !connection.local) {
+            if ((method === 'takeOver' || isSignIn(method)) && !connection.local) {
                 const started = value as { ok?: unknown; terminalId?: unknown; started?: unknown } | null;
-                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true) });
+                // A sign-in's login terminal is this ask's: its companion closing cancels the login (genie-host takeOverEnded).
+                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true || isSignIn(method)) });
             }
             return ok(value);
         } catch (error) {
@@ -1115,6 +1121,18 @@ export class RemoteHost {
     }
 
     /** Who this call came from (Tynn #578): what this host admitted, the door's or the relay's proof, never the hello's say-so. */
+    /**
+     * THE SIGN-INS' ONE CHECK (Tynn #896): `providerLogin`, `logins.design` and `accounts.switch` start the provider's own
+     * login on this host, for its OWNER only (a share-link guest is refused, as Take Over from another machine is). STEP 3
+     * adds its step-up here (a second factor from a paired device, the owner's choice of which actions need it), and
+     * nowhere else.
+     */
+    #signInRefusal(connection: Connection, method: string): string | null {
+        if (!isSignIn(method)) return null;
+        if (!connection.auth?.isOwner) return `only the owner of ${this.#hostName} can sign in to its accounts`;
+        return null;
+    }
+
     #callContext(connection: Connection): CallContext {
         const auth = connection.auth!, pre = connection.socket.preAuth;
         const origin = connection.local ? (pre?.window === 'main' ? 'local-window' : 'remote-window') : pre ? 'relay' : 'device';

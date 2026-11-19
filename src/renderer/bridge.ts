@@ -180,7 +180,7 @@ export interface GenieBridge {
          * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): a Take Over window HERE on that host's terminal. Main keeps the
          * ticket for the window it opens, never in its URL or title; that window reads it once (`takeOverTicket`).
          */
-        openTakeOver?(url: string, terminalId: string, ticket: string, name?: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        openTakeOver?(url: string, terminalId: string, ticket: string, name?: string | null, route?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** This Take Over window's ticket, read once; `null` when there is none (or it was read already). */
         takeOverTicket?(): Promise<string | null>;
     };
@@ -282,13 +282,13 @@ export interface GenieBridge {
     /** `Resume now`: the agent's provider login, held for its rate limit, opens at once (Tynn #794). */
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */
-    providerLogin(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    providerLogin(agentId: string): Promise<SignInResult>;
     /**
      * SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps. How it came out
      * arrives as an `account-switch` action. Absent on an older host.
      */
     /** `choose`: the account the person pressed Switch on, named in the login's steps (Tynn #483). */
-    switchAccount?(provider: string, choose?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    switchAccount?(provider: string, choose?: string): Promise<SignInResult>;
     /** Every known account with its readings, and the standing switch offers (Tynn #483); `null` while the host cannot answer. */
     accounts?(): Promise<AccountsSnapshot | null>;
     /** Rename or forget a known account (Tynn #484); a refusal comes back as its reason. */
@@ -298,9 +298,9 @@ export interface GenieBridge {
     /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
     accountRetry?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to Claude Design` (#1081): the interactive `claude` in the login window on this machine. Absent on an older host. */
-    designLogin?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    designLogin?(agentId: string): Promise<SignInResult>;
     /** Design sign-in for the machine (Tynn #480), from the accounts popover or Settings: no agent needed. Absent on an older host. */
-    designSignIn?(): Promise<{ ok: true } | { ok: false; reason: string }>;
+    designSignIn?(): Promise<SignInResult>;
     /**
      * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.
@@ -714,7 +714,13 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * WHAT THE PRELOAD EXPOSES: the remaining native window ports. Protocol reads and patch watches are assembled by
  * {@link pageBridge}; an agent's ledger is rebuilt once in the page, never copied whole across contextBridge per event.
  */
-export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
+/**
+ * A SIGN-IN's answer (Tynn #896): genie-host started the provider's own login. This machine's window is opened by the
+ * host; another machine's window opens its own on `route` with `ticket`.
+ */
+export type SignInResult = { ok: true; terminalId?: string; route?: string; ticket?: string } | { ok: false; reason: string };
+
+export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;

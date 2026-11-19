@@ -128,13 +128,13 @@ describe('the three new family4 product methods are local', () => {
         expect(providerLogin).toHaveBeenCalledExactlyOnceWith('agent_a'); expect(designLogin).toHaveBeenCalledExactlyOnceWith('agent_a');
         expect(capabilityOf('providerLogin')).toBe('host-only');
     });
-    it('retires headroom/accountRetry native paths and classifies both retained logins as moving in step 2b', () => {
+    it('retires headroom/accountRetry native paths, and the provider and design logins left in step 2b (Tynn #896)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         for (const channel of ['genie:headroom', 'genie:account-retry']) {
             expect(main).not.toContain(`ipcMain.handle('${channel}'`); expect(preload).not.toContain(`ipcRenderer.invoke('${channel}'`); expect(inventory).not.toContain(`['${channel}',`);
         }
         for (const channel of ['genie:provider-login', 'genie:design-login']) {
-            expect(main).toContain(`ipcMain.handle('${channel}'`); expect(preload).toContain(`ipcRenderer.invoke('${channel}'`); expect(inventory).toContain(`['${channel}', 'move:2b']`);
+            expect(main).not.toContain(`ipcMain.handle('${channel}'`); expect(preload).not.toContain(`ipcRenderer.invoke('${channel}'`); expect(inventory).not.toContain(`['${channel}',`);
         }
     });
 });

@@ -195,11 +195,12 @@ describe('S9: one click from a window, and the outcome back to it', () => {
         expect(host).toMatch(/onSwitchEnded: \(provider, signedIn\) => \{ void switchFlow\?\.settle\(provider, signedIn\)/);
         expect(host).toMatch(/signal: accountSwitchSignal\(outcome\)/);
     });
-    it('main opens the switch window from the bridge and hands the outcome to every window', () => {
+    it('genie-host starts the switch for the client that asked (Tynn #896); main hands the outcome to every window', () => {
         const main = source('src/main/main.ts');
-        expect(main).toMatch(/ipcMain\.handle\('genie:account-switch'/);
+        expect(main).not.toContain("'genie:account-switch'");
+        expect(source('src/main/genie-host.ts')).toMatch(/switchLogin: \(provider\) => switchAccount\?\.\(provider\)/);
         expect(main).toMatch(/signal\.kind === 'account-switch'\) broadcast\('genie:action', \{ agentId: null, kind: 'account-switch', outcome: \(raw as \{ outcome\?: unknown \}\)\.outcome \}\)/);
-        expect(source('src/main/preload.ts')).toMatch(/switchAccount: \(provider, choose\) => ipcRenderer\.invoke\('genie:account-switch', provider, choose\)/);
+        expect(source('src/renderer/remote-bridge.ts')).toMatch(/switchAccount: \(provider, choose\) => answer<SignInResult>\('accounts\.switch', provider, choose \?\? null\)/);
     });
     it('the window shows the outcome with accountSwitchToast, Retry calling the bridge\'s switch', () => {
         expect(source('src/renderer/App.tsx')).toMatch(/accountSwitchToast\([^)]*\(provider\) => \{ void resolvedBridge\?\.switchAccount\?\.\(provider\)/);

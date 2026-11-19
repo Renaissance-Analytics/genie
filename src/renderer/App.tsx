@@ -1216,12 +1216,23 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
     useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed') readAccounts(); }), [resolvedBridge, readAccounts]);
     // DESIGN SIGN-IN for the machine (Tynn #480): one click from the Claude popover or Settings.
+    /**
+     * ANOTHER MACHINE'S TERMINAL, HERE (Tynn #529 part A; sign-ins, Tynn #896): its host started a Take Over TUI or a
+     * provider's own login and answered with a ticket; this window opens its own window on it. This machine's window is
+     * opened by its host, so a local answer carries no ticket and nothing is done here.
+     */
+    const openCompanion = useCallback((r: { ok: true; terminalId?: string; ticket?: string; route?: string }, title: string) => {
+        if (!remote.state?.connected || !r.ticket || !r.terminalId) return;
+        const opened = remote.url ? window.genie?.remoteWindows?.openTakeOver?.(remote.url, r.terminalId, r.ticket, remote.state.host, r.route) : undefined;
+        if (!opened) { showAlert({ title, body: 'This window cannot open a Take Over window for another machine.' }); return; }
+        void opened.then((o) => { if (!o.ok) showAlert({ title, body: o.reason }); });
+    }, [remote.state?.connected, remote.state?.host, remote.url, showAlert]);
     const designSignIn = useCallback(() => {
-        void resolvedBridge?.designSignIn?.().then((r) => { if (!r.ok) showAlert({ title: 'Design sign-in could not start', body: r.reason }); }, () => {});
-    }, [resolvedBridge, showAlert]);
+        void resolvedBridge?.designSignIn?.().then((r) => { if (!r.ok) { showAlert({ title: 'Design sign-in could not start', body: r.reason }); return; } openCompanion(r, 'Design sign-in'); }, () => {});
+    }, [resolvedBridge, showAlert, openCompanion]);
     const switchAccount = useCallback((provider: string, choose?: string) => {
-        void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) showAlert({ title: 'The switch could not start', body: r.reason }); }, () => {});
-    }, [resolvedBridge, showAlert]);
+        void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) { showAlert({ title: 'The switch could not start', body: r.reason }); return; } openCompanion(r, 'Switch account'); }, () => {});
+    }, [resolvedBridge, showAlert, openCompanion]);
     const accountsAct = useCallback(async (action: AccountsAction): Promise<AccountsActResult> => {
         const r = (await resolvedBridge?.accountsAct?.(action)) ?? { ok: false as const, reason: 'Genie’s host is not connected yet.' };
         readAccounts();
@@ -1238,7 +1249,7 @@ function DesktopApp({ bridge }: AppProps) {
         // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
         if (action.kind === 'account-switch') {
             const outcome = accountSwitchOutcomeOf(action.outcome);
-            if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider); }));
+            if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider).then((r) => { if (r.ok) openCompanion(r, 'Switch account'); }, () => {}); }));
             return;
         }
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
@@ -2361,10 +2372,7 @@ function DesktopApp({ bridge }: AppProps) {
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => {
                 if (!r.ok) { if (!remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); return; }
                 // Another machine's agent (Tynn #529 part A): its TUI started there; its Take Over window opens HERE.
-                if (!remote.state?.connected || !r.ticket) return;
-                const opened = remote.url ? window.genie?.remoteWindows?.openTakeOver?.(remote.url, r.terminalId, r.ticket, remote.state.host) : undefined;
-                if (!opened) { showAlert({ title: 'Take over', body: 'This window cannot open a Take Over window for another machine.' }); return; }
-                void opened.then((o) => { if (!o.ok) showAlert({ title: 'Take over', body: o.reason }); });
+                openCompanion(r, 'Take over');
             }, (error: unknown) => showAlert({ title: 'Take over', body: error instanceof Error ? error.message : String(error) })); }}
             {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
             {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
@@ -2373,9 +2381,9 @@ function DesktopApp({ bridge }: AppProps) {
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId, intent) => { void resolvedBridge?.cancelTurn(agentId, intent); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
-            onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
+            onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId).then((r) => { if (r.ok) openCompanion(r, 'Log in'); else showAlert({ title: 'Log in', body: r.reason }); }, () => {}); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
-            onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
+            onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId).then((r) => { if (r.ok) openCompanion(r, 'Design sign-in'); else showAlert({ title: 'Design sign-in', body: r.reason }); }, () => {}); }}
             onChooseProviderProgram={resolvedBridge?.chooseProviderProgram ? (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) : undefined}
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onSafeModeStartAgent={restartOne}

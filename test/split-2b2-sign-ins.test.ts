@@ -59,7 +59,7 @@ describe('the three sign-in methods are named once, written by the owner (the st
     it('RemoteHost checks them in ONE place, where step 3 adds its step-up', () => {
         const host = code(src('src/main/remote-host.ts'));
         expect(host.match(/#signInRefusal\(/g)?.length).toBe(2); // the definition and its one call
-        expect(host).toMatch(/SIGN_IN_METHODS\.includes\(method\)/);
+        expect(host).toMatch(/SIGN_IN_METHODS[^;]*\.includes\(method\)/);
     });
 });
 

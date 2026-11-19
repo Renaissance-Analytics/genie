@@ -58,7 +58,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('stopAgent', 'allow', [A], [[B]]),
         row('cancelTurn', 'allow', [A, 'stop'], [[B, 'stop']]),
         row('resumeLimit', 'allow', [A], [[B]]),
-        row('providerLogin', 'host-only', [A]),
+        // The provider's own login (Tynn #896): the host owner's; a share-link guest is refused.
+        row('providerLogin', 'refuse', [A]),
         row('prompt', 'allow', [A, 'hi'], [[B, 'hi']]),
         row('resolvePrompt', 'allow', [A, 'd1', 'send'], [[B, 'd1', 'send']]),
         row('addAgent', 'allow', ['tynn', { name: 'x' }], [['fancy', { name: 'x' }]]),
@@ -148,6 +149,9 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('accounts.list', 'refuse'),
         row('accounts.act', 'refuse', [{ kind: 'rename', id: 'acct_1', label: 'Work' }]),
         row('accounts.dismissOffer', 'refuse', ['offer_1']),
+        // The design sign-in and a switch of account (Tynn #896): the provider's own login, the host owner's.
+        row('logins.design', 'refuse'),
+        row('accounts.switch', 'refuse', ['claude']),
     ],
     terminals: [
         row('terminals.open', 'allow', ['tynn', {}], [['fancy', {}]]),

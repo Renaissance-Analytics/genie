@@ -98,7 +98,6 @@ describe('P4 IPC inventory', () => {
      */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
         // 2b (#896): sign-ins, Take Over and the share link.
-        'genie:account-switch': '2b', 'genie:design-login': '2b', 'genie:design-sign-in': '2b', 'genie:provider-login': '2b',
         'genie:connect-link': '2b',
         // 2c (#897): the crash report, the provider's program, the scratch terminal and Add workspace.
         'genie:crash-report-draft': '2c', 'genie:crash-report-send': '2c', 'genie:provider-choose-program': '2c',

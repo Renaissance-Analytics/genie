@@ -6,7 +6,7 @@ import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js'
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, TYPING_EVENT, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
-import { NO_FILES, type AgentDetail, type CloneOffersReply, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import { NO_FILES, type AgentDetail, type CloneOffersReply, type GenieBridge, type GenieSnapshot, type SignInResult, type UpdateState } from './bridge.js';
 import type { FeatureAction, FeatureData } from './features.js';
 import { isFeaturesRevision } from '../core/remote-frame.js';
 import { deckActionForWire } from '../core/deck-answer-wire.js';
@@ -495,7 +495,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         stopAgent: (agentId) => fire('stopAgent', agentId),
         cancelTurn: (agentId, intent) => answer<{ ok: true } | { ok: false; reason: string }>('cancelTurn', agentId, intent),
         resumeLimit: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('resumeLimit', agentId),
-        providerLogin: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('providerLogin', agentId),
+        // SIGN-INS (Tynn #896): the provider's own login, started on the host; the host's owner only.
+        providerLogin: (agentId) => answer<SignInResult>('providerLogin', agentId),
+        // The design sign-in is the machine's one (Tynn #480): the agent that offered it names nothing more.
+        designLogin: () => answer<SignInResult>('logins.design'),
+        designSignIn: () => answer<SignInResult>('logins.design'),
+        switchAccount: (provider, choose) => answer<SignInResult>('accounts.switch', provider, choose ?? null),
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.
