@@ -148,6 +148,9 @@ import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
 import { hostLocalPorts } from './host-local-ports.js';
+import { hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
+import { hostOwnerOps } from './host-owner-ops.js';
+import { LocalStagingArea } from './local-staging-area.js';
 import { Registry } from './registry.js';
 import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -434,6 +437,8 @@ async function main(): Promise<void> {
     const stores = new AgentStoresService({ ...own, approvals, settings, drafts, registry: { store: registryStore, model: hostRegistry } }, { forwardedCall: (id) => forwardedCalls.get(id) });
     let mcp: HostMcp | null = null;
     let v1Done = false;
+    /** Genie 1's database, as the window located it (Electron's userData; v1Import below): its record of this machine. */
+    let v1DatabasePath: string | null = null;
     /*
      * THE PROCESS SUPERVISOR (P3.3b; plan §11e, decision 1a): sites' servers, queue workers, kept processes and the front
      * door, under THIS process — their restart policy and their logs run here, so a crashed queue worker restarts with the
@@ -666,7 +671,7 @@ async function main(): Promise<void> {
         socket: tynnSocket,
         schedule: tynnTimer,
         projectFor: workspaceTynnProject,
-        send: (owner, event) => { engineRef?.tynnBoardEvent(owner, event); },
+        send: ownerRoute((event) => hostTynnWatches.deliver('board', event), (owner, event) => { engineRef?.tynnBoardEvent(owner, event); }),
         log: say,
     });
     const tynnIssues = new TynnBoardHub({
@@ -675,7 +680,7 @@ async function main(): Promise<void> {
         schedule: tynnTimer,
         projectFor: workspaceTynnProject,
         feed: TYNN_ISSUES_FEED,
-        send: (owner, event) => { engineRef?.tynnIssuesEvent(owner, event); },
+        send: ownerRoute((event) => hostTynnWatches.deliver('issues', event), (owner, event) => { engineRef?.tynnIssuesEvent(owner, event); }),
         log: say,
     });
     // The Features page (row F1) follows its own channel, as the Issues queue does.
@@ -685,9 +690,11 @@ async function main(): Promise<void> {
         schedule: tynnTimer,
         projectFor: workspaceTynnProject,
         feed: TYNN_FEATURES_FEED,
-        send: (owner, event) => { engineRef?.tynnFeaturesEvent(owner, event); },
+        send: ownerRoute((event) => hostTynnWatches.deliver('features', event), (owner, event) => { engineRef?.tynnFeaturesEvent(owner, event); }),
         log: say,
     });
+    // THE LIVE TYNN TAB, AS GENIE-HOST'S OWN ANSWERS WATCH IT (Tynn #898 step 2d-3b): the three hubs, under its own owner.
+    const hostTynnWatches = hostTynnWatch({ hubs: { board: tynnBoard, issues: tynnIssues, features: tynnFeatures } });
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now; and once the account opens.
     void tynnOpening.then((account) => {
         account.onChange(() => { issueWatch.restart(); });
@@ -1041,6 +1048,8 @@ async function main(): Promise<void> {
         hostName: hostname(),
         transport: remoteHub,
         build,
+        // What a local connection uploads (Tynn #898 step 2d-3b) is staged under this host's runtime, per process.
+        createLocalUploads: async () => (await LocalStagingArea.open(home)).createConnection(Date.now),
         // THE HOST'S OFFER (Tynn #894), read at each hello: its track and build, the wire's schema and the fixed window's
         // floor, and the catalog's elements as capabilities, so a client sees which elements this host has. `host.update`
         // answers with RemoteHost's stub until the launcher step wires it.
@@ -1145,6 +1154,34 @@ async function main(): Promise<void> {
                 void tynnRecovery?.recover({ secretsMoved: true });
             },
         }));
+    // OTHER MACHINES: the host dials them, and holds the tokens that open them (P3.4 cut e). One service, the engine
+    // link's and genie-host's own owner operations' (Tynn #898 step 2d-3b).
+    const deviceLinkService = new DeviceLinkService({
+        tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),
+        socket: (url) => deviceSocket(url),
+        send: (owner, event) => engine.deviceEvent(owner, event),
+        log: say,
+        /*
+         * A PILOT'S CONNECTION TO ANOTHER TYNN WORKSTATION (Tynn #552, host split P5d.4; audit M-e): the grant is minted
+         * here with this host's Tynn account, the proof key made and kept here, the relay member opened and renewed
+         * here; the window gets a channel. The browser's door to that workstation's sites is here too.
+         */
+        relay: {
+            signedIn: () => tynnAccountNow?.status().signedIn === true,
+            // Not known to be a drone: ask Tynn first (beta.61.1); only its own "drone" is refused as one.
+            refusal: async () => {
+                if (!mayBrowse(relayHostService.role()) && relayHostService.said() === null) await relayHostService.readRole().catch(() => {});
+                return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said(), why: relayHostService.unknownWhy() });
+            },
+            keypair: () => PopKeypair.generate(),
+            mint: (workstationId, jwk) => (tynnAccountNow
+                ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
+                : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
+            // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
+            open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
+        },
+        browsers: new RemoteBrowsers(siteDoor),
+    });
     const engine = new SessionEngineServer({
         features: featureCallers,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
@@ -1202,32 +1239,7 @@ async function main(): Promise<void> {
         // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
         configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
         // Other machines: the host dials them, and holds the tokens that open them (P3.4 cut e).
-        deviceLink: new DeviceLinkService({
-            tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),
-            socket: (url) => deviceSocket(url),
-            send: (owner, event) => engine.deviceEvent(owner, event),
-            log: say,
-            /*
-             * A PILOT'S CONNECTION TO ANOTHER TYNN WORKSTATION (Tynn #552, host split P5d.4; audit M-e): the grant is minted
-             * here with this host's Tynn account, the proof key made and kept here, the relay member opened and renewed
-             * here; the window gets a channel. The browser's door to that workstation's sites is here too.
-             */
-            relay: {
-                signedIn: () => tynnAccountNow?.status().signedIn === true,
-                // Not known to be a drone: ask Tynn first (beta.61.1); only its own "drone" is refused as one.
-                refusal: async () => {
-                    if (!mayBrowse(relayHostService.role()) && relayHostService.said() === null) await relayHostService.readRole().catch(() => {});
-                    return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said(), why: relayHostService.unknownWhy() });
-                },
-                keypair: () => PopKeypair.generate(),
-                mint: (workstationId, jwk) => (tynnAccountNow
-                    ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
-                    : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
-                // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
-                open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
-            },
-            browsers: new RemoteBrowsers(siteDoor),
-        }),
+        deviceLink: deviceLinkService,
         workstation: workstationService,
         relayHost: relayHostService,
         takeOver: takeOverService,
@@ -1250,6 +1262,7 @@ async function main(): Promise<void> {
         },
         // Genie 1's memories and AgentInbox history, once, from the database only the window can locate.
         v1Import: async (databasePath) => {
+            v1DatabasePath = databasePath;
             if (v1Done) return;
             v1Done = true;
             // Genie 1's settings carried over once (the store records it), then its memories and mail.
@@ -1272,7 +1285,10 @@ async function main(): Promise<void> {
     });
     engineRef = engine;
     // The watch runs on a thread of its own (Tynn #524): a build's thousands of changes never hold this host's loop.
-    files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
+    // THE FILE PANEL, AS GENIE-HOST'S OWN ANSWERS WATCH IT (Tynn #898 step 2d-3b): the same hub, under its own owner; a
+    // batch feeds its files host's record of disk changes, as a window's main fed its own.
+    const hostFilesWatches = hostFilesWatch({ hub: () => files, workspace: (id) => hostRegistry.workspace(id) ?? null, recordDiskChanges: (id, changes) => phoneFiles.recordDiskChanges(id, changes), log: say });
+    files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: ownerRoute(hostFilesWatches.deliver, (owner, event) => engine.filesEvent(owner, event)), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
     // GENIE INSTALLS ITS PLAYWRIGHT BROWSERS ITSELF (Tynn #846): the stable set at launch when it has none, a version a
@@ -1803,7 +1819,7 @@ async function main(): Promise<void> {
         },
         // THE LOCAL FAMILIES (Tynn #898 step 2d-3a): the file and Repository panels, drafts, the ArtBoard, the window's own
         // terminals, the Marketplace and the GApp book, from what this host owns.
-        local: hostLocalPorts({
+        local: { ...hostLocalPorts({
             workspaces: () => hostRegistry.listWorkspaces(),
             workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null,
             files: () => phoneFiles,
@@ -1818,6 +1834,9 @@ async function main(): Promise<void> {
             onGappsChanged: (listener) => gappBook?.onChange(listener) ?? (() => {}),
             say,
         }),
+            // ITS WATCHES (step 2d-3b): the file panel and the live Tynn tab, under genie-host's own owner on its hubs.
+            filesWatch: hostFilesWatches.port,
+            tynnWatch: hostTynnWatches.port },
         // The update actions and the share links are this host's too (Tynn #898 step 2d-2b): its updater, its Tynn account.
         updates: remoteUpdatesPort(updatesService),
         shares: shareLinksOver({
@@ -1825,6 +1844,28 @@ async function main(): Promise<void> {
             workstation: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
             // A revoked link's live guest session is dropped now, not at the next re-check (audit M-c).
             endSessions: async () => { await relayHostService.call('revalidate', []); },
+        }),
+        // THE OWNER'S OPERATIONS (Tynn #898 step 2d-3b): its app door's keys, its device link's remembered hosts, its Tynn
+        // account and relay role. Genie 1's record of this machine is read once a window has said where its database is.
+        owner: hostOwnerOps({
+            appInbox: {
+                door: appInboxDoor,
+                enabled: (workspaceId) => settings.snapshotFor(workspaceId).app_inbox !== false,
+                workspaceExists: (workspaceId) => !!hostRegistry.workspace(workspaceId),
+                restart: {
+                    serviceEnvChanged: (workspaceId) => hostingStack?.sites.serviceEnvChanged(workspaceId) ?? [],
+                    processes: () => (processBookNow ? { status: (id: string) => processSupervisor.status(id), restart: (id: string) => processBookNow!.restart(id) } : null),
+                },
+            },
+            deviceLink: deviceLinkService,
+            tynn: {
+                account: () => tynnAccountNow,
+                role: () => relayHostService.role(),
+                readRole: () => relayHostService.readRole(),
+                registered: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
+                stored: async (host) => (await workstationService.identity(host))?.workstationId ?? null,
+                v1Settings: () => (v1DatabasePath ? readV1Settings(v1DatabasePath) : null),
+            },
         }),
     });
     for (const listener of phoneReady) listener();

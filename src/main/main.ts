@@ -93,6 +93,7 @@ import { deviceLinkGate } from './device-link-gate.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { wordTynnRefusal } from './drone-refusal.js';
+import { appInboxCardState, restartAppSource } from './host-owner-ops.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { buildHostApi } from './host-api.js';
 import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
@@ -3010,24 +3011,12 @@ async function boot(): Promise<void> {
     // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own local window; a key is
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
-    const appInboxState = (workspaceId: string) => ({
-        url: linkedAppInbox.url(),
-        enabled: composed.settings.snapshotFor(workspaceId).app_inbox !== false,
-        sources: appInboxKeys.sources(workspaceId),
-        revoked: appInboxKeys.revokedSources(workspaceId),
-        scriptKeys: appInboxKeys.scriptKeys(workspaceId),
-    });
-    const restartSource = async (workspaceId: string, kind: AppSourceKind, id: string): Promise<string> => {
-        if (kind === 'site') {
-            const restarted = composed.sites.serviceEnvChanged(workspaceId);
-            return restarted.includes(id) ? 'restarted with it' : 'its next start uses it';
-        }
-        if (kind === 'process' && processBook) {
-            const live = composed.supervisor.status(id);
-            if (live?.state === 'running' || live?.state === 'restarting') { await processBook.restart(id); return 'restarted with it'; }
-        }
-        return 'its next start uses it';
-    };
+    // The same code as genie-host's own answers (host-owner-ops.ts, Tynn #898 step 2d-3b), over this window's replicas.
+    const appInboxState = (workspaceId: string) => appInboxCardState(linkedAppInbox, composed.settings.snapshotFor(workspaceId).app_inbox !== false, workspaceId);
+    const restartSource = (workspaceId: string, kind: AppSourceKind, id: string): Promise<string> => restartAppSource({
+        serviceEnvChanged: (w) => composed.sites.serviceEnvChanged(w),
+        processes: () => (processBook ? { status: (p: string) => composed.supervisor.status(p), restart: (p: string) => processBook!.restart(p) } : null),
+    }, workspaceId, kind, id);
     // ISSUEWATCH AND THE LIVE BOARD (Tynn #806, genie#1295 B4; the host split, P5c): genie-host's. It hears Tynn on its own
     // account and tells the linked workspace's agents through its own wake, window or no window; this window reads the state,
     // plays the sounds the host says to play now, and follows its boards per view.

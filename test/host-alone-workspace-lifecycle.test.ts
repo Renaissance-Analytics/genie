@@ -223,13 +223,6 @@ describe('the gate', () => {
         await api.invoke('workspaces.hibernate', ['tynn']);
         expect(invoke).toHaveBeenCalledWith('workspaces.hibernate', ['tynn'], undefined);
     });
-
-    it('a family not moved yet still says to open a window (CONTROL)', async () => {
-        // genie-host always has its share links, so its owner operations exist: only these are not its yet.
-        const api = gate(hostAloneApi(ports({ shares: { list: async () => ({ ok: true, links: [] }), mint: async () => ({ ok: false, reason: 'x' }), revoke: async () => ({ ok: true }) } })));
-        // The owner operations move at step 2d-3b (Tynn #898); the Tynn tab's change reads are genie-host's since 2d-3a.
-        await expect(api.invoke('tynnNetwork.workstations', [])).rejects.toThrow('open Genie on alphar');
-    });
 });
 
 describe('the wiring', () => {

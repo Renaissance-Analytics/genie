@@ -3,6 +3,7 @@ import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
 import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, TYPING_EVENT, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
+import type { LocalUploads } from './local-uploads.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
 import type { ProtocolOffer } from '../core/protocol-version.js';
@@ -121,6 +122,11 @@ export interface RemoteAccessHostOptions {
     readonly build?: string;
     /** This host's protocol offer, read at each hello (Tynn #894); absent = this build's, with no catalog elements. */
     readonly protocol?: () => ProtocolOffer;
+    /**
+     * Where a local connection stages what it uploads (a draft's file, a file to write; Tynn #898 step 2d-3b): one
+     * registry per connection, over this host's staging area. Absent = "local staging is not configured on this host".
+     */
+    readonly createLocalUploads?: () => LocalUploads | Promise<LocalUploads>;
 }
 
 export class RemoteAccessHost {
@@ -150,6 +156,7 @@ export class RemoteAccessHost {
             now,
             ...(options.build ? { build: options.build } : {}),
             ...(options.protocol ? { protocol: options.protocol } : {}),
+            ...(options.createLocalUploads ? { createLocalUploads: options.createLocalUploads } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }

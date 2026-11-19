@@ -154,12 +154,6 @@ describe('genie-host answers the local families itself', () => {
         expect(api.localTerminals).toBe(built.localTerminals);
         expect(api.localAgents).toBe(built.localAgents);
     });
-
-    it('CONTROL, moves at 2d-3b: the owner operations are not genie-host\'s yet', async () => {
-        // genie-host always has its share links, so its owner operations exist: only these are not its yet.
-        const alone = hostAloneApi(ports({ shares: { list: async () => ({ ok: true, links: [] }), mint: async () => ({ ok: false, reason: 'x' }), revoke: async () => ({ ok: true }) } }));
-        await expect(hostRemoteApi({ hostName: 'alphar', own: {}, alone }).invoke('tynnNetwork.workstations', [])).rejects.toThrow('open Genie on alphar');
-    });
 });
 
 describe('genie-host\'s local ports, from what it owns', () => {
@@ -226,7 +220,7 @@ describe('genie-host\'s local ports, from what it owns', () => {
 describe('the wiring', () => {
     it('genie-host hands its own local ports to its answers', () => {
         const host = readFileSync('src/main/genie-host.ts', 'utf8');
-        expect(host).toMatch(/local: hostLocalPorts\(/);
+        expect(host).toMatch(/local: \{ \.\.\.hostLocalPorts\(/);
     });
 
     it('main and genie-host decide an editor\'s file access with the same code', () => {
