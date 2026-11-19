@@ -71,8 +71,6 @@ import type { GenRouterServer } from './gen-router-server.js';
  */
 
 export interface ComposeInput extends HostingOptions {
-    /** The host's canonical file writers and their health record; no duplicate writes in the window. */
-    readonly hostFeatureFiles?: () => Pick<WindowServices, 'syncAgentDocs' | 'syncConfig'> | null;
     /**
      * SAFE MODE (Tynn #386), on the emergency no-host path: this window's own flows, sites and engines start nothing by
      * themselves while it is on (window-safe-mode.ts reads it from the runtime files). `heldSite` names a site it held;
@@ -656,7 +654,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         pluginsDir,
         pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {
-            const owner = input.hostFeatureFiles?.(); if (owner) return owner.syncConfig(workspacePath, source);
             // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
             if (!(await mayWriteInto(workspacePath))) return [];
             const endpoint = input.mcpEndpoint?.() ?? null;
@@ -675,8 +672,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             return results;
         },
         syncAgentDocs: (workspacePath, source = 'start') => {
-            const owner = input.hostFeatureFiles?.();
-            return owner ? owner.syncAgentDocs(workspacePath, source) : featureWorkspaceFiles({ mayWriteInto, settings, health: agentFiles,
+            return featureWorkspaceFiles({ mayWriteInto, settings, health: agentFiles,
                 tools: () => input.mcpTools?.() ?? [], tracking: workTracking }).syncAgentDocs(workspacePath, source);
         },
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },

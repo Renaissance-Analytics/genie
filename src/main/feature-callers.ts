@@ -17,37 +17,28 @@ export class FeatureCallers {
     readonly #tunnelled = new Map<string, { owner: string; effect: FeatureEffect; browser: FeatureBrowser | null }>();
     constructor(readonly service: () => HostFeatures | null) {}
 
+    /**
+     * The question window's answer (engine.featureQuestion, until step 2f moves it, Tynn #912). The engine server's
+     * engine.features route that also came here is retired (step 2e-2, Tynn #914): every client reaches the features over
+     * the one protocol, where RemoteHost admits it.
+     */
     async call(owner: string, method: string, args: unknown[], raw: unknown, effect: FeatureEffect, browser: FeatureBrowser | null): Promise<unknown> {
-        if (method === 'invalidate') { this.service()?.invalidate(); return null; }
-        if (method === 'soundData') { const service = this.service(); if (!service) throw new Error('Genie’s feature services are still starting'); return service.soundData(String(args[0] ?? '')); }
-        if (method === 'syncAgentDocs' || method === 'syncConfig') {
-            const services = this.service()?.ports.machine?.services;
-            if (!services || typeof args[0] !== 'string') throw new Error('workspace file services are still starting');
-            const source = args[1] === 'you' ? 'you' : 'start';
-            try { return await (method === 'syncAgentDocs' ? services.syncAgentDocs(args[0], source) : services.syncConfig(args[0], source)); }
-            finally { this.service()?.invalidate(); }
-        }
         const context = admittedContext(raw);
         const key = JSON.stringify([owner, context.connectionId]);
         const scoped = { ...context, connectionId: key };
         const service = this.service();
         if (!service) throw new Error('Genie’s feature services are still starting; try again in a moment');
-        if (method === 'releaseCaller') { service.releaseCaller(scoped); this.#callers.delete(key); return null; }
         if (!this.#callers.has(key) && this.#callers.size >= 256) throw new Error('too many feature callers are connected; close an unused window and try again');
         const previous = this.#callers.get(key);
         if (previous) { previous.browser = browser; previous.effect = effect; }
         else this.#callers.set(key, { owner, context: scoped, effect, browser });
-        switch (method) {
-            case 'snapshot': return service.snapshot(scoped);
-            case 'act': return service.act(args[0] as FeatureAction, scoped);
-            case 'picked': service.picked(Array.isArray(args[0]) ? args[0] : [], scoped); return null;
-            default: throw new Error('unknown feature operation');
-        }
+        if (method !== 'act') throw new Error('unknown feature operation');
+        return service.act(args[0] as FeatureAction, scoped);
     }
 
     presentation(context: CallContext): HostFeaturePresentation | null {
         const forwarded = this.#callers.get(context.connectionId);
-        // A forwarded caller (engine.features) is keyed [owner, its connection]; a tunnelled one by RemoteHost's own id.
+        // A forwarded caller (the question window's engine.featureQuestion) is keyed [owner, its connection]; a tunnelled one by RemoteHost's own id.
         const tunnelled = forwarded ? undefined : this.#tunnelled.get(context.connectionId);
         const binding = forwarded ?? tunnelled;
         if (!binding || (forwarded ? forwarded.context.origin : context.origin) !== 'local-window') return null;

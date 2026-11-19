@@ -169,8 +169,6 @@ const EMPTY_GLOBAL: EngineGlobalView = { startedIds: [], heldLogins: [], signedO
 const NO_ROWS: readonly TimedEvent[] = [];
 
 export class SessionEngineClient {
-    readonly #featureInvalidations = new Set<() => void>();
-    onFeatureInvalidated(listener: () => void): () => void { this.#featureInvalidations.add(listener); return () => { this.#featureInvalidations.delete(listener); }; }
     readonly #options: EngineClientOptions;
     #transport: ClientTransport | null = null;
     #welcome: EngineWelcome | null = null;
@@ -436,9 +434,6 @@ export class SessionEngineClient {
                 this.hosting().rebase(payload as HostingDump);
                 return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
-            case 'features.invalidated':
-                for (const listener of this.#featureInvalidations) listener();
-                break;
             case 'safeMode.event':
                 this.#setSafeMode(payload as SafeModeView);
                 return;

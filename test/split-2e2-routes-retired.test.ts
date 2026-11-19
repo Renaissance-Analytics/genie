@@ -22,7 +22,7 @@ const closers: Array<() => void> = [];
 afterEach(() => { for (const close of closers.splice(0)) close(); });
 
 async function localWindow() {
-    const features = { call: vi.fn(async () => ({ answered: true })), presentation: () => null };
+    const features = { call: vi.fn(async () => ({ answered: true })), presentation: () => null, dropOwner: () => {} };
     const stores = { call: vi.fn(), dump: () => ({}), onEvent: () => () => {}, dropDraftFiles: vi.fn(async () => {}),
         draftFileOpen: vi.fn(async () => null), draftFileRead: vi.fn(async () => ({ base64: '' })), draftFileClose: vi.fn(async () => ({ closed: true })) };
     const server = new SessionEngineServer({ token: 'fixture', build: 'fixture', features: features as never, stores: stores as never });
@@ -89,6 +89,8 @@ describe('the window sends genie-host nothing for its features (step 2e-2)', () 
         expect(host).toMatch(/syncWorkspaceFiles\(\{/);
         expect(host).toMatch(/syncAgentDocs: \(path\) => featureFiles\.syncAgentDocs\(path\)/);
         expect(host).toMatch(/syncConfig: \(path\) => featureConfig\(path\)/);
-        expect(host).toMatch(/tynnProject: workspaceTynnProject/);
+        // The registry the loop follows: phoneRegistry, refreshed on every registry change (hostRegistry is read at boot).
+        expect(host).toMatch(/workspaces: \(\) => phoneRegistry\.listWorkspaces\(\)/);
+        expect(host).toMatch(/tynnProject: \(workspaceId\) => \{ const w = phoneRegistry\.workspace\(workspaceId\); return w \? tynnProjectOf\(w\.path\) : null; \}/);
     });
 });

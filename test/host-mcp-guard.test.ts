@@ -24,8 +24,9 @@ describe('the window', () => {
     });
 
     it('composes against genie-host\'s stores (replicas) when it runs', () => {
-        expect(main).toMatch(/composeWindowServices\(\{ \.\.\.input, agentStores: engineForStores\.client\.stores\(\),\s*hostFeatureFiles: \(\) => \{/);
-        expect(main).toContain("agentEngineLink.client.call('engine.features', [method, [path, source]])");
+        expect(main).toContain('composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })');
+        // The workspace agent files are genie-host's to keep (Tynn #898 step 2e-2): main sends it nothing for them.
+        expect(main).not.toContain("'engine.features'");
     });
 });
 
