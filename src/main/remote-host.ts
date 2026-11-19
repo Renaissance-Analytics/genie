@@ -97,7 +97,8 @@ export interface HostApi {
     /** Release transient view state for this admitted connection; never an invocation from the wire. */
     releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
-    readonly gapps?: () => GAppsApi | null;
+    /** The GApp book; an app's window opens in the caller's own window (`context`, Tynn #898 step 2d-4b). */
+    readonly gapps?: (context?: CallContext) => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
     /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
     readonly tynnWatch?: TynnWatchPort;
@@ -265,6 +266,7 @@ export class RemoteHost {
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
     readonly #createLocalUploads: (() => LocalUploads | Promise<LocalUploads>) | undefined;
+    readonly #localSnapshot: ((connectionId: string) => Readonly<Record<string, unknown>> | null) | undefined;
     readonly #hostName: string;
     /** This Genie's build, said in `welcome` with the wire's protocol (P10.1e). */
     readonly #build: string;
@@ -323,7 +325,7 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void; protocol?: ProtocolOffer | (() => ProtocolOffer); requestUpdate?: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer> }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null; schedule?: (ms: number, fn: () => void) => () => void; protocol?: ProtocolOffer | (() => ProtocolOffer); requestUpdate?: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer> }) {
         this.#api = deps.api;
         const protocol = deps.protocol;
         const build = deps.build ?? 'dev';
@@ -340,6 +342,7 @@ export class RemoteHost {
         this.#now = deps.now ?? Date.now;
         this.#openPage = deps.openPage;
         this.#createLocalUploads = deps.createLocalUploads;
+        this.#localSnapshot = deps.localSnapshot;
         this.#staging = new UploadStaging({ now: this.#now });
         this.#schedule = deps.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); });
         deps.transport.onConnection((socket) => this.#accept(socket));
@@ -1059,7 +1062,7 @@ export class RemoteHost {
 
         if (isGappMethod(method)) {
             if (!connection.local || !this.#connections.has(connection.id)) return refuse('GApp actions need this machine\'s own local window.');
-            try { return ok(await dispatchGapps(() => this.#api.gapps?.() ?? null, method.slice('gapps.'.length), args)); }
+            try { return ok(await dispatchGapps(() => this.#api.gapps?.(this.#callContext(connection)) ?? null, method.slice('gapps.'.length), args)); }
             catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
         }
         if (isMarketplaceMethod(method)) {
@@ -1106,6 +1109,7 @@ export class RemoteHost {
             // paired devices and the connections. Only an owner sees them.
             // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
             // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
+            if (connection.local && method === 'snapshot') return ok(this.#content(connection).jsonResult(this.#windowSnapshot(connection, value), method));
             if (connection.local && (method === 'snapshot' || method === 'agentDetail' || method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
             // ONE KEPT IMAGE (Tynn #642): a sent image can be up to 5 MB, so this machine's window takes it as a blob, never
             // a frame over the door's cap; another device takes one whose reply is at most REMOTE_ATTACHMENT_MAX_BYTES
@@ -1303,8 +1307,18 @@ export class RemoteHost {
         const windows = [...this.#connections.values()].filter((c) => c.auth !== null && c.local);
         if (windows.length === 0) return;
         const revision = ++this.#snapshotRevision;
-        const inline = Buffer.byteLength(JSON.stringify(snapshot)) <= LOCAL_EVENT_MAX_BYTES;
-        for (const c of windows) this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.snapshot, payload: inline ? { revision, snapshot } : { revision } });
+        for (const c of windows) {
+            const own = this.#windowSnapshot(c, snapshot);
+            const inline = Buffer.byteLength(JSON.stringify(own)) <= LOCAL_EVENT_MAX_BYTES;
+            this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.snapshot, payload: inline ? { revision, snapshot: own } : { revision } });
+        }
+    }
+
+    /** A window's own additions (its renderer notice; gate renderer-crash B3/B4) on its snapshot, and on no other connection's. */
+    #windowSnapshot(connection: Connection, snapshot: unknown): unknown {
+        if (!connection.local || !snapshot || typeof snapshot !== 'object') return snapshot;
+        const own = this.#localSnapshot?.(connection.id);
+        return own ? { ...(snapshot as Record<string, unknown>), ...own } : snapshot;
     }
 
     #broadcast(channel: string, payload: unknown): void {

@@ -79,7 +79,8 @@ export interface HostApiDeps {
     /** The roster should be read again: an agent was restarted (Tynn #563). */
     rosterChanged?(): void;
     marketplace?: () => MarketplaceApi | null;
-    gapps?: () => GAppsApi | null;
+    /** The GApp book; `context` is the caller RemoteHost admitted, whose window opens an app (Tynn #898 step 2d-4b). */
+    gapps?: (context?: CallContext) => GAppsApi | null;
     /** The GApp book changed: a signal; the window reads the list (Tynn #596). */
     gappsChanged?: { subscribe(listener: () => void): () => void };
     localTerminals?: NativeTerminalPort;

@@ -53,7 +53,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
         releaseCaller: context => alone()?.releaseCaller?.(context),
         // THE PORTS RemoteHost READS OFF THE API (Tynn #898 step 2d-3a): genie-host's own, once its answers are built.
         marketplace: () => alone()?.marketplace?.() ?? null,
-        gapps: () => alone()?.gapps?.() ?? null,
+        gapps: (context) => alone()?.gapps?.(context) ?? null,
         invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);
@@ -127,6 +127,8 @@ export interface RemoteAccessHostOptions {
      * registry per connection, over this host's staging area. Absent = "local staging is not configured on this host".
      */
     readonly createLocalUploads?: () => LocalUploads | Promise<LocalUploads>;
+    /** What one of this machine's windows adds to its own snapshot (its renderer notice); null = nothing. Never a remote connection's. */
+    readonly localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null;
 }
 
 export class RemoteAccessHost {
@@ -157,6 +159,7 @@ export class RemoteAccessHost {
             ...(options.build ? { build: options.build } : {}),
             ...(options.protocol ? { protocol: options.protocol } : {}),
             ...(options.createLocalUploads ? { createLocalUploads: options.createLocalUploads } : {}),
+            ...(options.localSnapshot ? { localSnapshot: options.localSnapshot } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }

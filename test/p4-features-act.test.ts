@@ -180,9 +180,11 @@ describe('the IPC path is gone', () => {
         expect(owner).toContain('if (required && !ui) throw new Error(OWN_WINDOW);');
         expect(read('main/genie-host.ts')).toContain('presentation: context => { const ui = featureCallers.presentation(context); return ui ? { ...ui,');
         const callers = read('main/feature-callers.ts');
-        expect(callers).toContain('const binding = this.#callers.get(context.connectionId);');
-        expect(callers).toContain("if (!binding || binding.context.origin !== 'local-window') return null;");
-        expect(callers).toContain('await binding.effect(original[1], method, args)');
+        // A forwarded caller (engine.features), or since Tynn #898 step 2d-4b a tunnelled window's connection: either way
+        // only a local window's, and its effect goes to the window process that owns it.
+        expect(callers).toContain('const forwarded = this.#callers.get(context.connectionId);');
+        expect(callers).toContain("if (!binding || (forwarded ? forwarded.context.origin : context.origin) !== 'local-window') return null;");
+        expect(callers).toContain('await binding.effect(effectId, method, args)');
         expect(owner).toMatch(/picked\(paths: readonly unknown\[\], context: CallContext\): void \{\s*this\.#check\(context\);\s*if \(context\.origin === 'local-window'\) this\.#caller\(context\.connectionId\)\.picks\.record\(paths\);\s*\}/);
     });
 });

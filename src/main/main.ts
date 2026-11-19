@@ -36,6 +36,7 @@ import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard,
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
+import { tunnelDoor, tunnelLinkOf, windowOpsHandler } from './window-tunnel.js';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -365,6 +366,8 @@ const pageMemory = pageMemorySampler({
 });
 /** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
 let rendererNotice: RendererNotice | null = null;
+/** The door's tunnel to genie-host (Tynn #898 step 2d-4b): what this window owns is said down it on every change. */
+let windowTunnelNow: { refreshWindow(): void } | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
 // Which window a connection is decides what it may do (Tynn #578): main's own record, read when the page connects.
 const localDoor = localProtocolDoor(ipcMain, { windowKind: (contents) => (isRemoteWindow(contents as Electron.WebContents) ? 'remote' : 'main'), onClosed: (reason) => rendererErrorLog?.(`local door closed: ${reason}`) });
@@ -1409,6 +1412,19 @@ const phpCgiBase = (): PhpCgiPorts => ({
 });
 const localFeatureInvalidations = new Set<() => void>();
 let featureEffectNow: ((connectionId: string, method: string, args: unknown[]) => Promise<unknown>) | null = null;
+/**
+ * WINDOW-LOCAL CLIENT OPERATIONS genie-host asks of this window (Tynn #898 step 2d-4b; window-tunnel.ts): Delete moves a
+ * file to the OS trash (Tynn #844), and an app's window opens here (Tynn #595). The path is checked against this
+ * machine's workspaces again, whoever asked.
+ */
+const windowOps = windowOpsHandler({
+    trash: (absolutePath) => shell.trashItem(absolutePath),
+    workspaces: () => registry?.snapshot().workspaces ?? [],
+    openApp: async (packageId, preview) => {
+        if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.');
+        await gappWindowsNow.open(packageId, preview ? { preview: true } : undefined);
+    },
+});
 /** The ForceTheQuestion window's controller (question-window.ts); set once the services are composed. */
 let questionWindow: QuestionWindow | null = null;
 /** Who else wants the feature snapshot on change: the remote host's event stream. */
@@ -1539,6 +1555,8 @@ async function boot(): Promise<void> {
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
         onFeatureEffect: (connectionId: string, method: string, args: unknown[]) => featureEffectNow ? featureEffectNow(connectionId, method, args) : Promise.reject(new Error('this caller’s window is still starting')),
+        // WHAT ONLY THIS WINDOW CAN DO FOR GENIE-HOST (Tynn #898 step 2d-4b): Electron's trash, an app's window.
+        onWindowOp: (op: string, args: unknown[]) => windowOps(op, args),
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
         // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
         phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
@@ -2589,10 +2607,29 @@ async function boot(): Promise<void> {
     }
     composedNow = composed;
     servicesComposed(composed);
-    // Local calls and event subscriptions use late-bound services. Until now the door answers "Genie is still starting".
-    remoteHub.add(localDoor);
-    // Browser/UI facts invalidate the owned service; business contributors subscribe once in genie-host.
-    const pushFeatures = () => { for (const listener of localFeatureInvalidations) listener(); };
+    /*
+     * THIS WINDOW IS SERVED BY GENIE-HOST (Tynn #898 step 2d-4b): each connection the door admits rides the engine link
+     * to genie-host's RemoteHost, admitted there as this machine's window. main serves none of it; the window's browser
+     * pane is said for the main window's connection, and again on every change.
+     */
+    const windowTunnel = tunnelDoor(localDoor, tunnelLinkOf(agentEngineLink.client), {
+        browser: (connectionId) => {
+            const contents = localDoor.contentsFor(connectionId);
+            return contents && contents.id === window?.webContents.id ? browserPane?.state() ?? null : null;
+        },
+        // The main window's "the page came back" notice is its own: said for its connection only (gate renderer-crash B3/B4).
+        notice: (connectionId) => {
+            const contents = localDoor.contentsFor(connectionId);
+            return contents && contents.id === window?.webContents.id ? rendererNotice : null;
+        },
+    });
+    windowTunnelNow = windowTunnel;
+    // Browser/UI facts this window owns change genie-host's features: its pane is said, and the features read again.
+    const pushFeatures = () => {
+        for (const listener of localFeatureInvalidations) listener();
+        windowTunnel.refreshWindow();
+        if (agentEngineLink?.live === true) void agentEngineLink.client.call('engine.features', ['invalidate', []]);
+    };
     requestFeaturePush = pushFeatures;
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
     // window not in front asks for attention (taskbar flash / urgency) WITHOUT taking focus (q_8c07b142).
@@ -3050,7 +3087,7 @@ async function boot(): Promise<void> {
         openFlowEditor: route => openFlowEditorWindow(route, 'user-gesture'),
         openExternal: async url => { if (!/^https:\/\//i.test(url)) throw new Error('only an HTTPS sign-in page can be opened'); await shell.openExternal(url); },
         openInBrowser: openInBrowserFor('user-gesture'),
-        rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); return { ok: true as const }; } },
+        rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); windowTunnelNow?.refreshWindow(); return { ok: true as const }; } },
         login: async provider => signIn?.(provider) ?? { ok: false, reason: 'Genie’s login window is not ready yet; try again in a moment' },
         browser: {
             snapshot: () => browserPane?.state() ?? { url: null, canGoBack: false, canGoForward: false },
@@ -3365,8 +3402,8 @@ function bringBackItsPage(win: BrowserWindow): void {
     recoverRenderer({
         contents: win.webContents,
         rendererMb: () => pageMemory.mb(),
-        onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); },
-        onGaveUp: (notice) => { rendererNotice = notice; },
+        onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); windowTunnelNow?.refreshWindow(); },
+        onGaveUp: (notice) => { rendererNotice = notice; windowTunnelNow?.refreshWindow(); },
         errorPage: rendererErrorPage,
         recreate: () => { rebuild('renderer recovery: the reload failed'); },
         log: (line) => { rendererErrorLog?.(line); },

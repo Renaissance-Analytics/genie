@@ -19,8 +19,11 @@ import { parseFrame, type Frame, type FrameRefusal } from './remote-protocol.js'
  * credentials, prepared with the OS secret store Electron owns).
  */
 
-/** Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced. */
-export const ENGINE_PROTOCOL = 3;
+/**
+ * Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced.
+ * 4: the window's protocol connections ride this link (`engine.protocol`, Tynn #898 step 2d-4b); a host of 3 has no tunnel.
+ */
+export const ENGINE_PROTOCOL = 4;
 
 /**
  * What a link says in its `hello`. A WINDOW answers the host's calls to it (a forwarded tool, an elevation); the Genie
@@ -185,6 +188,11 @@ export const ENGINE_METHODS = [
     'engine.workstation',
     // Another machine's socket, dialled by the host; the window holds a channel (P3.4 cut e): `[method, args]`.
     'engine.deviceLink',
+    // THE WINDOW'S PROTOCOL CONNECTIONS, TUNNELLED (Tynn #898 step 2d-4b: protocol-tunnels.ts, window-tunnel.ts): `[op,
+    // tunnel, payload]` with call id 0, a notification, in order on this one socket. `open {window, label}`, `frame text`,
+    // `close reason`, `browser state`. genie-host's RemoteHost answers them; its frames come back as `protocol.frame`.
+    // A LOCAL window's link only: genie-host admits each as this machine's own window.
+    'engine.protocol',
     // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
     'engine.remoteAccess',
     // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
@@ -212,6 +220,9 @@ export const ENGINE_METHODS = [
     // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
     // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
     'client.elevate',
+    // What only a window can do, asked of the window process that owns the caller (Tynn #898 step 2d-4b): `[op, args]`.
+    // `trash [path]` (Electron's shell.trashItem), `gapps.open [id]` / `gapps.preview [id]` (an app's BrowserWindow).
+    'client.windowOp',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];

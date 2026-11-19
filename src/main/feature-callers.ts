@@ -10,6 +10,11 @@ const NO_WINDOW = 'this feature action needs its caller’s own admitted local w
 /** Engine connections own their forwarded callers and their effects; no window is selected by recency. */
 export class FeatureCallers {
     readonly #callers = new Map<string, { owner: string; context: CallContext; effect: FeatureEffect; browser: FeatureBrowser | null }>();
+    /**
+     * THIS MACHINE'S WINDOWS, TUNNELLED TO GENIE-HOST'S REMOTEHOST (Tynn #898 step 2d-4b): by the connection id RemoteHost
+     * admitted, the window process that owns it, how to ask it for an effect, and its browser pane as it last said.
+     */
+    readonly #tunnelled = new Map<string, { owner: string; effect: FeatureEffect; browser: FeatureBrowser | null }>();
     constructor(readonly service: () => HostFeatures | null) {}
 
     async call(owner: string, method: string, args: unknown[], raw: unknown, effect: FeatureEffect, browser: FeatureBrowser | null): Promise<unknown> {
@@ -41,14 +46,18 @@ export class FeatureCallers {
     }
 
     presentation(context: CallContext): HostFeaturePresentation | null {
-        const binding = this.#callers.get(context.connectionId);
-        if (!binding || binding.context.origin !== 'local-window') return null;
-        const original = JSON.parse(context.connectionId) as [string, string];
+        const forwarded = this.#callers.get(context.connectionId);
+        // A forwarded caller (engine.features) is keyed [owner, its connection]; a tunnelled one by RemoteHost's own id.
+        const tunnelled = forwarded ? undefined : this.#tunnelled.get(context.connectionId);
+        const binding = forwarded ?? tunnelled;
+        if (!binding || (forwarded ? forwarded.context.origin : context.origin) !== 'local-window') return null;
+        const effectId = forwarded ? (JSON.parse(context.connectionId) as [string, string])[1] : context.connectionId;
+        const current = () => (forwarded ? this.#callers.get(context.connectionId) : this.#tunnelled.get(context.connectionId));
         const call = async <T>(method: string, args: unknown[] = []): Promise<T> => {
-            if (this.#callers.get(context.connectionId) !== binding) throw new Error(NO_WINDOW);
-            const answer = await binding.effect(original[1], method, args) as { value?: unknown; browser?: FeatureBrowser | null };
+            if (current() !== binding) throw new Error(NO_WINDOW);
+            const answer = await binding.effect(effectId, method, args) as { value?: unknown; browser?: FeatureBrowser | null };
             if (!answer || typeof answer !== 'object' || !Object.hasOwn(answer, 'value') || !Object.hasOwn(answer, 'browser')) throw new Error('the caller’s window answered with an invalid feature effect');
-            if (this.#callers.get(context.connectionId) !== binding) throw new Error(NO_WINDOW);
+            if (current() !== binding) throw new Error(NO_WINDOW);
             binding.browser = answer.browser ?? null;
             return answer.value as T;
         };
@@ -65,7 +74,24 @@ export class FeatureCallers {
         };
     }
 
+    /** A window's protocol connection, tunnelled to genie-host (protocol-tunnels.ts): its effects go to `owner`'s process. */
+    bindConnection(connectionId: string, owner: string, effect: FeatureEffect): void {
+        const previous = this.#tunnelled.get(connectionId);
+        this.#tunnelled.set(connectionId, { owner, effect, browser: previous?.owner === owner ? previous.browser : null });
+    }
+
+    unbindConnection(connectionId: string): void {
+        this.#tunnelled.delete(connectionId);
+    }
+
+    /** The window's browser pane as its process said it (null = this window has none). */
+    connectionBrowser(connectionId: string, browser: FeatureBrowser | null): void {
+        const binding = this.#tunnelled.get(connectionId);
+        if (binding) binding.browser = browser;
+    }
+
     dropOwner(owner: string): void {
+        for (const [key, value] of this.#tunnelled) if (value.owner === owner) this.#tunnelled.delete(key);
         for (const [key, value] of this.#callers) if (value.owner === owner) { this.service()?.releaseCaller(value.context); this.#callers.delete(key); }
     }
 }
