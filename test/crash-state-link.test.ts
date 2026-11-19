@@ -83,13 +83,13 @@ describe('the wiring', () => {
         expect(host).toMatch(/write: \(record\) => \{ writeCrashRecord\(join\(runtime, 'crash'\), record\); crashState\.recorded\(record\); \}/);
     });
 
-    it('window main: the notice in the snapshot, the record in the crash report, and the notice’s two actions', () => {
+    it('genie-host: the notice in its snapshot, the record in its crash report, and the notice’s two actions (Tynn #897, 2c-2)', () => {
         const main = src('src/main/main.ts');
-        expect(main).toMatch(/registry\.setHangNotice\(\(\) => agentEngineLink\?\.client\.crashStateView\(\)\?\.notice \?\? null\);/);
-        expect(main).toMatch(/agentEngineLink\?\.client\.onCrashState\(\(\) => registry\?\.touch\(\)\);/);
-        expect(main).toMatch(/record: \(\) => agentEngineLink\?\.client\.crashStateView\(\)\?\.record \?\? null,/);
-        expect(main).toMatch(/notice: \(\) => agentEngineLink\?\.client\.crashStateView\(\)\?\.notice \?\? null,/);
+        expect(main).not.toMatch(/registry\.setHangNotice\(|onCrashState\(|crashStateView\(/);
         const host = src('src/main/genie-host.ts');
+        expect(host).toMatch(/phoneRegistry\.setHangNotice\(\(\) => crashState\.view\(\)\.notice\);/);
+        expect(host).toMatch(/record: \(\) => crashState\.view\(\)\.record \?\? null,/);
+        expect(host).toMatch(/notice: \(\) => crashState\.view\(\)\.notice \?\? null,/);
         expect(host).toMatch(/hangNotice: \{\s*dismiss: async \(\) => \{ crashState\.dismiss\(\); return \{ ok: true \}; \}, stopAll: async \(\) => \{ await host\.stopAll\(\); return \{ ok: true \}; \}/);
         expect(src('src/main/features-host.ts')).toContain('...effects, ...this.ports.system,');
         const shell = src('src/renderer/Shell.tsx');

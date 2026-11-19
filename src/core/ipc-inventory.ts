@@ -75,9 +75,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // Take over from another machine (Tynn #529 part A): this machine's Take Over window, and its ticket read once.
     ['genie:remote-takeover-open', 'window:take-over-window'],
     ['genie:takeover-ticket', 'window:take-over-window'],
-    // 2c (#897): the safe-mode banner's crash report reads the host's crash and safe-mode state, and posts to Tynn.
-    ['genie:crash-report-draft', 'move:2c'],
-    ['genie:crash-report-send', 'move:2c'],
     // 2c (#897): a scratch shell opened on the host's terminals with the workspace's env.
     ['genie:scratch-terminal-open', 'move:2c'],
     ['genie:files-open-external', 'window:os-shell'],
@@ -161,10 +158,7 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // 2f (#912): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
     // 2026-11-19). Take Over itself is the protocol's since 2b-1 (#896).
     ['takeOvers', 'move:2f'],
-    // 2c (#897): the crash report's state, and the scratch terminal.
-    ['crashStateView', 'move:2c'],
-    ['onCrashState', 'move:2c'],
-    ['safeModeView', 'move:2c'],
+    // 2c (#897): the scratch terminal. The crash report is the protocol's since 2c-2 (crashReport.draft/send).
     ['terminals', 'move:2c'],
     // 2f (#912): the question window's answers, and the device link's frames.
     ['call:engine.featureQuestion', 'move:2f'],

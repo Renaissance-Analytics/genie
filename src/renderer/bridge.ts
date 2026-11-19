@@ -780,6 +780,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const bridge: GenieBridge = { ...preload, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
         accounts: local.accounts, accountsAct: local.accountsAct, dismissSwitchOffer: local.dismissSwitchOffer,
+        crashReport: local.crashReport,
         marketplace: local.marketplace,
         gapps: local.gapps,
         appInbox: local.owner.appInbox,

@@ -139,8 +139,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
 
     /** Frozen (the coordinator, 2026-11-19): each leaves in the PR that moves it, and nothing joins. */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2c (#897): the crash report's state and the scratch terminal.
-        crashStateView: '2c', onCrashState: '2c', safeModeView: '2c', terminals: '2c',
+        // 2c (#897): the scratch terminal. The crash report moved in 2c-2.
+        terminals: '2c',
         // 2f (#912): the question window's answers, and the device link's frames.
         'call:engine.featureQuestion': '2f', deviceLink: '2f',
         // Re-labelled from 2b by the coordinator (2026-11-19): main's deck liveness until the question window and the tray

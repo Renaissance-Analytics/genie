@@ -89,6 +89,7 @@ import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { openCallersTerminalWindow, type TerminalWindowPorts } from './host-terminal-windows.js';
 import { hostMcpRecovery, withMcpRecovery } from './host-mcp-recovery.js';
+import { crashReportHost } from './crash-report-host.js';
 import { hostSignIns } from './host-sign-ins.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
 import { ProcessBook } from './process-book.js';
@@ -1837,6 +1838,23 @@ async function main(): Promise<void> {
         cwdFor: phoneCwd,
         // The sign-ins (Tynn #896): the provider's own login, started here for the caller, whose window shows it.
         signIns,
+        // THE CRASH REPORT (Tynn #386 part 4; #897 2c-2), for every client of the owner's: built from this host's own safe
+        // mode, crash state, registry and workstation identity. Nothing is sent until the person presses Send.
+        crashReports: crashReportHost({
+            view: () => safeMode.view(),
+            record: () => crashState.view().record ?? null,
+            notice: () => crashState.view().notice ?? null,
+            agents: () => hostRegistry.listAgents().map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
+            workspaceNames: () => [...hostRegistry.listWorkspaces().flatMap((w) => [w.id, basename(w.path)]), ...hostRegistry.workspaceSlugs().values()],
+            genieVersion: build,
+            os: process.platform,
+            arch: process.arch,
+            tynnHost: TYNN_HOST,
+            identity: async () => workstationService.identity(TYNN_HOST),
+            authHeader: () => workstationService.authHeader(TYNN_HOST),
+            // This machine's network (its roots and proxies), as the relay's calls to Tynn go.
+            fetch: (url, init) => relayFetch(url, init),
+        }),
         // ANY FILE IN A MESSAGE (Tynn #829), with no window connected: saved into the agent's workspace on this host.
         saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(hostRegistry.workspace(record.workspaceId), hostUntrustedNow(record)), files, now: new Date() }),
         startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {
