@@ -76,7 +76,40 @@ export function installMeasurementHostLaunch(options, injected) {
     };
 }
 
-/** RED stub (Tynn #910): genie-host's ArtBoard phase trace. */
-export function installMeasurementHostPhases() { return { enabled: false }; }
-/** RED stub (Tynn #910): the owned host's phases in a row's wall window. */
-export function readHostPhases() { return { events: [], dropped: 0 }; }
+const HOST_PHASE = 'ARTBOARD_HOST_PHASE ';
+const PHASES = ['native-build', 'resolve-board', 'metadata-build', 'artifact-open', 'projection'];
+
+/**
+ * THE ARTBOARD BUILD RUNS IN GENIE-HOST (Tynn #898 step 2d-4b): its phase timing (src/main/artboard-build-timing.ts) is
+ * recorded there, under the same flags as the heartbeat. Nothing is held in memory: each phase is written to the host's
+ * log as it ends, with its wall window, so the in-memory cap never drops one. Fixed diagnostic fields only.
+ */
+export function installMeasurementHostPhases(injected) {
+    const ports = injected ?? { env: process.env, pid: process.pid, wallNow: () => Date.now(), globals: globalThis, emit: line => process.stdout.write(line + '\n') };
+    if (ports.env.GENIE_ARTBOARD_MEASURE_ALLOW !== '1' || ports.env.GENIE_PAGE_PROBE !== '1' || ports.env.ELECTRON_RUN_AS_NODE !== '1') return { enabled: false };
+    const events = [];
+    Object.defineProperty(events, 'push', { value: (...items) => {
+        for (const e of items) {
+            const endedWallMs = ports.wallNow(), elapsedMs = Number.isFinite(e?.elapsedMs) ? e.elapsedMs : 0;
+            ports.emit(HOST_PHASE + JSON.stringify({ role: 'host', pid: ports.pid, kind: 'phase', phase: e?.phase, mode: e?.mode, elapsedMs, startedWallMs: endedWallMs - Math.round(elapsedMs), endedWallMs }));
+        }
+        return 0;
+    } });
+    ports.globals.__artboardPhases = { events, dropped: 0 };
+    return { enabled: true };
+}
+
+/** The phases an owned host (by pid) ended inside a row's wall window. A partial or malformed owned record fails the row. */
+export function readHostPhases(text, pids, fromWallMs, toWallMs) {
+    const events = [];
+    for (const line of text.split(/\r?\n/)) {
+        if (!line.startsWith(HOST_PHASE)) continue;
+        let value; try { value = JSON.parse(line.slice(HOST_PHASE.length)); } catch { throw new Error('an owned host phase record is incomplete'); }
+        if (value?.role !== 'host' || !pids.includes(value.pid)) continue;
+        if (value.kind !== 'phase' || !PHASES.includes(value.phase) || !['async', 'sync'].includes(value.mode) || !['elapsedMs', 'startedWallMs', 'endedWallMs'].every(key => Number.isFinite(value[key]))) throw new Error('invalid owned host phase fields');
+        if (value.endedWallMs < fromWallMs || value.endedWallMs > toWallMs) continue;
+        if (events.length >= 4096) throw new Error('too many owned host phase records');
+        events.push({ phase: value.phase, mode: value.mode, elapsedMs: value.elapsedMs, startedWallMs: value.startedWallMs, endedWallMs: value.endedWallMs });
+    }
+    return { events, dropped: 0 };
+}
