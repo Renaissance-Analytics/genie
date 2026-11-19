@@ -115,7 +115,8 @@ describe('the capability table', () => {
         // protocol, for every client of the owner's (client/host split step 2a, Tynn #895).
         // 171 since `logins.design` and `accounts.switch` (Tynn #896): the design sign-in and a switch of account, writes.
         // 172 with `logins.provider` (Tynn #896, 2b-2b): the tray's Log in by provider, a write, the owner's.
-        expect(REMOTE_METHODS.length).toBe(172);
+        // 173 with `tynnNetwork.classifyLink` (Tynn #896, 2b-4): a pasted share link, decided by the host; local, like workstations.
+        expect(REMOTE_METHODS.length).toBe(173);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

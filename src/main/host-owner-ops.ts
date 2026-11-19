@@ -117,6 +117,7 @@ export function hostOwnerOps(sources: HostOwnerSources): HostOwnerOps {
             hasAccount: () => tynn.account() !== null,
             signedIn: () => tynn.account()?.status().signedIn === true,
             role: () => tynn.role(),
+            host: () => tynn.account()?.host() ?? null,
             workstations: async () => {
                 const a = account();
                 return wordTynnRefusal(await connectableWorkstations((path, init) => a.request(path, init), await thisMachine(a.host())), rereadRole);

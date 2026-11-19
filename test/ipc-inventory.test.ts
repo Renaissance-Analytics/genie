@@ -97,8 +97,6 @@ describe('P4 IPC inventory', () => {
      * it, and a row on it cannot be re-labelled a window capability while its handler is still registered.
      */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2b (#896): sign-ins, Take Over and the share link.
-        'genie:connect-link': '2b',
         // 2c (#897): the crash report, the provider's program, the scratch terminal and Add workspace.
         'genie:crash-report-draft': '2c', 'genie:crash-report-send': '2c', 'genie:provider-choose-program': '2c',
         'genie:scratch-terminal-open': '2c', 'genie:add-workspace': '2c',

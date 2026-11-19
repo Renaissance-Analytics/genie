@@ -21,6 +21,7 @@ import { attachmentKind, type Attachment } from '../core/prompt-content.js';
 import type { BytesResult, FileOpResult, OpenResult } from './files-host.js';
 import type { TreeNode } from '../core/files-panel.js';
 import { droneRefusal, type WorkstationRole } from '../core/workstation-role.js';
+import { decideConnectLink } from '../core/connect-link.js';
 import type { AppSourceKind } from '../core/app-inbox.js';
 import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
@@ -61,6 +62,8 @@ export interface LocalOwnerDeps {
         signedIn(): boolean;
         role(): WorkstationRole | null;
         workstations(): Promise<TynnWorkstationList>;
+        /** The Tynn this host is signed in to (Tynn #896, 2b-4); absent or null = none known. */
+        host?(): string | null;
         setRole(workstationId: string, role: WorkstationRole, code: string): Promise<RoleChange>;
         rereadRole(): void;
         shares: NonNullable<TynnNetworkBridge['shares']>;
@@ -384,6 +387,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const refused = droneRefusal(network.role());
                 if (refused) return { ok: false, reason: refused };
                 return network.workstations();
+            }
+            // A pasted share link, decided HERE with the host's Tynn and the role Tynn gave it; the window opens it (2b-4).
+            case 'tynnNetwork.classifyLink': {
+                const network = owner().tynnNetwork;
+                const host = network.hasAccount() && network.signedIn() ? network.host?.() ?? null : null;
+                return decideConnectLink(str(args[0]), host, network.role());
             }
             case 'tynnNetwork.setRole': {
                 const network = owner().tynnNetwork, [workstationId, role, code] = args;

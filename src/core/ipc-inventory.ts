@@ -92,8 +92,9 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // The connected machine's questions into THIS machine's question window, and how an answer went (Tynn #726).
     ['genie:remote-questions', 'window:pop-out'],
     ['genie:remote-question-acted', 'window:pop-out'],
-    // 2b (#896): a pasted share link is classified with the host's Tynn account.
-    ['genie:connect-link', 'move:2b'],
+    // A pasted share link (Tynn #896, 2b-4): genie-host decides what it is (tynnNetwork.classifyLink); the window opens it,
+    // in the person's browser or a workstation's window.
+    ['genie:connect-link', 'window:os-shell'],
     // 2f (#912): the host's device link, a second frame path beside the protocol door's.
     ['genie:relay-open', 'move:2f'],
     ['genie:relay-send', 'move:2f'],
