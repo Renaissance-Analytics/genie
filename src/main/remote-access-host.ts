@@ -127,6 +127,7 @@ export interface RemoteAccessHostOptions {
      * registry per connection, over this host's staging area. Absent = "local staging is not configured on this host".
      */
     readonly createLocalUploads?: () => LocalUploads | Promise<LocalUploads>;
+    /** What one of this machine's windows adds to its own snapshot (its renderer notice); null = nothing. Never a remote connection's. */
     readonly localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null;
 }
 
@@ -158,6 +159,7 @@ export class RemoteAccessHost {
             ...(options.build ? { build: options.build } : {}),
             ...(options.protocol ? { protocol: options.protocol } : {}),
             ...(options.createLocalUploads ? { createLocalUploads: options.createLocalUploads } : {}),
+            ...(options.localSnapshot ? { localSnapshot: options.localSnapshot } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }

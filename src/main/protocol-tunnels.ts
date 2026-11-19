@@ -31,6 +31,7 @@ export interface ProtocolTunnelsOptions {
     readonly onUnbound?: (connectionId: string, binding: TunnelBinding) => void;
     /** The window's browser pane changed (said by its owner). */
     readonly onBrowser?: (connectionId: string, browser: FeatureBrowser | null) => void;
+    /** The window's "the page came back" notice changed (said by its owner): that window's snapshot is pushed again. */
     readonly onNotice?: (connectionId: string, notice: RendererNotice | null) => void;
 }
 
@@ -44,6 +45,7 @@ interface Tunnel {
     readonly send: (event: TunnelEvent) => void;
     connectionId: string | null;
     browser: FeatureBrowser | null;
+    notice: RendererNotice | null;
     closed: boolean;
 }
 
@@ -52,6 +54,15 @@ const browserOf = (value: unknown): FeatureBrowser | null => {
     const v = value as Record<string, unknown>;
     if ((v.url !== null && typeof v.url !== 'string') || typeof v.canGoBack !== 'boolean' || typeof v.canGoForward !== 'boolean') return null;
     return { url: v.url as string | null, canGoBack: v.canGoBack, canGoForward: v.canGoForward };
+};
+
+const noticeOf = (value: unknown): RendererNotice | null => {
+    if (!value || typeof value !== 'object') return null;
+    const v = value as Record<string, unknown>;
+    if (typeof v.at !== 'number' || !Number.isFinite(v.at) || typeof v.reason !== 'string' || v.reason.length === 0 || v.reason.length > 64) return null;
+    if (v.rendererMb !== null && (typeof v.rendererMb !== 'number' || !Number.isFinite(v.rendererMb))) return null;
+    if (typeof v.reloads !== 'number' || !Number.isInteger(v.reloads) || v.reloads < 0) return null;
+    return { at: v.at, reason: v.reason, rendererMb: v.rendererMb as number | null, reloads: v.reloads };
 };
 
 export class ProtocolTunnels implements ServerTransport {
@@ -87,6 +98,11 @@ export class ProtocolTunnels implements ServerTransport {
             if (current.connectionId !== null) this.#options.onBrowser?.(current.connectionId, current.browser);
             return;
         }
+        if (op === 'notice') {
+            current.notice = noticeOf(payload);
+            if (current.connectionId !== null) this.#options.onNotice?.(current.connectionId, current.notice);
+            return;
+        }
         if (op !== 'frame' || typeof payload !== 'string') return this.#end(current, 'the local frame port accepts string frames only', true);
         if (Buffer.byteLength(payload, 'utf8') > LOCAL_FRAME_LIMIT_BYTES) return this.#end(current, CAP_REASON, true);
         for (const listener of [...current.messages]) listener(payload);
@@ -100,7 +116,15 @@ export class ProtocolTunnels implements ServerTransport {
         this.#tunnels.delete(owner);
     }
 
-    windowSnapshotOf(_connectionId: string): { rendererNotice: RendererNotice | null } | null { return null; }
+    /**
+     * What only this window adds to its own snapshot (gate renderer-crash B3/B4): its "the page came back" notice, which
+     * is the window's state, never the host's. RemoteHost overlays it on that one local connection's snapshot; a Pilot
+     * and this machine's other windows never see it. null = not a tunnelled window's connection.
+     */
+    windowSnapshotOf(connectionId: string): { rendererNotice: RendererNotice | null } | null {
+        const t = this.#bound.get(connectionId);
+        return t && !t.closed ? { rendererNotice: t.notice } : null;
+    }
 
     /** Which window process owns a RemoteHost connection (by the id its welcome said); null = not a tunnelled one. */
     bindingOf(connectionId: string): TunnelBinding | null {
@@ -115,7 +139,7 @@ export class ProtocolTunnels implements ServerTransport {
         const said = (payload && typeof payload === 'object' ? payload : {}) as { window?: unknown; label?: unknown };
         const window: TunnelWindow = said.window === 'remote' ? 'remote' : 'main';
         const label = typeof said.label === 'string' && said.label.length > 0 && said.label.length <= 120 ? said.label : 'this Genie window';
-        const t: Tunnel = { binding: { owner, tunnel: id, window }, messages: new Set(), closes: new Set(), send, connectionId: null, browser: null, closed: false };
+        const t: Tunnel = { binding: { owner, tunnel: id, window }, messages: new Set(), closes: new Set(), send, connectionId: null, browser: null, notice: null, closed: false };
         let mine = this.#tunnels.get(owner);
         if (!mine) { mine = new Map(); this.#tunnels.set(owner, mine); }
         mine.set(id, t);

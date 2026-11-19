@@ -651,7 +651,7 @@ describe('wired: genie-host serves the window, main forwards it', () => {
         expect(host).toMatch(/appWindow: /);
         expect(host).toMatch(/windowOp\(null, 'trash'/);
         expect(host).toMatch(/localSnapshot: \(connectionId\) => protocolTunnels\.windowSnapshotOf\(connectionId\)/);
-        expect(host).toMatch(/onNotice: \(\) => \{ phoneRegistry\.touch\(\)/);
+        expect(host).toMatch(/onNotice: \(\) => \{ phoneRegistryNow\?\.touch\(\)/);
     });
 
     it('main no longer serves its door: it tunnels it, answers window operations and says what changed', async () => {

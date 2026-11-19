@@ -25,6 +25,7 @@ export interface TunnelLink {
 export interface TunnelDoorOptions {
     /** A window's browser pane, by the RemoteHost connection id its welcome said; null = this window has none. */
     readonly browser?: (connectionId: string) => FeatureBrowser | null;
+    /** A window's "the page came back" notice, by the RemoteHost connection its welcome said; null = none (or not this window). */
     readonly notice?: (connectionId: string) => RendererNotice | null;
     readonly newId?: () => string;
 }
@@ -43,6 +44,9 @@ export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: Tun
     const sayBrowser = (tunnel: string, c: Carried) => {
         if (options.browser && c.connectionId !== null) link.send('browser', tunnel, options.browser(c.connectionId));
     };
+    const sayNotice = (tunnel: string, c: Carried) => {
+        if (options.notice && c.connectionId !== null) link.send('notice', tunnel, options.notice(c.connectionId));
+    };
     const drop = (tunnel: string, c: Carried) => {
         if (carried.get(tunnel) !== c) return;
         carried.delete(tunnel);
@@ -57,7 +61,7 @@ export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: Tun
         if (c.connectionId === null && event.text.includes('"welcome"')) {
             try {
                 const sent = JSON.parse(event.text) as { kind?: unknown; connectionId?: unknown };
-                if (sent.kind === 'welcome' && typeof sent.connectionId === 'string') { c.connectionId = sent.connectionId; sayBrowser(event.tunnel, c); }
+                if (sent.kind === 'welcome' && typeof sent.connectionId === 'string') { c.connectionId = sent.connectionId; sayBrowser(event.tunnel, c); sayNotice(event.tunnel, c); }
             } catch { /* not a welcome */ }
         }
     });
@@ -86,7 +90,8 @@ export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: Tun
         });
     });
     return {
-        refreshWindow: () => { for (const [tunnel, c] of carried) sayBrowser(tunnel, c); },
+        // What the window owns changed (its browser pane, its notice): said again for every connection it carries.
+        refreshWindow: () => { for (const [tunnel, c] of carried) { sayBrowser(tunnel, c); sayNotice(tunnel, c); } },
         dispose: () => {
             offDoor(); offFrame(); offDown();
             for (const [tunnel, c] of [...carried]) { carried.delete(tunnel); link.send('close', tunnel, 'Genie’s window is closing'); c.connection.close(); }

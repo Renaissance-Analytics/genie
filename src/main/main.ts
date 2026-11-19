@@ -366,6 +366,8 @@ const pageMemory = pageMemorySampler({
 });
 /** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
 let rendererNotice: RendererNotice | null = null;
+/** The door's tunnel to genie-host (Tynn #898 step 2d-4b): what this window owns is said down it on every change. */
+let windowTunnelNow: { refreshWindow(): void } | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
 // Which window a connection is decides what it may do (Tynn #578): main's own record, read when the page connects.
 const localDoor = localProtocolDoor(ipcMain, { windowKind: (contents) => (isRemoteWindow(contents as Electron.WebContents) ? 'remote' : 'main'), onClosed: (reason) => rendererErrorLog?.(`local door closed: ${reason}`) });
@@ -2615,7 +2617,13 @@ async function boot(): Promise<void> {
             const contents = localDoor.contentsFor(connectionId);
             return contents && contents.id === window?.webContents.id ? browserPane?.state() ?? null : null;
         },
+        // The main window's "the page came back" notice is its own: said for its connection only (gate renderer-crash B3/B4).
+        notice: (connectionId) => {
+            const contents = localDoor.contentsFor(connectionId);
+            return contents && contents.id === window?.webContents.id ? rendererNotice : null;
+        },
     });
+    windowTunnelNow = windowTunnel;
     // Browser/UI facts this window owns change genie-host's features: its pane is said, and the features read again.
     const pushFeatures = () => {
         for (const listener of localFeatureInvalidations) listener();
@@ -3079,7 +3087,7 @@ async function boot(): Promise<void> {
         openFlowEditor: route => openFlowEditorWindow(route, 'user-gesture'),
         openExternal: async url => { if (!/^https:\/\//i.test(url)) throw new Error('only an HTTPS sign-in page can be opened'); await shell.openExternal(url); },
         openInBrowser: openInBrowserFor('user-gesture'),
-        rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); return { ok: true as const }; } },
+        rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); windowTunnelNow?.refreshWindow(); return { ok: true as const }; } },
         login: async provider => signIn?.(provider) ?? { ok: false, reason: 'Genie’s login window is not ready yet; try again in a moment' },
         browser: {
             snapshot: () => browserPane?.state() ?? { url: null, canGoBack: false, canGoForward: false },
@@ -3394,8 +3402,8 @@ function bringBackItsPage(win: BrowserWindow): void {
     recoverRenderer({
         contents: win.webContents,
         rendererMb: () => pageMemory.mb(),
-        onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); },
-        onGaveUp: (notice) => { rendererNotice = notice; },
+        onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); windowTunnelNow?.refreshWindow(); },
+        onGaveUp: (notice) => { rendererNotice = notice; windowTunnelNow?.refreshWindow(); },
         errorPage: rendererErrorPage,
         recreate: () => { rebuild('renderer recovery: the reload failed'); },
         log: (line) => { rendererErrorLog?.(line); },

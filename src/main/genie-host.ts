@@ -429,6 +429,8 @@ async function main(): Promise<void> {
      * process's engine link, joins the remote hub below as this machine's own window. A tunnelled connection's feature
      * effects (a page to open, a sign-in, the browser pane) are asked of the window process that owns it.
      */
+    /** Set once the phone registry is built, below: a notice said before then has no snapshot to push yet. */
+    let phoneRegistryNow: Registry | null = null;
     const protocolTunnels = new ProtocolTunnels({
         onBound: (connectionId, binding, browser) => {
             featureCallers.bindConnection(connectionId, binding.owner, (id, method, args) => (engineRef ? engineRef.featureEffect(binding.owner, id, method, args) : Promise.reject(new Error('Genie’s window link is not ready'))));
@@ -436,6 +438,8 @@ async function main(): Promise<void> {
         },
         onUnbound: (connectionId) => { featureCallers.unbindConnection(connectionId); },
         onBrowser: (connectionId, browser) => { featureCallers.connectionBrowser(connectionId, browser); hostFeatures?.invalidate(); },
+        // The window's "the page came back" notice (gate renderer-crash B3/B4): its snapshot is pushed again, with it.
+        onNotice: () => { phoneRegistryNow?.touch(); },
     });
     const featureChanges = new Set<() => void>();
     const featureChanged = () => { for (const listener of featureChanges) listener(); };
@@ -1065,6 +1069,8 @@ async function main(): Promise<void> {
         build,
         // What a local connection uploads (Tynn #898 step 2d-3b) is staged under this host's runtime, per process.
         createLocalUploads: async () => (await LocalStagingArea.open(home)).createConnection(Date.now),
+        // Each window's own snapshot additions, on its connection only (its renderer notice).
+        localSnapshot: (connectionId) => protocolTunnels.windowSnapshotOf(connectionId),
         // THE HOST'S OFFER (Tynn #894), read at each hello: its track and build, the wire's schema and the fixed window's
         // floor, and the catalog's elements as capabilities, so a client sees which elements this host has. `host.update`
         // answers with RemoteHost's stub until the launcher step wires it.
@@ -1561,7 +1567,7 @@ async function main(): Promise<void> {
         readIdentity: (provider) => { if (!isAcpProvider(provider)) return Promise.resolve(); readingAttribution.signedIn(provider); return accountIdentity.refreshProvider(provider); },
         emit: (outcome) => { engine.callback({ name: 'toolSignal', signal: accountSwitchSignal(outcome) }); },
     });
-    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
+    const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));
