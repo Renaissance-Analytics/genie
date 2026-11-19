@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
+import type { RendererNotice } from '../core/renderer-notice.js';
 import type { FeatureBrowser } from './feature-callers.js';
 import type { TunnelEvent, TunnelOp } from './protocol-tunnels.js';
 
@@ -24,6 +25,7 @@ export interface TunnelLink {
 export interface TunnelDoorOptions {
     /** A window's browser pane, by the RemoteHost connection id its welcome said; null = this window has none. */
     readonly browser?: (connectionId: string) => FeatureBrowser | null;
+    readonly notice?: (connectionId: string) => RendererNotice | null;
     readonly newId?: () => string;
 }
 
@@ -34,7 +36,7 @@ interface Carried {
     connectionId: string | null;
 }
 
-export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: TunnelDoorOptions = {}): { refreshBrowser(): void; dispose(): void } {
+export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: TunnelDoorOptions = {}): { refreshWindow(): void; dispose(): void } {
     let next = 0;
     const newId = options.newId ?? (() => `w${(++next).toString(36)}`);
     const carried = new Map<string, Carried>();
@@ -84,7 +86,7 @@ export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: Tun
         });
     });
     return {
-        refreshBrowser: () => { for (const [tunnel, c] of carried) sayBrowser(tunnel, c); },
+        refreshWindow: () => { for (const [tunnel, c] of carried) sayBrowser(tunnel, c); },
         dispose: () => {
             offDoor(); offFrame(); offDown();
             for (const [tunnel, c] of [...carried]) { carried.delete(tunnel); link.send('close', tunnel, 'Genie’s window is closing'); c.connection.close(); }

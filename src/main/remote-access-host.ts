@@ -127,6 +127,7 @@ export interface RemoteAccessHostOptions {
      * registry per connection, over this host's staging area. Absent = "local staging is not configured on this host".
      */
     readonly createLocalUploads?: () => LocalUploads | Promise<LocalUploads>;
+    readonly localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null;
 }
 
 export class RemoteAccessHost {

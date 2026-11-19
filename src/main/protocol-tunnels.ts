@@ -1,5 +1,6 @@
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
+import type { RendererNotice } from '../core/renderer-notice.js';
 import type { FeatureBrowser } from './feature-callers.js';
 
 /**
@@ -20,7 +21,7 @@ import type { FeatureBrowser } from './feature-callers.js';
 export type TunnelWindow = 'main' | 'remote';
 /** What genie-host sends back down one tunnel: a protocol frame, or its end. */
 export type TunnelEvent = { readonly tunnel: string; readonly kind: 'frame'; readonly text: string } | { readonly tunnel: string; readonly kind: 'closed'; readonly reason: string };
-export type TunnelOp = 'open' | 'frame' | 'close' | 'browser';
+export type TunnelOp = 'open' | 'frame' | 'close' | 'browser' | 'notice';
 /** Who a tunnelled RemoteHost connection belongs to: the engine connection (one window process) and its tunnel. */
 export interface TunnelBinding { readonly owner: string; readonly tunnel: string; readonly window: TunnelWindow }
 
@@ -30,6 +31,7 @@ export interface ProtocolTunnelsOptions {
     readonly onUnbound?: (connectionId: string, binding: TunnelBinding) => void;
     /** The window's browser pane changed (said by its owner). */
     readonly onBrowser?: (connectionId: string, browser: FeatureBrowser | null) => void;
+    readonly onNotice?: (connectionId: string, notice: RendererNotice | null) => void;
 }
 
 const CAP_REASON = 'a local protocol frame exceeds 1 MiB; this window’s protocol connection was closed';
@@ -97,6 +99,8 @@ export class ProtocolTunnels implements ServerTransport {
         for (const t of [...mine.values()]) this.#end(t, 'Genie’s window lost its link to genie-host', false);
         this.#tunnels.delete(owner);
     }
+
+    windowSnapshotOf(_connectionId: string): { rendererNotice: RendererNotice | null } | null { return null; }
 
     /** Which window process owns a RemoteHost connection (by the id its welcome said); null = not a tunnelled one. */
     bindingOf(connectionId: string): TunnelBinding | null {

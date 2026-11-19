@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import type { RendererNotice } from '../src/core/renderer-notice.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -229,9 +230,10 @@ describe('the tunnel on the engine link (genie-host side)', () => {
 });
 
 /** main's IPC door, as a transport the test opens connections on. */
-function fakeDoor(): ServerTransport & { connect(preAuth: PreAuth): ClientTransport } {
+function fakeDoor(): ServerTransport & { connect(preAuth: PreAuth): ClientTransport; mainId: string | null } {
     const listeners = new Set<(c: ServerConnection) => void>();
     return {
+        mainId: null,
         onConnection: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
         connect: (preAuth) => {
             const pair = inMemoryPair();
@@ -354,7 +356,7 @@ describe('main forwards its door’s connections over the tunnel (main side)', (
         const first = pane;
         expect(changed).toEqual([['rc_7', first]]);
         pane = { url: 'https://b.example.test/', canGoBack: true, canGoForward: false };
-        bridge.refreshBrowser();
+        bridge.refreshWindow();
         await settle();
         expect(changed).toEqual([['rc_7', first], ['rc_7', pane]]);
     });
@@ -498,6 +500,148 @@ describe('an app’s window opens in the window that asked', () => {
     });
 });
 
+// RENDERER-NOTICE-2D4B
+const NOTICE: RendererNotice = { at: 1_700_000_000_000, reason: 'oom', rendererMb: 2048, reloads: 1 };
+
+/** A Pilot over the relay, as its owner: never this machine's window. */
+function pilotOn(relay: Array<(c: ServerConnection) => void>) {
+    const pair = inMemoryPair();
+    for (const cb of relay) cb({ ...pair.server, remoteAddress: 'relay:Pilot laptop', preAuth: { label: 'Pilot laptop', isOwner: true, workspaceId: null, readonly: false } });
+    const heard = listen(pair.client);
+    pair.client.send(JSON.stringify({ kind: 'hello', auth: { kind: 'relay' }, label: 'Pilot laptop' }));
+    return { client: pair.client, heard };
+}
+
+/** genie-host as wired: the tunnels' notice is overlaid on that one window's snapshot, and a change re-pushes it. */
+async function hostWithNotice(notice: () => RendererNotice | null) {
+    const home = await mkdtemp(join(tmpdir(), 'genie-2d4b-notice-'));
+    let pushSnapshot: ((s: unknown) => void) | null = null;
+    const relay: Array<(c: ServerConnection) => void> = [];
+    const tunnels = new ProtocolTunnels({ onNotice: () => { pushSnapshot?.(fixtureSnapshot()); } });
+    const hub = transportHub(tunnels);
+    hub.add({ onConnection: (cb) => { relay.push(cb); return () => {}; } });
+    const alone = hostApiFixture({ subscribeSnapshot: (l: (s: unknown) => void) => { pushSnapshot = l; return () => { pushSnapshot = null; }; } } as unknown as Partial<HostApiDeps>);
+    const access = await RemoteAccessHost.open({ home, hostName: 'box', api: hostRemoteApi({ hostName: 'box', own: {}, alone, workspaceOfAgent: (id) => (id === 'agent_kai' ? 'ws_shop' : null) }), transport: hub, now: () => 1_000_000, localSnapshot: (id) => tunnels.windowSnapshotOf(id) });
+    cleanups.push(async () => { await access.close(); await rm(home, { recursive: true, force: true }); });
+    const linked = await linkTo(tunnels);
+    const door = fakeDoor();
+    const bridge = tunnelDoor(door, tunnelLinkOf(linked.client), { notice: (id) => (door.mainId === id ? notice() : null) });
+    cleanups.push(() => bridge.dispose());
+    return { access, tunnels, door, bridge, relay };
+}
+
+const fixtureSnapshot = () => ({ agents: [], workspaces: [{ id: 'ws_shop', path: '/w/shop', agentsKnown: true }], deckItems: [], signals: {} });
+const snapshotResult = (frames: WireMessage[], id: number) => (frames.find((f) => f.kind === 'result' && f.id === id) as { value?: Record<string, unknown> } | undefined)?.value;
+const pushedSnapshots = (frames: WireMessage[]) => frames
+    .filter((f) => f.kind === 'event' && f.channel === LOCAL_EVENTS.snapshot)
+    .map((f) => ((f as { payload: { snapshot?: Record<string, unknown> } }).payload.snapshot));
+
+describe('the renderer notice is the window’s own, on genie-host too (gate renderer-crash B3/B4)', () => {
+    it('the tunnels keep each window’s notice by the connection its welcome named, and say when it changes', async () => {
+        const said: Array<[string, RendererNotice | null]> = [];
+        const tunnels = new ProtocolTunnels({ onNotice: (id, n) => said.push([id, n]) });
+        const seen = admitted(tunnels);
+        const l = await linkTo(tunnels);
+        l.client.protocolSend('open', 't1', { window: 'main', label: LABEL });
+        await settle();
+        seen.connections[0]!.send(JSON.stringify({ kind: 'welcome', connectionId: 'rc_1', host: 'box', isOwner: true, workspaceId: null }));
+        await settle();
+        expect(tunnels.windowSnapshotOf('rc_1')).toEqual({ rendererNotice: null });
+        l.client.protocolSend('notice', 't1', NOTICE);
+        await settle();
+        expect(said).toEqual([['rc_1', NOTICE]]);
+        expect(tunnels.windowSnapshotOf('rc_1')).toEqual({ rendererNotice: NOTICE });
+        // A malformed notice is no notice; it never reaches a snapshot as said.
+        l.client.protocolSend('notice', 't1', { at: 'soon', reason: 7 });
+        await settle();
+        expect(tunnels.windowSnapshotOf('rc_1')).toEqual({ rendererNotice: null });
+        l.client.protocolSend('notice', 't1', null);
+        await settle();
+        expect(said).toEqual([['rc_1', NOTICE], ['rc_1', null], ['rc_1', null]]);
+        // CONTROL: a connection no tunnel bound has nothing to overlay, and neither has one that ended.
+        expect(tunnels.windowSnapshotOf('rc_other')).toBeNull();
+        seen.connections[0]!.close();
+        await settle();
+        expect(tunnels.windowSnapshotOf('rc_1')).toBeNull();
+    });
+
+    it('main says its window’s notice once the welcome names the connection, and again on every change', async () => {
+        const said: Array<[string, RendererNotice | null]> = [];
+        const tunnels = new ProtocolTunnels({ onNotice: (id, n) => said.push([id, n]) });
+        const seen = admitted(tunnels);
+        const linked = await linkTo(tunnels);
+        let notice: RendererNotice | null = NOTICE;
+        const door = fakeDoor();
+        const bridge = tunnelDoor(door, tunnelLinkOf(linked.client), { notice: () => notice });
+        cleanups.push(() => bridge.dispose());
+        door.connect(LOCAL_MAIN);
+        await settle();
+        seen.connections[0]!.send(JSON.stringify({ kind: 'welcome', connectionId: 'rc_9', host: 'box', isOwner: true, workspaceId: null }));
+        await settle();
+        expect(said).toEqual([['rc_9', NOTICE]]);
+        notice = null;
+        bridge.refreshWindow();
+        await settle();
+        expect(said).toEqual([['rc_9', NOTICE], ['rc_9', null]]);
+    });
+
+    it('the window served by genie-host reads “the page came back” in its snapshot, read and pushed, and dismissing clears it', async () => {
+        let notice: RendererNotice | null = NOTICE;
+        const h = await hostWithNotice(() => notice);
+        const window = h.door.connect(LOCAL_MAIN);
+        const local = listen(window);
+        window.send(JSON.stringify({ kind: 'hello', auth: { kind: 'local' }, label: LABEL }));
+        await settle();
+        const welcome = local.frames.find((f) => f.kind === 'welcome') as Extract<WireMessage, { kind: 'welcome' }>;
+        h.door.mainId = welcome.connectionId;
+        h.bridge.refreshWindow();
+        await settle();
+        window.send(JSON.stringify({ kind: 'call', id: 1, method: 'snapshot', args: [] }));
+        await settle();
+        expect(snapshotResult(local.frames, 1)).toMatchObject({ rendererNotice: NOTICE, workspaces: [{ id: 'ws_shop' }] });
+        // The notice said re-pushes the window's snapshot, with the notice in it.
+        expect(pushedSnapshots(local.frames).at(-1)).toMatchObject({ rendererNotice: NOTICE });
+        notice = null;
+        h.bridge.refreshWindow();
+        await settle();
+        expect(pushedSnapshots(local.frames).at(-1)).toMatchObject({ rendererNotice: null });
+        window.send(JSON.stringify({ kind: 'call', id: 2, method: 'snapshot', args: [] }));
+        await settle();
+        expect(snapshotResult(local.frames, 2)).toMatchObject({ rendererNotice: null });
+    });
+
+    it('CONTROL: a Pilot, and this machine’s other window, never see that window’s notice', async () => {
+        const h = await hostWithNotice(() => NOTICE);
+        const window = h.door.connect(LOCAL_MAIN);
+        const local = listen(window);
+        window.send(JSON.stringify({ kind: 'hello', auth: { kind: 'local' }, label: LABEL }));
+        await settle();
+        const welcome = local.frames.find((f) => f.kind === 'welcome') as Extract<WireMessage, { kind: 'welcome' }>;
+        h.door.mainId = welcome.connectionId;
+        const other = h.door.connect({ ...LOCAL_MAIN, window: 'remote' });
+        const otherHeard = listen(other);
+        other.send(JSON.stringify({ kind: 'hello', auth: { kind: 'local' }, label: LABEL }));
+        const pilot = pilotOn(h.relay);
+        await settle();
+        h.bridge.refreshWindow();
+        await settle();
+        // POSITIVE CONTROL in the same run: the main window has it.
+        window.send(JSON.stringify({ kind: 'call', id: 1, method: 'snapshot', args: [] }));
+        other.send(JSON.stringify({ kind: 'call', id: 1, method: 'snapshot', args: [] }));
+        pilot.client.send(JSON.stringify({ kind: 'call', id: 1, method: 'snapshot', args: [] }));
+        await settle();
+        expect(snapshotResult(local.frames, 1)).toMatchObject({ rendererNotice: NOTICE });
+        const otherSnap = snapshotResult(otherHeard.frames, 1);
+        expect(otherSnap).toMatchObject({ workspaces: [{ id: 'ws_shop' }] });
+        expect(otherSnap!.rendererNotice ?? null).toBeNull();
+        const pilotSnap = snapshotResult(pilot.heard.frames, 1);
+        expect(pilotSnap).toMatchObject({ workspaces: [{ id: 'ws_shop' }] });
+        expect(Object.hasOwn(pilotSnap!, 'rendererNotice')).toBe(false);
+        for (const s of pushedSnapshots(otherHeard.frames)) expect(s?.rendererNotice ?? null).toBeNull();
+        expect(pilot.heard.frames.some((f) => f.kind === 'event' && JSON.stringify(f).includes('"oom"'))).toBe(false);
+    });
+});
+
 describe('wired: genie-host serves the window, main forwards it', () => {
     it('genie-host adds the tunnels to its remote hub, hands them the engine link, and binds feature effects, apps and the trash', async () => {
         const host = await readFile('src/main/genie-host.ts', 'utf8');
@@ -506,6 +650,8 @@ describe('wired: genie-host serves the window, main forwards it', () => {
         expect(host).toMatch(/featureCallers\.bindConnection\(/);
         expect(host).toMatch(/appWindow: /);
         expect(host).toMatch(/windowOp\(null, 'trash'/);
+        expect(host).toMatch(/localSnapshot: \(connectionId\) => protocolTunnels\.windowSnapshotOf\(connectionId\)/);
+        expect(host).toMatch(/onNotice: \(\) => \{ phoneRegistry\.touch\(\)/);
     });
 
     it('main no longer serves its door: it tunnels it, answers window operations and says what changed', async () => {
@@ -514,5 +660,8 @@ describe('wired: genie-host serves the window, main forwards it', () => {
         expect(main).toMatch(/tunnelDoor\(localDoor, tunnelLinkOf\(/);
         expect(main).toMatch(/onWindowOp: /);
         expect(main).toMatch(/'engine\.features', \['invalidate'/);
+        expect(main).toMatch(/notice: \(connectionId\) => /);
+        expect(main.match(/rendererNotice = notice;[^\n]*windowTunnelNow\?\.refreshWindow\(\)/g)).toHaveLength(2);
+        expect(main).toMatch(/dismiss: async \(\) => \{ rendererNotice = null;[^\n]*windowTunnelNow\?\.refreshWindow\(\)/);
     });
 });

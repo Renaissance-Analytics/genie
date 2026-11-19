@@ -2619,7 +2619,7 @@ async function boot(): Promise<void> {
     // Browser/UI facts this window owns change genie-host's features: its pane is said, and the features read again.
     const pushFeatures = () => {
         for (const listener of localFeatureInvalidations) listener();
-        windowTunnel.refreshBrowser();
+        windowTunnel.refreshWindow();
         if (agentEngineLink?.live === true) void agentEngineLink.client.call('engine.features', ['invalidate', []]);
     };
     requestFeaturePush = pushFeatures;
