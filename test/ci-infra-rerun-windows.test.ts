@@ -32,7 +32,7 @@ function samples(stalled: boolean): string {
 
 const ps = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
-function runLoop(samplesText: string | null): { out: string; count: (row: string) => number } {
+function runLoop(samplesText: string | null, selected: readonly string[] = ['ok', 'flaky', 'broken', 'cached', 'needs']): { out: string; count: (row: string) => number; stopped: () => string[] } {
     const dir = mkdtempSync(join(tmpdir(), 'ci-infra-win-'));
     if (samplesText !== null) writeFileSync(join(dir, 'machine-samples.log'), samplesText);
     const script = `
@@ -48,6 +48,10 @@ $script:Installed = ''; $script:Electron = ''; $script:Built = ''; $script:Machi
 function Ceiling([string]$name) { 60 }
 function Start-Watchdog([int]$limit, [string]$mark, [string]$token) { [pscustomobject]@{ HasExited = $true; Id = 0 } }
 function Stop-App { }
+function Find-GenieLeftovers { $f = Join-Path $Out 'leave'; if (Test-Path $f) { Remove-Item $f; [pscustomobject]@{ Name = 'electron'; Id = 856 } } }
+function Stop-GenieLeftovers($procs) { foreach ($p in $procs) { Add-Content -Path (Join-Path $Out 'stopped') -Value $p.Id } }
+function Row-leaves { Ran leaves; New-Item -ItemType File (Join-Path $Out 'leave') | Out-Null }
+function Row-unit { Ran unit; New-Item -ItemType File (Join-Path $Out 'leave') | Out-Null }
 function Block([string]$why) { $script:Blocked = $why; Write-Output "--- $why"; throw "NOT RUN: $why" }
 function Ran([string]$n) { Add-Content -Path (Join-Path $Out "ran-$n") -Value x }
 function Count([string]$n) { @(Get-Content (Join-Path $Out "ran-$n")).Count }
@@ -64,7 +68,7 @@ function Row-needs {
     Block $script:Built
 }
 ${loop}
-$selected = @('ok', 'flaky', 'broken', 'cached', 'needs')
+$selected = @(${selected.map((r) => `'${r}'`).join(', ')})
 Invoke-Rows
 Write-InfraSummary
 Write-Output "FAILED: $($script:Failed -join ' ')"
@@ -74,7 +78,8 @@ Write-Output "FAILED: $($script:Failed -join ' ')"
     const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', timeout: 120000 });
     const out = `${r.stdout}${r.stderr}`.replace(/\r\n/g, '\n');
     const count = (row: string) => (existsSync(join(dir, `ran-${row}`)) ? readFileSync(join(dir, `ran-${row}`), 'utf8').trim().split(/\r?\n/).length : 0);
-    return { out, count };
+    const stopped = () => (existsSync(join(dir, 'stopped')) ? readFileSync(join(dir, 'stopped'), 'utf8').trim().split(/\r?\n/) : []);
+    return { out, count, stopped };
 }
 
 describe.skipIf(process.platform !== 'win32')('windows.ps1: stall-aware rows', () => {
@@ -133,6 +138,30 @@ describe.skipIf(process.platform !== 'win32')('windows.ps1: stall-aware rows', (
         it('the summary says there were no INFRA rows', () => {
             expect(out).toMatch(/^INFRA ROWS: none$/m);
             expect(out).toMatch(/^FAILED: flaky broken cached needs$/m);
+        });
+    });
+
+    /*
+     * NOTHING OF GENIE OUTLIVES ITS ROW (Tynn #916). ui-lag's teardown left a Genie window running on every Windows gate (its
+     * app.quit() opened the quit prompt, which blocks main; genie-host's hang watchdog then started a NEW window), and it
+     * ran on beside every later row. A row that leaves Genie running fails, naming what it left, and what it left is ended,
+     * so the next row starts on a machine with no Genie on it. The unit row is not judged: its processes are vitest's.
+     */
+    describe('a row that leaves Genie running', () => {
+        let out = '';
+        let count: (row: string) => number = () => -1;
+        let stopped: () => string[] = () => [];
+        beforeAll(() => { ({ out, count, stopped } = runLoop(samples(false), ['leaves', 'ok', 'unit'])); }, 120000);
+        it('fails, naming what it left running', () => {
+            expect(count('leaves')).toBe(1);
+            expect(out).toMatch(/^ROW leaves FAIL \d+ \(left Genie running: electron 856\)$/m);
+        });
+        it('what it left is ended, and the next row runs on a clean machine and passes', () => {
+            expect(stopped()).toEqual(['856']);
+            expect(out).toMatch(/^ROW ok PASS \d+$/m);
+        });
+        it('the unit row is not judged on processes (they are its tests\', and vitest\'s)', () => {
+            expect(out).toMatch(/^ROW unit PASS \d+$/m);
         });
     });
 
