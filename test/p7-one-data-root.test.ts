@@ -268,9 +268,10 @@ describe('the source guard: every host-side path from the one root', () => {
 describe('the window wires its scratch from its root, and stops the sweep on quit', () => {
     const main = readFileSync('src/main/main.ts', 'utf8');
     it('the login and Import from Git take the scratch area’s folder; the sweep is scheduled and stopped in before-quit', () => {
-        expect(main).toMatch(/scratchArea\(genieRoot\(\)\)/);
+        // The window adds no workspace itself (Tynn #897, 2c-1): Import from Git stages in genie-host's scratch.
+        expect(main).not.toMatch(/scratchArea\(/);
         expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/new LoginHost\(\{[\s\S]{0,400}scratch: \(\) => hostScratch\.directory\(\)/);
-        expect(main).toMatch(/stagingDirectory: \(\) => scratch\.directory\(\)/);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/stagingDirectory: \(\) => hostScratch\.directory\(\)/);
         expect(readFileSync('src/main/workspace-lifecycle-api.ts', 'utf8')).toMatch(/nodeEnvelopePorts\(\{ stagingBase: w\.stagingDirectory \}\)/);
         expect(main).toMatch(/scheduleScratchSweep\(genieRoot\(\)/);
         const beforeQuit = main.slice(main.indexOf("app.on('before-quit'"));
