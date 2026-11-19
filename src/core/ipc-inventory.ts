@@ -9,6 +9,11 @@ import { LOCAL_FRAME_CHANNELS } from './local-frame.js';
 export type IpcDestination = `protocol:${string}` | 'protocol-door' | 'window-port' | 'browser-process' | `later:${string}`;
 export type IpcInventoryEntry = readonly [channel: string, destination: IpcDestination];
 
+// RED STUB (Tynn #899): the guard's names, with no engine row yet.
+export const WINDOW_CAPABILITIES = ['chrome', 'clipboard', 'stall-report', 'file-dialog', 'os-shell', 'trash', 'pop-out', 'take-over-window', 'site-panel', 'feature-effect', 'gapp-window', 'host-wait'] as const;
+export const MOVE_STEPS = ['2b', '2c', '2e', '2f', '2g'] as const;
+export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destination: string])[] = [];
+
 /** Protocol destinations include the local-only methods to be registered as their families move. */
 export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // The only retained protocol input: frames, never a handler per method. The reply channel has no ipcMain registration.
