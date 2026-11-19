@@ -62,9 +62,9 @@ describe("the files-watch fixture's repo (Tynn #732)", () => {
 describe('the Windows job warms git before any row (Tynn #732)', () => {
     it('Warm-Git makes a throwaway repo with a commit (its maintenance child too) and prints how long each step took', () => {
         const warm = windowsFunction('Warm-Git');
-        expect(warm).toMatch(/git init/);
-        expect(warm).toMatch(/git .*add/);
-        expect(warm).toMatch(/git .*commit/);
+        expect(warm).toMatch(/\bgit\b[^\n]*\binit\b/);
+        expect(warm).toMatch(/\bgit\b[^\n]*\badd\b/);
+        expect(warm).toMatch(/\bgit\b[^\n]*\bcommit\b/);
         expect(warm).toMatch(/--- git warmed/);
     });
 
