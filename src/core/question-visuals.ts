@@ -87,15 +87,16 @@ export function sanitizeMockupHtml(html: string): string {
     // nothing, no pattern matches anywhere in what is returned — which is the claim, for every pattern at once.
     let s = html;
     for (let pass = 0; ; pass += 1) {
-        if (pass === MAX_SANITIZE_PASSES) return `${MOCKUP_CSP}<pre>${escapeHtml(html)}</pre>`;
+        if (pass === MAX_SANITIZE_PASSES) return `<head>${MOCKUP_CSP}</head><pre>${escapeHtml(html)}</pre>`;
         const next = sanitizePass(s);
         if (next === s) break;
         s = next;
     }
-    // The policy goes FIRST, after a doctype (a doctype not first is quirks mode): a parser puts a <meta> before <html> into
-    // <head> whatever follows, where a `<head>` found by a regex might be in a comment, a <title> or an attribute.
+    // The policy goes FIRST, after a doctype (a doctype not first is quirks mode), in a <head> of its own: a `<head>` found
+    // by a regex might be in a comment, a <title> or an attribute. The page's own <html> and <head> after it are merged and
+    // ignored by the parser, and what was in its head (title, style) still goes into this one.
     const doctype = /^(?:\s|<!--[\s\S]*?-->)*<!doctype\b[^>]*>/i.exec(s)?.[0] ?? '';
-    return `${doctype}${MOCKUP_CSP}${s.slice(doctype.length)}`;
+    return `${doctype}<head>${MOCKUP_CSP}</head>${s.slice(doctype.length)}`;
 }
 
 /**
