@@ -230,9 +230,10 @@ describe('native paths retired and P5/window boundaries pinned', () => {
         // Opening and channel ownership stay on their deferred native path.
         expect(script).toContain('window.genie.deviceLink.open('); expect(script).toContain('window.genie.tynnNetwork');
     });
-    it('leaves all five retained native bodies byte-identical apart from line endings', () => {
+    // connect-link left this set in 2b-4 (Tynn #896): genie-host decides the link now, and the window only opens it.
+    it('leaves the four retained native bodies byte-identical apart from line endings', () => {
         const main = readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
-        const hashes = { 'connect-link': '0b9ae3b3eda218ec458bcd0d9b770a714b31301cf031296696221ca672511252', 'relay-open': '98cdfeb54514ae882c367a9d2c5d0d3f23a280828c264029589ec4f226c23976', 'device-open': '4f2bd080e28c2d9e97eeca4a949dbbadc5bbc9a76cef9ef7f1d3ffae9cf40478', 'relay-send': 'f34a50135a124bcd30285701daadb10cc19c56739987bd628b95d85975645409', 'relay-close': 'cb283050ceec2132cef13da9b7bf9037ca55dded976d38189145ed4fb1c21143' };
+        const hashes = { 'relay-open': '98cdfeb54514ae882c367a9d2c5d0d3f23a280828c264029589ec4f226c23976', 'device-open': '4f2bd080e28c2d9e97eeca4a949dbbadc5bbc9a76cef9ef7f1d3ffae9cf40478', 'relay-send': 'f34a50135a124bcd30285701daadb10cc19c56739987bd628b95d85975645409', 'relay-close': 'cb283050ceec2132cef13da9b7bf9037ca55dded976d38189145ed4fb1c21143' };
         for (const [channel, hash] of Object.entries(hashes)) {
             const body = new RegExp(`^    ipcMain\\.(?:handle|on)\\('genie:${channel}'.*?^    \\}\\);`, 'ms').exec(main)?.[0];
             expect(body, channel).toBeDefined(); expect(createHash('sha256').update(body!).digest('hex'), channel).toBe(hash);
@@ -244,7 +245,7 @@ describe('native paths retired and P5/window boundaries pinned', () => {
     });
     it('connect links remain window ports and relay clients remain P5 with exact sender ownership', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inv = readFileSync('src/core/ipc-inventory.ts', 'utf8');
-        expect(inv).toContain("['genie:connect-link', 'move:2b']"); expect(main).toContain("ipcMain.handle('genie:connect-link'"); expect(preload).toContain("ipcRenderer.invoke('genie:connect-link'");
+        expect(inv).toContain("['genie:connect-link', 'window:os-shell']"); expect(main).toContain("ipcMain.handle('genie:connect-link'"); expect(preload).toContain("ipcRenderer.invoke('genie:connect-link'");
         for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(inv).toContain(`['genie:${channel}', 'move:2f']`);
         expect(main).toContain("ipcMain.handle('genie:relay-open', async (event, workstationId: unknown)"); expect(main).toContain("ipcMain.handle('genie:device-open', async (event, url: unknown)");
         expect(main.match(/deviceChannels\.get\(channel\) === event\.sender/g)).toHaveLength(2); expect(main.match(/c\.sender === event\.sender/g)).toHaveLength(1);
