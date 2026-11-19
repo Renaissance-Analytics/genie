@@ -47,9 +47,12 @@ export interface HostRemoteApiPorts {
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
     const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
-    return {
+    const api: HostApi = {
         get ownsFeatures() { return alone()?.ownsFeatures === true; },
         releaseCaller: context => alone()?.releaseCaller?.(context),
+        // THE PORTS RemoteHost READS OFF THE API (Tynn #898 step 2d-3a): genie-host's own, once its answers are built.
+        marketplace: () => alone()?.marketplace?.() ?? null,
+        gapps: () => alone()?.gapps?.() ?? null,
         invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);
@@ -83,6 +86,11 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
         ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),
     };
+    // Read when RemoteHost asks, so a port genie-host builds after this API (at boot) is the one it gets; absent until then.
+    for (const key of ['filesWatch', 'tynnWatch', 'localTerminals', 'localAgents'] as const) {
+        Object.defineProperty(api, key, { get: () => alone()?.[key], enumerable: true });
+    }
+    return api;
 }
 
 /** What Settings → Workstation shows of remote access, read from the host. */

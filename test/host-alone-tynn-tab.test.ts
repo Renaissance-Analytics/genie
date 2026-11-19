@@ -127,8 +127,11 @@ describe('the gate', () => {
         expect(invoke).toHaveBeenCalledWith('workspaces.tynnBoard', ['tynn', {}], undefined);
     });
 
-    it('the live view\'s change reads stay the window\'s own (CONTROL)', async () => {
-        await expect(gate(hostAloneApi(ports())).invoke('workspaces.tynnBoardChanges', ['tynn', {}, 'c1', []])).rejects.toThrow('open Genie on alphar');
+    it('the live view\'s change reads are genie-host\'s too (Tynn #898 step 2d-3a): read through its Tynn account', async () => {
+        requests.length = 0;
+        const answer = await gate(hostAloneApi(ports())).invoke('workspaces.tynnBoardChanges', ['tynn', {}, 'c1', []]);
+        expect(JSON.stringify(answer)).not.toMatch(/open Genie on/);
+        expect(requests.length).toBeGreaterThan(0);
     });
 });
 

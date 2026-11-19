@@ -45,6 +45,21 @@ export type EditorBytesDecision = { allowed: true } | { allowed: false; reason: 
  * The bytes an editor of THIS plugin may read and write: a type its own editor claims AND its fs capability declares
  * (Genie 1 side.ts `clientEditorExtensions` — tighter than either alone). Anything else is refused, naming which half.
  */
+/**
+ * WHETHER A PLUGIN'S EDITOR MAY TOUCH A FILE'S BYTES, from the plugins' state (main/plugins-host.ts `PluginsDump`): an
+ * ENABLED plugin whose editor claims the type and whose fs capability declares it. The window's replica and genie-host's
+ * own file panel (Tynn #898 step 2d-3a) decide with this one function.
+ */
+export function editorBytesOfDump(dump: {
+    readonly entries: readonly { readonly id: string; readonly state: string }[];
+    readonly manifests: Readonly<Record<string, Parameters<typeof editorBytesAccess>[0]>>;
+}, pluginId: string, path: string): EditorBytesDecision {
+    const entry = dump.entries.find((e) => e.id === pluginId);
+    const manifest = dump.manifests[pluginId];
+    if (!entry || entry.state !== 'enabled' || !manifest) return { allowed: false, reason: `${pluginId} is not an enabled plugin` };
+    return editorBytesAccess(manifest, path);
+}
+
 export function editorBytesAccess(manifest: { readonly id: string; readonly editors?: readonly PluginEditor[] | undefined; readonly capabilities: { readonly fs?: { readonly extensions: readonly string[] } | undefined } }, path: string): EditorBytesDecision {
     const ext = pluginFileExtension(path);
     const claimed = ext !== '' && (manifest.editors ?? []).some((e) => e.extensions.includes(ext));

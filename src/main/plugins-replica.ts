@@ -1,4 +1,4 @@
-import { editorBytesAccess, type ClaimingEditor, type EditorBytesDecision } from '../core/plugin-editors.js';
+import { editorBytesOfDump, type ClaimingEditor, type EditorBytesDecision } from '../core/plugin-editors.js';
 import type { PluginEntry } from './plugin-host.js';
 import type { PluginsDump } from './plugins-host.js';
 
@@ -41,10 +41,7 @@ export class PluginsReplica implements PluginsApi {
     editors(): readonly ClaimingEditor[] { return this.#dump.editors; }
 
     editorBytes(pluginId: string, path: string): EditorBytesDecision {
-        const entry = this.#dump.entries.find((e) => e.id === pluginId);
-        const manifest = this.#dump.manifests[pluginId];
-        if (!entry || entry.state !== 'enabled' || !manifest) return { allowed: false, reason: `${pluginId} is not an enabled plugin` };
-        return editorBytesAccess(manifest, path);
+        return editorBytesOfDump(this.#dump, pluginId, path);
     }
 
     async setEnabled(pluginId: string, enabled: boolean): Promise<boolean> {
