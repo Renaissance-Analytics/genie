@@ -34,6 +34,13 @@ export const REMOTE_PROTOCOL = 2;
  */
 export const REMOTE_SCHEMA = '2026.11.18';
 
+/**
+ * THE ACCOUNT CHIPS (client/host split step 2a, Tynn #895): every known provider account and the standing switch offers,
+ * renaming or forgetting one, and Not now on an offer. The host's account book, for every client (main/accounts-protocol.ts).
+ */
+export const ACCOUNTS_METHODS = ['accounts.list', 'accounts.act', 'accounts.dismissOffer'] as const;
+export type AccountsMethod = (typeof ACCOUNTS_METHODS)[number];
+
 export const REMOTE_METHODS = [
     'snapshot',
     'agentDetail',
@@ -170,6 +177,7 @@ export const REMOTE_METHODS = [
     ...LOCAL_TERMINAL_METHODS,
     ...MARKETPLACE_METHODS,
     ...GAPP_METHODS,
+    ...ACCOUNTS_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -364,6 +372,11 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // A provider's login opens a window on the host, for the person at it: like Take Over.
     providerLogin: 'host-only',
     'features.setBrowserBounds': 'host-only',
+    // The host's account book (Tynn #895): reading it is a read; renaming, forgetting and Not now change it. Every client
+    // gets them; a share-link guest is refused (remote-host.ts OWNER_ONLY).
+    'accounts.list': 'read',
+    'accounts.act': 'write',
+    'accounts.dismissOffer': 'write',
 };
 
 export function capabilityOf(method: RemoteMethod): RemoteCapability {

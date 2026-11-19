@@ -107,7 +107,11 @@ describe('the capability table', () => {
         // 163 with `workspaces.savePreview` (a read) and `workspaces.save` (a write): Save to repo (Tynn #756), the owner's, workspace-scoped.
         // 165 with `workspaces.cloneOffers` (a read) and `workspaces.applyOffer` (a write): the offers a clone's repo brings (Tynn #756), the owner's, workspace-scoped.
         // 166 with `agents.typing` (what a composer holds, relayed to the other windows on the agent, Tynn #730): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(166);
+        // 169 with `accounts.list` (a read), `accounts.act` and `accounts.dismissOffer` (writes): the account chips on the one
+        // protocol, for every client of the owner's (client/host split step 2a, Tynn #895).
+        expect(REMOTE_METHODS.length).toBe(169);
+        expect(capabilityOf('accounts.list')).toBe('read');
+        expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.typing');
         expect(capabilityOf('agents.attachment')).toBe('read');

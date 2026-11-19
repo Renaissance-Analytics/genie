@@ -28,6 +28,8 @@ import { localDraftsClient } from './local-drafts-client.js';
 import { localArtboardClient } from './local-artboard-client.js';
 import type { SavePreview, SaveResult } from '../core/workspace-save.js';
 import { readTypingEvent } from '../core/typing-mirror.js';
+import type { AccountsSnapshot } from '../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -453,6 +455,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 };
             },
         },
+        // THE ACCOUNT CHIPS (Tynn #895): the host's account book, for every client. A host that cannot answer (an older one
+        // says `unsupported`) is shown as nothing known, a refusal in its words, and an offer not dismissed.
+        accounts: async () => { const r = await call('accounts.list'); return r.ok ? (r.value as AccountsSnapshot | null) : null; },
+        accountsAct: (action: AccountsAction) => answer<AccountsActResult>('accounts.act', action),
+        dismissSwitchOffer: async (id: string) => { const r = await call('accounts.dismissOffer', id); return r.ok && r.value === true; },
         ...(local ? {
             accountRetry: (agentId: string) => answer<{ ok: true } | { ok: false; reason: string }>('accountRetry', agentId),
             onHeadroom: (listener: (room: Readonly<Record<string, Headroom>>) => void) => {
