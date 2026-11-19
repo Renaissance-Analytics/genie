@@ -57,8 +57,8 @@ describe('remote access, in genie-host', () => {
         const phone = connect();
         expect(await phone.hello({ kind: 'token', token })).toMatchObject({ kind: 'welcome', host: 'alphar', isOwner: true });
         expect(await phone.call('updates.state')).toMatchObject({ kind: 'result', ok: true, value: { phase: 'idle', version: '2.0.0-beta.61' } });
-        // What genie-host does not own yet (terminals.list: step 2d-2) needs a window here.
-        expect(await phone.call('terminals.list')).toEqual({ kind: 'result', id: 2, ok: false, reason: 'alphar answers terminals.list only while a Genie window is open there: open Genie on alphar' });
+        // What genie-host does not own yet (host.home: step 2d-2b) needs a window here.
+        expect(await phone.call('host.home')).toEqual({ kind: 'result', id: 2, ok: false, reason: 'alphar answers host.home only while a Genie window is open there: open Genie on alphar' });
         await host.close();
     });
 

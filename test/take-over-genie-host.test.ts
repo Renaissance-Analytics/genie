@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TakeOverProbe } from '../src/core/observed.js';
 import type { AgentRecord } from '../src/core/identity.js';
-import { hostAloneApi, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
+import { hostAloneApi, HOST_ALONE_METHODS, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
 import { hostRemoteApi } from '../src/main/remote-access-host.js';
 import type { HostApi } from '../src/main/remote-host.js';
 import { Registry } from '../src/main/registry.js';
@@ -297,10 +297,8 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         expect(seen).toEqual([['terminal-data', { id: 'term_1', data: 'hi' }], ['terminal-exit', { id: 'term_1', exitCode: 0 }]]);
     });
 
-    it('opening or listing terminals is not part of this: still "open a window" (CONTROL)', async () => {
-        const api = gate(hostAloneApi(ports(term().api)));
-        await expect(api.invoke('terminals.open', ['tynn', {}])).rejects.toThrow('open Genie on alphar');
-        await expect(api.invoke('terminals.list', ['tynn'])).rejects.toThrow('open Genie on alphar');
+    it('opening and listing terminals are genie-host\'s too since Tynn #898 (step 2d-2), with the Take Over calls', () => {
+        for (const method of ['terminals.open', 'terminals.list', 'terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close'] as const) expect(HOST_ALONE_METHODS.has(method)).toBe(true);
     });
 
     it('with a window connected genie-host still answers the terminal calls, and the window is not asked (Tynn #898)', async () => {

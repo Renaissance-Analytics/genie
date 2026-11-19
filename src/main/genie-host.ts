@@ -138,6 +138,8 @@ import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
 import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
 import { accountsOwnAnswers, type AccountsPort } from './accounts-protocol.js';
+import { uploadSender } from './uploads.js';
+import { sacredNameOf } from '../core/agent-adoption.js';
 import { RelayHostService } from './relay-host-service.js';
 import { connectOutRefusal, mayBrowse } from '../core/workstation-role.js';
 import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
@@ -1776,6 +1778,10 @@ async function main(): Promise<void> {
             elements: (id) => elementSourcesFor({ services: { list: () => hostingStack?.engines.list() ?? [] }, settings: { workspaceValues: (w) => settings.workspaceValues(w) }, registry: hostRegistry, flows: { list: (w) => flowStoreNow?.list(w) ?? [] }, processes: { kept: () => processBookNow?.kept() ?? [] } }, id) }),
         tynnTab: { board: hostTynnBoard, readPage: readHostTynnPage },
         terminals: terminalHost,
+        // Opening a terminal, adding an agent and sending one a file are genie-host's too (Tynn #898 step 2d-2).
+        serviceEnvFor: (workspaceId) => engine.serviceEnvFor(workspaceId),
+        uploads: uploadSender({ resolve: (to) => resolveOnRoster(to, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()), send: (input) => own.inbox.send(input) }),
+        agentCreate: { sacredName: async (workspaceId) => { const projectId = workspaceTynnProject(workspaceId); return projectId === null || !tynnAccountNow ? null : sacredNameOf(await tynnAccountNow.projects(), projectId); } },
         takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,
         models: providerModels,

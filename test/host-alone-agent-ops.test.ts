@@ -265,7 +265,7 @@ describe('the gate', () => {
 
     it('a family not moved yet still says to open a window (CONTROL: this is not an open door)', async () => {
         const api = gate(hostAloneApi(ports(engine())));
-        await expect(api.invoke('addAgent', ['tynn', {}])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('host.home', [])).rejects.toThrow('open Genie on alphar');
     });
 });
 

@@ -12,6 +12,10 @@ import { workspaceLifecycleApi, workspaceLifecyclePorts, type CloneOfferOps, typ
 import { workspaceSettingsOps } from './workspace-reads-api.js';
 import { workspaceTynnApi } from './workspace-tynn-api.js';
 import { buildHostApi, type HostApiDeps } from './host-api.js';
+import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
+import { nodeAgentConfigFs } from './agent-config-host.js';
+import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import type { InboxMessage } from './inbox-store.js';
 import type { Registry } from './registry.js';
 import type { HostApi } from './remote-host.js';
@@ -52,8 +56,11 @@ export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMeth
 /** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
 export const HOST_FEED_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['activity', 'headroom']);
 
-/** A Pilot's Take Over window's own terminal (Tynn #553, P5d.5c). Opening and listing terminals stay the window's. */
-export const HOST_TERMINAL_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close']);
+/** A workspace's terminals (Tynn #553 P5d.5c; opening and listing since Tynn #898 step 2d-2). */
+export const HOST_TERMINAL_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['terminals.open', 'terminals.list', 'terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close']);
+
+/** Adding an agent and sending one a file (Tynn #898 step 2d-2): the last methods a window had to answer. */
+export const HOST_AGENT_WRITE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['addAgent', 'inbox.sendFile']);
 
 /** A workspace's settings and repo reads, always the host's (Tynn #666). Changing repos keeps its existing fallback. */
 export const HOST_WORKSPACE_READ_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.listRepos', 'workspaces.commitsSince']);
@@ -72,7 +79,7 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
 export const HOST_TYNN_TAB_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['workspaces.tynnBoard', 'workspaces.tynnPage', 'workspaces.tynnIssues', 'workspaces.tynnBoardAction', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction']);
 
 /** Every method genie-host answers itself while no window is connected. */
-export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_WORKSPACE_READ_METHODS, ...HOST_WORKSPACE_LIFECYCLE_METHODS, ...HOST_TYNN_TAB_METHODS]);
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_AGENT_WRITE_METHODS, ...HOST_WORKSPACE_READ_METHODS, ...HOST_WORKSPACE_LIFECYCLE_METHODS, ...HOST_TYNN_TAB_METHODS]);
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
@@ -103,8 +110,14 @@ export interface HostAlonePorts {
     readonly files: NonNullable<HostApiDeps['files']>;
     /** Each provider's latest rate-limit reading, kept by genie-host whether or not a window is open. */
     readonly headroom: NonNullable<HostApiDeps['headroom']>;
-    /** The host's terminals, as a Take Over window on a Pilot reads and types into its own. */
-    readonly terminals: Pick<HostApiDeps['terminals'], 'attach' | 'write' | 'resize' | 'close' | 'list' | 'onData' | 'onExit'>;
+    /** The host's terminals: opened in a workspace, listed, joined and typed into (Tynn #553, #898). */
+    readonly terminals: HostApiDeps['terminals'];
+    /** A workspace's environment from the hosting engines, which its terminals open with (Tynn #898). */
+    readonly serviceEnvFor: HostApiDeps['serviceEnvFor'];
+    /** A file sent to an agent: its bytes to genie-host's inbox, addressed on its roster (Tynn #898). */
+    readonly uploads: HostApiDeps['uploads'];
+    /** What adding an agent needs beyond the registry and the disk: its workspace's sacred name from Tynn (Tynn #898). */
+    readonly agentCreate?: Pick<AgentCreatePorts, 'sacredName'>;
     /** What is known of this agent's Take Over TUI: its Observed row. */
     readonly takeOver: NonNullable<Parameters<typeof agentDetailFor>[0]['takeOver']>;
     /** genie-host's own settings store. */
@@ -180,6 +193,15 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         cwdFor: ports.cwdFor,
         startRefusal: ports.startRefusal,
     }, record);
+    const agentCreate: AgentCreatePorts = {
+        workspace: (id) => registry.workspace(id) ?? null,
+        agentsOf: (id) => registry.agentsOf(id),
+        exists: async (path) => existsSync(path),
+        mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
+        ...nodeAgentConfigFs(),
+        register: async (input) => { const record = await registry.register(input); return { id: record.id, name: record.name }; },
+        ...(ports.agentCreate?.sacredName ? { sacredName: ports.agentCreate.sacredName } : {}),
+    };
     const deps: HostApiDeps = {
         ...(ports.schedule ? { schedule: ports.schedule } : {}),
         snapshot: () => registry.snapshot(),
@@ -207,11 +229,12 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             answerApproval: (id, optionId, note) => engine().answerApproval(id, optionId, note ?? ''),
             subscribe: (listener) => ports.engine()?.subscribe(listener) ?? (() => {}),
         },
-        registerAgent: async () => { throw new Error(needsWindow('a new agent')); },
-        terminals: windowOnly<HostApiDeps['terminals']>('terminals', ports.terminals),
-        uploads: windowOnly<HostApiDeps['uploads']>('inbox.sendFile'),
+        // ADDING AN AGENT, here (Tynn #898): the same creation a window ran, over genie-host's registry and the disk.
+        registerAgent: (workspaceId, input) => createAgent(agentCreate, workspaceId, input),
+        terminals: ports.terminals,
+        uploads: ports.uploads,
         files: ports.files,
-        serviceEnvFor: () => ({}),
+        serviceEnvFor: (workspaceId) => ports.serviceEnvFor(workspaceId),
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
             onSettingsChanged: (listener) => ports.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
             ...workspaceSettingsOps(() => ports.settings),

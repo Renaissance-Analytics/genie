@@ -123,7 +123,7 @@ describe('with a window connected, genie-host still answers what it owns', () =>
 });
 
 describe('the window answers only what genie-host does not own yet', () => {
-    it.each(['terminals.open', 'terminals.list', 'addAgent', 'inbox.sendFile'] as const)('%s still goes to the connected window (step 2d-2 moves it)', async (method) => {
+    it.each(['host.home', 'host.listDir', 'openAgent', 'resolvePrompt'] as const)('%s still goes to the connected window (step 2d-2b moves it)', async (method) => {
         const window = connectedWindow();
         expect(await gate(hostAloneApi(ports(engine())), window).invoke(method, [])).toBe(`window answered ${method}`);
     });
