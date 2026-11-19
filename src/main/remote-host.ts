@@ -1020,7 +1020,6 @@ export class RemoteHost {
             if (!roots.some((r) => within(target, r))) return refuse(`${target} is outside what this link shares`);
         }
         if (capability === 'host-only') {
-            if (method === 'addWorkspace') return refuse(`${method} opens a folder picker on ${this.#hostName}; do it there`);
             if (method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; do it there`);
             return refuse(`${method} places a view on ${this.#hostName}'s own window; there is nothing to do remotely`);
         }

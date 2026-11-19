@@ -364,9 +364,8 @@ describe('reads, writes, the baton', () => {
     it('host-only methods are refused with where to do them', async () => {
         const a = await owner('laptop');
         await a.call('baton.take');
-        expect(await a.call('addWorkspace')).toEqual({ kind: 'result', id: 2, ok: false, reason: 'addWorkspace opens a folder picker on alphar; do it there' });
-        expect(await a.call('features.setBrowserBounds', { x: 0, y: 0, width: 1, height: 1 })).toMatchObject({ ok: false });
-        expect(api.calls.map((c) => c.method)).not.toContain('addWorkspace');
+        expect(await a.call('features.setBrowserBounds', { x: 0, y: 0, width: 1, height: 1 })).toEqual({ kind: 'result', id: 2, ok: false, reason: "features.setBrowserBounds places a view on alphar's own window; there is nothing to do remotely" });
+        expect(api.calls.map((c) => c.method)).not.toContain('features.setBrowserBounds');
     });
 });
 

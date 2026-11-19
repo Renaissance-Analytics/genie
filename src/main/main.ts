@@ -82,7 +82,6 @@ import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '..
 import { wordTynnRefusal } from './drone-refusal.js';
 import { appInboxCardState, restartAppSource } from './host-owner-ops.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
-import { registeredEnvFile } from './workspace-ops-host.js';
 import { mkdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
@@ -106,7 +105,7 @@ import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './ag
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
-import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
+import { scheduleScratchSweep } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { callRefusal, ownProtocolClient } from './own-protocol-client.js';
 import { ActivityFeeds } from './activity-feeds.js';
@@ -171,7 +170,6 @@ import { FilesTreeKeeper } from './files-tree-keeper.js';
 import { fileExporter } from './file-export.js';
 import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
-import { workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { HUMAN } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteAccess } from './remote-access.js';
@@ -1752,9 +1750,8 @@ async function boot(): Promise<void> {
      * looked up in the registry: an unknown workspace is refused, and there is no way to name
      * an agent through this surface.
      */
-    // GENIE'S SCRATCH (P7): this process's folder under `<root>/cache/tmp`, made on first use with no process-table read;
-    // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
-    const scratch = scratchArea(genieRoot());
+    // GENIE'S SCRATCH (P7): the folders under `<root>/cache/tmp` of Genies that are gone
+    // are swept deferred, and the sweep is stopped on quit.
     scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
     // THE SIGN-INS (Tynn #896) are protocol calls answered by genie-host (host-sign-ins.ts): the provider's own login, opened
     // on the window that asked (windowOps terminal.window), for the host's owner. Genie never handles a credential.
@@ -1944,34 +1941,6 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
     ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
 
-    /*
-     * WORKSPACE OPERATIONS (§6.1). The plans live in core/workspace-model.ts, the sequencing in
-     * workspace-ops-host.ts; these ports are the real registry, session host, terminal host,
-     * supervisor and filesystem. Add is preview-then-confirm: the picker and the classification
-     * write nothing; `confirmAdd` does the writes the plan showed.
-     */
-    const lifecycleWiring: WorkspaceLifecycleWiring = {
-        registry: () => registry,
-        engine: () => host,
-        finished: () => services?.attention.finished() ?? [],
-        terminals: () => terminals,
-        supervisor: () => services?.supervisor ?? null,
-        engines: () => services?.hibernationEngines ?? null,
-        reverifyTrust: async (id) => {
-            const view = await services?.workspaceTrust.refresh(id, 'redock');
-            if (!view) throw new Error('workspace trust is not available yet');
-        },
-        github: () => githubAccount,
-        tynn: () => tynnAccount,
-        // Settings → General "Env file name", read at each add (Add workspace parity 2b); before the services exist, `.env`.
-        defaultEnvFile: () => {
-            const v = services?.settings.get('default_env_file');
-            return typeof v === 'string' ? v : '';
-        },
-        stagingDirectory: () => scratch.directory(),
-    };
-    const lifecycle = workspaceLifecyclePorts(lifecycleWiring);
-    const { workspaceOps } = lifecycle;
     // The person's own answer to a provider hidden behind a batch wrapper (Tynn #577): an .exe, kept per provider.
     ipcMain.handle('genie:provider-choose-program', async (_event, raw: unknown) => {
         if (!window || typeof raw !== 'string' || !isAcpProvider(raw)) return { ok: false, reason: 'No provider named.' };
@@ -1981,22 +1950,6 @@ async function boot(): Promise<void> {
         const file = providerChoiceFile();
         if (file === null) return { ok: false, reason: 'Genie has nowhere to keep the choice yet.' };
         return writeProviderChoice(file, raw, path);
-    });
-
-    ipcMain.handle('genie:add-workspace', async () => {
-        if (!window || !registry) return { ok: false };
-
-        // Always a real folder the user chose. Genie never guesses a path and never writes
-        // into one before showing what it found.
-        const picked = await dialog.showOpenDialog(window, {
-            title: 'Add a workspace',
-            properties: ['openDirectory'],
-        });
-        const path = picked.filePaths[0];
-        if (picked.canceled || !path) return { ok: false };
-
-        await registry.addWorkspace({ id: basename(path), path, envFile: registeredEnvFile(workspaceOps) });
-        return { ok: true };
     });
 
     /*

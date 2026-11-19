@@ -46,10 +46,6 @@ const bridge: PreloadBridge = {
     workspaces: {
     },
 
-    addWorkspace: () => {
-        void ipcRenderer.invoke('genie:add-workspace');
-    },
-
     /**
      * TERMINALS — keyed by workspace, never by agent. Output and exits are PUSHED on two
      * channels carrying the terminal id, so one listener per window serves every terminal;

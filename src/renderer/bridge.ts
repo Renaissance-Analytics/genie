@@ -322,14 +322,6 @@ export interface GenieBridge {
     /** The New agent form's answer (renderer/components/NewAgentModal.tsx): created, or the host's refusal in words. */
     addAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string } | { ok: false; reason: string }>;
     /**
-     * Open the folder picker and register what the user chose.
-     *
-     * The first-run invitation's one action. Genie never guesses a path and never writes into
-     * a folder before showing what it found there.
-     */
-    addWorkspace(): void;
-
-    /**
      * TAKE OVER — open the agent's TUI in a terminal in a NEW window (§1). The main process
      * opens the terminal in the agent's workspace and the window on it; Genie then only
      * watches. The answer says whether it opened and which terminal, or why not.

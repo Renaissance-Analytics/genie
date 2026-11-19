@@ -38,7 +38,8 @@ describe('the capability table', () => {
         expect(capabilityOf('updates.check')).toBe('upgrade');
         expect(capabilityOf('updates.download')).toBe('upgrade');
         expect(capabilityOf('updates.install')).toBe('upgrade');
-        expect(capabilityOf('addWorkspace')).toBe('host-only');
+        // The old addWorkspace only refused; every client adds through workspaces.previewAdd / confirmAdd (Tynn #897, 2c-1).
+        expect(REMOTE_METHODS as readonly string[]).not.toContain('addWorkspace');
         // Tynn #529 part A: Take over from another machine is a write — it needs the baton — and its window opens THERE.
         expect(capabilityOf('takeOver')).toBe('write');
         // Sign-ins (Tynn #896): the provider's own login, started on the host for the owner's client, which opens its window.
@@ -116,7 +117,8 @@ describe('the capability table', () => {
         // 171 since `logins.design` and `accounts.switch` (Tynn #896): the design sign-in and a switch of account, writes.
         // 172 with `logins.provider` (Tynn #896, 2b-2b): the tray's Log in by provider, a write, the owner's.
         // 173 with `tynnNetwork.classifyLink` (Tynn #896, 2b-4): a pasted share link, decided by the host; local, like workstations.
-        expect(REMOTE_METHODS.length).toBe(173);
+        // 172 again without the old `addWorkspace` (Tynn #897, 2c-1): it only ever refused.
+        expect(REMOTE_METHODS.length).toBe(172);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

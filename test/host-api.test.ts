@@ -190,7 +190,6 @@ describe('invoke', () => {
 
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {
         const api = buildHostApi(fakes().deps);
-        await expect(api.invoke('addWorkspace', [])).rejects.toThrow(/folder picker/);
         await expect(api.invoke('features.setBrowserBounds', [{}])).rejects.toThrow(/host/);
         await expect(api.invoke('workspaces.tynnProjects', [])).rejects.toThrow(/host/);
     });

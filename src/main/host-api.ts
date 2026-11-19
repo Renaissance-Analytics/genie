@@ -699,8 +699,6 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.applyOffer ? deps.workspaceOps.applyOffer(args[0], args[1]) : { ok: false, reason: 'this host does not watch a workspace’s repo' };
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
-            case 'addWorkspace':
-                throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':
                 if (!deps.takeOver) throw new Error('takeOver opens a window on the host; do it there');
                 return deps.takeOver.start(str(args[0]));

@@ -91,8 +91,9 @@ describe('Genie wires it', () => {
     it('the boot reconcile is told which engines only sleeping workspaces use (hosting-compose.ts)', () => {
         expect(hosting).toMatch(/reconcileEngines\(\s*\{[\s\S]{0,1500}?asleepOnly: \(i\) => asleepOnlyEngine\(i,/);
     });
-    it('the workspace ops get the engines port from the composition (main.ts)', () => {
-        expect(main).toMatch(/engines: \(\) => services\?\.hibernationEngines \?\? null/);
+    it('the workspace ops get the engines port from the composition (genie-host, which answers every client; Tynn #897 2c-1)', () => {
+        expect(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8')).toMatch(/engines: \(\) => hostingStack\?\.hibernationEngines \?\? null/);
+        expect(main).not.toMatch(/hibernationEngines \?\? null/);
         const wiring = readFileSync(new URL('../src/main/workspace-lifecycle-api.ts', import.meta.url), 'utf8');
         expect(wiring).toMatch(/toRelease: \(id\) => w\.engines\(\)\?\.toRelease\(id\)/);
         expect(wiring).toMatch(/toResume: \(id\) => w\.engines\(\)\?\.toResume\(id\)/);

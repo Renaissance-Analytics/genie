@@ -17,7 +17,6 @@ import { GAPP_METHODS } from '../src/core/gapps.js';
 
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
-    addWorkspace: 'addWorkspace opens a folder picker on the host; do it there',
     'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
 };
 const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
@@ -70,7 +69,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],
     'workspaces.setSetting': ['work', 'theme', 'dark'], 'workspaces.resetSetting': ['work', 'theme'],
     'workspaces.setGoverns': ['work', []], 'workspaces.setDefaultAgent': ['work', null], 'workspaces.setMcpServer': ['work', 'slack', false],
-    'workspaces.setColor': ['work', 'blue'], 'workspaces.savePreview': ['work'], 'workspaces.save': ['work', {}], 'workspaces.cloneOffers': ['work'], 'workspaces.applyOffer': ['work', 'flow:.flows/a.json'], addWorkspace: [], takeOver: ['agent_a'],
+    'workspaces.setColor': ['work', 'blue'], 'workspaces.savePreview': ['work'], 'workspaces.save': ['work', {}], 'workspaces.cloneOffers': ['work'], 'workspaces.applyOffer': ['work', 'flow:.flows/a.json'], takeOver: ['agent_a'],
     'terminals.open': ['work', { cols: 80, rows: 24 }], 'terminals.write': ['term_1', 'hello'],
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],
@@ -248,7 +247,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
 });
 
 const VOID_CALLS: Record<string, (bridge: ReturnType<typeof connectRemote>['bridge']) => void> = {
-    openAgent: (b) => b.openAgent('agent_a'), stopAgent: (b) => b.stopAgent('agent_a'), addWorkspace: (b) => b.addWorkspace(),
+    openAgent: (b) => b.openAgent('agent_a'), stopAgent: (b) => b.stopAgent('agent_a'),
     'terminals.write': (b) => b.terminals.write('term_1', 'hello'),
     'terminals.resize': (b) => b.terminals.resize('term_1', 80, 24), 'terminals.close': (b) => b.terminals.close('term_1'),
 };
