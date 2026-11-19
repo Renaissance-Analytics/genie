@@ -27,6 +27,8 @@ interface BrowserBridge {
     forward(): Promise<void>;
     reload(): Promise<void>;
     setPreset(id: string): Promise<void>;
+    /** The sites row's "»": a native menu over the page (Tynn #900); the host picked, or null when dismissed. */
+    sitesMenu(hosts: readonly string[], at: { x: number; y: number }): Promise<string | null>;
     popBack(): Promise<void>;
     restart(): Promise<void>;
     setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
@@ -84,6 +86,7 @@ function Browser({ bridge }: { bridge: BrowserBridge }) {
             onForward={() => void bridge.forward()}
             onReload={() => void bridge.reload()}
             onPreset={(id) => void bridge.setPreset(id)}
+            onSitesMenu={(hosts, at) => bridge.sitesMenu(hosts, at)}
             onRestart={() => void bridge.restart()}
         />
     );

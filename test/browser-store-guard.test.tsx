@@ -102,7 +102,7 @@ describe('the browser process', () => {
 
     it('its chrome offers it beside the notice', () => {
         const snapshot = { notice: STORE_LOCKED, noticeRestart: true, tabs: [], active: null, presetId: 'fit', presets: [], sites: [] };
-        const html = renderToStaticMarkup(<GenieBrowserChrome snapshot={snapshot} refusal={null} onNavigate={noop} onOpen={noop} onActivate={noop} onClose={noop} onNewTab={noop} onBack={noop} onForward={noop} onReload={noop} onPreset={noop} onRestart={noop} />);
+        const html = renderToStaticMarkup(<GenieBrowserChrome onSitesMenu={async () => null} snapshot={snapshot} refusal={null} onNavigate={noop} onOpen={noop} onActivate={noop} onClose={noop} onNewTab={noop} onBack={noop} onForward={noop} onReload={noop} onPreset={noop} onRestart={noop} />);
         expect(html).toMatch(/<button[^>]*data-browser-restart/);
     });
 });

@@ -33,6 +33,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['browser-window:forward', 'browser-process'],
     ['browser-window:reload', 'browser-process'],
     ['browser-window:preset', 'browser-process'],
+    ['browser-window:sites-menu', 'browser-process'],
     ['browser-window:bounds', 'browser-process'],
     ['browser-window:overlay-colors', 'browser-process'],
     ['browser-window:pop-back', 'browser-process'],

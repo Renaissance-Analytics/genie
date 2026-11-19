@@ -50,18 +50,18 @@ describe('siteLabel never returns an id', () => {
 describe('the row', () => {
     const host = `${ULID}.mail.gen`;
     it('shows the workspace name main gave it and never the id', () => {
-        const h = renderToStaticMarkup(<BrowserSitesRow sites={[host]} current={null} labels={{ [host]: 'Atlas · mail' }} onOpen={() => {}} fit={1} />);
+        const h = renderToStaticMarkup(<BrowserSitesRow onMore={async () => null} sites={[host]} current={null} labels={{ [host]: 'Atlas · mail' }} onOpen={() => {}} fit={1} />);
         expect(h).toContain('Atlas · mail');
         expect(h).not.toContain(`>${ULID}`);
         expect(h).not.toMatch(new RegExp(`>[^<]*${ULID}`));
     });
     it('with no label from main, still never the id', () => {
-        const h = renderToStaticMarkup(<BrowserSitesRow sites={[host]} current={null} onOpen={() => {}} fit={1} />);
+        const h = renderToStaticMarkup(<BrowserSitesRow onMore={async () => null} sites={[host]} current={null} onOpen={() => {}} fit={1} />);
         expect(h).toContain('>mail<');
         expect(h).not.toMatch(new RegExp(`>[^<]*${ULID}`));
     });
     it('the » menu items are labelled the same way', () => {
-        const h = renderToStaticMarkup(<BrowserSitesRow sites={['a.gen', host]} current={host} labels={{ [host]: 'Atlas · mail' }} onOpen={() => {}} fit={1} />);
+        const h = renderToStaticMarkup(<BrowserSitesRow onMore={async () => null} sites={['a.gen', host]} current={host} labels={{ [host]: 'Atlas · mail' }} onOpen={() => {}} fit={1} />);
         expect(h).toMatch(/data-browser-sites-more=""[^>]*aria-label="1 more site"/);
         expect(h).not.toContain(ULID.slice(0, 12) + '.mail');
     });

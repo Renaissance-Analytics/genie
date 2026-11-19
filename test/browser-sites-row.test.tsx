@@ -38,7 +38,7 @@ describe('siteLabel: the workspace name', () => {
 
 describe('the row', () => {
     const sites = ['tynn.gen', 'moic.gen', 'fancy.gen', 'genie.gen'];
-    const html = (over: Partial<Parameters<typeof BrowserSitesRow>[0]> = {}) => renderToStaticMarkup(<BrowserSitesRow sites={sites} current="moic.gen" onOpen={() => {}} {...over} />);
+    const html = (over: Partial<Parameters<typeof BrowserSitesRow>[0]> = {}) => renderToStaticMarkup(<BrowserSitesRow onMore={async () => null} sites={sites} current="moic.gen" onOpen={() => {}} {...over} />);
 
     it('is ONE row: no wrapping, clipped', () => {
         const h = html();
@@ -74,7 +74,7 @@ describe('the chrome uses it', () => {
     const presets = [{ id: 'fit', label: 'Fit' }];
     const snap: BrowserSnapshot = { notice: null, tabs: [], active: null, presetId: 'fit', presets, sites: ['tynn.gen', 'moic.gen'] };
     it('one sites row inside the chrome, the same data hook', () => {
-        const h = renderToStaticMarkup(<GenieBrowserChrome snapshot={snap} refusal={null} onNavigate={() => {}} onOpen={() => {}} onActivate={() => {}} onClose={() => {}} onNewTab={() => {}} onBack={() => {}} onForward={() => {}} onReload={() => {}} onPreset={() => {}} />);
+        const h = renderToStaticMarkup(<GenieBrowserChrome onSitesMenu={async () => null} snapshot={snap} refusal={null} onNavigate={() => {}} onOpen={() => {}} onActivate={() => {}} onClose={() => {}} onNewTab={() => {}} onBack={() => {}} onForward={() => {}} onReload={() => {}} onPreset={() => {}} />);
         expect(h.match(/data-browser-sites=""/g)).toHaveLength(1);
     });
 });

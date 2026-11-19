@@ -1,5 +1,6 @@
-import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, screen, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { BrowserWindow, Menu, WebContentsView, app, ipcMain, safeStorage, screen, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
 import { browserWindowBounds, browserWindowMove, type Rect } from '../core/browser-placement.js';
+import { menuAnchor, sitesMenuItems } from '../core/browser-sites.js';
 import { loadWindowPage } from './window-pages.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -207,6 +208,26 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     ipcMain.handle('browser-window:restart', (event) => brain(event) && restartThisProcess());
     ipcMain.handle('browser-window:pop-back', (event) => brain(event) && closeIfSingle(event));
     ipcMain.handle('browser-window:preset', (event, id: unknown) => brain(event)?.setPreset(String(id)));
+    // The sites row's "»" (Tynn #900): a NATIVE menu, because the page is a native view over the box below the row and a
+    // menu in the chrome's DOM is drawn under it. Built from this window's own list (the chrome only says which are
+    // hidden), over this window at the »; the OS gives it arrow keys, Enter and Esc. Answers the host picked, or null
+    // when dismissed. On some platforms the close callback runs before the item's click, so the dismissal waits a tick.
+    ipcMain.handle('browser-window:sites-menu', (event, hosts: unknown, at: unknown) => {
+        const b = brain(event);
+        const w = entryOf(event)?.win;
+        const point = menuAnchor(at);
+        if (!b || !w || !point) return null;
+        const snap = b.snapshot();
+        const current = snap.tabs.find((t) => t.id === snap.active)?.url ?? null;
+        const items = sitesMenuItems({ requested: hosts, sites: snap.sites, labels: snap.siteLabels ?? {}, current: current === null ? null : hostOfUrl(current) });
+        if (items.length === 0) return null;
+        return new Promise<string | null>((resolve) => {
+            let done = false;
+            const answer = (host: string | null) => { if (!done) { done = true; resolve(host); } };
+            Menu.buildFromTemplate(items.map((i) => ({ label: i.label, type: 'checkbox' as const, checked: i.checked, click: () => answer(i.host) })))
+                .popup({ window: w, x: point.x, y: point.y, callback: () => { setTimeout(() => answer(null), 50); } });
+        });
+    });
     ipcMain.handle('browser-window:bounds', (event, raw: unknown) => {
         const b = brain(event);
         const r = raw as { x?: unknown; y?: unknown; width?: unknown; height?: unknown } | null;
