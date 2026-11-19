@@ -1668,6 +1668,17 @@ function DesktopApp({ bridge }: AppProps) {
     const [modelsAsked, setModelsAsked] = useState(0);
     // A Refresh is ONE ask of the provider again (it starts its CLI), never carried over to the next agent opened.
     const refreshModels = useRef(false);
+    /*
+     * A PROVIDER'S PROGRAM (Tynn #577; #897 2c-3): the .exe behind a batch wrapper, picked on the HOST's disk with this
+     * window's host-disk picker (never this machine's own dialog), so any of the owner's windows can choose it; genie-host
+     * keeps it. Cancelled = nothing chosen and nothing said. A choice reads the models again.
+     */
+    const chooseProviderProgram = pickHostPath && resolvedBridge?.chooseProviderProgram
+        ? (provider: string): Promise<{ ok: true } | { ok: false; reason?: string }> =>
+            pickHostPath({ mode: 'file', title: `Choose ${provider}'s program`, extensions: ['exe', 'com'] })
+                .then((picked) => (typeof picked === 'string' ? resolvedBridge.chooseProviderProgram!(provider, picked) : { ok: false as const }))
+                .then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; })
+        : null;
     const modelsAgent = useRef<string | null>(null);
     const modelsWanted = parsed.surface === 'agent' && parsed.tab === 'settings';
     const modelsProvider = detail?.agent.provider ?? null;
@@ -1711,7 +1722,7 @@ function DesktopApp({ bridge }: AppProps) {
               model: detail?.agent.model ?? null,
               ...(modelChoices !== undefined ? { models: modelChoices } : {}),
               onRefreshModels: () => { refreshModels.current = true; setModelsAsked((n) => n + 1); },
-              ...(resolvedBridge.chooseProviderProgram ? { onChooseProviderProgram: (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) } : {}),
+              ...(chooseProviderProgram ? { onChooseProviderProgram: chooseProviderProgram } : {}),
               onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', model ?? 'the provider default', r.apply ?? { when: 'next-start' }) : r.reason })); if (r.ok) setModelsAsked((n) => n + 1); }); },
               onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools', r.apply ?? { when: 'next-start' }) : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
@@ -2384,7 +2395,7 @@ function DesktopApp({ bridge }: AppProps) {
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId).then((r) => { if (r.ok) openCompanion(r, 'Log in'); else showAlert({ title: 'Log in', body: r.reason }); }, () => {}); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId).then((r) => { if (r.ok) openCompanion(r, 'Design sign-in'); else showAlert({ title: 'Design sign-in', body: r.reason }); }, () => {}); }}
-            onChooseProviderProgram={resolvedBridge?.chooseProviderProgram ? (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) : undefined}
+            onChooseProviderProgram={chooseProviderProgram ?? undefined}
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}
