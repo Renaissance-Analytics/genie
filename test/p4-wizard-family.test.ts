@@ -134,7 +134,7 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         expect(main).toContain("ipcMain.handle('genie:take-over'");
         expect(preload).toContain("'genie:take-over'");
-        expect(inventory).toContain("['genie:take-over', 'window-port']");
+        expect(inventory).toContain("['genie:take-over', 'move:2b']");
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);

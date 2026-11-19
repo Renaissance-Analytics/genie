@@ -126,7 +126,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         expect(main).toContain("ipcMain.handle('genie:window-overlay-colors-current'");
         expect(preload).toContain("ipcRenderer.invoke('genie:window-overlay-colors-current'");
-        expect(inventory).toContain("['genie:window-overlay-colors-current', 'window-port']");
+        expect(inventory).toContain("['genie:window-overlay-colors-current', 'window:chrome']");
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);
