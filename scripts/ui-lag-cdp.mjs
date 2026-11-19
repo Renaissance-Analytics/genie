@@ -28,9 +28,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { initFixtureRepo } from './fixture-git-repo.mjs';
 import { builtFramePath } from './built-frame-path.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
-import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
 // Ten pairs (the coordinator's (b), Tynn #536): a stable median of paired differences on the Linux runner.
@@ -257,9 +258,9 @@ try {
     copyFileSync(resolve('scripts/perf-lag/ui-lag-build.mjs'), join(workspace, 'build.mjs'));
     copyFileSync(resolve('scripts/perf-lag/ui-lag-flood.mjs'), join(workspace, 'flood.mjs'));
     const git = (args) => execFileSync('git', ['-c', 'user.name=UI lag fixture', '-c', 'user.email=ui-lag@example.test', ...args], { cwd: workspace, stdio: 'pipe', timeout: 90000, windowsHide: true });
-    // THE FIXTURE GIT, BOUNDED (Tynn #536): spawnSync git ETIMEDOUT on the Windows runner (genie#1718). A timed-out try is
-    // started again from no repository, at most twice; how long each took is in the result.
-    result.fixtureGit = retryOnTimeout(() => { git(['init']); git(['add', '.']); git(['commit', '-m', 'ui lag baseline']); }, { attempts: 2, reset: () => rmSync(join(workspace, '.git'), { recursive: true, force: true, maxRetries: 5 }) }).tries;
+    // THE FIXTURE GIT (Tynn #732): its own repo, without git's auto-maintenance (scripts/fixture-git-repo.mjs). The
+    // timeouts the old retry answered were a fresh VM's first git calls, now paid before any row (windows.ps1 Warm-Git).
+    { const t = Date.now(); initFixtureRepo(git, 'ui lag baseline'); result.fixtureGit = { ms: Date.now() - t }; }
 
     const fd = openSync(join(OUT, 'ui-lag-electron.log'), 'w');
     const electron = resolve('node_modules/electron', WIN ? 'dist/electron.exe' : 'dist/electron'), args = ['.', `--remote-debugging-port=${PORT}`, `--inspect-brk=${INSPECT}`, `--user-data-dir=${join(root, 'profile')}`];

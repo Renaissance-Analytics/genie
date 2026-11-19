@@ -57,6 +57,15 @@ describe("the files-watch fixture's repo (Tynn #732)", () => {
         expect(src).toMatch(/import \{ initFixtureRepo \} from '\.\/fixture-git-repo\.mjs'/);
         expect(src).toMatch(/initFixtureRepo\(git, 'watch baseline'\)/);
     });
+
+    it('ui-lag makes its repo with it too, and no longer retries its git on a timeout (the retry answered the same cold start)', () => {
+        const src = readFileSync(new URL('../scripts/ui-lag-cdp.mjs', import.meta.url), 'utf8');
+        expect(src).toMatch(/import \{ initFixtureRepo \} from '\.\/fixture-git-repo\.mjs'/);
+        expect(src).toMatch(/initFixtureRepo\(git, 'ui lag baseline'\)/);
+        expect(src).not.toMatch(/retryOnTimeout/);
+        const analyze = readFileSync(new URL('../scripts/perf-lag/ui-lag-analyze.mjs', import.meta.url), 'utf8');
+        expect(analyze).not.toMatch(/export function retryOnTimeout/);
+    });
 });
 
 describe('the Windows job warms git before any row (Tynn #732)', () => {
