@@ -89,7 +89,7 @@ describe('the window sends genie-host nothing for its features (step 2e-2)', () 
         expect(host).toMatch(/syncWorkspaceFiles\(\{/);
         expect(host).toMatch(/syncAgentDocs: \(path\) => featureFiles\.syncAgentDocs\(path\)/);
         expect(host).toMatch(/syncConfig: \(path\) => featureConfig\(path\)/);
-        // The registry the loop follows: phoneRegistry, refreshed on every registry change (hostRegistry is read at boot).
+        // One registry for the list, the follow and the Tynn link: phoneRegistry.
         expect(host).toMatch(/workspaces: \(\) => phoneRegistry\.listWorkspaces\(\)/);
         expect(host).toMatch(/tynnProject: \(workspaceId\) => \{ const w = phoneRegistry\.workspace\(workspaceId\); return w \? tynnProjectOf\(w\.path\) : null; \}/);
     });

@@ -2216,7 +2216,7 @@ async function main(): Promise<void> {
                     void tynnOpening.then((account) => { if (!done) off = account.onChange(listener); }, () => {});
                     return () => { done = true; off?.(); };
                 },
-                // The registry the loop follows (phoneRegistry is refreshed on every registry change; hostRegistry at boot).
+                // The same registry the loop lists and follows (phoneRegistry), so a workspace it was told of is found here.
                 tynnProject: (workspaceId) => { const w = phoneRegistry.workspace(workspaceId); return w ? tynnProjectOf(w.path) : null; },
                 syncAgentDocs: (path) => featureFiles.syncAgentDocs(path),
                 syncConfig: (path) => featureConfig(path),
