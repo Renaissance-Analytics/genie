@@ -85,7 +85,7 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     update_channel: 'general', launch_at_login: 'general', start_minimized: 'general', rate_limit_refresh: 'general',
     do_not_disturb: 'general', dnd_reply: 'general', dnd_question_sound: 'general',
     // How much finished history genie-host keeps (Tynn #549): the owner changes the three numbers here.
-    finished_kept_per_agent: 'general', finished_seen_days: 'general', handoff_kept_kb: 'general', turn_stall_minutes: 'general',
+    finished_kept_per_agent: 'general', finished_seen_days: 'general', handoff_kept_kb: 'general', turn_stall_minutes: 'general', tool_call_timeout_minutes: 'general', stalled_auto_restart: 'general',
     notification_sounds: 'notifications', rate_limit_alerts: 'notifications',
     command_window_hotkey: 'keyboard', ftq_nudge_hotkey: 'keyboard', send_key: 'keyboard',
     // Drawn as its own row (a folder + Browse) on General, not a generic one.

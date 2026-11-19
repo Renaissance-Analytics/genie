@@ -10,7 +10,7 @@ export function RunningCall({ call, now, onStop }: { call: Call; now: number; on
     const words = runningCallWords(call, now);
     return (
         <span data-running-call={call.toolCallId} className="flex min-w-0 items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-2)]">
-            <Icon name="terminal" size="xs" />
+            <Icon name="square-terminal" size="xs" />
             <span className="min-w-0 truncate font-mono" title={call.command ?? call.label}>{words}</span>
             {onStop ? (
                 <Button size="xs" labelClassName="contents"

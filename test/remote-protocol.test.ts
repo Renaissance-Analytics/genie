@@ -121,7 +121,8 @@ describe('the capability table', () => {
         // 174 with `crashReport.draft` (a read) and `crashReport.send` (a write), the owner's (Tynn #897, 2c-2).
         // 175 with `providers.chooseProgram` (a write, the owner's): a provider's .exe, picked on the host's disk (Tynn #897, 2c-3).
         // 176 with `terminals.scratch` (a write, workspace-scoped; the home one the owner's): the throwaway shell (Tynn #897, 2c-4).
-        expect(REMOTE_METHODS.length).toBe(176);
+        // 177 with `stopToolCall` (a write, agent-scoped): Stop this call, one hung tool call ends (Tynn #855).
+        expect(REMOTE_METHODS.length).toBe(177);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');
