@@ -162,6 +162,8 @@ export const REMOTE_METHODS = [
     'deviceLink.forget',
     'deviceLink.adopt',
     'tynnNetwork.workstations',
+    // "Open a share link…" (Tynn #896, 2b-4): what a pasted link is, against the host's Tynn account and role.
+    'tynnNetwork.classifyLink',
     'tynnNetwork.setRole',
     'tynnNetwork.shares.list',
     'tynnNetwork.shares.mint',
@@ -353,6 +355,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.forget': 'local',
     'deviceLink.adopt': 'local',
     'tynnNetwork.workstations': 'local',
+    'tynnNetwork.classifyLink': 'local',
     'tynnNetwork.setRole': 'local',
     // Tynn #587: the host being shared makes its own links. Its owner only (OWNER_ONLY, remote-host.ts); making or revoking takes the baton.
     'tynnNetwork.shares.list': 'read',

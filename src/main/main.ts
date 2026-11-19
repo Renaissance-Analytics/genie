@@ -77,7 +77,7 @@ import { gatherSources } from './keychain-migration.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { droneRefusal, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { deviceLinkGate } from './device-link-gate.js';
-import { dispatchConnectLink } from '../core/connect-link.js';
+import { actOnConnectLink, connectLinkDecisionOf } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { wordTynnRefusal } from './drone-refusal.js';
 import { appInboxCardState, restartAppSource } from './host-owner-ops.js';
@@ -1869,12 +1869,15 @@ async function boot(): Promise<void> {
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
-    // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): main classifies it against the Tynn this Genie is
-    // signed in to, with the role Tynn gave this machine — never one the window sends — then opens the invite in the
-    // browser or the workstation in its own window.
+    // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): genie-host decides what it is, against the Tynn it is
+    // signed in to and the role Tynn gave this machine (tynnNetwork.classifyLink, Tynn #896 2b-4), never one a window sends;
+    // this window opens what it decided, the invite in the browser or the workstation in its own window.
     ipcMain.handle('genie:connect-link', async (_event, text: unknown) => {
-        const status = tynnAccount?.status();
-        return dispatchConnectLink(String(text ?? ''), status?.signedIn ? status.host : null, workstationRoleNow, {
+        const asked = await ownProtocol.call('tynnNetwork.classifyLink', [String(text ?? '')]);
+        if (!asked.ok) return { ok: false, note: asked.reason };
+        const decided = connectLinkDecisionOf(asked.value);
+        if (decided === null) return { ok: false, note: 'Genie could not read what that link is; try again in a moment.' };
+        return actOnConnectLink(decided, {
             openExternal: async (url) => { try { await shell.openExternal(url); return true; } catch { return false; } },
             openWorkstation: (id, name) => openRemoteWindow(`relay:${id}`, name ?? null),
         });
