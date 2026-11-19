@@ -257,7 +257,7 @@ describe('the Pilot\'s Take Over window with no window here', () => {
     }
     const ports = (terminalsApi: unknown, over: Record<string, unknown> = {}) => ({
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => '/w', startRefusal: () => null,
-        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false, headroom: { view: () => ({}), subscribe: () => () => {} },
+        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, headroom: { view: () => ({}), subscribe: () => () => {} },
         attention: { finished: () => [], answer: async () => true, lists: { done: async () => true } },
         approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [], involving: () => [] }, deliverToAgent: async () => true,
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
@@ -303,11 +303,13 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         await expect(api.invoke('terminals.list', ['tynn'])).rejects.toThrow('open Genie on alphar');
     });
 
-    it('with a window connected the window answers the terminal calls (CONTROL)', async () => {
+    it('with a window connected genie-host still answers the terminal calls, and the window is not asked (Tynn #898)', async () => {
         const t = term();
-        const api = gate(hostAloneApi(ports(t.api)), { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('terminals.write', ['term_1', 'ls'])).toBe('window answered terminals.write');
-        expect(t.calls).toEqual([]);
+        const asked: string[] = [];
+        const api = gate(hostAloneApi(ports(t.api)), { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
+        expect(await api.invoke('terminals.write', ['term_1', 'ls'])).not.toBe('window answered terminals.write');
+        expect(t.calls).toEqual(['write term_1 ls']);
+        expect(asked).toEqual([]);
     });
 
     it('a Pilot\'s agent detail shows the TUI as Observed', async () => {

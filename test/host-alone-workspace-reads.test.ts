@@ -39,7 +39,7 @@ function ports(over: Record<string, unknown> = {}): HostAlonePorts {
     const engine = { probe: () => null, subscribe: () => () => {}, ledgerFor: () => [], rowsFor: () => [], turnsFor: () => 0, recentStderrFor: () => [], refusals: new Map(), needsNewDriver: () => false, notice: () => true } as unknown as HostAloneEngine;
     return {
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => workspace, startRefusal: () => null,
-        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false,
+        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
@@ -137,6 +137,6 @@ describe('the wiring', () => {
     });
 
     it('genie-host gives it its own settings store', () => {
-        expect(src('src/main/genie-host.ts')).toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null,\r?\n        settings,\r?\n/);
+        expect(src('src/main/genie-host.ts')).toMatch(/startRefusal: \(r\) => startRefusal\([\s\S]*?\}\),\r?\n        settings,\r?\n/);
     });
 });

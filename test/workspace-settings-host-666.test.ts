@@ -53,7 +53,6 @@ function ownedApi(): HostApi {
     return hostAloneApi({
         hostName: 'fixture-host', registry, settings, engine: () => engine, cwdFor: () => workspace,
         startRefusal: () => null, models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
-        windowConnected: () => false,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true,
             list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null, headroom: { view: () => ({}), subscribe: () => () => {} },
@@ -120,17 +119,19 @@ describe('five workspace methods have one host answer', () => {
         expect(source.invokeWindow).not.toHaveBeenCalled();
     });
 
-    it('CONTROL: an unrelated family still uses the window and its existing no-window fallback', async () => {
-        const invoke = vi.fn(async () => 'host fallback');
+    it('CONTROL: genie-host\'s other families are its own with a window or without (Tynn #898); what it does not own yet uses the window', async () => {
+        const invoke = vi.fn(async () => 'host answer');
         const source = gate({ invoke, onEvent: () => () => {}, workspaceOfAgent: () => null });
         for (const method of ['workspaces.tynnBoard', 'workspaces.hibernate', 'agents.models', 'features.act'] as const) {
-            invoke.mockClear(); source.invokeWindow.mockClear(); source.windows(1);
-            expect(await source.api.invoke(method, [], context)).toEqual({ windowAnswered: method });
-            expect(invoke).not.toHaveBeenCalled();
-            source.windows(0);
-            expect(await source.api.invoke(method, [], context)).toBe('host fallback');
-            expect(invoke).toHaveBeenCalledExactlyOnceWith(method, [], context);
+            for (const count of [1, 0]) {
+                invoke.mockClear(); source.invokeWindow.mockClear(); source.windows(count);
+                expect(await source.api.invoke(method, [], context)).toBe('host answer');
+                expect(invoke).toHaveBeenCalledExactlyOnceWith(method, [], context);
+                expect(source.invokeWindow).not.toHaveBeenCalled();
+            }
         }
+        source.windows(1);
+        expect(await source.api.invoke('terminals.open', [], context)).toEqual({ windowAnswered: 'terminals.open' });
     });
 });
 
@@ -171,14 +172,14 @@ describe('one host-owned workspace settings signal', () => {
         expect(heard.mock.calls).toEqual([[SETTINGS_EVENT, 'work']]);
     });
 
-    it('CONTROL: unrelated events keep their current connected-window and host-fallback sources', () => {
+    it('CONTROL: other events come from genie-host with a window connected or not; the window\'s copy is dropped (Tynn #898)', () => {
         const events = hostEvents(), source = gate(events.api), heard = vi.fn(); source.windows(1);
         listeners.push(source.api.onEvent(heard));
-        events.emit('activity', { source: 'host while connected' }); expect(heard).not.toHaveBeenCalled();
+        events.emit('activity', { source: 'host while connected' });
         source.emitWindow('activity', { source: 'window' });
-        source.windows(0); events.emit('activity', { source: 'host fallback' });
+        source.windows(0); events.emit('activity', { source: 'host with no window' });
         expect(heard.mock.calls).toEqual([
-            ['activity', { source: 'window' }], ['activity', { source: 'host fallback' }],
+            ['activity', { source: 'host while connected' }], ['activity', { source: 'host with no window' }],
         ]);
     });
 

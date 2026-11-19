@@ -36,7 +36,7 @@ function ports(tab: Record<string, unknown> = {}): HostAlonePorts {
     const engine = { probe: () => null, subscribe: () => () => {}, ledgerFor: () => [], rowsFor: () => [], turnsFor: () => 0, recentStderrFor: () => [], refusals: new Map(), needsNewDriver: () => false, notice: () => true } as unknown as HostAloneEngine;
     return {
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => '/w', startRefusal: () => null,
-        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false,
+        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
@@ -119,13 +119,14 @@ describe('the Tynn tab with no window', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected the window answers, and genie-host is not asked (CONTROL)', async () => {
+    it('with a window connected genie-host still answers, and the window is not asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports());
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('workspaces.tynnBoard', ['tynn', {}])).toBe('window answered workspaces.tynnBoard');
-        expect(invoke).not.toHaveBeenCalled();
-        expect(requests).toEqual([]);
+        const asked: string[] = [];
+        const api = gate(alone, { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
+        expect(await api.invoke('workspaces.tynnBoard', ['tynn', {}])).not.toBe('window answered workspaces.tynnBoard');
+        expect(invoke).toHaveBeenCalledWith('workspaces.tynnBoard', ['tynn', {}], undefined);
+        expect(asked).toEqual([]);
     });
 
     it('the live view\'s change reads stay the window\'s own (CONTROL)', async () => {

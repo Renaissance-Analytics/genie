@@ -98,12 +98,15 @@ describe('one FTQ on the machine being reached reaches the Pilot’s Deck', () =
         expect(p.heard.some((m) => m.kind === 'result' && (m as { ok?: boolean }).ok === true)).toBe(true);
     });
 
-    it('with the client’s window open: the window’s next snapshot, carrying the question, is pushed to the Pilot', async () => {
+    it('with the client’s window open: genie-host’s own snapshot, carrying the question, is pushed to the Pilot, and the window’s copy is not (Tynn #898)', async () => {
         const p = pilot();
         p.hello();
         await settle();
+        const before = snapshotsHeard(p.heard).length;
+        aloneApi.emit('snapshot', ASKED);
         windowApi.emit('snapshot', ASKED);
         await settle();
+        expect(snapshotsHeard(p.heard).length - before).toBe(1);
         expect(snapshotsHeard(p.heard).at(-1)?.deckItems.map((d) => d.id)).toEqual(['q_1']);
     });
 

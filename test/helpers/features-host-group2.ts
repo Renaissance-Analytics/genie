@@ -113,7 +113,7 @@ export async function groupTwoFixture(machine?: HostFeatureMachinePorts) {
     const invokeWindow = vi.fn(async (method: RemoteMethod) => ({ windowAnswered: method }));
     const alone = hostAloneApi({ hostName: 'fixture-host', registry, settings, engine: () => null, cwdFor: () => workspace,
         startRefusal: () => null, models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
-        windowConnected: () => windows > 0, attention, approvals: { resolve: () => true }, inbox, deliverToAgent: async () => true,
+        attention, approvals: { resolve: () => true }, inbox, deliverToAgent: async () => true,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null, headroom: { view: () => ({}), subscribe: () => () => {} },
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },

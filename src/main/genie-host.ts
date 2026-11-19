@@ -1562,8 +1562,9 @@ async function main(): Promise<void> {
     }));
     // Its snapshot follows the stores and the sessions, coalesced as the window's is, and only while no window is
     // connected: a snapshot is built on every touch, and with a window open the window answers.
-    const phoneEstate = new Coalescer<'estate'>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: () => { if (engine.newestLocalWindow() === null) phoneRegistry.touch(); }, schedule: realSchedule, now: () => Date.now() });
-    const phoneTouch = () => { if (engine.newestLocalWindow() === null) phoneEstate.request('estate'); };
+    // The estate every remote client hears, pushed whether or not a window is connected (Tynn #898).
+    const phoneEstate = new Coalescer<'estate'>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: () => { phoneRegistry.touch(); }, schedule: realSchedule, now: () => Date.now() });
+    const phoneTouch = () => { phoneEstate.request('estate'); };
     stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);
@@ -1754,7 +1755,6 @@ async function main(): Promise<void> {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
-        windowConnected: () => engine.newestLocalWindow() !== null,
         settings,
         workspaceLifecycle: {
             terminals: () => terminalHost,

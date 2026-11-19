@@ -27,7 +27,7 @@ const engine = { probe: () => null, prompt: () => true, stop: () => true, subscr
 function ports(over: Record<string, unknown> = {}, life: Record<string, unknown> = {}): HostAlonePorts {
     return {
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => workspace, startRefusal: () => null,
-        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false,
+        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
@@ -216,13 +216,14 @@ describe('repositories, governs, default agent, colour', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected the window answers, and genie-host is not asked (CONTROL)', async () => {
+    it('with a window connected genie-host still answers, and the window is not asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports());
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('workspaces.hibernate', ['tynn'])).toBe('window answered workspaces.hibernate');
-        expect(invoke).not.toHaveBeenCalled();
-        expect(registry.workspace('tynn')?.asleep).not.toBe(true);
+        const asked: string[] = [];
+        const api = gate(alone, { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
+        expect(await api.invoke('workspaces.hibernate', ['tynn'])).not.toBe('window answered workspaces.hibernate');
+        expect(invoke).toHaveBeenCalledWith('workspaces.hibernate', ['tynn'], undefined);
+        expect(asked).toEqual([]);
     });
 
     it('a family not moved yet still says to open a window (CONTROL)', async () => {

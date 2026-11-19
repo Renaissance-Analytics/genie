@@ -67,7 +67,6 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         inbox: { unread: () => [], receive: async () => [], involving: () => [] },
         deliverToAgent: async () => true,
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
-        windowConnected: () => false,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
@@ -113,19 +112,19 @@ describe('the activity feeds with no window', () => {
         expect(seen.map((f) => f.agentId)).toEqual([atlas.id]);
     });
 
-    it('with a window connected no feed is built, and the window answers (CONTROL)', async () => {
+    it('with a window connected genie-host still builds the feed and answers (Tynn #898)', async () => {
         const e = engine();
         const clock = timers();
-        const alone = hostAloneApi(ports(e, { schedule: clock.schedule, windowConnected: () => true }));
+        const alone = hostAloneApi(ports(e, { schedule: clock.schedule }));
         const invoke = vi.spyOn(alone, 'invoke');
         const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
         // No agent watched: an agent's detail reads the ledger too, and this counts only what the feeds read.
         api.onEvent(() => {}, { wantsAgent: () => false });
         e.emit(atlas.id);
         clock.run();
-        expect(ledgerReads).toBe(0);
-        expect(await api.invoke('activity', ['tynn'])).toBe('window answered activity');
-        expect(invoke).not.toHaveBeenCalled();
+        expect(ledgerReads).toBeGreaterThan(0);
+        expect(await api.invoke('activity', ['tynn'])).not.toBe('window answered activity');
+        expect(invoke).toHaveBeenCalledWith('activity', ['tynn'], undefined);
     });
 
     it('the same change with no window does read the ledger (CONTROL: the count above can move)', async () => {
@@ -153,9 +152,9 @@ describe('the rate limits with no window', () => {
         expect(seen).toEqual([[LOCAL_EVENTS.headroom, { claude: room(12) }]]);
     });
 
-    it('with a window connected the window answers (CONTROL)', async () => {
-        const api = gate(hostAloneApi(ports(engine())), { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('headroom', [])).toBe('window answered headroom');
+    it('with a window connected genie-host still answers from its own board (Tynn #898)', async () => {
+        const api = gate(hostAloneApi(ports(engine(), { headroom: { view: () => ({ claude: room(38) }), subscribe: () => () => {} } })), { connected: () => true, invoke: async (method) => `window answered ${method}` });
+        expect(await api.invoke('headroom', [])).toEqual({ claude: room(38) });
     });
 });
 
@@ -217,7 +216,7 @@ describe('the wiring', () => {
         expect(watch).toMatch(/if \(!stamp\) \{ p\.offer\(provider, room, stamp\); return; \}[\s\S]*?const shown = p\.attribution\.stamp\(provider, room, stamp\);\s*if \(shown\) p\.offer\(provider, room, shown\);/);
         expect(watch).toMatch(/if \(ended\.held\) p\.offer\(provider, ended\.held\.room, ended\.held\.stamp\);/);
         expect(host).toMatch(/offer: \(provider, room, stamp\) => \{ if \(stamp\) offerReadingNow\?\.\(provider, room, stamp\); \}/);
-        expect(host).toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null/);
+        expect(host).not.toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null/);
         expect(host).toMatch(/headroom: headroomFeed/);
     });
 

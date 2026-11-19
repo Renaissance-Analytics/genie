@@ -71,7 +71,7 @@ beforeEach(async () => {
         runFlow, refreshPlugins, applyRemote });
     const alone = hostAloneApi({ hostName: 'fixture-host', registry, settings, engine: () => null, cwdFor: () => workspace,
         startRefusal: () => null, models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
-        windowConnected: () => windows > 0, attention, approvals: { resolve: () => true }, inbox, deliverToAgent: async () => true,
+        attention, approvals: { resolve: () => true }, inbox, deliverToAgent: async () => true,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null, headroom: { view: () => ({}), subscribe: () => () => {} },
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
@@ -203,9 +203,9 @@ describe('host feature group one with no window (Tynn #720)', () => {
     it('CONTROL: unrelated host workspace settings preserve their current answer', async () => {
         expect(await outcome('workspaces.settings', ['work'])).toMatchObject({ ok: true, value: { ok: true, values: { app_inbox: true } } });
     });
-    it('CONTROL: unrelated connected-window methods keep the window preference', async () => {
+    it('CONTROL: a method genie-host does not own yet keeps the window preference (Tynn #898: its own are its own)', async () => {
         windows = 1;
-        expect(await outcome('agents.models', ['unused'])).toEqual({ ok: true, value: { windowAnswered: 'agents.models' } });
-        expect(invokeWindow).toHaveBeenCalledExactlyOnceWith('agents.models', ['unused'], context);
+        expect(await outcome('terminals.open', ['work', {}])).toEqual({ ok: true, value: { windowAnswered: 'terminals.open' } });
+        expect(invokeWindow).toHaveBeenCalledExactlyOnceWith('terminals.open', ['work', {}], context);
     });
 });
