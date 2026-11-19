@@ -2,6 +2,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
 import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
+import { isAcpProvider } from '../core/engine.js';
 import { homedir } from 'node:os';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
@@ -150,6 +151,8 @@ export interface HostApiDeps {
     signIns?: import('./host-sign-ins.js').HostSignIns;
     /** The banner's crash report (Tynn #897, 2c-2), built by genie-host. Absent = this host cannot send one, said in words. */
     crashReports?: { draft(): { text: string }; send(text: string, notes: string): Promise<unknown> };
+    /** A provider's program (Tynn #577; #897 2c-3), kept by genie-host (host-provider-programs.ts). Absent = said in words. */
+    providerPrograms?: import('./host-provider-programs.js').HostProviderPrograms;
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -717,6 +720,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'crashReport.send':
                 if (!deps.crashReports) return { ok: false, reason: 'this host cannot send a crash report' };
                 return typeof args[0] === 'string' && typeof args[1] === 'string' ? deps.crashReports.send(args[0], args[1]) : { ok: false, reason: 'A crash report needs its text.' };
+            // The .exe the owner picked on this host's disk for a batch-wrapped provider (Tynn #577; #897 2c-3).
+            case 'providers.chooseProgram':
+                if (!deps.providerPrograms) return { ok: false, reason: 'this host cannot keep a provider’s program' };
+                if (typeof args[0] !== 'string' || !isAcpProvider(args[0])) return { ok: false, reason: 'No provider named.' };
+                if (typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'No program chosen.' };
+                return deps.providerPrograms.choose(args[0], args[1]);
             // The tray's Log in names a provider, not an agent (Tynn #896, 2b-2b).
             case 'logins.provider':
                 return deps.signIns ? deps.signIns.loginFor(str(args[0]), context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };

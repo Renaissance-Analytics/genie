@@ -119,7 +119,8 @@ describe('the capability table', () => {
         // 173 with `tynnNetwork.classifyLink` (Tynn #896, 2b-4): a pasted share link, decided by the host; local, like workstations.
         // 172 again without the old `addWorkspace` (Tynn #897, 2c-1): it only ever refused.
         // 174 with `crashReport.draft` (a read) and `crashReport.send` (a write), the owner's (Tynn #897, 2c-2).
-        expect(REMOTE_METHODS.length).toBe(174);
+        // 175 with `providers.chooseProgram` (a write, the owner's): a provider's .exe, picked on the host's disk (Tynn #897, 2c-3).
+        expect(REMOTE_METHODS.length).toBe(175);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

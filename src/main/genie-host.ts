@@ -246,7 +246,8 @@ import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
 import { setThreadStoreSlowLog } from '../core/thread-store.js';
 import { supervisorFailureWords } from '../core/supervisor-failure.js';
-import { setProviderChoiceFile } from './provider-choice.js';
+import { providerChoiceFile, setProviderChoiceFile } from './provider-choice.js';
+import { hostProviderPrograms } from './host-provider-programs.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
@@ -1838,6 +1839,12 @@ async function main(): Promise<void> {
         cwdFor: phoneCwd,
         // The sign-ins (Tynn #896): the provider's own login, started here for the caller, whose window shows it.
         signIns,
+        // A PROVIDER'S PROGRAM (Tynn #577; #897 2c-3): the .exe the owner picked on this host's disk, from any of their
+        // windows, written to this host's own choice file (the one its agents start from); the provider is read again.
+        providerPrograms: hostProviderPrograms({
+            file: () => providerChoiceFile(),
+            refresh: (provider) => { void providerHealth.refresh(provider); },
+        }),
         // THE CRASH REPORT (Tynn #386 part 4; #897 2c-2), for every client of the owner's: built from this host's own safe
         // mode, crash state, registry and workstation identity. Nothing is sent until the person presses Send.
         crashReports: crashReportHost({

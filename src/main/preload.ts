@@ -52,9 +52,6 @@ const bridge: PreloadBridge = {
      * the renderer's reducer keeps what belongs to its workspace.
      */
 
-    chooseProviderProgram: (provider) =>
-        ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
-
     popOutTerminals: (workspaceId) => ipcRenderer.invoke('genie:terminals-popout', workspaceId) as Promise<void>,
 
     scratchTerminal: (workspaceId) =>

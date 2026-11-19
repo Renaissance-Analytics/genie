@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'marketplace' | 'gapps' | 'crashReport'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'marketplace' | 'gapps' | 'crashReport' | 'chooseProviderProgram'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -293,6 +293,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             draft: async () => { const r = await requestBridge((bridge) => bridge.crashReport!.draft()); return 'text' in r ? r : { text: '' }; },
             send: (text, notes) => requestBridge((bridge) => bridge.crashReport!.send(text, notes)),
         },
+        // A provider's program (Tynn #897, 2c-3): the path this window picked on the host's disk, kept by genie-host.
+        chooseProviderProgram: (provider, path) => requestBridge((bridge) => bridge.chooseProviderProgram!(provider, path)),
         // The account chips (Tynn #895), as the IPC answered them: nothing known while the link is down, its words, false.
         accounts: async () => { const r = await requestBridge((bridge) => bridge.accounts!()); return r !== null && 'ok' in r ? null : r; },
         accountsAct: (action) => requestBridge((bridge) => bridge.accountsAct!(action)),

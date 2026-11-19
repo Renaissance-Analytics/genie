@@ -45,8 +45,7 @@ import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile } from 'node:fs/promises';
-import { isAcpProvider } from '../core/engine.js';
-import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
+import { setProviderChoiceFile } from './provider-choice.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
@@ -1919,16 +1918,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
     ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
 
-    // The person's own answer to a provider hidden behind a batch wrapper (Tynn #577): an .exe, kept per provider.
-    ipcMain.handle('genie:provider-choose-program', async (_event, raw: unknown) => {
-        if (!window || typeof raw !== 'string' || !isAcpProvider(raw)) return { ok: false, reason: 'No provider named.' };
-        const picked = await dialog.showOpenDialog(window, { title: `Choose ${raw}'s program`, properties: ['openFile'], filters: [{ name: 'Programs', extensions: ['exe', 'com'] }] });
-        const path = picked.filePaths[0];
-        if (picked.canceled || !path) return { ok: false };
-        const file = providerChoiceFile();
-        if (file === null) return { ok: false, reason: 'Genie has nowhere to keep the choice yet.' };
-        return writeProviderChoice(file, raw, path);
-    });
+    // A provider's program (Tynn #577) is genie-host's since 2c-3 (#897): providers.chooseProgram, picked on its disk.
 
     /*
      * THE FEATURE SERVICES — every store, the Flow scheduler, the supervisor, the site manager and

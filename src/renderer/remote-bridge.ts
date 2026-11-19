@@ -507,6 +507,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             draft: async () => { const r = await call('crashReport.draft'); const v = r.ok ? (r.value as { text?: unknown } | null) : null; return { text: typeof v?.text === 'string' ? v.text : '' }; },
             send: (text, notes) => answer<CrashReportAnswer>('crashReport.send', text, notes),
         },
+        // A provider's program (Tynn #577; #897 2c-3): picked on the host's disk with this window's picker, kept by the host.
+        chooseProviderProgram: (provider, path) => answer<{ ok: true } | { ok: false; reason: string }>('providers.chooseProgram', provider, path),
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.

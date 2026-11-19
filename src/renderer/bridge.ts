@@ -339,8 +339,11 @@ export interface GenieBridge {
      * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
      * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
      */
-    /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). This machine's own window only. */
-    chooseProviderProgram?(provider: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
+    /**
+     * Keep the .exe for a provider hidden behind a batch wrapper (Tynn #577): a path on the HOST's disk, picked with the
+     * window's host-disk picker; genie-host writes it (providers.chooseProgram, the owner's; #897 2c-3). Every window.
+     */
+    chooseProviderProgram?(provider: string, path: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
     scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
     /** A workspace's terminals view in a NEW window (Tynn #706, the Dashboard's windows column). Absent = this window cannot open one (a remote window). */
     popOutTerminals?(workspaceId: string): Promise<void>;
@@ -712,7 +715,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  */
 export type SignInResult = { ok: true; terminalId?: string; route?: string; ticket?: string } | { ok: false; reason: string };
 
-export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
+export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
@@ -781,6 +784,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
         accounts: local.accounts, accountsAct: local.accountsAct, dismissSwitchOffer: local.dismissSwitchOffer,
         crashReport: local.crashReport,
+        chooseProviderProgram: local.chooseProviderProgram,
         marketplace: local.marketplace,
         gapps: local.gapps,
         appInbox: local.owner.appInbox,

@@ -164,6 +164,8 @@ export const REMOTE_METHODS = [
     // The banner's crash report (Tynn #386 part 4; #897 2c-2): the draft, and the send the person chose. The owner's.
     'crashReport.draft',
     'crashReport.send',
+    // A provider's program (Tynn #577; #897 2c-3): the .exe the owner picked on the host's disk for a batch-wrapped provider.
+    'providers.chooseProgram',
     // "Open a share link…" (Tynn #896, 2b-4): what a pasted link is, against the host's Tynn account and role.
     'tynnNetwork.classifyLink',
     'tynnNetwork.setRole',
@@ -359,6 +361,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'tynnNetwork.workstations': 'local',
     'crashReport.draft': 'read',
     'crashReport.send': 'write',
+    'providers.chooseProgram': 'write',
     'tynnNetwork.classifyLink': 'local',
     'tynnNetwork.setRole': 'local',
     // Tynn #587: the host being shared makes its own links. Its owner only (OWNER_ONLY, remote-host.ts); making or revoking takes the baton.
