@@ -9,6 +9,7 @@ import { analyseFolder } from '../src/main/envelope-fs.js';
 import { GIT_READ_LIMIT, GitDidNotAnswer, gitFileStatus, gitLogSince, gitShowHead, gitTreeStatus } from '../src/main/git-ports.js';
 import { repoDiff, repoStatus } from '../src/main/repo-git.js';
 import { GitReadProblem } from '../src/renderer/components/GitReadProblem.js';
+import { endMarkedChildren, markedChildRunning, runningMarkedChildren } from './helpers/marked-children.js';
 
 /**
  * A GIT READ THAT DOES NOT ANSWER IS SAID, NOT SHOWN AS NOTHING. A read has a limit a slow real repository won't reach; one that reaches it is a failure the person sees, with a Retry, and never an empty list that reads as "nothing changed". A real git, whose configured hook never exits.
@@ -97,7 +98,6 @@ function holders(dir: string): string[] {
 }
 
 describe('past it, what the read started is ended', () => {
-    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
     let mark: string;
     let child = 0;
 
@@ -114,7 +114,8 @@ describe('past it, what the read started is ended', () => {
         git('config', 'core.fsmonitor', slashes(hook));
         GIT_READ_LIMIT.ms = 6000;
     });
-    afterEach(() => { if (child !== 0 && alive(child)) process.kill(child); });
+    // The same child (pid AND start time, Tynn #919): its pid may be another worker's process by now.
+    afterEach(() => { if (child !== 0 && markedChildRunning(child, mark) === true) process.kill(child); });
 
     it.each([
         ['gitTreeStatus', () => gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message)],
@@ -123,9 +124,9 @@ describe('past it, what the read started is ended', () => {
         const reading = read();
         await vi.waitFor(() => { expect(existsSync(mark) && readFileSync(mark, 'utf8') !== '').toBe(true); }, { timeout: 5500, interval: 50 });
         child = Number(readFileSync(mark, 'utf8'));
-        expect(alive(child)).toBe(true);
+        expect(markedChildRunning(child, mark)).toBe(true);
         expect(await reading).toMatch(/did not answer/);
-        await vi.waitFor(() => { expect(alive(child)).toBe(false); }, { timeout: 40_000, interval: 200 });
+        await vi.waitFor(() => { expect(markedChildRunning(child, mark)).toBe(false); }, { timeout: 40_000, interval: 200 });
         try {
             await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 5000, interval: 200 });
         } catch (error) {
@@ -143,7 +144,6 @@ describe('past it, what the read started is ended', () => {
  * window is always there; each child writes its own pid. After the limit, every child ends, and no new one comes.
  */
 describe('past it, a hook that keeps starting children is ended with all of them', () => {
-    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
     let marks: string;
     const started = (): number[] => (existsSync(marks) ? readdirSync(marks).map(Number).filter((n) => Number.isInteger(n) && n > 0) : []);
 
@@ -161,14 +161,15 @@ describe('past it, a hook that keeps starting children is ended with all of them
         git('config', 'core.fsmonitor', slashes(hook));
         GIT_READ_LIMIT.ms = 4000;
     });
-    afterEach(() => { for (const pid of started()) if (alive(pid)) { try { process.kill(pid); } catch { /* gone */ } } });
+    // Only the children that are still the processes that marked themselves (Tynn #919): never a bare pid.
+    afterEach(() => { endMarkedChildren(marks); });
 
     it('gitTreeStatus: at the limit every child the hook started is ended, and none is started after', async () => {
         const reading = gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message);
         await vi.waitFor(() => { expect(started().length).toBeGreaterThan(2); }, { timeout: 10_000, interval: 50 });
         expect(await reading).toMatch(/did not answer/);
         // Every child ended (the limit's kill runs after the answer)...
-        await vi.waitFor(() => { expect(started().filter(alive)).toEqual([]); }, { timeout: 40_000, interval: 250 });
+        await vi.waitFor(() => { expect(runningMarkedChildren(marks)).toEqual([]); }, { timeout: 40_000, interval: 250 });
         // ...and the loop that started them is gone too: no child is started from here on.
         const count = started().length;
         await new Promise((r) => setTimeout(r, 2_000));
