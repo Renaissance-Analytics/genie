@@ -102,8 +102,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:device-open', 'move:2f'],
     ['genie:files-bringback', 'window:pop-out'],
     ['genie:files-windows', 'window:pop-out'],
-    // 2c (#897): the folder picker stays the client's; the workspace is added to the window's registry.
-    ['genie:add-workspace', 'move:2c'],
     // 2c (#897): the program picker stays the client's; the choice is written to provider-programs.json here.
     ['genie:provider-choose-program', 'move:2c'],
     ['genie:features-browser-bounds', 'window:feature-effect'],

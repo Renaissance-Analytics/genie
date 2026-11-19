@@ -130,7 +130,6 @@ export const REMOTE_METHODS = [
     'workspaces.cloneOffers',
     'workspaces.applyOffer',
     'workspaces.setMcpServer',
-    'addWorkspace',
     'takeOver',
     'terminals.open',
     'terminals.write',
@@ -374,7 +373,6 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     ...Object.fromEntries(LOCAL_TERMINAL_METHODS.map(method => [method, 'local'])) as Record<LocalTerminalMethod, 'local'>,
     ...Object.fromEntries(MARKETPLACE_METHODS.map(method => [method, 'local'])) as Record<MarketplaceMethod, 'local'>,
     ...Object.fromEntries(GAPP_METHODS.map(method => [method, 'local'])) as Record<GAppMethod, 'local'>,
-    addWorkspace: 'host-only',
     // Tynn #529 part A: from another machine, the TUI starts here and its window opens THERE — a write, on the baton.
     takeOver: 'write',
     // SIGN-INS (Tynn #896, the coordinator's ruling 2026-11-19): the host starts the provider's own login; the client that

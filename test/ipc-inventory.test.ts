@@ -99,7 +99,7 @@ describe('P4 IPC inventory', () => {
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
         // 2c (#897): the crash report, the provider's program, the scratch terminal and Add workspace.
         'genie:crash-report-draft': '2c', 'genie:crash-report-send': '2c', 'genie:provider-choose-program': '2c',
-        'genie:scratch-terminal-open': '2c', 'genie:add-workspace': '2c',
+        'genie:scratch-terminal-open': '2c',
         // 2f (#912): the question window's answers and reads, the device/relay frame path, the relay browser open, host-wait's act.
         'question:answer': '2f', 'question:dismiss': '2f', 'question:files': '2f', 'question:file': '2f', 'question:visuals': '2f',
         'genie:device-open': '2f', 'genie:relay-open': '2f', 'genie:relay-send': '2f', 'genie:relay-close': '2f',
