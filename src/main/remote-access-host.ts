@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
 import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
-import { LOCAL_EVENTS, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import type { LocalUploads } from './local-uploads.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
@@ -25,7 +25,8 @@ import { HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 export interface HostRemoteApiPorts {
     readonly hostName: string;
     /** Methods genie-host performs itself, ahead of its built answers. */
-    readonly own: Partial<Record<RemoteMethod, (args: unknown[]) => Promise<unknown>>>;
+    /** Answered here, with who called (RemoteHost's CallContext; absent from an in-process caller). */
+    readonly own: Partial<Record<RemoteMethod, (args: unknown[], context?: CallContext) => Promise<unknown>>>;
     /**
      * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, #898; host-alone-api.ts): every method, and every event, come from here
      * whether or not a window is connected. A getter: genie-host builds it once its session host is up; until then a call
@@ -54,7 +55,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
         gapps: (context) => alone()?.gapps?.(context) ?? null,
         invoke: async (method, args, context) => {
             const own = ports.own[method];
-            if (own) return own(args);
+            if (own) return own(args, context);
             const owned = alone();
             // These reads and writes share the host's store (Tynn #666); the rest are genie-host's too (Tynn #898).
             if (!owned) {

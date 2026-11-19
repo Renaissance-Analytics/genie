@@ -123,12 +123,15 @@ describe('the window\'s engine link carries only the link, window capabilities, 
 
     /** Frozen (the coordinator, 2026-11-19): each leaves in the PR that moves it, and nothing joins. */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2b (#896): sign-ins and Take Over.
-        login: '2b', cancelLogin: '2b', switchAccount: '2b', providerAccount: '2b', takeOvers: '2b',
+        // 2b (#896): sign-ins.
+        login: '2b', cancelLogin: '2b', switchAccount: '2b', providerAccount: '2b',
         // 2c (#897): the crash report's state and the scratch terminal.
         crashStateView: '2c', onCrashState: '2c', safeModeView: '2c', terminals: '2c',
         // 2f (#912): the question window's answers, and the device link's frames.
         'call:engine.featureQuestion': '2f', deviceLink: '2f',
+        // Re-labelled from 2b by the coordinator (2026-11-19): main's deck liveness until the question window and the tray
+        // badge read the host's deck. Take Over moved in 2b-1.
+        takeOvers: '2f',
         // 2g (#913): the services the window still composes over genie-host's replicas.
         appInbox: '2g', catalog: '2g', flows: '2g', github: '2g', hosting: '2g', keyring: '2g', plugins: '2g', processBook: '2g',
         recordsChanged: '2g', relayHost: '2g', remoteAccess: '2g', stores: '2g', supervisor: '2g', tynn: '2g', tynnPage: '2g',

@@ -3,6 +3,7 @@ import type { ServerConnection, ServerTransport } from '../core/remote-protocol.
 import type { RendererNotice } from '../core/renderer-notice.js';
 import type { FeatureBrowser } from './feature-callers.js';
 import type { TunnelEvent, TunnelOp } from './protocol-tunnels.js';
+import { takeOverTerminalOf } from '../core/take-over-route.js';
 
 /**
  * MAIN FORWARDS ITS DOOR OVER THE ENGINE LINK (client/host split step 2d-4b, Tynn #898, story #910). The window's page
@@ -114,11 +115,21 @@ export function tunnelLinkOf(client: {
     };
 }
 
-/** What only a window can do for genie-host: move a file to the OS trash, open an app's window. */
+/** What only a window can do for genie-host: move a file to the OS trash, open an app's window, a terminal's window. */
 export interface WindowOpsDeps {
     readonly trash: (absolutePath: string) => Promise<void>;
     readonly workspaces: () => readonly { readonly path: string }[];
     readonly openApp: (packageId: string, preview: boolean) => Promise<void>;
+    /**
+     * A terminal genie-host started for this window (Take Over, Tynn #896), in a window of its own: settles `'closed'` when
+     * that window closes, or `'raised'` at once when one was already open on it.
+     */
+    readonly openTerminalWindow: (route: string) => Promise<'closed' | 'raised'>;
+}
+
+/** The routes a terminal's window opens on: a Take Over terminal's. */
+function terminalWindowRoute(route: unknown): string | null {
+    return typeof route === 'string' && takeOverTerminalOf(route) !== null ? route : null;
 }
 
 /**
@@ -145,6 +156,11 @@ export function windowOpsHandler(deps: WindowOpsDeps): (op: string, args: unknow
             if (typeof id !== 'string' || id.length === 0) throw new Error('name the app to open');
             await deps.openApp(id, op === 'gapps.preview');
             return null;
+        }
+        if (op === 'terminal.window') {
+            const route = terminalWindowRoute(args[0]);
+            if (route === null) throw new Error('this window opens only a terminal window’s own route');
+            return deps.openTerminalWindow(route);
         }
         throw new Error(`${op} is not something this window does for genie-host`);
     };

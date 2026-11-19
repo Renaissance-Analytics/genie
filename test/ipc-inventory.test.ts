@@ -99,7 +99,7 @@ describe('P4 IPC inventory', () => {
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
         // 2b (#896): sign-ins, Take Over and the share link.
         'genie:account-switch': '2b', 'genie:design-login': '2b', 'genie:design-sign-in': '2b', 'genie:provider-login': '2b',
-        'genie:take-over': '2b', 'genie:connect-link': '2b',
+        'genie:connect-link': '2b',
         // 2c (#897): the crash report, the provider's program, the scratch terminal and Add workspace.
         'genie:crash-report-draft': '2c', 'genie:crash-report-send': '2c', 'genie:provider-choose-program': '2c',
         'genie:scratch-terminal-open': '2c', 'genie:add-workspace': '2c',
@@ -120,8 +120,8 @@ describe('P4 IPC inventory', () => {
 
     it('CONTROL: the ratchet notices a new still-to-move row and a frozen one re-labelled a window capability', () => {
         expect(ratchet([['genie:new-host-thing', 'move:2b']], []).joined).toEqual(['genie:new-host-thing']);
-        expect(ratchet([['genie:take-over', 'move:2c']], []).joined).toEqual(['genie:take-over']);
-        expect(ratchet([['genie:take-over', 'window:take-over-window']], ['genie:take-over']).relabelled).toEqual(['genie:take-over']);
+        expect(ratchet([['question:answer', 'move:2c']], []).joined).toEqual(['question:answer']);
+        expect(ratchet([['question:answer', 'window:pop-out']], ['question:answer']).relabelled).toEqual(['question:answer']);
         // A frozen channel whose handler is gone needs no row (the stale check removes it): the list shrinks.
         expect(ratchet([], [])).toEqual({ joined: [], relabelled: [] });
     });

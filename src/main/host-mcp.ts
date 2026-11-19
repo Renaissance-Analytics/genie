@@ -37,8 +37,11 @@ export interface WindowView {
     readonly workspaceNames: Readonly<Record<string, string>>;
     /** The person is at the computer (the window's own measure). No window = nobody is. */
     readonly userActive: boolean;
-    /** Terminals the window runs whose agents call Genie (Take Over windows, flow runs): terminal id → caller. */
-    readonly callers: Readonly<Record<string, Caller>>;
+    /**
+     * Terminals the window runs whose agents call Genie: terminal id → caller. Absent = it runs none: a Take Over TUI is
+     * genie-host's (ports.takeOverCaller, Tynn #896).
+     */
+    readonly callers?: Readonly<Record<string, Caller>>;
 }
 
 export interface HostMcpPorts {
@@ -143,7 +146,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const vouched = injected.get(id);
         if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
-        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers[id] ?? null;
+        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers?.[id] ?? null;
     };
     const settings = ports.settings;
 

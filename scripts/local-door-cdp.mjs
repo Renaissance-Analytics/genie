@@ -389,7 +389,8 @@ try {
         const snap = await main.evaluate('window.genieTest.snapshot()');
         const id = snap.agents.find((a) => a.provider === 'codex')?.id;
         if (!id) throw new Unmeasured('seed has no suitable take-over agent');
-        const r = await main.evaluate(`window.genie.takeOver(${JSON.stringify(id)})`);
+        // Take over is the protocol's (Tynn #896): the page bridge asks genie-host, which asks this window's process to open it.
+        const r = await main.evaluate(`window.genieTest.takeOver(${JSON.stringify(id)})`);
         if (!r?.ok) throw new Unmeasured(`takeOver refused: ${r?.reason ?? 'no result'}`);
         const cdp = await Cdp.connect((await pageFor((t) => /take-?over/i.test(t.url))).webSocketDebuggerUrl);
         await attachPage(cdp);
