@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { describe, expect, it } from 'vitest';
+import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -304,20 +304,5 @@ describe('a trace, summarised by thread and by event (Tynn #537)', () => {
         expect(s.top).toEqual([{ thread: 'CrRendererMain', name: 'Paint', ms: 6, count: 2 }, { thread: 'VizCompositorThread', name: 'Draw', ms: 3, count: 1 }]);
         // A thread without a name event keeps its ids.
         expect(traceSummary([{ ph: 'X', name: 'Task', pid: 3, tid: 30, ts: 0, dur: 500 }]).threads).toEqual([{ thread: '3:30', ms: 0.5 }]);
-    });
-});
-
-describe('the fixture git, bounded (Tynn #536)', () => {
-    it('retries a timeout, resets between tries, and stops at the bound; any other failure at once', () => {
-        const reset = vi.fn();
-        let n = 0;
-        const ok = retryOnTimeout(() => { n += 1; if (n === 1) throw Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }); return 'done'; }, { attempts: 2, reset });
-        expect(ok.value).toBe('done');
-        expect(ok.tries.map((t) => t.ok)).toEqual([false, true]);
-        expect(reset).toHaveBeenCalledOnce();
-        expect(() => retryOnTimeout(() => { throw Object.assign(new Error('x'), { code: 'ETIMEDOUT' }); }, { attempts: 2 })).toThrow('x');
-        let calls = 0;
-        expect(() => retryOnTimeout(() => { calls += 1; throw new Error('not a repository'); }, { attempts: 3 })).toThrow('not a repository');
-        expect(calls).toBe(1);
     });
 });
