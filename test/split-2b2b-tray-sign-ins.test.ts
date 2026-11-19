@@ -90,7 +90,7 @@ async function hostAndTray(signIns: Record<string, unknown>) {
         host: { subscribe: none }, terminals: { onData: none, onExit: none, list: () => [] },
         features: {}, updates: null, workspaceOps: {}, agentOps: {}, signIns,
     } as unknown as HostApiDeps);
-    const access = await RemoteAccessHost.open({ home, hostName: 'box', api: hostRemoteApi({ hostName: 'box', own: {}, alone, workspaceOfAgent: () => null }), transport: hub, now: () => 1_000_000, confirm: allowEveryPairing });
+    const access = await RemoteAccessHost.open({ home, hostName: 'box', api: hostRemoteApi({ hostName: 'box', own: {}, alone, workspaceOfAgent: () => null }), transport: hub, now: () => 1_000_000, confirm: { ...allowEveryPairing, requests: () => [], answer: () => ({ ok: true as const }), onChange: () => () => {} } });
     cleanups.push(async () => { await access.close(); await rm(home, { recursive: true, force: true }); });
     const server = new SessionEngineServer({ token: TOKEN, build: 't', protocol: tunnels });
     const [hostSide, windowSide] = memoryPair();
