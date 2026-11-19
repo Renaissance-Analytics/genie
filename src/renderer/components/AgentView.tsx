@@ -66,6 +66,7 @@ import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 import { turnCards } from '../../core/turn-cards.js';
 import type { StreamLayout } from '../../core/route.js';
 import { costWords } from '../../core/cost-words.js';
+import { ProviderQuote } from './ProviderQuote.js';
 
 /**
  * THE AGENT VIEW — the most important screen.
@@ -1033,6 +1034,7 @@ function AgentViewBody({
                                         {session.providerStop?.code === session.failure.reason && session.providerStop.count > 1 ? <span data-stream-stop-count="">{session.providerStop.count} times</span> : null}
                                     </div>
                                     <p className="mt-1 text-[var(--fg-3)]">{session.providerStop?.code === session.failure.reason ? session.providerStop.words : 'The turn did not finish. The last tool call has no result.'}</p>
+                                    {session.providerStop?.code === session.failure.reason ? <ProviderQuote message={session.providerStop.providerMessage} details={session.providerStop.providerDetails} /> : null}
                                 </div>
                             ) : null}
 

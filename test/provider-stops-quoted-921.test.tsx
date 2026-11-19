@@ -137,7 +137,7 @@ describe('the stop line shows it as quoted provider text', () => {
         return { code: s.code, words: s.words, count: 1, providerMessage: s.providerMessage, providerDetails: s.providerDetails };
     };
     const broken = (stop: LiveSession['providerStop']): LiveSession => ({
-        failure: { reason: 'cyberPolicy', fixes: ['Restart'] }, providerStop: stop, pendingApproval: null, limit: null, running: true, turnState: 'failed',
+        failure: { reason: 'cyberPolicy', fixes: ['Restart'] }, providerStop: stop, pendingApproval: null, running: true, turnState: 'failed',
         startedAt: 1, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null,
     } as unknown as LiveSession);
     const agent = { id: 'a1', name: 'lark', provider: 'codex', fidelity: 'declared' as const };

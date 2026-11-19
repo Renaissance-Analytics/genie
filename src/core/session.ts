@@ -21,7 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { SLEEPING_AFTER_IDLE_MS } from './agent-status.js';
 import { redockReorientation } from './redock.js';
 import { providerProblemWords } from './claude-cli-version.js';
-import { explainProviderStop, providerStopNote } from './provider-stops.js';
+import { explainProviderStop, providerStopNote, type ProviderStopState } from './provider-stops.js';
 
 /**
  * ONE RUNNING AGENT.
@@ -159,7 +159,11 @@ export interface TurnOutcomeLike {
      * Why a failed turn failed, in the provider's own words (prism-acp 0.18, Tynn #791): Claude's assistant `error`,
      * codex's `codexErrorInfo`, verbatim as `reason`, sorted into a `kind`. `rate_limit` is a turn the limit ended.
      */
-    readonly failure?: { readonly reason: string; readonly kind: string; readonly resetsAtMs?: number; readonly message?: string };
+    readonly failure?: {
+        readonly reason: string; readonly kind: string; readonly resetsAtMs?: number;
+        /** prism-acp 0.43.0 (G-311): the provider's own message and allowlisted details. UNTRUSTED; see core/provider-stops.ts. */
+        readonly providerMessage?: string; readonly providerDetails?: Readonly<Record<string, string | number>>;
+    };
 }
 
 /** How a turn can end that is the provider's stop without being an error (ACP `stopReason`; Tynn #859). */
@@ -507,7 +511,7 @@ export class AgentSession {
      * ended the last turn (explained, counted), and the one line the next turn starts with so the agent changes approach.
      */
     #stopCounts = new Map<string, number>();
-    #providerStop: { readonly code: string; readonly words: string; readonly count: number } | null = null;
+    #providerStop: ProviderStopState | null = null;
     #stopNote: string | null = null;
     /** The provider said this login is not signed in (prism-acp `failure.kind: 'auth'`): a login fixes it, not a restart. */
     #signedOut = false;
@@ -976,7 +980,7 @@ export class AgentSession {
     }
 
     /** The last turn its provider stopped, explained and counted (Tynn #859); `null` = none. */
-    get providerStop(): { readonly code: string; readonly words: string; readonly count: number } | null {
+    get providerStop(): ProviderStopState | null {
         return this.#providerStop;
     }
 
@@ -2509,8 +2513,8 @@ export class AgentSession {
         if (stopCode !== null) {
             const count = (this.#stopCounts.get(stopCode) ?? 0) + 1;
             this.#stopCounts.set(stopCode, count);
-            const stop = explainProviderStop(stopCode, outcome.failure?.message ?? null);
-            this.#providerStop = { code: stopCode, words: stop.words, count };
+            const stop = explainProviderStop(stopCode, outcome.failure ?? null);
+            this.#providerStop = { code: stopCode, words: stop.words, count, providerMessage: stop.providerMessage, providerDetails: stop.providerDetails };
             this.#stopNote = providerStopNote(stop, count);
             // A failed turn's stop is on the red stop line; one that ended without an error has no line, so it is said here.
             if (!crashed) void this.#emitRow({ kind: 'notice', level: 'warning', message: `Stopped by the provider (${stopCode}${count > 1 ? `, ${count} times this session` : ''}): ${stop.words}` });
@@ -2787,11 +2791,11 @@ export class AgentSession {
         if (event.kind === 'message') {
             const open = this.#openMessage;
             const messageId = typeof update['messageId'] === 'string' ? update['messageId'] : null;
+            // ONE MESSAGE, ONE ROW, BY THE PROVIDER'S ID (Tynn #921): Codex's item id, and Claude's since prism-acp 0.43.0
+            // (G-312: the Anthropic message id, or a generated `prism_msg_<uuid>` kept until the message stops). A new id
+            // is a new reply whatever the text says (Tynn #918); the same id joins across rows held beside it (genie#1456).
             const sameItem = !open?.messageId || messageId === null || open.messageId === messageId;
-            // A SECOND REPLY after rows held beside the first (Tynn #918) is its own row, though nothing named the break.
-            // INTERIM until prism-acp sends Claude's message id (see `startsAnotherReply`).
-            const another = open !== null && open.event.kind === 'message' && this.#heldBeside.length > 0 && startsAnotherReply(open.event.text, event.text);
-            if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName && sameItem && !another) {
+            if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName && sameItem) {
                 open.event = { ...open.event, text: open.event.text + event.text };
                 this.#options.onEvent?.(open.event, { replacesLast: true });
                 return; // Written to the thread once, when it closes.
@@ -2996,30 +3000,4 @@ function answerFor(request: PermissionRequestLike, decision: 'allow' | 'deny'): 
 /** prism-acp 0.37.0's `ClaudeDriver.prompt()` after an uncertain cancel: `ClaudeCancelStateError`, known by its code. */
 function cancelStateUncertain(error: unknown): boolean {
     return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === CANCEL_STATE_UNCERTAIN_CODE;
-}
-
-/**
- * WHETHER A CHUNK BEGINS A NEW REPLY rather than going on with the open one (Tynn #918; the owner, 2026-11-19: "…its
- * gate.All three flaky checks…" in one bubble). Claude's chunks carry no message id (prism-acp maps `text_delta` alone), so
- * two replies with only a subagent's rows between them reach the session as one stream. ONE streamed text block always
- * keeps the whitespace after a sentence ends; a chunk that opens a sentence straight after a finished one cannot be more
- * of that block. Asked only when rows were held beside the open message (genie#1456): with nothing between them, the
- * pieces are one block's deltas, whatever they say. A cut mid-word or mid-sentence (genie#1456's) never matches.
- *
- * INTERIM: a stand-in until prism-acp sends a message id on Claude's chunks, as its Codex driver already does (prism is
- * asked to log it, as G-311). With an id the `sameItem` check above splits replies exactly, and this rule should go.
- *
- * A reply's end, then a new one (each only after rows held beside it):
- *  - a sentence's end (`. ! ? \u2026 : ;`, a closing quote, bracket or emphasis after it), then a capital or `**`;
- *  - a closed code block (its fence the last line), then anything but whitespace: inside one block a newline follows a fence;
- *  - a list item ending in a lowercase word, then a capitalised WORD (`All three`, never `All()`, never `I job` after `C`).
- * Inside a code block that is still open nothing splits: what it holds is code, not sentences.
- */
-export function startsAnotherReply(open: string, chunk: string): boolean {
-    const fences = (open.match(/^ {0,3}(?:```|~~~)/gm) ?? []).length;
-    if (fences % 2 === 1) return false;
-    if (fences > 0 && /(?:^|\n) {0,3}(?:```|~~~)[ \t]*$/.test(open)) return /^\S/.test(chunk);
-    if (/[.!?\u2026:;][)"'\u201d\u2019\]*_`]*$/u.test(open)) return /^(?:\p{Lu}|\*\*)/u.test(chunk);
-    const last = open.slice(open.lastIndexOf('\n') + 1);
-    return /^\s*(?:[-*+]|\d+[.)])\s/.test(last) && /\p{Ll}$/u.test(open) && /^\p{Lu}\p{Ll}*[\s,.:;!?]/u.test(chunk);
 }
