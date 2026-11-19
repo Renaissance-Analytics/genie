@@ -128,7 +128,7 @@ function phasePorts(env: Record<string, string>) {
     let wall = 1_700_000_000_000, now = 50;
     const lines: string[] = [];
     const globals: { __artboardPhases?: { events: unknown[]; dropped: number } } = {};
-    return { lines, globals, tick: (ms: number) => { wall += ms; now += ms; }, timing: () => ({ enabled: true, trace: globals.__artboardPhases, now: () => now, cpuUsage: () => ({ user: 0, system: 0 }) }),
+    return { lines, globals, tick: (ms: number) => { wall += ms; now += ms; }, timing: (): NonNullable<Parameters<typeof beginArtboardBuildTiming>[2]> => ({ enabled: true, trace: globals.__artboardPhases as NonNullable<Parameters<typeof beginArtboardBuildTiming>[2]>['trace'], now: () => now, cpuUsage: () => ({ user: 0, system: 0 }) }),
         ports: { env, pid: 4242, wallNow: () => wall, globals, emit: (line: string) => lines.push(line) } };
 }
 it('genie-host records each ArtBoard build phase with its wall window, never dropping past the in-memory cap', async () => {
