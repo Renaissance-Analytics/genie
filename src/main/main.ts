@@ -20,9 +20,9 @@ import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
-import { transportHub, type CallContext } from '../core/remote-protocol.js';
+import { transportHub } from '../core/remote-protocol.js';
 import { agentDetailFor } from './agent-detail.js';
-import { listShareLinks, mintShareLink, revokeShareLink } from './tynn-share-links.js';
+import { shareLinksOver } from './tynn-share-links.js';
 import { browserConnectionFor } from '../core/browser-connection.js';
 import { drivablePages } from './page-navigation-electron.js';
 import { isGenHost } from './relay-site.js';
@@ -1538,9 +1538,7 @@ async function boot(): Promise<void> {
          */
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
-        // A REMOTE METHOD GENIE-HOST DOES NOT OWN YET (Tynn #409): done here, by this window's own host API.
         onFeatureEffect: (connectionId: string, method: string, args: unknown[]) => featureEffectNow ? featureEffectNow(connectionId, method, args) : Promise.reject(new Error('this caller’s window is still starting')),
-        onRemoteInvoke: (method: string, args: unknown[], context: CallContext) => (remoteApiNow ? remoteApiNow.invoke(method as Parameters<ReturnType<typeof buildHostApi>['invoke']>[0], args, context) : Promise.reject(new Error('Genie’s window is still starting; try again in a moment.'))),
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
         // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
         phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
@@ -1636,6 +1634,8 @@ async function boot(): Promise<void> {
                 publishBrowserFacts();
                 // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
                 // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
+                // This window says it is one (Tynn #898): genie-host's install, whoever asks it, spares it and waits for it to go.
+                void client.updates().announce().catch(() => {});
                 void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...windowLaunchFlags(process.argv)] }).catch(() => {});
                 void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
                 cookieBridge?.relinked();
@@ -2474,12 +2474,8 @@ async function boot(): Promise<void> {
                         return setWorkstationRole((path, init) => account.request(path, init), id, role, code);
                     },
                     rereadRole: () => { void readWorkstationRoleNow?.(); },
-                    shares: {
-                        list: (id) => listShareLinks(shareRequest, ownWorkstation(), id),
-                        mint: (input) => mintShareLink(shareRequest, ownWorkstation(), input),
-                        // Keep immediate revalidation of a revoked link's live guest session (audit M-c).
-                        revoke: (id) => revokeShareLink(shareRequest, ownWorkstation(), id, async () => { await agentEngineLink?.client.relayHost().revalidate(); }),
-                    },
+                    // Keep immediate revalidation of a revoked link's live guest session (audit M-c).
+                    shares: shareLinksOver({ request: shareRequest, workstation: ownWorkstation, endSessions: async () => { await agentEngineLink?.client.relayHost().revalidate(); } }),
                 },
             },
             // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).

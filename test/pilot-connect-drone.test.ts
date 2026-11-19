@@ -46,7 +46,7 @@ async function drone(keepWelcomeToken: (token: string) => Promise<void> = async 
     let accept!: (c: ServerConnection) => void;
     const alone: HostApi = { invoke: async (method) => (method === 'snapshot' ? { agents: [], workspaces: [] } : null), onEvent: () => () => {}, workspaceOfAgent: () => null };
     const host = new RemoteHost({
-        api: hostRemoteApi({ hostName: 'drone', own: {}, window: { connected: () => false, invoke: async () => null }, alone }),
+        api: hostRemoteApi({ hostName: 'drone', own: {}, alone }),
         hostName: 'drone', baton, devices, pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing,
         transport: { onConnection: (l) => { accept = l; return () => {}; } },
     });

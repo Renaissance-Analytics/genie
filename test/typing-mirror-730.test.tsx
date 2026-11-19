@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { forwardedCallContext, inMemoryPair, LOCAL_EVENTS, parseMessage, TYPING_EVENT, type CallContext, type PreAuth, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
+import { inMemoryPair, LOCAL_EVENTS, parseMessage, TYPING_EVENT, type CallContext, type PreAuth, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
 import { draftChange, readTypingEvent, TYPING_FADE_MS, TYPING_SEND_MS, TYPING_SHOWN_CHARS, TypingBoard, TypingSender, typingTail, type TypingEvent } from '../src/core/typing-mirror.js';
 import type { ChatDraft } from '../src/core/chat-drafts.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
@@ -188,21 +188,29 @@ let home = '';
 let access: RemoteAccessHost;
 let connections: Array<(c: ServerConnection) => void> = [];
 let windowApi: ReturnType<typeof windowHostApi>;
+/** genie-host's own answers (host-alone-api.ts builds the same host API): every remote call goes to them (Tynn #898). */
+let hostApi: ReturnType<typeof windowHostApi>;
 let localHeard: unknown[] = [];
+/** What genie-host's own answers publish on the local channel: where a Pilot's typing lands until step 2d-4. */
+let hostLocalHeard: unknown[] = [];
 
 beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie-730-typing-'));
     connections = [];
     localHeard = [];
+    hostLocalHeard = [];
     windowApi = windowHostApi();
+    hostApi = windowHostApi();
+    hostApi.onEvent((channel, payload) => { if (channel === LOCAL_EVENTS.typing) hostLocalHeard.push(payload); });
     // The client's own window hears its local channel (main's RemoteHost sends it to this machine's windows).
     windowApi.onEvent((channel, payload) => { if (channel === LOCAL_EVENTS.typing) localHeard.push(payload); });
     const remoteWindowEvents = new Set<Listener>();
     const api = hostRemoteApi({
         hostName: 'client-box',
         own: {},
-        // The engine link's reverse call: genie-host hands the window what it does not own, with the caller's context.
-        window: { connected: () => true, invoke: (method, args, context) => windowApi.invoke(method, args, forwardedCallContext(context)) },
+        // genie-host answers every remote call itself (Tynn #898 step 2d-2b); a window's typing still reaches remote
+        // connections through its relay (onEvent below).
+        alone: hostApi,
         onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
         workspaceOfAgent: (agentId) => (agentId === KAI.id ? 'ws_shop' : null),
     });
@@ -261,14 +269,20 @@ describe('the whole path: the Pilot’s typing on the client, and the client’s
         await settle();
         expect(p.result(id)?.ok).toBe(false);
         expect(localHeard).toEqual([]);
+        expect(hostLocalHeard).toEqual([]);
     });
 
-    it('the driving Pilot’s typing reaches the client’s window, named, as it is typed', async () => {
+    /*
+     * Since step 2d-1 genie-host's own answers take the Pilot's typing and publish it, named, on their local channel. This
+     * machine's window is not yet one of genie-host's connections (its renderer is served by main's RemoteHost), so it
+     * hears it only from step 2d-4, when the window connects to genie-host's RemoteHost (Tynn #898).
+     */
+    it('the driving Pilot’s typing is taken by genie-host and published, named, as it is typed', async () => {
         const p = await drivingPilot();
         const id = p.call('agents.typing', KAI.id, 'can you see', 'window-pilot');
         await settle();
         expect(p.result(id)?.ok).toBe(true);
-        expect(localHeard).toEqual([{ agentId: KAI.id, text: 'can you see', source: 'window-pilot', label: 'Pilot laptop' }]);
+        expect(hostLocalHeard).toEqual([{ agentId: KAI.id, text: 'can you see', source: 'window-pilot', label: 'Pilot laptop' }]);
     });
 
     it('the client’s typing reaches the Pilot (the host’s own window is named by nobody: null)', async () => {

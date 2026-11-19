@@ -55,10 +55,8 @@ function ports(over: Record<string, unknown> = {}): HostAlonePorts {
     } as unknown as HostAlonePorts;
 }
 
-function gate(alone: HostApi, connected: boolean) {
-    const asked: string[] = [];
-    const api = hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => connected, invoke: async (method: RemoteMethod) => { asked.push(method); return `window answered ${method}`; } }, alone });
-    return { api, asked };
+function gate(alone: HostApi) {
+    return { api: hostRemoteApi({ hostName: 'alphar', own: {}, alone }) };
 }
 
 beforeEach(async () => {
@@ -80,17 +78,15 @@ describe('the four are genie-host\'s', () => {
         for (const method of FAMILY) expect(HOST_ALONE_METHODS.has(method)).toBe(true);
     });
 
-    it.each([true, false])('with a window connected=%s, every one is answered by genie-host and the window is never asked', async (connected) => {
+    it('every one is answered by genie-host (since step 2d-2b there is no window to ask)', async () => {
         const alone = hostAloneApi(ports());
         const invoke = vi.spyOn(alone, 'invoke');
-        const { api, asked } = gate(alone, connected);
+        const { api } = gate(alone);
         for (const method of FAMILY) {
             const answer = await api.invoke(method, []).catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
-            expect(answer).not.toBe(`window answered ${method}`);
             expect(String(answer)).not.toMatch(/open Genie on alphar/);
         }
         expect(invoke.mock.calls.map(([method]) => method)).toEqual([...FAMILY]);
-        expect(asked).toEqual([]);
     });
 });
 

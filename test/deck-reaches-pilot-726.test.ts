@@ -51,7 +51,6 @@ beforeEach(async () => {
     const api = hostRemoteApi({
         hostName: 'client-box',
         own: {},
-        window: { connected: () => windowOpen, invoke: async (method) => { if (method === 'snapshot') return EMPTY; throw new Error(`no ${method}`); } },
         onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
         alone: () => alone,
         workspaceOfAgent: () => 'ws_shop',

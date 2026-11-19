@@ -177,15 +177,11 @@ describe('a host path picked on this machine', () => {
     });
 });
 
-describe('a call forwarded from genie-host to a window', () => {
+describe('a call genie-host answers', () => {
     it('keeps who it came from', async () => {
-        const window = vi.fn(async () => 'from-window');
         const alone = vi.fn(async () => 'from-host');
-        const api = hostRemoteApi({ hostName: 'h', own: {}, window: { connected: () => true, invoke: window as never } });
+        const api = hostRemoteApi({ hostName: 'h', own: {}, alone: { invoke: alone as never, onEvent: () => () => {}, workspaceOfAgent: () => null } });
         await (api.invoke as unknown as (m: string, a: unknown[], c: Context) => Promise<unknown>)('snapshot', [], device());
-        expect(window).toHaveBeenCalledExactlyOnceWith('snapshot', [], device());
-        const closed = hostRemoteApi({ hostName: 'h', own: {}, window: { connected: () => false, invoke: window as never }, alone: { invoke: alone as never, onEvent: () => () => {}, workspaceOfAgent: () => null } });
-        await (closed.invoke as unknown as (m: string, a: unknown[], c: Context) => Promise<unknown>)('snapshot', [], device());
         expect(alone).toHaveBeenCalledExactlyOnceWith('snapshot', [], device());
     });
 
@@ -207,6 +203,5 @@ describe('main wires it', () => {
         expect(replica).toContain("act: (action, context) => call('act', [action], context)");
         expect(replica).toContain("[method, args, context, context ? browser(context) : null]");
         expect(readFileSync('src/main/features-host.ts', 'utf8')).toContain('featureOriginOf(context, caller.picks)');
-        expect(main).toMatch(/onRemoteInvoke: \(method: string, args: unknown\[\], context: CallContext\) =>[^\n]*, args, context\)/);
     });
 });

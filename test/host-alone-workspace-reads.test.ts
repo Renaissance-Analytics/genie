@@ -51,8 +51,8 @@ function ports(over: Record<string, unknown> = {}): HostAlonePorts {
     } as unknown as HostAlonePorts;
 }
 
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
-    return hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone });
+function gate(alone: HostApi): HostApi {
+    return hostRemoteApi({ hostName: 'alphar', own: {}, alone });
 }
 
 beforeEach(async () => {
@@ -110,11 +110,11 @@ describe('repositories with no window', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected genie-host still answers and writes its own store (Tynn #666)', async () => {
+    it('genie-host answers and writes its own store (Tynn #666)', async () => {
         const store = settings();
         const alone = hostAloneApi(ports({ settings: store }));
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
+        const api = gate(alone);
         expect(await api.invoke('workspaces.setSetting', ['tynn', 'terminals', 4])).toEqual({ ok: true });
         expect(invoke).toHaveBeenCalledTimes(1);
         expect(store.workspaceValues('tynn')).toEqual({ terminals: 4 });

@@ -14,8 +14,8 @@ import { Store } from '../src/main/store.js';
 /*
  * A PILOT'S AGENT OPERATIONS WITH EVERY WINDOW CLOSED (Tynn #553, host split P5d.5a). genie-host answers every `agents.*`
  * call itself, with the same operations the window runs (agent-ops-host.ts over one shared set of ports), so an agent can
- * be set up, switched or deleted from another machine while nothing is open here. With a window connected the window
- * answers, as it always has.
+ * be set up, switched or deleted from another machine while nothing is open here, and with a window open too
+ * (Tynn #898: no remote method is sent to a window).
  */
 
 let dir = '';
@@ -93,11 +93,10 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
 }
 
 /** The gate a Pilot's call comes through, with no window connected. */
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
+function gate(alone: HostApi): HostApi {
     return hostRemoteApi({
         hostName: 'alphar',
         own: {},
-        window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window },
         alone,
     });
 }
@@ -245,14 +244,12 @@ describe('they do what the window\'s do', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected genie-host still answers, and the window is not asked (Tynn #898)', async () => {
+    it('genie-host answers it itself: no window is asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports(engine()));
         const invoke = vi.spyOn(alone, 'invoke');
-        const asked: string[] = [];
-        const api = gate(alone, { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
-        expect(await api.invoke('agents.setMode', [atlas.id, 'automated'])).not.toBe('window answered agents.setMode');
+        const api = gate(alone);
+        await api.invoke('agents.setMode', [atlas.id, 'automated']);
         expect(invoke).toHaveBeenCalledWith('agents.setMode', [atlas.id, 'automated'], undefined);
-        expect(asked).toEqual([]);
         expect(registry.find(atlas.id)?.mode).toBe('automated');
     });
 
@@ -265,7 +262,7 @@ describe('the gate', () => {
 
     it('a family not moved yet still says to open a window (CONTROL: this is not an open door)', async () => {
         const api = gate(hostAloneApi(ports(engine())));
-        await expect(api.invoke('host.home', [])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('workspaces.tynnBoardChanges', ['tynn', {}, null, []])).rejects.toThrow('open Genie on alphar');
     });
 });
 

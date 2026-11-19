@@ -1,7 +1,6 @@
 import type { AccountRecord } from '../core/accounts.js';
 import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
-import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { KeyringService } from './keyring-service.js';
@@ -29,7 +28,7 @@ import {
 } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { cancelIntent } from '../core/session.js';
-import type { CallContext, ClientTransport } from '../core/remote-protocol.js';
+import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
@@ -425,13 +424,7 @@ export class SessionEngineServer {
         return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
     }
 
-    /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
-    remoteInvoke(method: string, args: unknown[], context?: CallContext): Promise<unknown> {
-        // Staged bytes cross as base64: the reverse call is JSON (Tynn #657, remote-invoke-wire.ts).
-        return this.#reverse('client.remoteInvoke', [method, encodeRemoteInvokeArgs(method, args), context ?? null], { localOnly: true });
-    }
-
-    /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */
+    /** The newest local window's connection: the one whose events remote connections follow. */
     newestLocalWindow(): string | null {
         return [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1)?.id ?? null;
     }
@@ -489,6 +482,8 @@ export class SessionEngineServer {
             }
             const was = conn.authed;
             this.#connections.delete(conn);
+            // A window that said it is one is no longer spared or waited for by an install (Tynn #898).
+            this.#options.updates?.windowDropped(conn.id);
             this.#gappSessionOwners.get(conn)?.closeAll();
             const reviews = this.#marketplaceReviews.get(conn);
             if (reviews) {
@@ -903,7 +898,7 @@ export class SessionEngineServer {
             case 'engine.updates':
                 if (!this.#options.updates) throw new Error('This host runs no updater.');
                 if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
-                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true });
+                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true, connection: conn.id });
             case 'engine.hosting':
                 if (!this.#options.hosting) throw new Error('This host runs no hosting.');
                 if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');

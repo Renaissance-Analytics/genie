@@ -109,8 +109,6 @@ export async function groupTwoFixture(machine?: HostFeatureMachinePorts) {
         hosting: { api: hostingApi, supervisor, processes: book, processScheduler: scheduler, workspaceVisible: id => visible.has(id), engineStatusWaitMs: 5 },
         ...(machine ? { machine } : {}),
     });
-    let windows = 0;
-    const invokeWindow = vi.fn(async (method: RemoteMethod) => ({ windowAnswered: method }));
     const alone = hostAloneApi({ hostName: 'fixture-host', registry, settings, engine: () => null, cwdFor: () => workspace,
         startRefusal: () => null, models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
         attention, approvals: { resolve: () => true }, inbox, deliverToAgent: async () => true,
@@ -119,7 +117,7 @@ export async function groupTwoFixture(machine?: HostFeatureMachinePorts) {
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
         features: service,
     } as unknown as HostAlonePorts);
-    const api = hostRemoteApi({ hostName: 'fixture-host', own: {}, alone, window: { connected: () => windows > 0, invoke: invokeWindow } });
+    const api = hostRemoteApi({ hostName: 'fixture-host', own: {}, alone });
     const offs: Array<() => void> = [];
     const outcome = (method: RemoteMethod, args: unknown[] = []) => api.invoke(method, args, groupTwoContext)
         .then(value => ({ ok: true as const, value }), error => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
@@ -146,7 +144,7 @@ export async function groupTwoFixture(machine?: HostFeatureMachinePorts) {
         await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     };
     return { dir, workspace, service, api, outcome, settings, hosting, hostingCalls, supervisor, book, scheduler, docker, dockerCalls, opened, print,
-        seedEngine, seedSite, seedManagedSite, seedProcess, changes, visible, close, invokeWindow, windows: (count: number) => { windows = count; },
+        seedEngine, seedSite, seedManagedSite, seedProcess, changes, visible, close,
         frontChanged: () => { linked = !linked; for (const listener of frontChanges) listener(); },
         envelope: async () => JSON.parse(await readFile(join(workspace, 'project.json'), 'utf8')) as Record<string, unknown>,
         bookFile: async () => JSON.parse(await readFile(join(dir, 'runtime', 'processes.json'), 'utf8')) as { processes: Array<{ id: string; wanted: boolean }> },

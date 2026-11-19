@@ -11,7 +11,7 @@ import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
 import { workspaceLifecycleApi, workspaceLifecyclePorts, type CloneOfferOps, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { workspaceSettingsOps } from './workspace-reads-api.js';
 import { workspaceTynnApi } from './workspace-tynn-api.js';
-import { buildHostApi, type HostApiDeps } from './host-api.js';
+import { buildHostApi, type HostApiDeps, type LocalOwnerDeps } from './host-api.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { nodeAgentConfigFs } from './agent-config-host.js';
 import { existsSync } from 'node:fs';
@@ -78,8 +78,18 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
 /** The Tynn tab, read and changed (Tynn #553, P5d.5f). A live view's change reads stay the local window's. */
 export const HOST_TYNN_TAB_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['workspaces.tynnBoard', 'workspaces.tynnPage', 'workspaces.tynnIssues', 'workspaces.tynnBoardAction', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction']);
 
-/** Every method genie-host answers itself while no window is connected. */
-export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_AGENT_WRITE_METHODS, ...HOST_WORKSPACE_READ_METHODS, ...HOST_WORKSPACE_LIFECYCLE_METHODS, ...HOST_TYNN_TAB_METHODS]);
+/**
+ * THE LAST A WINDOW ANSWERED (Tynn #898 step 2d-2b): opening, stopping and interrupting an agent, a queued draft's action,
+ * the host's folders, the update actions and the share links. genie-host's session host, disk, updater and Tynn account.
+ */
+export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
+    'openAgent', 'stopAgent', 'cancelTurn', 'resolvePrompt', 'host.listDir', 'host.mkdir', 'host.home',
+    'updates.check', 'updates.download', 'updates.install', 'updates.forceDrain',
+    'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke',
+]);
+
+/** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_AGENT_WRITE_METHODS, ...HOST_WORKSPACE_READ_METHODS, ...HOST_WORKSPACE_LIFECYCLE_METHODS, ...HOST_TYNN_TAB_METHODS, ...HOST_LAST_METHODS]);
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
@@ -135,6 +145,8 @@ export interface HostAlonePorts {
     /** genie-host's Tynn account, as the Tynn tab reaches it, and its page reader. */
     readonly tynnTab: { board: Parameters<typeof workspaceTynnApi>[0]; readPage: Parameters<typeof workspaceTynnApi>[1] };
     readonly updates?: HostApiDeps['updates'];
+    /** genie-host's share links (Tynn #839, #898 step 2d-2b): over its Tynn account, a revoke re-checks its relay sessions. */
+    readonly shares?: LocalOwnerDeps['tynnNetwork']['shares'];
     readonly schedule?: HostApiDeps['schedule'];
     /** The owned feature aggregator (Tynn #720), supplied when its measured contributors are composed. */
     readonly features?: HostApiDeps['features'];
@@ -256,6 +268,8 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry.listAgents(), workspaceId), subscribe: (listener) => activityFeeds.subscribe(listener) },
         headroom: ports.headroom,
         updates: ports.updates ?? null,
+        // Of the owner's operations, a remote client reaches only the share links (the rest are `local`, refused before).
+        ...(ports.shares ? { localOwner: windowOnly<LocalOwnerDeps>('owner operations', { tynnNetwork: windowOnly<LocalOwnerDeps['tynnNetwork']>('tynnNetwork', { shares: ports.shares }) }) } : {}),
     };
     return { ...buildHostApi(deps), ...(ports.features ? { ownsFeatures: true } : {}) };
 }

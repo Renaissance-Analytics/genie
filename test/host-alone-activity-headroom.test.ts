@@ -16,8 +16,7 @@ import { Store } from '../src/main/store.js';
 /*
  * THE DASHBOARD'S LANES AND RATE LIMITS WITH EVERY WINDOW CLOSED (Tynn #553, host split P5d.5b). genie-host builds each
  * agent's activity feed from its own session host, and keeps each provider's latest rate-limit reading, so what a Pilot
- * reads does not depend on a window being open here. With a window connected the window answers, and genie-host spends
- * nothing building feeds nobody it serves will read.
+ * reads does not depend on a window being open here (Tynn #898: genie-host answers, window or not).
  */
 
 let dir = '';
@@ -75,8 +74,8 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
     } as unknown as HostAlonePorts;
 }
 
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
-    return hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone });
+function gate(alone: HostApi): HostApi {
+    return hostRemoteApi({ hostName: 'alphar', own: {}, alone });
 }
 
 beforeEach(async () => {
@@ -112,18 +111,18 @@ describe('the activity feeds with no window', () => {
         expect(seen.map((f) => f.agentId)).toEqual([atlas.id]);
     });
 
-    it('with a window connected genie-host still builds the feed and answers (Tynn #898)', async () => {
+    it('genie-host builds the feed and answers it itself (Tynn #898)', async () => {
         const e = engine();
         const clock = timers();
         const alone = hostAloneApi(ports(e, { schedule: clock.schedule }));
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
+        const api = gate(alone);
         // No agent watched: an agent's detail reads the ledger too, and this counts only what the feeds read.
         api.onEvent(() => {}, { wantsAgent: () => false });
         e.emit(atlas.id);
         clock.run();
         expect(ledgerReads).toBeGreaterThan(0);
-        expect(await api.invoke('activity', ['tynn'])).not.toBe('window answered activity');
+        await api.invoke('activity', ['tynn']);
         expect(invoke).toHaveBeenCalledWith('activity', ['tynn'], undefined);
     });
 
@@ -152,8 +151,8 @@ describe('the rate limits with no window', () => {
         expect(seen).toEqual([[LOCAL_EVENTS.headroom, { claude: room(12) }]]);
     });
 
-    it('with a window connected genie-host still answers from its own board (Tynn #898)', async () => {
-        const api = gate(hostAloneApi(ports(engine(), { headroom: { view: () => ({ claude: room(38) }), subscribe: () => () => {} } })), { connected: () => true, invoke: async (method) => `window answered ${method}` });
+    it('genie-host answers from its own board (Tynn #898)', async () => {
+        const api = gate(hostAloneApi(ports(engine(), { headroom: { view: () => ({ claude: room(38) }), subscribe: () => () => {} } })));
         expect(await api.invoke('headroom', [])).toEqual({ claude: room(38) });
     });
 });

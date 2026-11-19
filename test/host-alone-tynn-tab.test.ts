@@ -54,8 +54,8 @@ function ports(tab: Record<string, unknown> = {}): HostAlonePorts {
     } as unknown as HostAlonePorts;
 }
 
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
-    return hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone });
+function gate(alone: HostApi): HostApi {
+    return hostRemoteApi({ hostName: 'alphar', own: {}, alone });
 }
 
 beforeEach(async () => {
@@ -119,14 +119,12 @@ describe('the Tynn tab with no window', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected genie-host still answers, and the window is not asked (Tynn #898)', async () => {
+    it('genie-host answers it itself: no window is asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports());
         const invoke = vi.spyOn(alone, 'invoke');
-        const asked: string[] = [];
-        const api = gate(alone, { connected: () => true, invoke: async (method) => { asked.push(method); return `window answered ${method}`; } });
-        expect(await api.invoke('workspaces.tynnBoard', ['tynn', {}])).not.toBe('window answered workspaces.tynnBoard');
+        const api = gate(alone);
+        await api.invoke('workspaces.tynnBoard', ['tynn', {}]);
         expect(invoke).toHaveBeenCalledWith('workspaces.tynnBoard', ['tynn', {}], undefined);
-        expect(asked).toEqual([]);
     });
 
     it('the live view\'s change reads stay the window\'s own (CONTROL)', async () => {

@@ -171,18 +171,18 @@ describe('the accounts family is on the remote wire, for every client', () => {
 });
 
 describe('genie-host answers the accounts family itself, window or not', () => {
-    it('its own answers run with a window connected, and the window is never asked', async () => {
-        const accounts = port(), windowInvoke = vi.fn(async () => 'from the window');
-        const api = hostRemoteApi({ hostName: 'host', own: { ...accountsOwnAnswers(accounts) }, window: { connected: () => true, invoke: windowInvoke } });
+    it('its own answers run ahead of everything else (Tynn #898: there is no window to ask)', async () => {
+        const accounts = port(), aloneInvoke = vi.fn(async () => 'from the host\'s other answers');
+        const api = hostRemoteApi({ hostName: 'host', own: { ...accountsOwnAnswers(accounts) }, alone: { invoke: aloneInvoke, onEvent: () => () => {}, workspaceOfAgent: () => null } });
         expect(await api.invoke('accounts.list' as RemoteMethod, [])).toEqual(SNAPSHOT);
         expect(await api.invoke('accounts.act' as RemoteMethod, [RENAME])).toEqual({ ok: true });
         expect(await api.invoke('accounts.dismissOffer' as RemoteMethod, ['offer_1'])).toBe(true);
-        expect(windowInvoke).not.toHaveBeenCalled();
+        expect(aloneInvoke).not.toHaveBeenCalled();
     });
 
-    it('and with no window at all', async () => {
+    it('and before the rest of genie-host\'s answers are built', async () => {
         const accounts = port();
-        const api = hostRemoteApi({ hostName: 'host', own: { ...accountsOwnAnswers(accounts) }, window: { connected: () => false, invoke: async () => { throw new Error('no window'); } } });
+        const api = hostRemoteApi({ hostName: 'host', own: { ...accountsOwnAnswers(accounts) } });
         expect(await api.invoke('accounts.list' as RemoteMethod, [])).toEqual(SNAPSHOT);
     });
 

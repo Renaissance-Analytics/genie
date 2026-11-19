@@ -300,7 +300,7 @@ describe('a window quits when the host\'s install restarts, whoever asked', () =
 describe('the reverse call is gone', () => {
     it('no engine method, server call, window handler or wire codec for it remains', () => {
         expect((ENGINE_METHODS as readonly string[]).includes('client.remoteInvoke')).toBe(false);
-        expect(readFileSync('src/main/session-engine-server.ts', 'utf8')).not.toMatch(/remoteInvoke|newestLocalWindow/);
+        expect(readFileSync('src/main/session-engine-server.ts', 'utf8')).not.toMatch(/remoteInvoke|remote-invoke-wire/);
         expect(readFileSync('src/main/session-engine-client.ts', 'utf8')).not.toMatch(/onRemoteInvoke|remote-invoke-wire/);
         expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/onRemoteInvoke/);
         expect(existsSync('src/main/remote-invoke-wire.ts')).toBe(false);
