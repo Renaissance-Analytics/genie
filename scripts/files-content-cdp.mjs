@@ -186,7 +186,8 @@ finally {
     try { await page?.evaluate('window.__filesCounters?.stop();true', 3000); } catch {}
     try { await main?.evaluate('globalThis.__filesCounters?.stop();true', 3000); } catch {}
     try { await main?.evaluate('globalThis.__filesMeasure?.stop();true', 3000); } catch {}
-    try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.quit();true", 3000); } catch {}
+    // Ended, not quit (Tynn #916): a quit asks first when anything runs, and that box blocks main until genie-host's hang watchdog starts a new window.
+    try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.exit(0);true", 3000); } catch {}
     for (const session of sessions) session.socket.close();
     await sleep(1000); if (app?.exitCode === null) { try { app.kill('SIGTERM'); } catch {} }
     // The isolated root did not exist before this run. Only its newly created host record is eligible, never enumeration.

@@ -108,7 +108,8 @@ try {
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); }
 finally {
     try { await main?.evaluate('globalThis.__draftMain?.stop();true'); } catch {}
-    try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.quit();true"); } catch {}
+    // Ended, not quit (Tynn #916): a quit asks first when anything runs, and that box blocks main until genie-host's hang watchdog starts a new window.
+    try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.exit(0);true"); } catch {}
     for (const session of sessions) session.socket.close(); await sleep(1000); if (app?.exitCode === null) { try { app.kill('SIGTERM'); } catch {} }
     const record = root ? json(join(root, '.genie', 'runtime', 'host.json')) : null;
     if (hostRecord && record?.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt && Number.isFinite(record.startedAt) && record.startedAt >= started) { try { process.kill(record.pid, 'SIGTERM'); } catch {} }
