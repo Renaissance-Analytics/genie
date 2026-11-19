@@ -40,6 +40,11 @@ export interface HostLocalSources {
     /** The GApp book's actions (gapps-api.ts `gappsApi`); null while it is not open. */
     readonly gapps: () => GAppBookApi | null;
     readonly onGappsChanged: (listener: () => void) => () => void;
+    /**
+     * An app's window, opened by the window that asked (Tynn #898 step 2d-4b): a window-local client operation, done in
+     * that window's process (gapp-windows-electron.ts). `context` is the caller RemoteHost admitted; absent = refused in words.
+     */
+    readonly appWindow?: (context: import('../core/remote-protocol.js').CallContext | undefined, packageId: string, preview: boolean) => Promise<void>;
     readonly say: (line: string) => void;
     readonly now?: () => Date;
 }

@@ -102,6 +102,8 @@ export type Awaitable<T> = T | Promise<T>;
 /** What main.ts handed its in-process SessionHost, minus what runs on the host. Same names, same meanings. */
 export interface EngineClientOptions {
     readonly onFeatureEffect?: (connectionId: string, method: string, args: unknown[]) => Promise<unknown>;
+    /** What only a window can do for genie-host (window-tunnel.ts windowOpsHandler): the OS trash, an app's window. */
+    readonly onWindowOp?: (op: string, args: unknown[]) => Promise<unknown>;
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
     readonly onCarryOverSent?: (agentId: AgentId) => void;
     readonly onRedockSent?: (agentId: AgentId, at: string) => void;
@@ -1029,6 +1031,11 @@ export class SessionEngineClient {
         this.#filesListeners.add(listener);
         return () => { this.#filesListeners.delete(listener); };
     }
+
+    /** One op on a tunnel of this window's protocol connections to genie-host's RemoteHost; false while not linked. */
+    protocolSend(_op: import('./protocol-tunnels.js').TunnelOp, _tunnel: string, _payload: unknown): boolean { throw new Error('2d-4b: not built'); }
+
+    onProtocolFrame(_listener: (event: import('./protocol-tunnels.js').TunnelEvent) => void): () => void { throw new Error('2d-4b: not built'); }
 
     /** The frames of genie-host's spawn-host child of `profile`. */
     onSpawnFrame(profile: string, listener: (frame: SpawnFrame) => void): () => void {

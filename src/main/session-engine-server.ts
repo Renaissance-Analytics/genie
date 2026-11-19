@@ -101,6 +101,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** This machine's windows' protocol connections, tunnelled to genie-host's RemoteHost (protocol-tunnels.ts). */
+    readonly protocol?: Pick<import('./protocol-tunnels.js').ProtocolTunnels, 'receive' | 'dropOwner'>;
     readonly features?: FeatureCallers;
     /** This machine as a workstation (P3.4): the host holds its key. */
     readonly workstation?: WorkstationService;
@@ -1026,6 +1028,12 @@ export class SessionEngineServer {
     }
 
     /** A batch or a git result of the file-watch hub, to the window (connection) that owns the views it is for. */
+    /** A feature effect for a tunnelled connection, to the window process that owns it. */
+    featureEffect(_owner: string, _connectionId: string, _method: string, _args: unknown[]): Promise<unknown> { return Promise.reject(new Error('2d-4b: not built')); }
+
+    /** What only a window can do (the trash, an app's window): to `owner`'s window, or with null any local window. */
+    windowOp(_owner: string | null, _op: string, _args: unknown[]): Promise<unknown> { return Promise.reject(new Error('2d-4b: not built')); }
+
     /** A socket to another machine said something: to the window that opened it, and no other. */
     deviceEvent(owner: string, event: DeviceLinkEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'device.event', event);

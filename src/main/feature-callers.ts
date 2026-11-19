@@ -65,6 +65,10 @@ export class FeatureCallers {
         };
     }
 
+    bindConnection(_connectionId: string, _owner: string, _effect: FeatureEffect): void { throw new Error('2d-4b: not built'); }
+    unbindConnection(_connectionId: string): void { throw new Error('2d-4b: not built'); }
+    connectionBrowser(_connectionId: string, _browser: FeatureBrowser | null): void { throw new Error('2d-4b: not built'); }
+
     dropOwner(owner: string): void {
         for (const [key, value] of this.#callers) if (value.owner === owner) { this.service()?.releaseCaller(value.context); this.#callers.delete(key); }
     }
