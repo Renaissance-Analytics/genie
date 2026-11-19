@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +65,8 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie-split-2d2-'));
     registry = new Registry(new Store(dir));
     await registry.load({ name: 'alphar', healthy: true });
+    // Real workspaces are folders on the host's disk: adding an agent writes into them.
+    await mkdir(join(dir, 'tynn')); await mkdir(join(dir, 'moic'));
     await registry.addWorkspace({ id: 'tynn', path: join(dir, 'tynn') });
     await registry.addWorkspace({ id: 'moic', path: join(dir, 'moic') });
     atlas = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
@@ -109,7 +111,7 @@ describe('what each one does on genie-host', () => {
     it('addAgent registers the agent in genie-host\'s registry and writes its folder', async () => {
         const api = hostAloneApi(ports());
         const created = await api.invoke('addAgent', ['tynn', { name: 'vega', purpose: 'reviews', provider: 'claude' }]) as { ok: boolean; id?: string };
-        expect(created).toMatchObject({ ok: true });
+        expect(created).toEqual({ ok: true, id: expect.any(String) });
         const record = registry.find(created.id as never);
         expect(record).toMatchObject({ name: 'vega', workspaceId: 'tynn', provider: 'claude' });
         expect(await readFile(join(dir, 'tynn', '.agents', 'vega', 'AGENT.md'), 'utf8')).toContain('reviews');

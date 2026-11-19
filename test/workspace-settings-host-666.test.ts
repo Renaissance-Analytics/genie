@@ -131,7 +131,7 @@ describe('five workspace methods have one host answer', () => {
             }
         }
         source.windows(1);
-        expect(await source.api.invoke('terminals.open', [], context)).toEqual({ windowAnswered: 'terminals.open' });
+        expect(await source.api.invoke('host.home', [], context)).toEqual({ windowAnswered: 'host.home' });
     });
 });
 
