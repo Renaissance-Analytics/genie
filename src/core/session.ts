@@ -60,11 +60,14 @@ export interface SessionDriver {
      */
     stop?(options?: { graceMs?: number }): Promise<unknown>;
     /**
-     * DOES THE PROVIDER ANSWER (Tynn #855; prism-acp G-314, requested): resolves when it answered within `timeoutMs`,
-     * rejects (or never settles) when it did not. Optional: until prism ships it, a live process is `unknown`, never
-     * guessed alive or dead (`AgentSession.alive`).
+     * DOES THE PROVIDER ANSWER (prism-acp 0.44.0, G-314; Tynn #855/#926): `true` = it answered within `timeoutMs` (an
+     * error answer counts), `false` = it did not (timeout, exit, a write failure, a stopped driver). Never rejects. Both
+     * drivers answer mid-turn, read-only (Claude `mcp_status`, Codex `model/list`). Absent (a fake, an older driver): a
+     * live process is `unknown`, never guessed (`AgentSession.alive`).
      */
-    ping?(timeoutMs: number): Promise<unknown>;
+    ping?(options?: { timeoutMs?: number }): Promise<boolean>;
+    /** When the provider last wrote any frame, epoch ms (prism-acp 0.44.0, G-314); `undefined` before the first. */
+    readonly lastFrameAt?: number | undefined;
     /**
      * END THE CURRENT TURN AND KEEP THE SESSION — prism-acp's `AgentDriver.cancel?()` (0.14.0, prism-acp-ts#16/#17).
      * The provider is asked to interrupt; the turn then ends through `onTurnEnd` with `stopReason: 'cancelled'`, and the
@@ -177,6 +180,8 @@ export interface TurnOutcomeLike {
      * settles a prompt of Genie's (no `turnId`), and it is never a queued prompt's turn.
      */
     readonly unsolicited?: boolean;
+    /** prism-acp 0.44.0 (G-313): the driver's id for that self-started turn; a prompt folded into it names it in `foldedInto`. */
+    readonly unsolicitedTurnId?: string;
 }
 
 /** How a turn can end that is the provider's stop without being an error (ACP `stopReason`; Tynn #859). */
@@ -2151,9 +2156,15 @@ export class AgentSession {
         return newest;
     }
 
-    /** When the provider last sent anything; `null` = nothing yet this run. */
+    /**
+     * When the provider last sent anything; `null` = nothing yet this run. The later of Genie's own stamp (an update it
+     * read) and the driver's `lastFrameAt` (G-314: every frame, including those Genie maps to no row — an API retry).
+     */
     get lastEventAt(): number | null {
-        return this.#lastEventAt;
+        const frame = this.#driver?.lastFrameAt;
+        const own = this.#lastEventAt;
+        if (typeof frame !== 'number') return own;
+        return own === null ? frame : Math.max(own, frame);
     }
 
     /** The last turn Genie ended as stalled, until a turn starts again (Tynn #855). */
@@ -2184,12 +2195,13 @@ export class AgentSession {
         const driver = this.#driver;
         if (!driver || this.#exited || this.#ended || !this.running) return 'dead';
         if (typeof driver.ping !== 'function') return 'unknown';
+        // prism's ping keeps its own deadline and never rejects; this one only backs it up (a driver that broke that promise).
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), timeoutMs); });
+        const late = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs + 1_000); });
         try {
-            const answer = await Promise.race([driver.ping(timeoutMs).then(() => 'answered' as const), late]);
-            return answer === 'answered' ? 'alive' : 'unresponsive';
-        } catch {
+            // ONE BOOLEAN (G-314): `false` is the provider NOT answering — unresponsive, never alive (Tynn #926).
+            const answered = await Promise.race([driver.ping({ timeoutMs }).then((a) => a === true, () => false), late]);
+            if (answered) return 'alive';
             return this.running ? 'unresponsive' : 'dead';
         } finally {
             if (timer !== undefined) clearTimeout(timer);
