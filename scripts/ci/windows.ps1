@@ -478,6 +478,30 @@ $MachineSamples = Join-Path $Out 'machine-samples.log'
 $script:MachineSampler = Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/ci/machine-sampler.ps1', '-Out', $MachineSamples, '-ParentId', $PID -PassThru -WindowStyle Hidden
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
 
+# THE FIRST GIT ON A FRESH VM IS SLOW, AND IS PAID HERE (Tynn #732). Measured in the files-watch row on Azure (queue items
+# 1119-173835-3a5952, 1119-180221-2b163b): a VM's first git calls took up to 15.4 s (init), 2.3 s (add) and 7.6 s (commit,
+# whose auto-maintenance child is a separate executable that had never run), with the CPU and disk idle; every later call
+# took 60-130 ms. Four gates failed files-watch on its fixture's 15 s bound. Nothing earlier in the run had left anything
+# running, and Defender is kept out of git and the tree. So that cost is the VM's, not a row's: one throwaway repo with a
+# commit (its maintenance child included) before any row, each step's time said so the cost stays visible.
+function Warm-Git {
+    $d = Join-Path ([System.IO.Path]::GetTempPath()) ("genie-git-warm-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        New-Item -ItemType Directory -Force $d | Out-Null
+        Set-Content -LiteralPath (Join-Path $d 'warm.txt') -Value 'warm'
+        $git = @('-c', 'user.name=warm', '-c', 'user.email=warm@example.test', '-C', $d)
+        $t = [System.Diagnostics.Stopwatch]::StartNew(); git @git init -q *> $null; $init = "init $($t.ElapsedMilliseconds) ms (exit $LASTEXITCODE)"
+        $t = [System.Diagnostics.Stopwatch]::StartNew(); git @git add . *> $null; $add = "add $($t.ElapsedMilliseconds) ms (exit $LASTEXITCODE)"
+        $t = [System.Diagnostics.Stopwatch]::StartNew(); git @git commit -q -m warm *> $null; $commit = "commit $($t.ElapsedMilliseconds) ms (exit $LASTEXITCODE)"
+        Write-Output "--- git warmed: $init, $add, $commit"
+    } catch {
+        Write-Output "--- git could not be warmed: $($_.Exception.Message)"
+    } finally {
+        Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+Warm-Git
+
 # >>> THE ROW LOOP (test/ci-infra-rerun-windows.test.ts runs this block, as it is, with stub rows)
 #
 # STALL-AWARE ROWS (Tynn #660; the owner: "we are wasting so much time on failing test infrastructure"). A row that

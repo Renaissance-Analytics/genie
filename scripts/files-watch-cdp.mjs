@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { measureFilesWatchPage } from './files-watch-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { initFixtureRepo } from './fixture-git-repo.mjs';
 
 const WIN = process.platform === 'win32', BASELINE = process.argv.includes('--baseline'), OUT = resolve('smoke-out'), PORT = 9344, INSPECT = 9345, started = Date.now(), sessions = [], reports = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -45,7 +46,7 @@ try {
     execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env, stdio: 'pipe', timeout: 15000, windowsHide: true });
     writeFileSync(join(root, '.genie', 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'tynn', path: workspace }])); writeFileSync(join(root, '.genie', 'runtime', 'agents.json'), '[]');
     const git = args => execFileSync('git', ['-c', 'user.name=Watch fixture', '-c', 'user.email=watch@example.test', ...args], { cwd: workspace, encoding: 'utf8', stdio: 'pipe', timeout: 15000, windowsHide: true });
-    writeFileSync(join(workspace, 'watched.txt'), 'baseline'); git(['init']); git(['add', '.']); git(['commit', '-m', 'watch baseline']);
+    writeFileSync(join(workspace, 'watched.txt'), 'baseline'); initFixtureRepo(git, 'watch baseline'); // no auto-maintenance child per commit (Tynn #732)
     for (let i = 0; i < 6000; i++) writeFileSync(join(workspace, `entry-${String(i).padStart(5, '0')}-${'x'.repeat(150)}.txt`), '');
     const fd = openSync(join(OUT, 'files-watch-electron.log'), 'w'), electron = resolve('node_modules/electron', WIN ? 'dist/electron.exe' : 'dist/electron');
     const args = ['.', `--remote-debugging-port=${PORT}`, `--inspect=${INSPECT}`, `--user-data-dir=${join(root, 'profile')}`]; if (!WIN) args.push('--no-sandbox');
