@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { statePill } from '../src/core/agent-view.js';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
-import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
+import { makeProcessTree, type ProcessInfo, type ProcessTree } from '../src/core/process-tree.js';
 import type { DriverEvents } from '../src/core/session.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
@@ -241,5 +241,56 @@ describe('prism G-313: the unsolicited turn end closes the turn Claude started i
         fake(r.id).events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null, unsolicited: true });
         expect(host.inTurn(r.id)).toBe(false);
         expect(host.probe(r.id)!.turnState).not.toBe('working');
+    });
+});
+
+describe('a reused pid is never killed (Tynn #855, after #919)', () => {
+    /**
+     * Stop this call and the no-output timeout end processes by IDENTITY — pid, start time and image name — through the
+     * process tree's own gate (`sameProcess`), against a reading taken AFTER the targets were chosen. Here the real
+     * `makeProcessTree` gate runs over a fake machine: between the reading that chose the targets and the kill, the hung
+     * shell (102) exits and Windows hands its pid to someone else's process. That process must live; the call's git (103),
+     * still the same process, ends.
+     */
+    it('a pid reused between choosing and killing is skipped; the same process is ended', async () => {
+        host.stopAll();
+        await host.settled();
+        const readings: ProcessInfo[][] = [];
+        const killedPids: number[] = [];
+        const machine = makeProcessTree({
+            snapshot: () => table.slice(),
+            killOne: (pid) => { killedPids.push(pid); },
+            snapshotAsync: async () => (readings.shift() ?? table).slice(),
+            killOneAsync: async (pid) => { killedPids.push(pid); },
+        });
+        host = new SessionHost({ userData: dir, driverFor, processTree: machine, clock: () => t });
+        const r = startInTurn();
+        hangBash(r.id);
+        t += 21 * MIN;
+        const chosenFrom = table.slice();
+        // The second reading: 102 is now a stranger's process (same pid, a later start, another image).
+        const reused = chosenFrom.map((p) => (p.pid === 102 ? { pid: 102, ppid: 4, started: t, name: 'explorer.exe' } : p));
+        readings.push(chosenFrom, reused);
+        const result = await host.stopToolCall(r.id, 't1', 'you');
+        expect(killedPids).toEqual([103]);
+        expect(result).toEqual({ ok: true, ended: 1 });
+    });
+
+    it('CONTROL: with no reuse, both of the call\'s processes end through the same gate', async () => {
+        host.stopAll();
+        await host.settled();
+        const killedPids: number[] = [];
+        const machine = makeProcessTree({
+            snapshot: () => table.slice(),
+            killOne: (pid) => { killedPids.push(pid); },
+            snapshotAsync: async () => table.slice(),
+            killOneAsync: async (pid) => { killedPids.push(pid); },
+        });
+        host = new SessionHost({ userData: dir, driverFor, processTree: machine, clock: () => t });
+        const r = startInTurn();
+        hangBash(r.id);
+        t += 21 * MIN;
+        expect(await host.stopToolCall(r.id, 't1', 'you')).toEqual({ ok: true, ended: 2 });
+        expect(killedPids.sort()).toEqual([102, 103]);
     });
 });
