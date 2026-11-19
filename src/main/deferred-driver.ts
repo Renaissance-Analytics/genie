@@ -42,6 +42,8 @@ export function deferredDriverFactory(prepare: (signal: AbortSignal) => Promise<
                     if (inner.cancel) driver.cancel = inner.cancel.bind(inner);
                     if (inner.modelState) driver.modelState = inner.modelState.bind(inner);
                     if (inner.setModel) driver.setModel = inner.setModel.bind(inner);
+                    // LIVENESS (prism-acp 0.44.0, G-314; Tynn #926): the provider's own ping, reached through this wrapper.
+                    if (inner.ping) driver.ping = inner.ping.bind(inner);
                     aroundSpawn(() => inner!.start());
                     await inner.ready;
                     if (!controller.signal.aborted && !exited) resolve();
@@ -63,6 +65,8 @@ export function deferredDriverFactory(prepare: (signal: AbortSignal) => Promise<
             stop: async () => { abort(); },
             get running() { return !controller.signal.aborted && !exited && (inner?.running ?? true); },
             get cliSessionId() { return inner?.cliSessionId ?? null; },
+            // When the provider last wrote a frame (G-314); `undefined` before it is up or from a driver without it.
+            get lastFrameAt() { return inner?.lastFrameAt; },
             ready,
         };
         return driver;

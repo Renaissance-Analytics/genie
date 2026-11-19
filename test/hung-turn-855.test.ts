@@ -38,7 +38,7 @@ const tree: ProcessTree = {
     },
 };
 
-interface Fake { events: DriverEvents; prompts: string[]; running: boolean; ping?: (timeoutMs: number) => Promise<unknown> }
+interface Fake { events: DriverEvents; prompts: string[]; running: boolean; ping?: (options?: { timeoutMs?: number }) => Promise<boolean> }
 const fakes = new Map<string, Fake>();
 
 const driverFor: DriverFor = (record) => (options) => {
@@ -51,10 +51,10 @@ const driverFor: DriverFor = (record) => (options) => {
         cancel: () => {},
         cliSessionId: null,
         get running() { return fake.running; },
-        ping: (timeoutMs: number) => (fake.ping ? fake.ping(timeoutMs) : Promise.reject(new Error('no ping in this fake'))),
+        ping: (options?: { timeoutMs?: number }) => (fake.ping ? fake.ping(options) : Promise.resolve(false)),
     };
 };
-/** A driver with NO ping: what prism-acp is until G-314. */
+/** A driver with NO ping (a fake, or prism-acp before 0.44.0). */
 const driverWithoutPing: DriverFor = (record) => (options) => {
     const fake: Fake = { events: options.events, prompts: [], running: true };
     fakes.set(record.id, fake);
