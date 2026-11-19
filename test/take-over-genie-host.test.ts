@@ -339,7 +339,8 @@ describe('the wiring', () => {
         // Every client's call, the window's too (Tynn #896): started here, with who asked.
         expect(host).toMatch(/takeOver: async \(args, context\) => \{\s*const started = takeOverService\.start\(args\[0\]\);/);
         // Another machine's window closing ends its TUI, or cancels its sign-in (Tynn #896).
-        expect(host).toMatch(/takeOverEnded: \(terminalId\) => \{ takeOverService\.ended\(terminalId\); logins\?\.cancel\(terminalId\); \}/);
+        // Its scratch terminal too since 2c-4 (Tynn #897): another machine's companion window closing ends it.
+        expect(host).toMatch(/takeOverEnded: \(terminalId\) => \{ takeOverService\.ended\(terminalId\); logins\?\.cancel\(terminalId\); hostScratchTerminals\.windowClosed\(terminalId\); \}/);
         expect(host).toMatch(/takeOver: takeOverService,/);
         expect(host).toMatch(/phoneRegistry\.setObservedProbe\(/);
         expect(host).toMatch(/takeOverCaller: \(id\) => takeOverHost\.callerFor\(id\)/);

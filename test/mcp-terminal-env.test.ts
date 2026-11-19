@@ -129,7 +129,7 @@ describe('main wires both paths to the one function', () => {
         // One since 2c-4 (#897): the header's throwaway Terminal is genie-host's too (terminals.scratch, its shellEnv).
         expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(1);
         // The header's Terminal button (Tynn story #378): a workspace terminal's environment, in a window of its own.
-        expect(code('src/main/genie-host.ts')).toMatch(/scratchTerminalFor\(\{ scratch: hostScratch\w*, home: homedir\(\), workspace: \(id\) => hostRegistry\.workspace\(id\) \?\? null, envFor: shellEnv \}/);
+        expect(code('src/main/genie-host.ts')).toMatch(/scratchTerminalFor\(\{ scratch: hostScratch\w*, home: userHome\(\), workspace: \(id\) => hostRegistry\.workspace\(id\) \?\? null, envFor: shellEnv \}/);
         expect(main).toMatch(/terminalEnv: \(workspaceId\) => terminalEnvFor\(composed, workspaceId, mcpEnv\(\)\)/);
         expect(/localTerminals: createNativeTerminalPort\(\{/.test(main)).toBe(false);
         // The Terminals tab: genie-host's port, with the workspace's service variables and Genie's MCP endpoint.

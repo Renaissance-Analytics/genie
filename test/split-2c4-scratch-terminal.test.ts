@@ -105,7 +105,7 @@ describe('genie-host’s scratch terminal: the workspace’s shell or the home o
     it('genie-host composes it over its terminal host, its shellEnv and the caller’s window; a companion window closing ends it too', () => {
         const g = code(src('src/main/genie-host.ts'));
         expect(g).toMatch(/new ScratchTerminals\(\{\s*terminals: terminalHost,\s*openWindow: \(route, terminalId, context\) => \{ openCallersTerminalWindow\(terminalWindowPorts, context, route, \{ startedHere: true, ended: \(\) => hostScratch\w*\.windowClosed\(terminalId\) \}\); \}/);
-        expect(g).toMatch(/scratchTerminalFor\(\{ scratch: hostScratch\w*, home: homedir\(\), workspace: \(id\) => hostRegistry\.workspace\(id\) \?\? null, envFor: shellEnv \}/);
+        expect(g).toMatch(/scratchTerminalFor\(\{ scratch: hostScratch\w*, home: userHome\(\), workspace: \(id\) => hostRegistry\.workspace\(id\) \?\? null, envFor: shellEnv \}/);
         expect(g).toMatch(/takeOverEnded: \(terminalId\) => \{[^}]*hostScratch\w*\.windowClosed\(terminalId\)/);
     });
 });

@@ -19,7 +19,7 @@ import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRul
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
-import { homedir, hostname, uptime } from 'node:os';
+import { hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
@@ -28,7 +28,7 @@ import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
-import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir } from './paths.js';
+import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir, userHome } from './paths.js';
 import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { formatBytes, type StorageView } from '../core/workspace-storage.js';
 import { threadAttachmentFiles } from '../core/thread-store.js';
@@ -1852,7 +1852,7 @@ async function main(): Promise<void> {
         // A PROVIDER'S PROGRAM (Tynn #577; #897 2c-3): the .exe the owner picked on this host's disk, from any of their
         // windows, written to this host's own choice file (the one its agents start from); the provider is read again.
         // The throwaway shell (Tynn #897, 2c-4): a workspace's with its shell environment, or Genie's own in the home folder.
-        scratchTerminals: { open: (workspaceId, context) => scratchTerminalFor({ scratch: hostScratchTerminals, home: homedir(), workspace: (id) => hostRegistry.workspace(id) ?? null, envFor: shellEnv }, workspaceId, context) },
+        scratchTerminals: { open: (workspaceId, context) => scratchTerminalFor({ scratch: hostScratchTerminals, home: userHome(), workspace: (id) => hostRegistry.workspace(id) ?? null, envFor: shellEnv }, workspaceId, context) },
         providerPrograms: hostProviderPrograms({
             file: () => providerChoiceFile(),
             refresh: (provider) => { void providerHealth.refresh(provider); },
