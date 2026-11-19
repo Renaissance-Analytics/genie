@@ -107,14 +107,14 @@ import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
-import { loginRoute, loginTerminalOf } from './login-host.js';
+import { loginTerminalOf } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
-import { DESIGN_LOGIN } from '../core/design-login.js';
+import { callRefusal, ownProtocolClient } from './own-protocol-client.js';
 import { ActivityFeeds } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
@@ -699,8 +699,12 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     return issueWatchNow?.summaryFor(projectId) ?? { state: 'stopped', linked: projectId !== null };
 }
 let terminals: TerminalsApi | null = null;
-/** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
-let signIn: ((provider: string, accountId?: string) => Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>) | null = null;
+/**
+ * MAIN'S OWN PROTOCOL CLIENT (Tynn #896, 2b-2b): what main itself asks of the host (the tray's Log in and Claude Design
+ * login) is a protocol call answered by genie-host, one connection per call, tunnelled over the engine link like the
+ * window's door once the link is composed. Before that a call is refused as still starting.
+ */
+const ownProtocol = ownProtocolClient();
 // SWITCH ACCOUNT (Tynn #753): the provider's own login in its one home, in a window that shows the steps. The entry the UI calls.
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
@@ -801,11 +805,9 @@ function openTakeOverWindow(route: string, activation: Activation): Promise<'clo
         if (!w.isDestroyed() && !remoteTakeOverWindows.has(w) && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return Promise.resolve('raised'); }
     }
     const win = takeOverWindow(route, request, null);
-    // Settled when it closes: a Take Over TUI's window is asked by genie-host (windowOps), which ends the TUI then (Tynn #896).
+    // Settled when it closes: a Take Over TUI's or a sign-in's window is asked by genie-host (windowOps), which ends the TUI
+    // or cancels the sign-in then (Tynn #896, #479): the person left the step.
     return new Promise((resolve) => win.on('closed', () => {
-        // A sign-in's window closing is the person leaving the step: the host kills and removes its terminal (Tynn #479).
-        const login = loginTerminalOf(route);
-        if (login !== null) void agentEngineLink?.client.cancelLogin(login);
         scratchTerminals?.windowClosed(terminalId);
         resolve('closed');
     }));
@@ -1868,20 +1870,10 @@ async function boot(): Promise<void> {
     });
     // Background tasks die with the process: a setting waits for the agent's to end (the Shells tab's own count).
     settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
-    // `Log in to <provider>` (the owner, 2026-10-18): the provider's own login in a scratch folder, in a window of its own.
-    // Signed in (its status command exits 0), every agent that login signed out is restarted on its thread and told.
     // GENIE'S SCRATCH (P7): this process's folder under `<root>/cache/tmp`, made on first use with no process-table read;
     // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
     const scratch = scratchArea(genieRoot());
     scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
-    // THE SIGN-IN RUNS IN GENIE-HOST, per account (Tynn #479): this window asks for it and only SHOWS the terminal it returns.
-    // Two clicks on one account join one sign-in; another account signs in beside it; closing the window cancels it, and the host
-    // kills and removes that terminal. A login starts from the tray or the agent view's Log in button only (genie#1235).
-    signIn = async (provider, accountId) => {
-        const started = await (agentEngineLink?.client.login(provider, accountId) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s login is not ready yet; try again in a moment' }));
-        if (started.ok) openTakeOverWindow(loginRoute(started.terminalId, provider), 'user-gesture');
-        return started;
-    };
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
@@ -2321,6 +2313,9 @@ async function boot(): Promise<void> {
             return contents && contents.id === window?.webContents.id ? rendererNotice : null;
         },
     });
+    // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
+    // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
+    tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client));
     windowTunnelNow = windowTunnel;
     // Browser/UI facts this window owns: its pane and its notice are said down the tunnel, where genie-host reads its
     // features again (genie-host's own sources invalidate them too: its Tynn and GitHub accounts, its relay role, …).
@@ -2905,12 +2900,14 @@ async function boot(): Promise<void> {
         onTaskManager: () => { revealMainWindow('tray: Task Manager'); showToPerson({ activation: 'user-gesture', route: 'genie://hosting?tab=processes', reason: 'tray: Task Manager' }); },
         // New scratch terminal (Tynn #761; the owner, 2026-10-19: in Genie's own workspace): home folder, its own window.
         // A signed-out login named in the tray (#967): its own login, in a window of its own.
+        // genie-host starts the provider's own login and asks this window to open it (Tynn #896, 2b-2b); Genie never
+        // touches a credential, and closing the window cancels the login there.
         onProviderLogin: (provider) => {
-            void signIn?.(provider).then((r) => { if (!r.ok) console.error('[genie] provider login:', r.reason); });
+            void ownProtocol.call('logins.provider', [provider]).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] provider login:', why); });
         },
         // Claude Design's login (#1081): the same login window, running the interactive `claude`.
         onDesignLogin: () => {
-            void signIn?.(DESIGN_LOGIN).then((r) => { if (!r.ok) console.error('[genie] Claude Design login:', r.reason); });
+            void ownProtocol.call('logins.design', []).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] Claude Design login:', why); });
         },
         onScratchTerminal: () => {
             if (!scratchTerminals) return;

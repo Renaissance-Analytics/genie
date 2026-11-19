@@ -133,6 +133,18 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['site-panel:open-window', 'window:site-panel'],
 ];
 
+/**
+ * THE DOORS MAIN TUNNELS OVER ITS ENGINE LINK (Tynn #896, 2b-2b; the coordinator's ruling): each `tunnelDoor(<door>, …)`
+ * in main.ts. A door carries protocol connections to genie-host's RemoteHost, which serves them; it is a PROTOCOL DOOR on
+ * the link, never a listener (it has no address, and main starts no server: test/split-2e-window-guard.test.ts).
+ *  - `localDoor`: the window's IPC door (local-protocol-door.ts), its pages' connections.
+ *  - `ownProtocol.door`: main's own protocol client (own-protocol-client.ts), one connection per call: the tray's.
+ */
+export const WINDOW_PROTOCOL_DOORS: readonly (readonly [door: string, kind: 'protocol-door'])[] = [
+    ['localDoor', 'protocol-door'],
+    ['ownProtocol.door', 'protocol-door'],
+];
+
 export type EngineUseDestination = 'link' | `window:${WindowCapability}` | `move:${MoveStep}`;
 
 /** Every use main.ts makes of its engine client: a member of SessionEngineClient, or `call:<method>` for a raw call. */
@@ -147,9 +159,7 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['browserCall', 'window:feature-effect'],
     ['onBrowserEvent', 'window:feature-effect'],
     ['gappSessions', 'window:gapp-window'],
-    // 2b (#896): the tray's sign-in (login, and cancelLogin as its window closes), and main's provider health.
-    ['login', 'move:2b'],
-    ['cancelLogin', 'move:2b'],
+    // 2b (#896): main's provider health. The tray's sign-in is the protocol's since 2b-2b (logins.provider).
     ['providerAccount', 'move:2b'],
     // 2f (#912): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
     // 2026-11-19). Take Over itself is the protocol's since 2b-1 (#896).
