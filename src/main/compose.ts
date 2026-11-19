@@ -42,7 +42,6 @@ import { runtimeDir } from './paths.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
-import { RemoteHost } from './remote-host.js';
 import type { PairingView, RemoteAccessReplica, RemoteAccessView } from './remote-access-replica.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';

@@ -13,7 +13,9 @@ describe('the production features owner (Tynn #720)', () => {
     });
     it('the window delegates every feature operation and owns no duplicate builder or state', () => {
         const main = source('main');
-        expect(main).toContain('featureReplica(');
+        // Its feature calls are genie-host's answers since Tynn #898 step 2d-4b2 (genie-host.ts hands them its HostFeatures).
+        expect(main).not.toContain('featureReplica(');
+        expect(source('genie-host')).toMatch(/phoneApi = hostAloneApi\(\{\s*hostName: hostname\(\),\s*features: hostFeatures,/);
         for (const removed of ['featureSnapshot(', 'handleFeatureAction(', 'let featureState', 'new HostPicks(', 'const featurePorts:', 'const processPorts =', 'new LatestPush<FeatureData>']) {
             expect(main, removed).not.toContain(removed);
         }

@@ -266,7 +266,10 @@ describe('the list is live across windows', () => {
         expect(host).toMatch(/gappsChanged: \(listener\) => gappBook!\.onChange\(listener\)/);
         expect(host).toMatch(/const gappAsk = askOnDeck\(approvals,/);
         expect(host).toMatch(/gapps: gappsApi\(gappBook, gappAsk, /);
-        expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).toMatch(/client\.onGappsChanged\(/);
+        // The window's list follows genie-host's book through genie-host's own port (Tynn #898 step 2d-4b2), not main's link.
+        expect(host).toMatch(/onGappsChanged: \(listener\) => gappBook\?\.onChange\(listener\) \?\? \(\(\) => \{\}\),/);
+        expect(readFileSync(join('src', 'main', 'host-local-ports.ts'), 'utf8')).toMatch(/gappsChanged: \{ subscribe: \(listener\) => sources\.onGappsChanged\(listener\) \}/);
+        expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).not.toMatch(/client\.onGappsChanged\(/);
         expect(readFileSync(join('src', 'renderer', 'Shell.tsx'), 'utf8')).toMatch(/gapps\.onChanged\(/);
     });
 });
