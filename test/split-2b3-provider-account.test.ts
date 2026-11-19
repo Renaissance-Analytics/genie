@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ENGINE_METHODS } from '../src/core/engine-protocol.js';
+import type { AgentId } from '../src/core/identity.js';
 import { WINDOW_ENGINE_INVENTORY } from '../src/core/ipc-inventory.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import { MCP_RECOVERY_ATTEMPTS, MCP_RECOVERY_SPACING_MS, type McpServerReport } from '../src/core/mcp-missing.js';
@@ -25,6 +26,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const src = (path: string) => readFileSync(resolve(root, path), 'utf8');
 const code = (text: string) => text.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
 const TOKEN = 'f'.repeat(64);
+const AGENT_A = 'agent_a' as AgentId;
 
 interface Recovery { heard(agentId: string, reports: readonly McpServerReport[]): void; dispose(): void }
 interface RecoveryPorts {
@@ -138,7 +140,7 @@ describe('with NO window connected, the host still recovers (the gap this closes
         const server = new SessionEngineServer({ token: TOKEN, build: 't' });
         const f = fixture();
         const onMcpServers = withMcpRecovery(server.hostOptions().onMcpServers, hostMcpRecovery(f.ports));
-        expect(() => onMcpServers('agent_a', [failed('tynn')])).not.toThrow();
+        expect(() => onMcpServers(AGENT_A, [failed('tynn')])).not.toThrow();
         expect(f.restarts).toEqual(['agent_a']);
     });
 
@@ -152,7 +154,7 @@ describe('with NO window connected, the host still recovers (the gap this closes
         expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
         cleanups.push(() => windowSide.close());
         const f = fixture();
-        withMcpRecovery(server.hostOptions().onMcpServers, hostMcpRecovery(f.ports))('agent_a', [failed('tynn')]);
+        withMcpRecovery(server.hostOptions().onMcpServers, hostMcpRecovery(f.ports))(AGENT_A, [failed('tynn')]);
         for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
         expect({ heard, restarts: f.restarts }).toEqual({ heard: ['agent_a'], restarts: ['agent_a'] });
     });
