@@ -177,7 +177,7 @@ describe('R1: the host resolves the ACTIVE account for launches, probes, Take Ov
         expect(source('src/main/genie-host.ts')).toContain('host.resumeLimit(record.provider);');
     });
     it('the window’s sign-in names the provider, and signs in the active account', () => {
-        expect(source('src/main/main.ts')).toContain('signIn!(record.provider)');
+        expect(source('src/main/host-sign-ins.ts')).toContain('return loginFor(provider, context);');
     });
 });
 

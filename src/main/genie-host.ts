@@ -1297,7 +1297,6 @@ async function main(): Promise<void> {
         workstation: workstationService,
         relayHost: relayHostService,
         takeOver: takeOverService,
-        signIns,
         // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
         keyring: featureKeyring,
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
@@ -1823,6 +1822,8 @@ async function main(): Promise<void> {
     };
     phoneApi = hostAloneApi({
         hostName: hostname(),
+        // The sign-ins (Tynn #896): the provider's own login, started here for the caller, whose window shows it.
+        signIns,
         features: hostFeatures,
         registry: phoneRegistry,
         engine: () => host,

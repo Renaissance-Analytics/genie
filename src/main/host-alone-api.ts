@@ -117,6 +117,8 @@ export interface HostAlonePorts {
     readonly providerInstalled: AgentOpsWiring['providerInstalled'];
     /** What the provider's status call last said (Tynn #698). Absent = not measured here, so nothing is claimed. */
     readonly signedIn?: AgentOpsWiring['signedIn'];
+    /** The sign-ins (Tynn #896, host-sign-ins.ts): the provider's own login for whoever asked. Absent = this host cannot. */
+    readonly signIns?: HostApiDeps['signIns'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -258,6 +260,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         ...(ports.saveUploads ? { saveUploads: ports.saveUploads } : {}),
+        ...(ports.signIns ? { signIns: ports.signIns } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

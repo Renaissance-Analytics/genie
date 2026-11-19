@@ -118,15 +118,16 @@ describe('the three new family4 product methods are local', () => {
         const source = server(f.deps), client = await source.connect();
         expect(await client.bridge.accountRetry!('agent_a')).toEqual({ ok: false, reason: 'fixture retry unavailable' });
     });
-    it('pageBridge uses shared account retry while both login window ports retain native identity', async () => {
+    it('pageBridge uses shared account retry, and the provider and design logins are the protocol\'s now (Tynn #896)', async () => {
         const f = setup(), source = server(f.deps); vi.stubGlobal('window', { genieLocalProtocol: source.port() });
         const oldRetry = vi.fn(async () => ({ ok: false, reason: 'old native path' })), providerLogin = vi.fn(async () => ({ ok: true })), designLogin = vi.fn(async () => ({ ok: true }));
         const bridge = pageBridge({ accountRetry: oldRetry, providerLogin, designLogin, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge);
         expect(await bridge.accountRetry!('agent_a')).toEqual({ ok: true }); expect(oldRetry).not.toHaveBeenCalled(); expect(f.retry).toHaveBeenCalledExactlyOnceWith('claude');
-        expect(bridge.providerLogin).toBe(providerLogin); expect(bridge.designLogin).toBe(designLogin);
+        // No native path is kept: the old preload members are never called, whatever the host answers.
+        expect(bridge.providerLogin).not.toBe(providerLogin); expect(bridge.designLogin).not.toBe(designLogin);
         await bridge.providerLogin('agent_a'); await bridge.designLogin!('agent_a');
-        expect(providerLogin).toHaveBeenCalledExactlyOnceWith('agent_a'); expect(designLogin).toHaveBeenCalledExactlyOnceWith('agent_a');
-        expect(capabilityOf('providerLogin')).toBe('host-only');
+        expect(providerLogin).not.toHaveBeenCalled(); expect(designLogin).not.toHaveBeenCalled();
+        expect(capabilityOf('providerLogin')).toBe('write');
     });
     it('retires headroom/accountRetry native paths, and the provider and design logins left in step 2b (Tynn #896)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
