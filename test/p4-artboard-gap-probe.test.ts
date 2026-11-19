@@ -1,6 +1,8 @@
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
+import { beginArtboardBuildTiming } from '../src/main/artboard-build-timing.js';
 
 const load = async () => { const file: string = '../scripts/artboard-gap-probe.mjs'; return import(file); };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -116,4 +118,68 @@ it('on Windows the same exact host launch through genie-launch.exe (#1628, async
     expect(probe.snapshot()).toMatchObject({ installed: true, injectedPids: [4242], dropped: 0 });
     probe.stop();
     expect(child.execFile).toBe(execFile);
+});
+
+// HOST-PHASES-2D4B
+// THE ARTBOARD BUILD RUNS IN GENIE-HOST (Tynn #898 step 2d-4b): its phase timing is recorded there, through the host
+// preload the harness already injects, and measure() reads it from the host's own log, by pid and wall window.
+const MEASURE_ENV = { GENIE_ARTBOARD_MEASURE_ALLOW: '1', GENIE_PAGE_PROBE: '1', ELECTRON_RUN_AS_NODE: '1' };
+function phasePorts(env: Record<string, string>) {
+    let wall = 1_700_000_000_000, now = 50;
+    const lines: string[] = [];
+    const globals: { __artboardPhases?: { events: unknown[]; dropped: number } } = {};
+    return { lines, globals, tick: (ms: number) => { wall += ms; now += ms; }, timing: () => ({ enabled: true, trace: globals.__artboardPhases, now: () => now, cpuUsage: () => ({ user: 0, system: 0 }) }),
+        ports: { env, pid: 4242, wallNow: () => wall, globals, emit: (line: string) => lines.push(line) } };
+}
+it('genie-host records each ArtBoard build phase with its wall window, never dropping past the in-memory cap', async () => {
+    const { installMeasurementHostPhases } = await load(), p = phasePorts(MEASURE_ENV);
+    expect(installMeasurementHostPhases(p.ports)).toMatchObject({ enabled: true });
+    for (let i = 0; i < 130; i++) {
+        const end = beginArtboardBuildTiming(i === 0 ? 'metadata-build' : 'projection', 'async', p.timing());
+        p.tick(7); end();
+    }
+    expect(p.globals.__artboardPhases!.dropped).toBe(0);
+    expect(p.lines).toHaveLength(130);
+    expect(p.lines.every((l) => l.startsWith('ARTBOARD_HOST_PHASE '))).toBe(true);
+    expect(JSON.parse(p.lines[0]!.slice('ARTBOARD_HOST_PHASE '.length))).toEqual({ role: 'host', pid: 4242, kind: 'phase', phase: 'metadata-build', mode: 'async', elapsedMs: 7, startedWallMs: 1_700_000_000_000, endedWallMs: 1_700_000_000_007 });
+});
+it('CONTROL: without the measurement flags genie-host gets no phase trace, and the timing stays inert', async () => {
+    const { installMeasurementHostPhases } = await load();
+    for (const env of [{}, { ...MEASURE_ENV, GENIE_PAGE_PROBE: '0' }, { ...MEASURE_ENV, GENIE_ARTBOARD_MEASURE_ALLOW: '0' }, { ...MEASURE_ENV, ELECTRON_RUN_AS_NODE: '0' }]) {
+        const p = phasePorts(env as Record<string, string>);
+        expect(installMeasurementHostPhases(p.ports)).toMatchObject({ enabled: false });
+        expect(p.globals.__artboardPhases).toBeUndefined();
+        beginArtboardBuildTiming('projection', 'async', p.timing())();
+        expect(p.lines).toEqual([]);
+    }
+});
+it('measure() reads the owned host’s phases inside the row’s wall window only', async () => {
+    const { readHostPhases } = await load();
+    const rec = (pid: number, phase: string, startedWallMs: number, endedWallMs: number) => 'ARTBOARD_HOST_PHASE ' + JSON.stringify({ role: 'host', pid, kind: 'phase', phase, mode: 'async', elapsedMs: endedWallMs - startedWallMs, startedWallMs, endedWallMs });
+    const text = [
+        'genie-host: booting',
+        rec(4242, 'metadata-build', 990, 999),     // before the row
+        rec(4242, 'metadata-build', 1000, 1010),
+        rec(4242, 'artifact-open', 1010, 1020),
+        rec(5555, 'native-build', 1011, 1012),     // a host this harness did not launch
+        rec(4242, 'projection', 1020, 1030),
+        rec(4242, 'projection', 2001, 2005),       // after the row
+    ].join('\r\n');
+    const read = readHostPhases(text, [4242], 1000, 2000);
+    expect(read.dropped).toBe(0);
+    expect(read.events.map((e: { phase: string }) => e.phase)).toEqual(['metadata-build', 'artifact-open', 'projection']);
+    // POSITIVE CONTROL on the same text: the wider window sees the edges, the foreign pid when owned.
+    expect(readHostPhases(text, [4242, 5555], 0, 9999).events).toHaveLength(6);
+    expect(() => readHostPhases('ARTBOARD_HOST_PHASE {"role":"host","pid":4242,"kind":"phase","phase":"projection","endedWallMs":', [4242], 0, 9999)).toThrow(/incomplete/);
+    expect(() => readHostPhases(rec(4242, 'projection', 1, 2).replace('"projection"', '"exfiltrate"'), [4242], 0, 9999)).toThrow(/invalid/);
+});
+it('wired: the host preload installs the phase trace and measure() takes its controls from genie-host', async () => {
+    const preload = await readFile('scripts/artboard-host-gauge.mjs', 'utf8');
+    expect(preload).toMatch(/installMeasurementHostPhases\(\)/);
+    const cdp = await readFile('scripts/artboard-cdp.mjs', 'utf8');
+    expect(cdp).toMatch(/readHostPhases\(/);
+    expect(cdp).toMatch(/const artboardPhases = readHostPhases\(/);
+    expect(cdp).toMatch(/demand\(artboardPhases\.dropped === 0 && \['metadata-build', 'artifact-open', 'projection'\]\.every\(phase => artboardPhases\.events\.some/);
+    expect(cdp).not.toMatch(/native\.artboardPhases/);
+    expect(cdp).not.toMatch(/P4 server stays in main/);
 });

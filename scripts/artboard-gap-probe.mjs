@@ -75,3 +75,8 @@ export function installMeasurementHostLaunch(options, injected) {
         stop() { if (stopped) return; stopped = true; if (enabled && installed()) { ports.child.spawn = original; if (ports.child.execFile === wrappedExec) ports.child.execFile = originalExec; ports.syncBuiltinESMExports(); } },
     };
 }
+
+/** RED stub (Tynn #910): genie-host's ArtBoard phase trace. */
+export function installMeasurementHostPhases() { return { enabled: false }; }
+/** RED stub (Tynn #910): the owned host's phases in a row's wall window. */
+export function readHostPhases() { return { events: [], dropped: 0 }; }
