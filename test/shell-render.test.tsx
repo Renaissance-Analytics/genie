@@ -294,8 +294,20 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
         ] as const) {
             const html = render({ route, ...over });
             expect(html.match(/data-view-header/g), route).toHaveLength(1);
-            expect(html, route).toMatch(/data-surface="[a-z]+"[^>]*><(div|header) data-view-header/);
+            expect(html, route).toMatch(/data-surface="[a-z]+"[^>]*><(div|nav) data-view-header/);
         }
+    });
+
+    it('an agent opens inside its workspace\'s ONE bar: the strip is the agent surface\'s first child, no second row (the owner on beta.64)', () => {
+        const html = render({ route: 'genie://agent/kai', agentDetail: DETAIL, agentResolved: true });
+        expect(html.match(/data-top-bar=""/g)?.length ?? 0).toBe(1);
+        const surface = html.indexOf('data-surface="agent"');
+        expect(surface).toBeGreaterThan(-1);
+        // The strip (its tabs) comes after the agent surface opens and inside the bar, which is that surface's first child.
+        expect(html.slice(surface)).toMatch(/^data-surface="agent"[^>]*><nav data-view-header=""[^>]*data-top-bar=""[^>]*data-workspace-tabs=""/);
+        // The agent's own views sit in that bar, not in a row of their own.
+        const bar = html.slice(surface, html.indexOf('</nav>', surface));
+        expect(bar).toContain('data-agent-subviews');
     });
 
 });

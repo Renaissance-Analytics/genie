@@ -3,9 +3,11 @@ import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
 import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
+import type { LocalUploads } from './local-uploads.js';
 import { DeviceStore, type Device } from './remote-devices.js';
-import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
-import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
+import { RemoteHost, type HostApi } from './remote-host.js';
+import type { ProtocolOffer } from '../core/protocol-version.js';
+import { HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 
 /**
  * REMOTE ACCESS'S HOST SIDE, IN GENIE-HOST (Tynn #409, host split P5d.1). A phone (over the tailnet) and a Pilot (over the
@@ -14,24 +16,21 @@ import { HOST_ALONE_METHODS, HOST_WORKSPACE_READ_METHODS } from './host-alone-ap
  * the baton and the owner's lock. A window reads and drives them through its replica; its own protocol door (local
  * authentication) stays the window's.
  *
- * What genie-host answers itself is answered with every window closed. What it does not own yet is done by the newest
- * LOCAL window, through the engine link's reverse call; with none it is refused with what to do. Later P5d stories move
- * each family here (Tynn #551, #553).
+ * genie-host answers every remote method itself, for every client, whether or not a window is connected (client/host
+ * split step 2d, Tynn #898). Since step 2d-2b no remote method is sent to a window: the engine link's reverse call for it
+ * (`client.remoteInvoke`) is gone.
  */
 
-/** What genie-host answers itself, and the window for the rest. */
+/** What genie-host answers for its remote connections. */
 export interface HostRemoteApiPorts {
     readonly hostName: string;
-    /** Methods genie-host performs itself, window or not. */
-    readonly own: Partial<Record<RemoteMethod, (args: unknown[]) => Promise<unknown>>>;
-    /** The newest local window, while one is connected: it performs what the host does not own yet. */
-    readonly window: { connected(): boolean; invoke(method: RemoteMethod, args: unknown[], context?: CallContext): Promise<unknown> };
-    /** Events for remote connections: the host's own, and those a connected window forwards. */
-    readonly onEvent?: (listener: (channel: string, payload: unknown) => void) => () => void;
+    /** Methods genie-host performs itself, ahead of its built answers. */
+    /** Answered here, with who called (RemoteHost's CallContext; absent from an in-process caller). */
+    readonly own: Partial<Record<RemoteMethod, (args: unknown[], context?: CallContext) => Promise<unknown>>>;
     /**
-     * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, host-alone-api.ts): the five workspace read/settings methods and their
-     * settings-change signal always come from here. Other families use this only while no window is connected.
-     * A getter: genie-host builds it once its session host is up.
+     * GENIE-HOST'S OWN ANSWERS (Tynn #551, #666, #898; host-alone-api.ts): every method, and every event, come from here
+     * whether or not a window is connected. A getter: genie-host builds it once its session host is up; until then a call
+     * is told to try again in a moment, and a connected window's events are passed on.
      */
     readonly alone?: HostApi | (() => HostApi | null);
     readonly onAloneReady?: (listener: () => void) => () => void;
@@ -47,43 +46,42 @@ export interface HostRemoteApiPorts {
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
-    const featureMethod = (method: RemoteMethod): boolean => method === 'features.snapshot' || method === 'features.act' || method === 'features.soundData' || method === 'features.picked';
     const featureEvent = (channel: string): boolean => channel === 'features' || channel === LOCAL_EVENTS.features;
-    return {
+    const api: HostApi = {
         get ownsFeatures() { return alone()?.ownsFeatures === true; },
         releaseCaller: context => alone()?.releaseCaller?.(context),
+        // THE PORTS RemoteHost READS OFF THE API (Tynn #898 step 2d-3a): genie-host's own, once its answers are built.
+        marketplace: () => alone()?.marketplace?.() ?? null,
+        gapps: (context) => alone()?.gapps?.(context) ?? null,
         invoke: async (method, args, context) => {
             const own = ports.own[method];
-            if (own) return own(args);
+            if (own) return own(args, context);
             const owned = alone();
-            if (owned?.ownsFeatures && featureMethod(method)) return owned.invoke(method, args, context);
-            // These reads and writes share the host's store even while a window is connected (Tynn #666).
-            if (HOST_WORKSPACE_READ_METHODS.has(method)) {
-                const answers = alone();
-                if (!answers) throw new Error(`${ports.hostName}'s workspace services are still starting; try again in a moment`);
-                return answers.invoke(method, args, context);
+            // These reads and writes share the host's store (Tynn #666); the rest are genie-host's too (Tynn #898).
+            if (!owned) {
+                if (HOST_WORKSPACE_READ_METHODS.has(method)) throw new Error(`${ports.hostName}'s workspace services are still starting; try again in a moment`);
+                throw new Error(`${ports.hostName}'s services are still starting; try again in a moment`);
             }
-            if (ports.window.connected()) return ports.window.invoke(method, args, context);
-            const answers = HOST_ALONE_METHODS.has(method) ? alone() : null;
-            if (answers) return answers.invoke(method, args, context);
-            throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
+            return owned.invoke(method, args, context);
         },
+        // GENIE-HOST'S OWN EVENTS (Tynn #898): every event comes from its answers, once built; what a Pilot types among them
+        // (Tynn #730), published to every client of this host, this machine's window included (it is one, since 2d-4b).
         onEvent: (listener, options) => {
-            // A window's replica can echo this change. Only the owned store's signal counts (Tynn #666).
-            const offWindow = ports.onEvent?.((channel, payload) => { if (channel !== 'workspace-settings-changed' && !(alone()?.ownsFeatures && featureEvent(channel))) listener(channel, payload); }) ?? (() => {});
-            // Other families keep their existing window/no-window event source.
             let offAlone: (() => void) | null = null;
-            const bind = () => { if (!offAlone) offAlone = alone()?.onEvent((channel, payload) => {
-                if (channel === 'workspace-settings-changed' || (alone()?.ownsFeatures && featureEvent(channel)) || !ports.window.connected()) listener(channel, payload);
-            }, options) ?? null; };
+            const bind = () => { if (!offAlone) offAlone = alone()?.onEvent(listener, options) ?? null; };
             const offReady = ports.onAloneReady?.(bind); bind();
-            return () => { offWindow(); offReady?.(); offAlone?.(); };
+            return () => { offReady?.(); offAlone?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
         ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
         ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),
     };
+    // Read when RemoteHost asks, so a port genie-host builds after this API (at boot) is the one it gets; absent until then.
+    for (const key of ['filesWatch', 'tynnWatch', 'localTerminals', 'localAgents'] as const) {
+        Object.defineProperty(api, key, { get: () => alone()?.[key], enumerable: true });
+    }
+    return api;
 }
 
 /** What Settings → Workstation shows of remote access, read from the host. */
@@ -98,8 +96,6 @@ export interface RemoteAccessStatus {
     readonly devices: Device[];
     readonly connections: ReturnType<RemoteHost['connections']>;
     readonly pairRequests: ReturnType<PairApprovals['requests']>;
-    /** What the connections want of the window's events (Tynn #662); absent from an older host = everything. */
-    readonly wants?: EventWants;
 }
 
 export interface RemoteAccessHostOptions {
@@ -112,6 +108,15 @@ export interface RemoteAccessHostOptions {
     readonly now?: () => number;
     readonly confirm?: PairConfirm & Pick<PairApprovals, 'requests' | 'answer' | 'onChange'>;
     readonly build?: string;
+    /** This host's protocol offer, read at each hello (Tynn #894); absent = this build's, with no catalog elements. */
+    readonly protocol?: () => ProtocolOffer;
+    /**
+     * Where a local connection stages what it uploads (a draft's file, a file to write; Tynn #898 step 2d-3b): one
+     * registry per connection, over this host's staging area. Absent = "local staging is not configured on this host".
+     */
+    readonly createLocalUploads?: () => LocalUploads | Promise<LocalUploads>;
+    /** What one of this machine's windows adds to its own snapshot (its renderer notice); null = nothing. Never a remote connection's. */
+    readonly localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null;
 }
 
 export class RemoteAccessHost {
@@ -140,13 +145,16 @@ export class RemoteAccessHost {
             transport: options.transport,
             now,
             ...(options.build ? { build: options.build } : {}),
+            ...(options.protocol ? { protocol: options.protocol } : {}),
+            ...(options.createLocalUploads ? { createLocalUploads: options.createLocalUploads } : {}),
+            ...(options.localSnapshot ? { localSnapshot: options.localSnapshot } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }
 
     status(): RemoteAccessStatus {
         const r = this.remote;
-        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), pinEnded: r.pinEnded(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests(), wants: r.wanted() };
+        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), pinEnded: r.pinEnded(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests() };
     }
 
     issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {
@@ -192,10 +200,6 @@ export type RemoteAccessEvent = { readonly kind: 'status'; readonly status: Remo
 export interface RemoteAccessServicePorts {
     /** The listener's switch (remote-access.ts): applied when `remote_access` changes, Restart from Settings. */
     readonly switch: { apply(): Promise<void>; restart(): Promise<void>; stop(): Promise<void> };
-    /** The newest local window's connection: only its events reach remote connections (one window feeds them). */
-    readonly newestWindow: () => string | null;
-    /** An event the newest window forwarded, for remote connections. */
-    readonly windowEvent: (channel: string, payload: unknown) => void;
     /** To one window (`owner`), or every local window (`null`). */
     readonly send: (owner: string | null, event: RemoteAccessEvent) => void;
 }
@@ -203,7 +207,7 @@ export interface RemoteAccessServicePorts {
 /**
  * REMOTE ACCESS, AS THE WINDOW DRIVES IT (Tynn #409): the engine link's `engine.remoteAccess`, from a LOCAL window only
  * (session-engine-server.ts). Settings → Workstation's remote section reads the status and drives the PIN, the devices,
- * the lock and the pair answers; the newest window forwards its events.
+ * the lock and the pair answers.
  */
 const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'setMode', 'answerPair', 'apply', 'restart', 'start', 'stop']);
 
@@ -249,11 +253,6 @@ export class RemoteAccessService {
             case 'stop': await this.#ports.switch.stop(); return a.status();
             case 'health': { const s = a.status(); return { host: s.host, listening: s.url !== null, why: s.unavailable }; }
             case 'restart': await this.#ports.switch.restart(); return a.status();
-            case 'event':
-                // One window feeds remote connections: the newest local one, the same that does their calls.
-                if (owner !== this.#ports.newestWindow()) return false;
-                this.#ports.windowEvent(String(args[0]), args[1]);
-                return true;
             default: throw new Error(`remote access has no ${method}`);
         }
     }

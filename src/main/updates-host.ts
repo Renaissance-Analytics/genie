@@ -4,6 +4,7 @@ import { channelFrom, type UpdateChannel } from '../core/update-channel.js';
 import type { AgentId } from '../core/identity.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { AUTO_CHECK, UpdateHost, type DrainAgentsPort, type UpdateHostOptions, type UpdateState, type UpdaterPort } from './updater.js';
+import type { HostApiDeps } from './host-api.js';
 
 /**
  * THE UPDATER IN GENIE-HOST (the host split, P5b; plan "P5b build spec").
@@ -63,6 +64,13 @@ export const NO_WINDOW_INSTALL = 'An update is installed from a Genie window or 
 export interface UpdatesCaller {
     /** A local window asked (its link, never the helper's or a remote's own). */
     readonly window: boolean;
+    /** The engine link that asked: a window's, so it can say it is one (`window [pid]`) and be forgotten when it closes. */
+    readonly connection?: string;
+    /**
+     * A remote client asked through genie-host's own answers (Tynn #898 step 2d-2b). It may install, or proceed with a drain,
+     * on the terms it always had when a window answered for it: while a Genie window is open on this host.
+     */
+    readonly remote?: boolean;
 }
 
 export interface UpdatesServiceOptions {
@@ -176,6 +184,8 @@ export class UpdatesService {
     #config: UpdaterConfig = { allowPrerelease: false, autoDownload: false };
     #nextId = 1;
     #windowPids: number[] = [];
+    /** Every local window linked now, by its link, with its pid (Tynn #898): each is spared by the teardown and waited for. */
+    readonly #windows = new Map<string, number>();
     #failed: UpdateFailedRecord | null;
 
     constructor(options: UpdatesServiceOptions) {
@@ -198,7 +208,7 @@ export class UpdatesService {
         this.#host = new UpdateHost({
             ...options.host,
             port,
-            spare: () => [...(this.#helper ? [this.#helper.pid] : []), ...this.#windowPids],
+            spare: () => [...(this.#helper ? [this.#helper.pid] : []), ...this.#allWindowPids()],
             ...(options.defer ? { defer: options.defer } : {}),
         });
         this.#host.onChange((state) => { for (const l of [...this.#listeners]) l(state); });
@@ -246,7 +256,7 @@ export class UpdatesService {
                 this.#host.cancelDrain();
                 return true;
             case 'forceDrain':
-                if (!caller.window) throw new Error(NO_WINDOW_INSTALL);
+                if (!this.#mayInstall(caller)) throw new Error(NO_WINDOW_INSTALL);
                 return this.#host.forceDrain();
             case 'state':
                 return this.#host.state();
@@ -263,20 +273,43 @@ export class UpdatesService {
             case 'setChannel':
                 this.setChannel(channelFrom(args[0]));
                 return null;
+            case 'window': {
+                // A window says it is one, each time it links: only a local window's own link may (never a remote's claim).
+                const pid = args[0];
+                if (!caller.window || !caller.connection) throw new Error('Only a local window says it is a window.');
+                if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) throw new Error('that is not a window’s pid');
+                this.#windows.set(caller.connection, pid);
+                return null;
+            }
             case 'launch':
                 if (!isLaunch(args[0])) throw new Error('that is not how to start Genie’s updater');
                 this.#launch = { file: args[0].file, args: [...args[0].args] };
                 return null;
             case 'install': {
                 if (this.#options.unavailable !== undefined) throw new Error(this.#options.unavailable);
-                if (!caller.window) throw new Error(NO_WINDOW_INSTALL);
+                if (!this.#mayInstall(caller)) throw new Error(NO_WINDOW_INSTALL);
                 const pid = args[0];
-                this.#windowPids = typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? [pid] : [];
+                this.#windowPids = caller.window && typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? [pid] : [];
                 return this.#host.install();
             }
             default:
                 throw new Error(`Genie’s updater has no ${method}`);
         }
+    }
+
+    /** A window's link closed: it is no longer spared, waited for, or counted as a window open here. */
+    windowDropped(connection: string): void {
+        this.#windows.delete(connection);
+    }
+
+    /** A window asked; or a remote client did while a Genie window is open on this host (as when a window answered it). */
+    #mayInstall(caller: UpdatesCaller): boolean {
+        return caller.window || (caller.remote === true && this.#windows.size > 0);
+    }
+
+    /** The windows the install leaves running until the helper sees them gone: every linked one, and the one that asked. */
+    #allWindowPids(): number[] {
+        return [...new Set([...this.#windows.values(), ...this.#windowPids])];
     }
 
     /**
@@ -369,14 +402,17 @@ export class UpdatesService {
 
     /** The install's last steps: the helper is handed it, then this host exits (it maps the executable the installer replaces). */
     async #handOver(): Promise<void> {
+        // A client-only update (Tynn #413): this host keeps running from its own copy, so the installer waits for the windows only.
+        const clientOnly = this.#host.clientOnly();
         const wait: InstallWait = {
-            pids: [this.#options.host.ownPid, ...this.#windowPids],
+            pids: clientOnly ? this.#allWindowPids() : [this.#options.host.ownPid, ...this.#allWindowPids()],
             installDir: this.#options.host.installDir,
             boundMs: this.#options.installWaitMs ?? INSTALL_WAIT_MS,
         };
         try {
             await this.#request('install', undefined, wait);
-            this.#log('updater: it has the install; this host exits');
+            this.#log(clientOnly ? 'updater: it has the install; only the window is updated, so this host stays' : 'updater: it has the install; this host exits');
+            if (clientOnly) return;
         } catch (error) {
             const why = error instanceof Error ? error.message : String(error);
             // Everything this host ran is already stopped: it exits either way. A person who clicked Install is never left
@@ -411,6 +447,8 @@ export function updaterHelperEnv(env: NodeJS.ProcessEnv, genieHome: string): Nod
 export function hostDrainAgents(input: {
     agents: () => readonly { id: string; name: string }[];
     probe: (id: AgentId) => { running: boolean; turnState: string; inTurn?: boolean | undefined } | null;
+    /** The saved agents a restore has not started yet (Tynn #754): the record keeps them. */
+    readPending?: () => Promise<{ readonly running: readonly string[]; readonly interrupted: readonly string[] }>;
     writeRunningAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     writeInterruptedAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     stopAll: (onLeft?: (left: number) => void) => Promise<void>;
@@ -429,11 +467,30 @@ export function hostDrainAgents(input: {
             record: () => recordShutdown({
                 agents: input.agents,
                 probe: input.probe,
+                ...(input.readPending ? { pending: input.readPending } : {}),
                 markRunningAtQuit: input.writeRunningAtQuit,
                 markInterruptedAtQuit: input.writeInterruptedAtQuit,
             }),
             stopAll: input.stopAll,
             ...(input.onRecordError ? { onRecordError: input.onRecordError } : {}),
         }),
+    };
+}
+
+/**
+ * GENIE-HOST'S UPDATER FOR ITS REMOTE CLIENTS (Tynn #898 step 2d-2b): the update actions a phone or another workstation's
+ * window asks, answered by this host's updater with no window in between. Checking, downloading and the notes need no
+ * window; installing and "proceed now" keep the terms they had when a window answered them (UpdatesService `#mayInstall`).
+ */
+export function remoteUpdatesPort(service: UpdatesService): NonNullable<HostApiDeps['updates']> {
+    const caller: UpdatesCaller = { window: false, remote: true };
+    return {
+        state: () => service.dump(),
+        onChange: (listener) => service.onEvent(listener),
+        check: () => service.call('check', [], caller) as Promise<UpdateState>,
+        download: async () => (await service.call('download', [], caller)) === true,
+        install: () => service.call('install', [], caller) as Promise<{ report: string }>,
+        forceDrain: async () => (await service.call('forceDrain', [], caller)) === true,
+        notes: () => service.call('notes', [], caller) as Promise<UpdateState | null>,
     };
 }

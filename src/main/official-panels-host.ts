@@ -2,8 +2,9 @@ import { access, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { listRepos } from '../core/repo-registry.js';
 import { pinArtBoardPost, readArtBoard, reviewArtBoardPost, type ReviewResult } from './artboard-host.js';
+import { clearArtBoard, restoreArtBoard } from './artboard-clear.js';
 import { repoCommit, repoCreateBranch, repoDiff, repoPull, repoPush, repoStage, repoStatus, repoUnstage, type RepoResult } from './repo-git.js';
-import type { ResolvedBoard } from '../core/artboard.js';
+import type { ClearScope, ResolvedBoard } from '../core/artboard.js';
 import { readArtboardFiles, type ArtboardFilesBoard } from './artboard-files.js';
 
 /**
@@ -20,6 +21,8 @@ export interface PanelsHostDeps {
 }
 
 const unknownWorkspace = 'Genie does not have that workspace';
+/** The Clear menu's verdicts, by the scope each clears (genie#847). */
+const CLEAR_VERDICT: Record<'clear-decided' | 'clear-all' | 'clear-everything', ClearScope> = { 'clear-decided': 'decided', 'clear-all': 'all', 'clear-everything': 'everything' };
 const exists = (p: string) => access(p).then(() => true, () => false);
 
 /** The repos a workspace's panel can pick: the workspace itself when it is one, then the envelope's `repos[]` that are. */
@@ -75,6 +78,12 @@ export async function artboardReview(deps: PanelsHostDeps, workspaceId: unknown,
     if (!root) return { ok: false, error: unknownWorkspace };
     // `pin` / `unpin` ride the same call as a verdict: it is the person's one action on a post (the wire has one method for it).
     if (typeof postId === 'string' && (verdict === 'pin' || verdict === 'unpin')) return pinArtBoardPost(root, postId, verdict === 'pin');
+    // So do the Clear menu, Delete and Undo (genie#847): the scope in the verdict's place; Delete names the post; Undo
+    // (`restore`) names the .trash entry the clear answered with, in the post's place.
+    const host = { send: deps.send, now: deps.now };
+    if (verdict === 'clear-decided' || verdict === 'clear-all' || verdict === 'clear-everything') return clearArtBoard(root, { scope: CLEAR_VERDICT[verdict] }, host);
+    if (typeof postId === 'string' && postId && verdict === 'delete') return clearArtBoard(root, { postId }, host);
+    if (typeof postId === 'string' && postId && verdict === 'restore') return restoreArtBoard(root, postId, host);
     if (typeof postId !== 'string' || (verdict !== 'approved' && verdict !== 'rejected')) return { ok: false, error: 'bad arguments' };
     return reviewArtBoardPost(root, postId, { verdict, comment: typeof comment === 'string' ? comment : undefined }, { send: deps.send, now: deps.now });
 }

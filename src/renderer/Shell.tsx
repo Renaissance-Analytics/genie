@@ -222,6 +222,8 @@ export interface ShellProps {
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** Discard an undelivered chat draft, unsent. */
     onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /** Withdraw / Edit one of your queued messages in the open chat (Tynn #843): the host's `resolvePrompt`. */
+    onResolveQueued?: import('../core/queued-withdraw.js').QueuedResolve | undefined;
     onOpenAgent: (agentId: string) => void;
     /** The Dashboard's row click: that agent's chat, docked beside the Dashboard, which stays (genie#1209). */
     onChatAgent?: ((agentId: string) => void) | undefined;
@@ -260,8 +262,6 @@ export interface ShellProps {
     /** Workspaces whose file panel is in its own window (§4.3): the dock holds a bar, not the panel. */
     filesPopped?: readonly string[] | undefined;
     onPopOutFiles?: ((workspaceId: string) => void) | undefined;
-    /** A workspace's terminals view in a NEW window (Tynn #706): the Dashboard's windows column. Absent = that entry is disabled. */
-    onPopOutTerminals?: ((workspaceId: string) => void) | undefined;
     onBringBackFiles?: ((workspaceId: string) => void) | undefined;
     /** An agent is writing a file you have dirty (§4.3): the ask, and its lifting. */
     onPauseAgent?: ((agent: string, path: string) => void) | undefined;
@@ -288,6 +288,8 @@ export interface ShellProps {
     /** `Stop this turn` — the Agent view's header and the chat's context line: the turn ends, the agent keeps running. */
     /** `intent`: `stop` (the default) latches the agent until the person acts; `interrupt` does not (Tynn #672 part 3). */
     onCancelTurn?: ((agentId: string, intent?: 'stop' | 'interrupt') => void) | undefined;
+    /** `Stop this call` (Tynn #855): one hung tool call ends, the turn goes on. */
+    onStopToolCall?: ((agentId: string, toolCallId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
     onProviderLogin?: ((agentId: string) => void) | undefined;
@@ -442,7 +444,6 @@ export function Shell({
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
-    onPopOutTerminals,
     onBringBackFiles,
     onPauseAgent,
     onResumeAgent,
@@ -458,6 +459,7 @@ export function Shell({
     onRestartAgent,
     onStopAgent,
     onCancelTurn,
+    onStopToolCall,
     onResumeLimit,
     onProviderLogin,
     onAccountRetry,
@@ -469,6 +471,7 @@ export function Shell({
     onSend,
     onRestartAndSend,
     onDiscardDraft,
+    onResolveQueued,
     answeringApproval,
     approvalRefusal = null,
     onAnswerApproval,
@@ -686,7 +689,7 @@ export function Shell({
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk && !scoped ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
-                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); } } : undefined}
+                flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); }, onStop: (flowId) => { void onFeature({ kind: 'flows.stop', flowId }); } } : undefined}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || scoped || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
@@ -803,9 +806,10 @@ export function Shell({
                     // click picks the chat, as a Dashboard row does, without leaving the page on screen.
                     agents={snapshot.agents.filter((agent) => !hiddenWorkspaces.has(agent.workspaceId))}
                     onChatAgent={onChatAgent}
-                    // The row's terminal and folder buttons open WINDOWS, never navigate (Tynn #733): the agent's Take Over window and the
-                    // workspace's popped-out Files panel — the same openers the Agent and Files pages use.
-                    onOpenAgentTerminal={onTakeOver}
+                    // The row's terminal and folder buttons open WINDOWS, never navigate (Tynn #733): a shell in the agent's
+                    // WORKSPACE — the workspace header's Terminal button's opener, never the agent's TUI (Tynn #851: that is a
+                    // diagnostics tool in the agent's Settings) — and the workspace's popped-out Files panel.
+                    onOpenWorkspaceTerminal={onOpenScratchTerminal && !readOnly ? onOpenScratchTerminal : undefined}
                     onOpenWorkspaceFiles={onPopOutFiles}
                     // THE PERSON'S INBOX (Tynn #742): one click from the rail, its unread count on the row.
                     {...(featureAsk && !scoped ? { personInbox: { unread: features.inbox ? personUnread(features.inbox.unread) : null, open: personOpen, onToggle: () => openInbox(personOpen ? null : PERSON_INBOX) } } : {})}
@@ -887,7 +891,9 @@ export function Shell({
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
                             // The windows column (Tynn #706): new windows, never a navigation; a share window offers its own workspace only.
-                            onOpenTerminalWindow={onPopOutTerminals}
+                            // Open window → Terminal (Tynn #706, #851): a SHELL in the row's workspace, the sidebar button's and the
+                            // workspace header's opener — not a second Genie window on an empty Terminals view (the owner's screenshot).
+                            onOpenTerminalWindow={onOpenScratchTerminal && !readOnly ? onOpenScratchTerminal : undefined}
                             onOpenFilesWindow={onPopOutFiles}
                             scopeWorkspaceId={scoped?.workspaceId}
                             faults={workspaceFaults}
@@ -935,39 +941,44 @@ export function Shell({
 
 
                     {canServe && parsed.surface === 'agent' && agentDetail ? (
-                        // AN AGENT OPENS INSIDE ITS WORKSPACE (Tynn #805; the owner's choice, as in Genie 1): its page sits under
-                        // its workspace's strip — Dashboard, every agent of the workspace, your tabs, +, Settings — one click from each.
+                        // AN AGENT OPENS INSIDE ITS WORKSPACE (Tynn #805; the owner's choice, as in Genie 1): its page's bar IS its
+                        // workspace's strip — Dashboard, every agent of the workspace, your tabs, +, Settings — one click from each.
                         <div data-agent-in-workspace={agentWorkspace?.id ?? ''} className="flex h-full min-h-0 flex-col">
-                            {agentWorkspace ? (
-                                <ErrorBoundary surface="Tab strip" resetKeys={[parsed.agentId]}>
-                                <WorkspaceTabs
-                                    designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
-                                    agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
-                                    current={{ kind: 'agent', id: parsed.agentId }}
-                                    onShare={scoped ? undefined : workspaceOps?.onShare}
-                                    color={agentWorkspace.color ?? null}
-                                    canDesign={!readOnly && Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
-                                    hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
-                                    artboardWaiting={agentArtboardWaiting}
-                                    github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
-                                    // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
-                                    tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
-                                    onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
-                                    onAdd={() => {
-                                        const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
-                                        const made = addTab(parseTabs(typeof raw === 'string' ? raw : '{"tabs":[]}'));
-                                        workspaceOps?.settings?.onSet('workspace_tabs', serializeTabs(made.state));
-                                        onNavigate(workspaceViewRoute(agentWorkspace.id, `tab:${made.id}`));
-                                    }}
-                                    onOpenAgent={onOpenAgent}
-                                    // The Active Plan column's toggle, at the strip's right end — only where the column exists.
-                                    {...(agentDetail.agent.fidelity !== 'observed' ? { planToggle: { open: planOpen, onToggle: () => setPlanColumn(!planOpen) } } : {})}
-                                />
-                                </ErrorBoundary>
-                            ) : null}
-                            <div className="min-h-0 flex-1">
                             <ErrorBoundary surface="Agent view" resetKeys={[parsed.agentId]}>
                             <AgentView
+                                // ITS WORKSPACE'S STRIP IS ITS BAR (TopBar.tsx; the owner on beta.64: one bar for every view): the agent puts
+                                // its state, its own views and its actions at the strip's right end; nothing is drawn above or below it.
+                                bar={agentWorkspace ? (trailing) => (
+                                    <ErrorBoundary surface="Tab strip" resetKeys={[parsed.agentId]}>
+                                    <WorkspaceTabs
+                                        designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
+                                        agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
+                                        current={{ kind: 'agent', id: parsed.agentId }}
+                                        onShare={scoped ? undefined : workspaceOps?.onShare}
+                                        color={agentWorkspace.color ?? null}
+                                        canDesign={!readOnly && Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
+                                        hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
+                                        artboardWaiting={agentArtboardWaiting}
+                                        github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
+                                        // The same strip as the workspace's own views (Tynn #545): the Tynn tab is there whatever is selected.
+                                        tynn={features.issueWatch?.[agentWorkspace.id]?.linked === true && tynnBoard !== undefined}
+                                        // Storage too, as on the workspace's own views (Tynn #697): one strip whatever is selected.
+                                        storage={Boolean(features.storage)}
+                                        onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
+                                        onAdd={() => {
+                                            const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
+                                            const made = addTab(parseTabs(typeof raw === 'string' ? raw : '{"tabs":[]}'));
+                                            workspaceOps?.settings?.onSet('workspace_tabs', serializeTabs(made.state));
+                                            onNavigate(workspaceViewRoute(agentWorkspace.id, `tab:${made.id}`));
+                                        }}
+                                        onOpenAgent={onOpenAgent}
+                                        // The Active Plan column's toggle, at the strip's right end — only where the column exists.
+                                        {...(agentDetail.agent.fidelity !== 'observed' ? { planToggle: { open: planOpen, onToggle: () => setPlanColumn(!planOpen) } } : {})}
+                                        trailing={trailing}
+                                        path={agentDetail.agent.cwd ?? null}
+                                    />
+                                    </ErrorBoundary>
+                                ) : undefined}
                                 chatRefs={chatRefs}
                                 planOpen={planOpen}
                                 onPlanCollapse={() => setPlanColumn(false)}
@@ -989,6 +1000,8 @@ export function Shell({
                                 onNavigate={onNavigate}
                                 onSelect={onSelectRow}
                                 chatSubject={parsed.chat}
+                                // The chat holds the side for good: when it is this agent's, the bar's Chat would open what is open.
+                                chatInView={chatThread?.agentId === agentDetail.agent.id}
                                 onLanes={(next) => {
                                     const value = formatLanes(next);
                                     const base = `genie://agent/${agentDetail.agent.id}?tab=${parsed.tab}`;
@@ -1011,6 +1024,7 @@ export function Shell({
                                 // A read-only share acts on nothing; a provider's login and an account retry are the host's own.
                                 onStop={readOnly ? undefined : onStopAgent}
                                 onCancelTurn={readOnly ? undefined : onCancelTurn}
+                                onStopToolCall={readOnly ? undefined : onStopToolCall}
                                 onResumeLimit={readOnly ? undefined : onResumeLimit}
                                 onProviderLogin={scoped ? undefined : onProviderLogin}
                                 onAccountRetry={scoped ? undefined : onAccountRetry}
@@ -1020,7 +1034,6 @@ export function Shell({
                                 terminalsReadOnly={readOnly}
                             />
                             </ErrorBoundary>
-                            </div>
                         </div>
                     ) : null}
 
@@ -1220,6 +1233,7 @@ export function Shell({
                         {...(featureAsk && !scoped ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
+                        onResolveQueued={readOnly ? undefined : onResolveQueued}
                         onStopTurn={chatTurnStop && chatThread && !readOnly ? () => onCancelTurn?.(chatThread.agentId, 'stop') : undefined}
                         // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
                         // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).

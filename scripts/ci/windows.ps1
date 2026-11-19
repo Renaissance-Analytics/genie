@@ -113,6 +113,10 @@ function Run([string]$what, [scriptblock]$cmd) {
 # THIS IS A TEST MACHINE, SAID ONCE AND ONLY WHEN IT IS TRUE. Each window row script refuses to run anywhere else, each
 # with its own variable; GitHub's CI=true used to satisfy them all. They are set here from one statement: the user is
 # `genie` (the Azure test VMs' standard user), or GENIE_TEST_MACHINE=1 was given by whoever started the run.
+# GENIE INSTALLS PLAYWRIGHT'S BROWSERS BY ITSELF at launch (Tynn #846): a few hundred MB from Playwright's CDN, on every
+# test VM, under rows that measure time and count processes. The rows test Genie, not that download: off for every row.
+$env:GENIE_PLAYWRIGHT_AUTO_INSTALL = '0'
+
 function Declare-TestMachine {
     if ($env:GENIE_TEST_MACHINE -ne '1') {
         if ($env:USERNAME -ne 'genie') { Block "not a test machine (user $env:USERNAME): the window rows run only on one; GENIE_TEST_MACHINE=1 says this machine is" }
@@ -466,6 +470,19 @@ function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
     Start-Process powershell -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded -WindowStyle Hidden -PassThru
 }
 
+# NOTHING OF GENIE OUTLIVES ITS ROW (Tynn #916). ui-lag's teardown left a Genie window running on every Windows gate: its
+# app.quit() opened the quit prompt, which blocks main, and genie-host's hang watchdog then started a NEW window that no
+# row owned. It ran beside every later row, and a row that leaves Genie running is not a clean start for the next. So after
+# each row (the shared app's rows excepted, and the unit row, whose processes are its tests'), what is still running of
+# Genie is named, the row fails on it, and it is ended. On a test VM every such process is the run's own.
+function Find-GenieLeftovers {
+    @(Get-Process -Name 'electron', 'Genie', 'genie-host', 'genie-launch' -ErrorAction SilentlyContinue)
+}
+function Stop-GenieLeftovers($procs) {
+    foreach ($p in @($procs)) { taskkill /PID $p.Id /T /F *> $null }
+    Start-Sleep -Seconds 1
+}
+
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 # THE MACHINE BESIDE EVERY ROW (Tynn #660): scripts/ci/machine-sampler.ps1 writes one MACHINE line every ~2 s for the
@@ -473,6 +490,30 @@ function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
 $MachineSamples = Join-Path $Out 'machine-samples.log'
 $script:MachineSampler = Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/ci/machine-sampler.ps1', '-Out', $MachineSamples, '-ParentId', $PID -PassThru -WindowStyle Hidden
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
+
+# THE FIRST GIT ON A FRESH VM IS SLOW, AND IS PAID HERE (Tynn #732). Measured in the files-watch row on Azure (queue items
+# 1119-173835-3a5952, 1119-180221-2b163b): a VM's first git calls took up to 15.4 s (init), 2.3 s (add) and 7.6 s (commit,
+# whose auto-maintenance child is a separate executable that had never run), with the CPU and disk idle; every later call
+# took 60-130 ms. Four gates failed files-watch on its fixture's 15 s bound. Nothing earlier in the run had left anything
+# running, and Defender is kept out of git and the tree. So that cost is the VM's, not a row's: one throwaway repo with a
+# commit (its maintenance child included) before any row, each step's time said so the cost stays visible.
+function Warm-Git {
+    $d = Join-Path ([System.IO.Path]::GetTempPath()) ("genie-git-warm-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        New-Item -ItemType Directory -Force $d | Out-Null
+        Set-Content -LiteralPath (Join-Path $d 'warm.txt') -Value 'warm'
+        $git = @('-c', 'user.name=warm', '-c', 'user.email=warm@example.test', '-C', $d)
+        $t = [System.Diagnostics.Stopwatch]::StartNew(); git @git init -q *> $null; $init = "init $($t.ElapsedMilliseconds) ms (exit $LASTEXITCODE)"
+        $t = [System.Diagnostics.Stopwatch]::StartNew(); git @git add . *> $null; $add = "add $($t.ElapsedMilliseconds) ms (exit $LASTEXITCODE)"
+        $t = [System.Diagnostics.Stopwatch]::StartNew(); git @git commit -q -m warm *> $null; $commit = "commit $($t.ElapsedMilliseconds) ms (exit $LASTEXITCODE)"
+        Write-Output "--- git warmed: $init, $add, $commit"
+    } catch {
+        Write-Output "--- git could not be warmed: $($_.Exception.Message)"
+    } finally {
+        Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+Warm-Git
 
 # >>> THE ROW LOOP (test/ci-infra-rerun-windows.test.ts runs this block, as it is, with stub rows)
 #
@@ -523,6 +564,16 @@ function Invoke-Row([string]$name) {
         # The watchdog and its tree; not what it already ended.
         if (-not $watch.HasExited) { taskkill /PID $watch.Id /T /F *> $null }
     }
+    $leftover = ''
+    if (-not $script:App -and $name -ne 'unit') {
+        $left = @(Find-GenieLeftovers)
+        if ($left.Count -gt 0) {
+            $leftover = (@($left | ForEach-Object { "$($_.Name) $($_.Id)" })) -join ', '
+            Add-Content -Path $log -Value "LEFT RUNNING after the row: $leftover"
+            Stop-GenieLeftovers $left
+            $ok = $false
+        }
+    }
     # A ROW THAT ENDS BEFORE ITS CEILING CANNOT READ AS TIMED OUT: the mark must exist as a file, hold this row's token,
     # and the ceiling's time must have passed. A scalar test each, never Test-Path of a list (an array of results reads
     # as true however they came out).
@@ -549,7 +600,7 @@ function Invoke-Row([string]$name) {
             Write-Output "--- the end of smoke-out\$($_.Name)"
             Get-Content $_.FullName -Tail 40
         }
-        $script:RowLine = "ROW $name FAIL $secs"
+        $script:RowLine = if ($leftover) { "ROW $name FAIL $secs (left Genie running: $leftover)" } else { "ROW $name FAIL $secs" }
     }
 }
 

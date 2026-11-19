@@ -64,7 +64,7 @@ const VERBS: Record<string, string> = {
 };
 
 /** Actions an agent's autonomy never approves for it: each waits for the person — unless a switch below answers it. */
-export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click'];
+export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click', 'flows.stop'];
 
 /**
  * A PERMISSION SWITCH THE PERSON TURNED ON IS THEIR ANSWER (genie#1294; the owner, 2026-10-27: an agent with "May manage
@@ -159,11 +159,10 @@ export class ApprovalQueue {
                 const at = entry.resolvers.indexOf(resolve);
                 if (at < 0) return;
                 entry.resolvers.splice(at, 1);
-                // The last call waiting on this item: nobody is left to receive a verdict, so nobody is asked for one.
+                // The last call waiting on this item: nobody is left to receive a verdict, so nobody is asked for one. An
+                // abort that says why (a string reason, Tynn #858) is recorded with it; a client that went is "client disconnected".
                 if (entry.resolvers.length === 0 && this.#pending.get(entry.id) === entry) {
-                    this.#pending.delete(entry.id);
-                    this.#cancelled = [...this.#cancelled, { action, detail, reason: 'client disconnected' }].slice(-50);
-                    this.#changed();
+                    this.cancel(entry.id, typeof signal?.reason === 'string' ? signal.reason : 'client disconnected');
                 }
                 resolve('denied');
             };
@@ -187,6 +186,21 @@ export class ApprovalQueue {
         if (!p) return false;
         this.#pending.delete(id);
         for (const r of p.resolvers) r(choice === 'allow' ? 'allowed' : 'denied');
+        this.#changed();
+        return true;
+    }
+
+    /**
+     * CANCEL BY ID (Tynn #858): the question went away, so its item leaves the Deck. Nobody answered it: it is recorded as
+     * cancelled with the reason (`lastCancelled`), never as an Allow or a Deny, and every caller still waiting on it ends
+     * denied. False for an id that is not pending (unknown, answered or already cancelled), which changes nothing.
+     */
+    cancel(id: string, reason: string): boolean {
+        const p = this.#pending.get(id);
+        if (!p) return false;
+        this.#pending.delete(id);
+        this.#cancelled = [...this.#cancelled, { action: p.action, detail: p.detail, reason }].slice(-50);
+        for (const r of p.resolvers) r('denied');
         this.#changed();
         return true;
     }

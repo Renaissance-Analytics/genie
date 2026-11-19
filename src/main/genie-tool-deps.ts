@@ -1,5 +1,6 @@
 import type { IssueWatchSummary } from '../core/issue-watch.js';
 import type { DrivablePage, PageAction } from './mcp-tools-pages.js';
+import { PLAYWRIGHT_INSTALL_ACTION, type PlaywrightToolPort } from './mcp-tools-playwright.js';
 import type { Liveness } from '../core/liveness.js';
 import { agentAddress } from '../core/inbox.js';
 import { CREATE_AGENT_ACTION, type AgentToolsDeps } from './mcp-tools-agents.js';
@@ -33,7 +34,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction | typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
@@ -49,6 +50,8 @@ export interface GenieToolParts {
     readonly thumbsUp: (caller: Caller, reason: string) => void;
     /** IssueWatch (Tynn #806): what is open on GitHub for a workspace, as last heard from Tynn. Absent = none (doctor mode). */
     readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer>; recheckSignIn?(): void };
+    /** A workspace's folder (the registry's): where a decided question writes on the ArtBoard (Tynn #835). Absent = where its agent was seen. */
+    readonly workspacePath?: (workspaceId: string) => string | null;
     /** openFileForUser (genie#922): the caller's workspace and the path relative to it — main opens Genie's file panel there. */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     /** The `plan` tool: the caller's plan into its own session (`SessionHost.reportPlan`); `false` = no running session. */
@@ -81,6 +84,8 @@ export interface GenieToolParts {
     readonly workspaceTabs?: { write(workspaceId: string, raw: string): void; sites(workspaceId: string): readonly string[] };
     /** `pages` (browser rebuild step 7): every page Genie has open, drivable (page-navigation-electron.ts). Absent = no such tool (doctor mode). */
     readonly pages?: { open(): readonly DrivablePage[] };
+    /** `playwright` (Tynn #846): genie-host's installer and what is on disk. Absent = no such tool (the window, doctor mode). */
+    readonly playwright?: PlaywrightToolPort;
 }
 
 /**
@@ -109,6 +114,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             thumbsUp: p.thumbsUp,
             dnd: () => ({ on: values().do_not_disturb === true, reply: String(values().dnd_reply ?? '') }),
             ...(p.issueWatch ? { issueWatch: p.issueWatch } : {}),
+            ...(p.workspacePath ? { workspacePath: p.workspacePath } : {}),
         },
         more: {
             knowledge: p.knowledge,
@@ -170,6 +176,14 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 sites: (ws: string) => p.workspaceTabs!.sites(ws),
                 pages: () => p.pages!.open(),
                 approve: (caller: Caller, action: PageAction, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
+            },
+        } : {}),
+        ...(p.playwright ? {
+            playwright: {
+                resolveCaller: p.resolveCaller,
+                port: p.playwright,
+                trusted: p.workspaceTrusted ?? (() => false),
+                approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
             },
         } : {}),
     };

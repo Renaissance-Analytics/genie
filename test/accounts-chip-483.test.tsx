@@ -162,10 +162,11 @@ describe('S10: the host serves the accounts', () => {
         expect(await client.accounts()).toEqual(SNAPSHOT([OFFER]));
         w.close();
     });
-    it('genie-host builds them from the book, the board and the offers; main and the preload carry them; App hands them to the Dashboard', () => {
-        expect(source('src/main/genie-host.ts')).toMatch(/accounts: \(\) => \(\{ providers: accountsView\(/);
-        expect(source('src/main/main.ts')).toMatch(/ipcMain\.handle\('genie:accounts'/);
-        expect(source('src/main/preload.ts')).toMatch(/accounts: \(\) => ipcRenderer\.invoke\('genie:accounts'\)/);
+    it('genie-host builds them from the book, the board and the offers; the one protocol carries them (accounts.list, Tynn #895); App hands them to the Dashboard', () => {
+        expect(source('src/main/genie-host.ts')).toMatch(/const accountsSnapshot = \(\): AccountsSnapshot => \(\{ providers: accountsView\(/);
+        expect(source('src/main/genie-host.ts')).toMatch(/accountsPortNow = \{ list: \(\) => accountsSnapshot\(\)/);
+        expect(source('src/renderer/remote-bridge.ts')).toMatch(/accounts: async \(\) => \{ const r = await call\('accounts\.list'\)/);
+        expect(source('src/main/preload.ts')).not.toMatch(/genie:accounts/);
         expect(source('src/renderer/App.tsx')).toMatch(/accounts=\{accountsSnapshot/);
     });
 });

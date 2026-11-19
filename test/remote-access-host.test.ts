@@ -41,40 +41,41 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(home, { recursive: true, force: true }); });
 
-async function openHost(window: { connected: () => boolean; invoke: (method: string, args: unknown[]) => Promise<unknown> }) {
+/** genie-host's remote API: its own answers (`alone`; absent = still being built) and what it answers ahead of them. */
+async function openHost(alone: ((method: string, args: unknown[]) => Promise<unknown>) | null = null) {
     const api = hostRemoteApi({
         hostName: 'alphar',
         // What genie-host owns itself (here: the updater's state, P5b).
         own: { 'updates.state': async () => ({ phase: 'idle', version: '2.0.0-beta.61' }) },
-        window,
+        alone: () => (alone ? { invoke: (method, args) => alone(method, args), onEvent: () => () => {}, workspaceOfAgent: () => null } : null),
     });
     return RemoteAccessHost.open({ home, hostName: 'alphar', api, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } }, now });
 }
 
 describe('remote access, in genie-host', () => {
-    it('with EVERY window closed, a paired phone connects, is answered for what the host owns, and told what to do for the rest', async () => {
-        const host = await openHost({ connected: () => false, invoke: async () => { throw new Error('no window'); } });
+    it('with EVERY window closed, a paired phone connects and is answered; while genie-host\'s answers are built, it is told to try again', async () => {
+        const host = await openHost();
         const phone = connect();
         expect(await phone.hello({ kind: 'token', token })).toMatchObject({ kind: 'welcome', host: 'alphar', isOwner: true });
         expect(await phone.call('updates.state')).toMatchObject({ kind: 'result', ok: true, value: { phase: 'idle', version: '2.0.0-beta.61' } });
-        expect(await phone.call('snapshot')).toEqual({ kind: 'result', id: 2, ok: false, reason: 'alphar answers snapshot only while a Genie window is open there: open Genie on alphar' });
+        expect(await phone.call('host.home')).toEqual({ kind: 'result', id: 2, ok: false, reason: 'alphar\'s services are still starting; try again in a moment' });
         await host.close();
     });
 
-    it('with a window connected, what the host does not own yet is done by that window', async () => {
+    it('every other method is genie-host\'s own answers; what it answers ahead of them never reaches them', async () => {
         const asked: Array<{ method: string; args: unknown[] }> = [];
-        const host = await openHost({ connected: () => true, invoke: async (method, args) => { asked.push({ method, args }); return { agents: [] }; } });
+        const host = await openHost(async (method, args) => { asked.push({ method, args }); return method === 'host.home' ? '/home/owner' : { agents: [] }; });
         const phone = connect();
         await phone.hello({ kind: 'token', token });
         expect(await phone.call('snapshot')).toMatchObject({ kind: 'result', ok: true, value: { agents: [] } });
-        // What the host owns never goes to the window.
+        expect(await phone.call('host.home')).toMatchObject({ kind: 'result', ok: true, value: '/home/owner' });
         await phone.call('updates.state');
-        expect(asked).toEqual([{ method: 'snapshot', args: [] }]);
+        expect(asked).toEqual([{ method: 'snapshot', args: [] }, { method: 'host.home', args: [] }]);
         await host.close();
     });
 
     it('the paired devices, the PIN and the lock are the host\'s: a revoke is written to this machine\'s store', async () => {
-        const host = await openHost({ connected: () => false, invoke: async () => { throw new Error('no window'); } });
+        const host = await openHost();
         const status = host.status();
         expect(status.devices.map((d) => d.label)).toEqual(['glenn’s phone']);
         expect(host.issuePin().code).toMatch(/^\d{6}$/);
@@ -86,7 +87,7 @@ describe('remote access, in genie-host', () => {
         const stored = JSON.parse(await readFile(join(home, 'runtime', 'remote-devices.json'), 'utf8')) as { devices: unknown[] };
         expect(stored.devices).toEqual([]);
         // A revoked phone is refused.
-        const again = await openHost({ connected: () => false, invoke: async () => { throw new Error('no window'); } });
+        const again = await openHost();
         expect(await connect().hello({ kind: 'token', token })).toMatchObject({ kind: 'refused' });
         await again.close();
     });

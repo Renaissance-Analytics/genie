@@ -2,6 +2,7 @@ import { orphanReport, orphansUnder, type RunningProcess } from './upgrade.js';
 import { changelogBetween, type ReleaseLike, type UpdateChangelog } from '../core/update-notes.js';
 import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor, type UpdateChannel } from '../core/update-channel.js';
 import type { AgentDrainOutcome, AgentDrainProgress, ShutdownReason } from '../core/agent-shutdown-drain.js';
+import { classifyUpdate } from '../core/update-kind.js';
 
 /**
  * THE UPDATE HOST — §7, wired.
@@ -62,6 +63,8 @@ export interface UpdateState {
      * then what runs from the install directory being closed, then the restart. The window's restart screen says it.
      */
     installing?: InstallProgress;
+    /** What the update on offer changes (Tynn #413): only the window (`client-only`), or genie-host too. Absent = nothing on offer. */
+    scope?: import('../core/update-kind.js').UpdateScope;
 }
 
 export interface InstallProgress {
@@ -81,8 +84,11 @@ export interface UpdaterPort {
      * update channel CHANGES (`UpdateHost.setChannel`). Each call replaces the last.
      */
     configure(channel: { allowPrerelease: boolean; autoDownload: boolean }): void;
-    /** Resolves the offered version, or `null` when there is none. Rejects on a library error. */
-    check(): Promise<{ version: string } | null>;
+    /**
+     * Resolves the offered version, or `null` when there is none. Rejects on a library error. `hostHash` and
+     * `engineProtocol` are what the release feed says of the offered genie-host (Tynn #413); absent = not said.
+     */
+    check(): Promise<{ version: string; hostHash?: string | null; engineProtocol?: number | null } | null>;
     /** Downloads the update found by the last check, reporting progress 0–100. */
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
@@ -139,6 +145,8 @@ export interface UpdateHostOptions {
     stopHosted?: () => Promise<void>;
     /** Other pids whose trees the teardown scan leaves alone (P5b: the updater helper, the window that asked). */
     spare?: () => readonly number[];
+    /** The genie-host running now: what an offer is compared with to know whether it changes the host (Tynn #413). */
+    running?: import('../core/update-kind.js').RunningHost;
 }
 
 /**
@@ -326,7 +334,9 @@ export class UpdateHost {
                 const checkedAt = this.clock();
                 if (found) {
                     const fetching = this.options.releases && this.options.runningVersion ? { changelog: null } : {};
-                    this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, ...fetching });
+                    // What it changes (Tynn #413): the window alone, or genie-host too. Said with the offer, kept until it is installed.
+                    const scope = classifyUpdate(found, this.options.running);
+                    this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, scope, ...fetching });
                     if ('changelog' in fetching) void this.#fetchChangelog(found.version);
                 }
                 else this.set({ phase: 'none', version: null, percent: null, error: null, checkedAt });
@@ -356,7 +366,7 @@ export class UpdateHost {
             this.set({ ...this.current, phase: 'error', error: message });
             return false;
         }
-        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt, ...(this.current.changelog !== undefined ? { changelog: this.current.changelog } : {}) });
+        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt, ...(this.current.scope ? { scope: this.current.scope } : {}), ...(this.current.changelog !== undefined ? { changelog: this.current.changelog } : {}) });
         return true;
     }
 
@@ -374,7 +384,8 @@ export class UpdateHost {
         this.drainGeneration += 1;
         // No handoff file is required; working agents get a bounded chance to finish safely first.
         let live: ReadonlyArray<{ id: string; name: string }>;
-        try { live = this.options.agents?.live() ?? []; }
+        // A CLIENT-ONLY UPDATE (Tynn #413) ends none: genie-host and its agents keep running through it.
+        try { live = ready.scope?.kind === 'client-only' ? [] : this.options.agents?.live() ?? []; }
         catch (error: unknown) { return Promise.resolve(this.failedInstall(error, true)); }
         /*
          * "INSTALLING" FIRST (genie#1201; the owner: "the whole Genie UI freezes, turns a pale white … We need a better UX
@@ -384,6 +395,11 @@ export class UpdateHost {
          */
         this.set({ ...ready, phase: 'installing', error: null, installing: { step: 'agents', agents: live.length, left: live.length } });
         return this.finishInstall(live).catch((error: unknown) => this.failedInstall(error));
+    }
+
+    /** The update on offer changes only the window (Tynn #413): installing it keeps genie-host and its agents running. */
+    clientOnly(): boolean {
+        return this.current.scope?.kind === 'client-only';
     }
 
     /** The report of the install that ran last (the drain's words first, then §7.2's), for the UI that missed the return value. */
@@ -403,7 +419,9 @@ export class UpdateHost {
         }
         // The helper is ready. Ask for safe points before recording who was actually interrupted.
         // Legacy/testing ports without a safe-point gate retain their synchronous stop setup.
-        const drain = this.options.agents?.waitForSafe ? await this.waitForAgents('upgrade') : { interrupted: [], forced: false, timedOut: false };
+        // Not a client-only one (Tynn #413): the host keeps its agents, and what it hosts, through it, so nothing drains.
+        const clientOnly = this.clientOnly();
+        const drain = this.options.agents?.waitForSafe && !clientOnly ? await this.waitForAgents('upgrade') : { interrupted: [], forced: false, timedOut: false };
         // STILL THERE? (Tynn #729) The drain can last minutes; before anything irreversible, the helper is asked again — a
         // helper that went is started and waited for, or the upgrade fails in words with everything still running.
         if (this.options.port.prepareInstall) {
@@ -417,7 +435,7 @@ export class UpdateHost {
         const stopping = (step: 'agents' | 'processes' | 'restarting', left: number): InstallProgress => ({ step, agents: live.length, left, ...(interrupted.length ? { interrupted } : {}) });
         // §7.4: the existing record-before-stop path remains the only restore-roster writer.
         let stillStopping = 0;
-        if (this.options.agents) {
+        if (this.options.agents && !clientOnly) {
             let left = live.length;
             const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress(stopping('agents', n)); })).then(() => true, () => true);
             let bound: ReturnType<typeof setTimeout> | undefined;
@@ -428,7 +446,7 @@ export class UpdateHost {
         }
         progress(stopping('processes', stillStopping));
         // What else the install stops before the scan (P5b: genie-host's sites and front door, P5a.3's order; containers stay).
-        await this.options.stopHosted?.().catch(() => undefined);
+        if (!clientOnly) await this.options.stopHosted?.().catch(() => undefined);
         const orphans = orphansUnder(
             await this.options.processes(),
             this.options.installDir,
@@ -437,7 +455,7 @@ export class UpdateHost {
         );
         await Promise.all(orphans.map((p) => Promise.resolve(this.options.kill(p.pid)).catch(() => false)));
         progress(stopping('restarting', stillStopping));
-        const ended = this.options.agents ? `${endedReport(live)}${stillStopping > 0 ? ` (${stillStopping} still stopping when the installer started)` : ''}. ` : '';
+        const ended = clientOnly ? 'Only the window was updated; genie-host and every agent kept running. ' : this.options.agents ? `${endedReport(live)}${stillStopping > 0 ? ` (${stillStopping} still stopping when the installer started)` : ''}. ` : '';
         const cutOff = interrupted.length > 0 ? `Stopped mid-turn: ${interrupted.map((a) => a.name).join(', ')}${drain.timedOut ? ' (120-second wait expired)' : drain.forced ? ' (Upgrade now chosen)' : ''}. ` : '';
         const result: InstallResult = { killed: orphans, report: `${ended}${cutOff}${orphanReport(orphans)}` };
         this.last = result;

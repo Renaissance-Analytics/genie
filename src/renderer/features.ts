@@ -9,6 +9,7 @@ import type { ServiceInstance } from '../core/services.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairFinding } from '../core/toolchain-repair.js';
 import type { DeckItem } from '../core/deck.js';
+import type { DeckItemRef } from '../core/deck-answer-wire.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
@@ -109,6 +110,9 @@ export interface SiteEditing {
 }
 
 /** A site row: the site, and the end of each of its processes' output (the supervisor's tail — there after a crash). */
+/** A process's whole kept log, opened by its Log button (Tynn #860). */
+export type ProcessLogOpen = import('../core/output-tail.js').ProcessLog & { readonly processId: string };
+
 export type HostedSite = SiteInfo & { readonly logs?: readonly SiteProcessLog[] };
 
 /** What the canvas's save did (genie#1204): stored — disarmed if it changed what an armed flow does — or refused, on the nodes. */
@@ -132,8 +136,11 @@ export interface ServiceAdding {
     readonly consent: { image: string; note: string; form: ServiceForm } | null;
 }
 
-/** Docker's state for the container, or `docker-not-running` when Docker itself is not there to ask (never read as `absent`). */
-export type ServiceStatus = 'running' | 'exited' | 'absent' | 'docker-not-running';
+/**
+ * Docker's state for the container, `docker-not-running` when Docker itself is not there to ask, or `unknown` when Genie
+ * could not ask it (Tynn #922: the spawn host lost, a timeout); neither is ever read as `absent`.
+ */
+export type ServiceStatus = 'running' | 'exited' | 'absent' | 'unknown' | 'docker-not-running';
 
 /** The end of one engine's own output, as `docker logs --tail` gave it when the person asked (H6). */
 export interface ServiceLogs {
@@ -147,7 +154,7 @@ export interface ServiceLogs {
 export interface ServiceView {
     readonly instance: ServiceInstance;
     readonly status: ServiceStatus;
-    /** Only with `docker-not-running`: Docker's own reason (the daemon is down, or Docker is not installed). */
+    /** With `docker-not-running`: Docker's own reason (the daemon is down, or not installed); with `unknown`: why it could not be asked. */
     readonly note?: string;
 }
 
@@ -354,7 +361,7 @@ export interface FeatureData {
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null; saved?: FlowSaved | null; toolKinds?: readonly import('@particle-academy/fancy-flow/engine').NodeKindDefinition[] } | null;
     /** Workspaces waiting for the person's yes. Absent = none. */
     readonly trust?: readonly TrustStepView[];
-    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[] } | null;
+    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[]; /** Tynn #860: the process log the person opened. */ processLog?: ProcessLogOpen | null } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
     readonly toolchain: ToolchainSection | null;
@@ -462,6 +469,8 @@ export type FeatureAction =
     | { kind: 'flows.remove'; flowId: string }
     /** The person's Run now: one run of the flow, armed or not; its outcome lands in the flow's run history. */
     | { kind: 'flows.runNow'; flowId: string }
+    /** The person's Stop on a running flow (Tynn #833): its run ends now, recorded stopped by you. */
+    | { kind: 'flows.stop'; flowId: string }
     /** Resume now for a run paused at its agent's provider limit (Tynn #749): the limit's hold is lifted at once. */
     | { kind: 'flows.resumeLimit'; flowId: string }
     | { kind: 'flows.add'; workspaceId: string }
@@ -472,7 +481,7 @@ export type FeatureAction =
     | { kind: 'flows.edit'; flowId: string }
     | { kind: 'flows.save'; flowId: string; form: FlowForm }
     /** THE CANVAS (genie#1204): open a flow, or a new one in a workspace, in the flow editor's own window. */
-    | { kind: 'flows.openEditor'; flowId: string }
+    | { kind: 'flows.openEditor'; flowId: string; /** Tynn #860: open on this run's review (its index in `runs`). */ run?: number }
     | { kind: 'flows.newFlow'; workspaceId: string }
     /** The canvas's Save, as the USER: create (`flowId` absent, always disarmed) or update in place. Answered in `flows.saved`. */
     | { kind: 'flows.saveGraph'; flowId?: string; workspaceId: string; name: string; document: unknown }
@@ -507,6 +516,9 @@ export type FeatureAction =
     /** Start a kept process the person stopped; the start is written down too. */
     | { kind: 'hosting.startProcess'; processId: string }
     | { kind: 'hosting.removeProcess'; processId: string }
+    /** Tynn #860: open a process's whole kept log (and a scheduled task's runs); it stays open until closed. */
+    | { kind: 'hosting.openProcessLog'; processId: string }
+    | { kind: 'hosting.closeProcessLog' }
     | { kind: 'services.add'; workspaceId: string }
     | { kind: 'services.cancelForm' }
     /** The Add-an-engine form, submitted. `consent: true` is the person's answer to the pull question. */
@@ -579,12 +591,13 @@ export type FeatureAction =
     | { kind: 'toolchain.machinePath'; apply: boolean; consent?: boolean }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent. */
-    | { kind: 'deck.answer'; item: DeckItem; optionId: string; note?: string }
+    /** `item`: the id it answers (core/deck-answer-wire.ts, Tynn #861); the host answers from its own record, never this copy. */
+    | { kind: 'deck.answer'; item: DeckItemRef; optionId: string; note?: string }
     /**
      * A multi-part question answered IN PLACE (§4.5): one array of labels per question and one note per question (a note
      * alone answers its question). `note` is the overall note — '' from the form, which no longer shows one.
      */
-    | { kind: 'deck.answerForm'; item: DeckItem; selections: string[][]; notes: string[]; note: string }
+    | { kind: 'deck.answerForm'; item: DeckItemRef; selections: string[][]; notes: string[]; note: string }
     /**
      * Dismiss an agent's question WITHOUT an answer (Deck or question window): it leaves both, and the agent is told —
      * with the person's notes, one per question as the form holds them ('' where none; absent = no notes).

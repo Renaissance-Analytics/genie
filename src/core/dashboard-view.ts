@@ -1,4 +1,6 @@
 import type { AccountPause } from './account-pause.js';
+import { minutesWords, type StalledTurn } from './hung-call.js';
+import { fullPlanView, type ChatPlanView } from './chat-plan.js';
 import { limitTitle, limitWords } from './limit-words.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { CommsLink } from './comms.js';
@@ -87,10 +89,14 @@ export interface AgentRow {
     fixes: readonly string[];
     /** `4/7` — a plan step, when the agent reports one. */
     step: string | null;
+    /** That plan's steps, from the host's snapshot (`LiveSession.planSteps`): the plan cell's hover (Tynn #918). Absent/`null` = none reported. */
+    planSteps?: readonly { readonly content: string; readonly status: string }[] | null | undefined;
     /** What started its current turn, first line (core/turn-now.ts); absent/`null` = not reported. */
     asked?: string | null | undefined;
     /** The tool its turn is in now, by title; absent/`null` = none running, or not reported. */
     tool?: string | null | undefined;
+    /** Its turn was ended as stalled (Tynn #855): ranked with Broken, said as Stalled. Absent/`null` = not stalled. */
+    stalled?: StalledTurn | null | undefined;
     /** Its last finished turn's handoff (Genie's record of finished turns); absent/`null` = none. */
     handoff?: { text: string; at: number } | null | undefined;
     target: string | null;
@@ -206,6 +212,8 @@ export function statusOf(row: AgentRow): StatusCell {
     // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): only once its turn is over — a refused tool does not end the turn, and an
     // agent still working reads Working. The Agent view, the chat and the tray offer `Log in to Claude Design`.
     if (row.designLogin && (row.state === 'idle' || row.state === 'cooling')) return { word: 'Login needed', detail: 'Claude Design', tone: 'warn' };
+    // ENDED AS STALLED (Tynn #855): the provider stopped answering mid-turn — never Working.
+    if (row.stalled && row.state === 'broken') return { word: 'Stalled', detail: `no events for ${minutesWords(row.stalled.silentMs)}`, tone: 'bad' };
     // The stronger fact than Cooling or Idle: its work is still running.
     if (workingInBackground(row)) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
     switch (row.state) {
@@ -304,7 +312,7 @@ export function commsOf(row: AgentRow): CommsCell {
 
 /** What occupies the "current target" column — they are mutually exclusive. */
 export type TargetCell =
-    | { kind: 'target'; step: string | null; text: string }
+    | { kind: 'target'; step: string | null; text: string; /** The whole plan, listed on hover (Tynn #918); `null` = no steps to list. */ plan: ChatPlanView | null }
     | { kind: 'activity'; bars: readonly number[] }
     | { kind: 'fixes'; fixes: readonly string[] }
     | null;
@@ -314,7 +322,7 @@ export function targetOf(row: AgentRow): TargetCell {
     // longer the useful fact.
     if (row.state === 'broken' && row.fixes.length > 0) return { kind: 'fixes', fixes: row.fixes };
     if (row.fidelity === 'observed' && row.activity) return { kind: 'activity', bars: row.activity };
-    if (row.target) return { kind: 'target', step: row.step, text: row.target };
+    if (row.target) return { kind: 'target', step: row.step, text: row.target, plan: fullPlanView(row.planSteps) };
     return null;
 }
 

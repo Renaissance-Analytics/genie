@@ -149,13 +149,11 @@ describe('one resolution', () => {
         expect(call('claude', { ...env, GENIE2_CLAUDE_BINARY: 'D:\\mine\\claude.exe' }, disk)).toBe('D:\\mine\\claude.exe');
     });
 
-    it('the window can choose it: the channel is registered, listed and wired to the settings', () => {
-        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        const inventory = readFileSync(new URL('../src/core/ipc-inventory.ts', import.meta.url), 'utf8');
+    it('the window can choose it: the host answers providers.chooseProgram, wired to the settings (Tynn #897, 2c-3)', () => {
+        const hostApi = readFileSync(new URL('../src/main/host-api.ts', import.meta.url), 'utf8');
         const app = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
         const view = readFileSync(new URL('../src/renderer/components/AgentView.tsx', import.meta.url), 'utf8');
-        expect(main).toMatch(/ipcMain\.handle\('genie:provider-choose-program'/);
-        expect(inventory).toContain("['genie:provider-choose-program', 'window-port']");
+        expect(hostApi).toContain("case 'providers.chooseProgram':");
         expect(app).toContain('onChooseProviderProgram');
         expect(view).toContain('<ProviderProgramChoice');
     });

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Baton, PairingPins } from '../src/core/remote.js';
-import { REMOTE_PROTOCOL, inMemoryPair, parseMessage, type ClientTransport, type PreAuth, type WireMessage } from '../src/core/remote-protocol.js';
+import { remoteOffer } from '../src/core/protocol-version.js';
+import { REMOTE_PROTOCOL, REMOTE_SCHEMA, inMemoryPair, parseMessage, type ClientTransport, type PreAuth, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
@@ -136,8 +137,12 @@ describe('the welcome says the protocol and the build', () => {
     it('a PIN pairing: the old fields as before, with protocol and build beside them', async () => {
         const { code } = host.issuePin();
         const welcome = await connect().hello({ kind: 'pin', code, label: 'glenn’s phone' });
-        expect(welcome).toEqual({ kind: 'welcome', connectionId: expect.any(String), host: 'alphar', isOwner: true, workspaceId: null, token: 'tok0', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab', readonly: false });
-        expect(REMOTE_PROTOCOL).toBe(1);
+        // Tynn #894: the host's floor and capabilities beside its protocol, so the client negotiates both ways.
+        const offer = remoteOffer('host', '2.0.0-beta.57+0123456789ab');
+        // Tynn #894: the host's track, schema, window floor and capabilities, so the client negotiates both ways.
+        expect(welcome).toEqual({ kind: 'welcome', connectionId: expect.any(String), host: 'alphar', isOwner: true, workspaceId: null, token: 'tok0', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab', readonly: false, track: 'host', schema: REMOTE_SCHEMA, minSchema: offer.minSchema, capabilities: offer.capabilities });
+        // The pre-schema number rose to 2 with the schema; older clients read it as "at least 1" (drone-version.ts).
+        expect(REMOTE_PROTOCOL).toBe(2);
     });
 
     it('a token hello and a relay guest say them too, and nothing else is added', async () => {
@@ -145,7 +150,7 @@ describe('the welcome says the protocol and the build', () => {
         await connect().hello({ kind: 'pin', code, label: 'glenn’s phone' });
         const again = await connect().hello({ kind: 'token', token: 'tok0' });
         // Tynn #688: `readonly` beside them, so a window can tell a read-only share from a driving one.
-        expect(Object.keys(again).sort()).toEqual([...OLD_FIELDS, 'build', 'protocol', 'readonly'].sort());
+        expect(Object.keys(again).sort()).toEqual([...OLD_FIELDS, 'build', 'capabilities', 'minSchema', 'protocol', 'readonly', 'schema', 'track'].sort());
         expect(again).toMatchObject({ protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
         const guest = await connectRelay({ label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false }).hello({ kind: 'relay' }, 'wren');
         expect(guest).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
@@ -359,9 +364,8 @@ describe('reads, writes, the baton', () => {
     it('host-only methods are refused with where to do them', async () => {
         const a = await owner('laptop');
         await a.call('baton.take');
-        expect(await a.call('addWorkspace')).toEqual({ kind: 'result', id: 2, ok: false, reason: 'addWorkspace opens a folder picker on alphar; do it there' });
-        expect(await a.call('features.setBrowserBounds', { x: 0, y: 0, width: 1, height: 1 })).toMatchObject({ ok: false });
-        expect(api.calls.map((c) => c.method)).not.toContain('addWorkspace');
+        expect(await a.call('features.setBrowserBounds', { x: 0, y: 0, width: 1, height: 1 })).toEqual({ kind: 'result', id: 2, ok: false, reason: "features.setBrowserBounds places a view on alphar's own window; there is nothing to do remotely" });
+        expect(api.calls.map((c) => c.method)).not.toContain('features.setBrowserBounds');
     });
 });
 

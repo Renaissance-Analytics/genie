@@ -106,7 +106,20 @@ export interface PostVersion {
 /** A verdict or a reply, against the version it was about. Verdicts are APPENDED — {@link BoardPost.review} is only the latest. */
 export type TrailEntry =
     | { type: 'verdict'; version: number; verdict: 'approved' | 'rejected'; comment?: string; at: string; by?: string }
-    | { type: 'reply'; version: number; text: string; at: string; agentId?: string; agentName?: string };
+    | { type: 'reply'; version: number; text: string; at: string; agentId?: string; agentName?: string }
+    /**
+     * A ForceTheQuestion question showed this item (Tynn #835) and the person decided: the item was the option CHOSEN, an
+     * option NOT chosen, SHOWN beside the question, or the question was DISMISSED. `answer` is what was chosen, in words.
+     */
+    | { type: 'question'; version: number; questionId: string; header: string; outcome: QuestionTrailOutcome; answer?: string; at: string; by?: string };
+
+export const QUESTION_TRAIL_OUTCOMES = ['chosen', 'not-chosen', 'shown', 'dismissed'] as const;
+export type QuestionTrailOutcome = (typeof QUESTION_TRAIL_OUTCOMES)[number];
+
+/** How a ForceTheQuestion decision reads on an item's trail (Tynn #835). */
+export function questionOutcomeWords(outcome: QuestionTrailOutcome): string {
+    return outcome === 'chosen' ? 'chosen' : outcome === 'not-chosen' ? 'not chosen' : outcome === 'shown' ? 'shown' : 'shown, question dismissed';
+}
 
 export type PostStatus = 'waiting' | 'approved' | 'rejected' | 'shown';
 export type BoardFilter = 'waiting' | 'decided' | 'all';
@@ -186,6 +199,13 @@ function toTrailEntry(raw: unknown): TrailEntry | null {
         if (r.verdict !== 'approved' && r.verdict !== 'rejected') return null;
         const e: TrailEntry = { type: 'verdict', version: r.version, verdict: r.verdict, at: r.at };
         if (typeof r.comment === 'string' && r.comment) e.comment = r.comment;
+        if (typeof r.by === 'string' && r.by) e.by = r.by;
+        return e;
+    }
+    if (r.type === 'question') {
+        if (typeof r.questionId !== 'string' || !r.questionId || typeof r.header !== 'string' || !(QUESTION_TRAIL_OUTCOMES as readonly unknown[]).includes(r.outcome)) return null;
+        const e: TrailEntry = { type: 'question', version: r.version, questionId: r.questionId, header: r.header, outcome: r.outcome as QuestionTrailOutcome, at: r.at };
+        if (typeof r.answer === 'string' && r.answer) e.answer = r.answer;
         if (typeof r.by === 'string' && r.by) e.by = r.by;
         return e;
     }
@@ -389,7 +409,8 @@ export function waitingCount(posts: readonly { askVerdict?: boolean | undefined;
 export type TimelineEvent =
     | { kind: 'version'; version: number; at: string; by?: string; note?: string }
     | { kind: 'verdict'; version: number; at: string; verdict: 'approved' | 'rejected'; comment?: string; by?: string }
-    | { kind: 'reply'; version: number; at: string; text: string; by?: string };
+    | { kind: 'reply'; version: number; at: string; text: string; by?: string }
+    | { kind: 'question'; version: number; at: string; questionId: string; header: string; outcome: QuestionTrailOutcome; answer?: string; by?: string };
 
 /** PURE. Everything that happened to an item, oldest first: each version posted, each verdict, each reply. */
 export function timelineOf(versions: readonly { n: number; createdAt: string; by?: string | undefined; note?: string | undefined }[], trail: readonly TrailEntry[]): TimelineEvent[] {
@@ -397,7 +418,9 @@ export function timelineOf(versions: readonly { n: number; createdAt: string; by
         ...versions.map((v): TimelineEvent => ({ kind: 'version', version: v.n, at: v.createdAt, ...(v.by ? { by: v.by } : {}), ...(v.note ? { note: v.note } : {}) })),
         ...trail.map((e): TimelineEvent => e.type === 'verdict'
             ? { kind: 'verdict', version: e.version, at: e.at, verdict: e.verdict, ...(e.comment ? { comment: e.comment } : {}), ...(e.by ? { by: e.by } : {}) }
-            : { kind: 'reply', version: e.version, at: e.at, text: e.text, ...(e.agentName ? { by: e.agentName } : {}) }),
+            : e.type === 'question'
+                ? { kind: 'question', version: e.version, at: e.at, questionId: e.questionId, header: e.header, outcome: e.outcome, ...(e.answer ? { answer: e.answer } : {}), ...(e.by ? { by: e.by } : {}) }
+                : { kind: 'reply', version: e.version, at: e.at, text: e.text, ...(e.agentName ? { by: e.agentName } : {}) }),
     ];
     return events.map((e, i) => ({ e, i })).sort((x, y) => x.e.at.localeCompare(y.e.at) || x.i - y.i).map(({ e }) => e);
 }
@@ -424,6 +447,60 @@ export function trailOf(post: BoardPost) {
         versions: versionsOf(post).map((v) => ({ version: v.n, title: v.title, postedAt: v.createdAt, ...(v.agentName ? { by: v.agentName } : {}), ...(v.note ? { note: v.note } : {}) })),
         events: trailTimeline(post),
     };
+}
+
+/** The board's log, beside its index: one JSON line per item cleared or put back. */
+export const BOARD_HISTORY = 'history.jsonl';
+
+/** What a Clear takes off the board (genie#847). Pinned items stay, except for `everything`. */
+export type ClearScope = 'decided' | 'all' | 'everything';
+export const CLEAR_SCOPES: readonly ClearScope[] = ['decided', 'all', 'everything'];
+
+/**
+ * PURE. The items a Clear of this scope takes, in the board's order. `decided`: every decided item; `all`: every item, the
+ * waiting ones too; both leave what the person PINNED (it was kept on purpose). `everything` takes the pinned as well.
+ */
+export function clearSelection<T extends { id: string; review?: unknown; pinned?: boolean | undefined }>(posts: readonly T[], scope: ClearScope): T[] {
+    if (scope === 'everything') return [...posts];
+    return posts.filter((p) => p.pinned !== true && (scope === 'all' || p.review !== undefined));
+}
+
+const CLEAR_LABEL: Record<ClearScope, string> = { decided: 'Clear decided', all: 'Clear all', everything: 'Clear all, pinned too' };
+const itemCount = (n: number) => `${n} item${n === 1 ? '' : 's'}`;
+
+/** The Clear menu's entries: each scope, its words and how many items it would take. */
+export function clearChoices(posts: readonly { id: string; review?: unknown; pinned?: boolean | undefined }[]): { scope: ClearScope; label: string; count: number }[] {
+    return CLEAR_SCOPES.map((scope) => ({ scope, label: CLEAR_LABEL[scope], count: clearSelection(posts, scope).length }));
+}
+
+/** The confirmation a Clear asks first: the count, where the items go, and what happens to the waiting and the pinned. */
+export function clearPrompt(scope: ClearScope, count: number): { title: string; body: string; confirmLabel: string } {
+    const where = 'They move to this workspace’s .trash with their whole trail, and can be put back with Undo or from the Storage tab.';
+    const waiting = scope === 'decided' ? '' : ' A waiting item is closed without a verdict, and the agent that posted it is told.';
+    const pinned = scope === 'everything' ? ' Pinned items go too.' : ' Pinned items stay.';
+    return { title: `Clear ${itemCount(count)}?`, body: `${where}${waiting}${pinned}`, confirmLabel: `Clear ${count}` };
+}
+
+/** How long the Undo toast stays: a few seconds. After that the items are still in .trash, for the Storage tab. */
+export const UNDO_MS = 8000;
+
+/** The toast after a clear or a delete, which offers Undo. */
+export function clearedToast(count: number): { title: string; actionLabel: string; duration: number } {
+    return { title: `Cleared ${itemCount(count)}`, actionLabel: 'Undo', duration: UNDO_MS };
+}
+
+/**
+ * What the posting agent is told when its waiting item is cleared without a verdict: delivered the way a verdict is, so an
+ * agent waiting on it stops waiting. It names the post (an agent may have several in flight) and what to do if it still
+ * needs a decision.
+ */
+export function clearedMessage(post: Pick<BoardPost, 'id' | 'title'>): string {
+    return `ArtBoard — "${post.title}" was cleared from the board without a verdict. Nothing was decided on it, so do not wait for one. If you still need a decision, post it again with the same id (\`${post.id}\`).`;
+}
+
+/** What it is told when Undo or a restore puts that item back, waiting again. */
+export function restoredMessage(post: Pick<BoardPost, 'id' | 'title'>): string {
+    return `ArtBoard — "${post.title}" (\`${post.id}\`) is back on the board and waiting for a verdict again: the earlier clear was undone.`;
 }
 
 /** The link that opens the workspace on its ArtBoard tab, on one item — what a question or notification about a post carries. */

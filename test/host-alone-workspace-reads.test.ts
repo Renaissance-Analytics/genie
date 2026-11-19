@@ -39,7 +39,7 @@ function ports(over: Record<string, unknown> = {}): HostAlonePorts {
     const engine = { probe: () => null, subscribe: () => () => {}, ledgerFor: () => [], rowsFor: () => [], turnsFor: () => 0, recentStderrFor: () => [], refusals: new Map(), needsNewDriver: () => false, notice: () => true } as unknown as HostAloneEngine;
     return {
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => workspace, startRefusal: () => null,
-        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false,
+        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
@@ -51,8 +51,8 @@ function ports(over: Record<string, unknown> = {}): HostAlonePorts {
     } as unknown as HostAlonePorts;
 }
 
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
-    return hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone });
+function gate(alone: HostApi): HostApi {
+    return hostRemoteApi({ hostName: 'alphar', own: {}, alone });
 }
 
 beforeEach(async () => {
@@ -110,33 +110,28 @@ describe('repositories with no window', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected genie-host still answers and writes its own store (Tynn #666)', async () => {
+    it('genie-host answers and writes its own store (Tynn #666)', async () => {
         const store = settings();
         const alone = hostAloneApi(ports({ settings: store }));
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
+        const api = gate(alone);
         expect(await api.invoke('workspaces.setSetting', ['tynn', 'terminals', 4])).toEqual({ ok: true });
         expect(invoke).toHaveBeenCalledTimes(1);
         expect(store.workspaceValues('tynn')).toEqual({ terminals: 4 });
-    });
-
-    it('a family not moved yet still says to open a window (CONTROL)', async () => {
-        const api = gate(hostAloneApi(ports()));
-        await expect(api.invoke('workspaces.tynnIssueChanges', ['tynn', {}, null, []])).rejects.toThrow('open Genie on alphar');
     });
 });
 
 describe('the wiring', () => {
     const src = (path: string) => readFileSync(path, 'utf8');
 
-    it('the window and genie-host answer through the same code', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) {
-            expect(src(file), file).toContain('workspaceSettingsOps(');
-            expect(src(file), file).toContain('workspaceLifecyclePorts(');
-        }
+    it('genie-host answers every client through that code; main answers no settings read itself', () => {
+        expect(src('src/main/host-alone-api.ts')).toContain('workspaceSettingsOps(');
+        expect(src('src/main/host-alone-api.ts')).toContain('workspaceLifecyclePorts(');
+        // main builds no host API (Tynn #898 step 2d-4b2): its window is served by genie-host's.
+        expect(src('src/main/main.ts')).not.toContain('workspaceSettingsOps(');
     });
 
     it('genie-host gives it its own settings store', () => {
-        expect(src('src/main/genie-host.ts')).toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null,\r?\n        settings,\r?\n/);
+        expect(src('src/main/genie-host.ts')).toMatch(/startRefusal: \(r\) => startRefusal\([\s\S]*?\}\),\r?\n        settings,\r?\n/);
     });
 });

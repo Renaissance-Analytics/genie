@@ -143,6 +143,16 @@ describe('a caller that goes away (genie#1360)', () => {
         expect(q.lastCancelled()).toEqual([]);
     });
 
+    it('an abort that carries a reason records that reason instead of "client disconnected" (Tynn #858)', async () => {
+        const q = new ApprovalQueue({ now });
+        const call = new AbortController();
+        const v = q.gate(atlas, 'pod.sign', 'Tynn task 7', { signal: call.signal });
+        call.abort('Tynn no longer lists this claim as waiting');
+        expect(await v).toBe('denied');
+        expect(q.deckItems()).toEqual([]);
+        expect(q.lastCancelled()).toEqual([{ action: 'pod.sign', detail: 'Tynn task 7', reason: 'Tynn no longer lists this claim as waiting' }]);
+    });
+
     it('tells the waiting client what it is waiting for', async () => {
         const q = new ApprovalQueue({ now });
         const said: string[] = [];
@@ -150,5 +160,44 @@ describe('a caller that goes away (genie#1360)', () => {
         expect(said).toEqual(['waiting for the person’s approval']);
         q.resolve(q.deckItems()[0]!.id, 'deny');
         expect(await v).toBe('denied');
+    });
+});
+
+/**
+ * CANCEL BY ID (Tynn #858): whoever parked a request can take its item off the Deck because the question went away (a
+ * Proof-of-Done claim Tynn superseded). Nobody answered it: it is recorded as cancelled with the reason, never as the
+ * person's Allow or Deny, and every caller waiting on it ends denied.
+ */
+describe('cancel(id, reason) (Tynn #858)', () => {
+    it('takes the item off the Deck, denies its waiters, records the reason and announces the change', async () => {
+        const q = new ApprovalQueue({ now });
+        let changes = 0;
+        q.onChange(() => { changes += 1; });
+        const a = q.gate(atlas, 'pod.sign', 'Tynn task 7');
+        const b = q.gate(atlas, 'pod.sign', 'Tynn task 7');
+        const keep = q.gate(atlas, 'pod.sign', 'Tynn task 8');
+        const [first, second] = q.deckItems();
+        expect(q.deckItems()).toHaveLength(2);
+        const before = changes;
+        expect(q.cancel(first!.id, 'withdrawn')).toBe(true);
+        expect(changes).toBe(before + 1);
+        expect(await Promise.all([a, b])).toEqual(['denied', 'denied']);
+        // CONTROL: the other request is still on the Deck, still waiting for the person.
+        expect(q.deckItems().map((i) => i.id)).toEqual([second!.id]);
+        expect(q.lastCancelled()).toEqual([{ action: 'pod.sign', detail: 'Tynn task 7', reason: 'withdrawn' }]);
+        q.resolve(second!.id, 'allow');
+        expect(await keep).toBe('allowed');
+    });
+
+    it('refuses an unknown or already-answered id, and changes nothing', async () => {
+        const q = new ApprovalQueue({ now });
+        const v = q.gate(atlas, 'pod.sign', 'Tynn task 7');
+        const id = q.deckItems()[0]!.id;
+        expect(q.cancel('appr_nope', 'withdrawn')).toBe(false);
+        expect(q.deckItems()).toHaveLength(1);
+        q.resolve(id, 'allow');
+        expect(await v).toBe('allowed');
+        expect(q.cancel(id, 'withdrawn')).toBe(false);
+        expect(q.lastCancelled()).toEqual([]);
     });
 });

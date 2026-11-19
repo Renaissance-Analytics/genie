@@ -150,7 +150,15 @@ const DATA_DIRS: Record<string, string> = {
     seaweedfs: '/data',
 };
 
-type ContainerState = { state: 'running'; since: string } | { state: 'exited' } | { state: 'absent' };
+/**
+ * What Docker says of a container. `unknown` is "Genie could not ask" (Tynn #922): the spawn host lost mid-call, a
+ * timeout, the daemon refusing. It carries the words and is never read as `absent`, which only Docker's own "No such
+ * container" may say: a dead spawn host once told a person to remove and re-add an engine that was running.
+ */
+export type ContainerState = { state: 'running'; since: string } | { state: 'exited' } | { state: 'absent' } | { state: 'unknown'; reason: string };
+
+/** Docker's own answer that a container (or object) does not exist. */
+const NO_SUCH = /\bNo such (container|object)\b/i;
 type Availability = { ok: true; version: string } | { ok: false; reason: string };
 
 export class ServiceDriver {
@@ -421,7 +429,7 @@ export class ServiceDriver {
         if (inFlight) return inFlight;
         const at = this.#now();
         const reading: Promise<ContainerState> = this.#inspect(name).then((value) => {
-            if (this.#reading.get(name) === reading) { this.#reading.delete(name); this.#states.set(name, { at, value }); }
+            if (this.#reading.get(name) === reading) { this.#reading.delete(name); if (value.state !== 'unknown') this.#states.set(name, { at, value }); }
             return value;
         }, (error: unknown) => { if (this.#reading.get(name) === reading) this.#reading.delete(name); throw error; });
         this.#reading.set(name, reading);
@@ -430,13 +438,18 @@ export class ServiceDriver {
 
     async #inspect(name: string): Promise<ContainerState> {
         const r = await this.#run(['container', 'inspect', name]);
-        if (r.exitCode !== 0) return { state: 'absent' };
+        if (r.exitCode !== 0) {
+            const words = `${r.streams?.stderr ?? ''}\n${r.stdout}`;
+            if (NO_SUCH.test(words)) return { state: 'absent' };
+            const said = words.trim().split(/\r?\n/).filter(Boolean).slice(0, 3).join('; ').slice(0, 300);
+            return { state: 'unknown', reason: said || `docker container inspect exited ${r.exitCode}` };
+        }
         try {
             const [info] = JSON.parse(r.stdout) as Array<{ State?: { Status?: string; StartedAt?: string } }>;
             if (info?.State?.Status === 'running') return { state: 'running', since: info.State.StartedAt ?? '' };
             return { state: 'exited' };
         } catch {
-            return { state: 'absent' };
+            return { state: 'unknown', reason: `Docker's answer could not be read: ${r.stdout.slice(0, 120)}` };
         }
     }
 

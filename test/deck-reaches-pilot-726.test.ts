@@ -4,23 +4,20 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { inMemoryPair, parseMessage, type PreAuth, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
 import type { HostApi } from '../src/main/remote-host.js';
-import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from '../src/main/remote-access-host.js';
-import { RemoteAccessReplica } from '../src/main/remote-access-replica.js';
+import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.js';
 
 /**
  * ONE FTQ ON THE MACHINE BEING REACHED, AND THE PILOT'S DECK (Tynn #726 part 1; the owner's live trial, 2026-11-16: a fresh
  * install, one ForceTheQuestion, a tiny snapshot — and the Pilot's Deck never updated). The whole path a Deck change
- * takes, composed from the real pieces: the client's window (its RemoteAccessReplica, refreshed at boot while nobody is
- * connected, forwarding its host API's events) → genie-host's RemoteAccessService (only the newest window feeds remote
- * connections) → hostRemoteApi → RemoteHost → a Pilot admitted by the relay. And the same with no window open, where
- * genie-host's own answers (the phone's registry) speak. Names are fixtures.
+ * takes, composed from the real pieces: genie-host's own answers (the phone's registry) → hostRemoteApi → RemoteHost → a
+ * Pilot admitted by the relay. No window relays its own copy (Tynn #898 step 2d-4b2): this machine's window is one of
+ * genie-host's connections too, served the same way. Names are fixtures.
  */
 
 const OWNER: PreAuth = { label: 'Pilot laptop', isOwner: true, workspaceId: null, readonly: false };
 const EMPTY = { agents: [], workspaces: [{ id: 'ws_shop', path: '/w/shop', agentsKnown: true }], deckItems: [], signals: {} };
 const FTQ = { id: 'q_1', source: 'agent-question', agentId: 'agent_kai', agentName: 'kai', workspaceId: 'ws_shop', title: 'Which engine?', blocking: true, priority: 'normal', at: 1, forwardedFrom: null, answer: { kind: 'form', fields: 1, questions: [{ question: 'Which engine?', header: 'Engine', options: [{ label: 'postgres' }], multiSelect: false }] } };
 const ASKED = { ...EMPTY, deckItems: [FTQ] };
-const WINDOW = 'conn_window';
 
 type Listener = (channel: string, payload: unknown) => void;
 function emitter() {
@@ -31,18 +28,12 @@ function emitter() {
 let home = '';
 let access: RemoteAccessHost;
 let connections: Array<(c: ServerConnection) => void> = [];
-let windowOpen = true;
-/** The client's window's own host API: what it emits (the snapshot on every change) and answers. */
-const windowApi = emitter();
-/** genie-host's own answers with no window (host-alone-api, the phone's registry). */
+/** genie-host's own answers (host-alone-api, the phone's registry): every client's, the window's included (Tynn #898). */
 const aloneApi = emitter();
-let replica: RemoteAccessReplica;
 
 beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie-726-deck-'));
     connections = [];
-    windowOpen = true;
-    const remoteWindowEvents = new Set<Listener>();
     const alone: HostApi = {
         invoke: async (method: string) => { if (method === 'snapshot') return EMPTY; throw new Error(`no ${method}`); },
         onEvent: (listener: Listener) => aloneApi.on(listener),
@@ -51,23 +42,10 @@ beforeEach(async () => {
     const api = hostRemoteApi({
         hostName: 'client-box',
         own: {},
-        window: { connected: () => windowOpen, invoke: async (method) => { if (method === 'snapshot') return EMPTY; throw new Error(`no ${method}`); } },
-        onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
         alone: () => alone,
         workspaceOfAgent: () => 'ws_shop',
     });
     access = await RemoteAccessHost.open({ home, hostName: 'client-box', api, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } }, now: () => 1_000_000 });
-    let service: RemoteAccessService | null = null;
-    replica = new RemoteAccessReplica('client-box', (method, args) => service!.call(WINDOW, method, args));
-    service = new RemoteAccessService(access, {
-        switch: { apply: async () => {}, restart: async () => {}, stop: async () => {} },
-        newestWindow: () => (windowOpen ? WINDOW : null),
-        windowEvent: (channel, payload) => { for (const l of [...remoteWindowEvents]) l(channel, payload); },
-        send: (owner, event) => { if (owner === null || owner === WINDOW) replica.deliver(event); },
-    });
-    // The window at boot, as main.ts does: forward its host API's events, and read the status — nobody connected yet.
-    replica.forwardEvents((listener) => windowApi.on(listener));
-    await replica.refresh();
 });
 afterEach(async () => { await access.close(); await rm(home, { recursive: true, force: true }); });
 
@@ -98,22 +76,15 @@ describe('one FTQ on the machine being reached reaches the Pilot’s Deck', () =
         expect(p.heard.some((m) => m.kind === 'result' && (m as { ok?: boolean }).ok === true)).toBe(true);
     });
 
-    it('with the client’s window open: the window’s next snapshot, carrying the question, is pushed to the Pilot', async () => {
+    // No window relays its own copy any more (Tynn #898 step 2d-4b2): the Pilot hears genie-host's, exactly once.
+    it('genie-host’s own snapshot, carrying the question, is pushed to the Pilot, exactly once', async () => {
         const p = pilot();
         p.hello();
         await settle();
-        windowApi.emit('snapshot', ASKED);
-        await settle();
-        expect(snapshotsHeard(p.heard).at(-1)?.deckItems.map((d) => d.id)).toEqual(['q_1']);
-    });
-
-    it('with no window open: genie-host’s own snapshot, carrying the question, is pushed to the Pilot', async () => {
-        windowOpen = false;
-        const p = pilot();
-        p.hello();
-        await settle();
+        const before = snapshotsHeard(p.heard).length;
         aloneApi.emit('snapshot', ASKED);
         await settle();
+        expect(snapshotsHeard(p.heard).length - before).toBe(1);
         expect(snapshotsHeard(p.heard).at(-1)?.deckItems.map((d) => d.id)).toEqual(['q_1']);
     });
 });

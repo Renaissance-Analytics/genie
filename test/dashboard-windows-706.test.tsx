@@ -9,6 +9,7 @@ import { terminalsWindowRoute } from '../src/core/workspace-window.js';
 import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/bridge.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
 import { Shell } from '../src/renderer/Shell.js';
+import { markupRoot, nodeText } from './helpers/markup-text.js';
 
 /**
  * THE DASHBOARD'S WINDOWS COLUMN (Tynn #706): an icon-only header with a tooltip; each agent row has an icon Button that
@@ -41,7 +42,9 @@ describe('the menu entries are data, and the scope is a rule', () => {
     });
 });
 
-describe('the Terminal window is the workspace’s terminals view', () => {
+// The Terminals-view route (main still serves it); the Dashboard's Terminal entry opens a workspace SHELL instead (Tynn #851,
+// test/agent-terminal-button-851.test.tsx), never a second Genie window on this view.
+describe('terminalsWindowRoute: the workspace’s terminals view', () => {
     it('its route parses to that workspace on its terminals view', () => {
         const parsed = parseRoute(terminalsWindowRoute('tynn'));
         expect(parsed).toMatchObject({ surface: 'workspace', workspaceId: 'tynn', view: 'terminals' });
@@ -55,13 +58,15 @@ describe('the Terminal window is the workspace’s terminals view', () => {
 describe('the column header', () => {
     it('is an icon with a tooltip and no words', () => {
         const html = renderToStaticMarkup(<Dashboard rows={AGENTS} workspaces={WORKSPACES} onOpenAgent={() => {}} onAddAgent={() => {}} />);
-        const cell = /<div[^>]*data-column-header="windows"[^>]*>([\s\S]*?)<\/div>/.exec(html);
+        const cell = markupRoot(html).querySelector('div[data-column-header="windows"]');
         expect(cell, 'a windows header cell').not.toBeNull();
-        expect(cell![0]).toMatch(/title="[^"]+"/);
-        expect(cell![0]).toMatch(/aria-label="[^"]+"/);
-        // No text anywhere inside it: tags stripped, nothing left.
-        expect(cell![1]!.replace(/<[^>]*>/g, '').trim()).toBe('');
-        expect(cell![0]).toMatch(/<(span|svg)\b/);
+        // The cell, or something in it, carries a non-empty tooltip and accessible name.
+        const carries = (name: string) => [cell!, ...Array.from(cell!.querySelectorAll('*'))].some((e) => (e.getAttribute(name) ?? '') !== '');
+        expect(carries('title'), 'a title').toBe(true);
+        expect(carries('aria-label'), 'an aria-label').toBe(true);
+        // No text anywhere inside it.
+        expect(nodeText(cell!).trim()).toBe('');
+        expect(cell!.querySelector('span, svg'), 'an icon').not.toBeNull();
     });
 });
 
@@ -89,7 +94,7 @@ describe('the row menu (happy-dom)', () => {
     const mount = (over: Partial<Parameters<typeof Dashboard>[0]> = {}) => act(() => root.render(
         <Dashboard
             rows={AGENTS} workspaces={WORKSPACES} onOpenAgent={(id) => opened.push(id)} onAddAgent={() => {}} onNavigate={(r) => navigated.push(r)}
-            onOpenTerminalWindow={(id) => terminals.push(id)} onOpenFilesWindow={(id) => files.push(id)} {...over}
+            onOpenTerminalWindow={(id) => { terminals.push(id); }} onOpenFilesWindow={(id) => files.push(id)} {...over}
         />,
     ));
     const click = (el: Element | null | undefined) => { expect(el).toBeTruthy(); act(() => (el as HTMLElement).click()); };
@@ -113,7 +118,7 @@ describe('the row menu (happy-dom)', () => {
         expect(items().map((i) => i.textContent!.trim())).toEqual(['Terminal', 'Files']);
     });
 
-    it('Terminal opens the row’s workspace terminals window and the current window goes nowhere', () => {
+    it('Terminal opens a terminal window for the row’s workspace and the current window goes nowhere', () => {
         mount();
         click(trigger('a_fancy'));
         click(items()[0]);
@@ -182,7 +187,7 @@ describe('the Shell hands the Dashboard its window openers', () => {
     const menuButtons = (html: string) => [...html.matchAll(/<button\b[^>]*data-windows-menu[^>]*>/g)].map((m) => m[0]);
 
     it('with openers the buttons are live; without them they are disabled (control)', () => {
-        const live = menuButtons(render({ onPopOutFiles: () => {}, onPopOutTerminals: () => {} }));
+        const live = menuButtons(render({ onPopOutFiles: () => {}, onOpenScratchTerminal: async () => ({ ok: true as const }) }));
         expect(live).toHaveLength(2);
         // `disabled` as an attribute, not as the `disabled:` utility inside a class.
         const isDisabled = (b: string) => /\sdisabled(=|\s|>)/.test(b);
@@ -193,7 +198,7 @@ describe('the Shell hands the Dashboard its window openers', () => {
     });
 
     it('a workspace-share window never reaches the Dashboard, so it offers no menu', () => {
-        const html = render({ windowScope: { kind: 'workspace', workspaceId: 'tynn', readonly: false }, onPopOutFiles: () => {}, onPopOutTerminals: () => {} });
+        const html = render({ windowScope: { kind: 'workspace', workspaceId: 'tynn', readonly: false }, onPopOutFiles: () => {}, onOpenScratchTerminal: async () => ({ ok: true as const }) });
         expect(menuButtons(html)).toEqual([]);
     });
 });

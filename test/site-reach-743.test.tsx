@@ -140,6 +140,8 @@ async function shopAdded(r: HostingRig) {
 
 function portsFor(w: Awaited<ReturnType<HostingRig['window']>>, opened: string[]): DeckAnswerPorts {
     return {
+        // The host's own Deck (Tynn #861): the answer is resolved against the items Genie's hosting stack holds.
+        deckItems: () => rig!.stack.trustDeckItems(),
         attention: {} as never, approvals: {} as never, inbox: {} as never,
         trustCertificate: () => w.replica.trustCertificate(), deferTrustCertificate: () => w.replica.deferTrustCertificate(),
         syncHosts: () => w.replica.syncHosts(), deferHosts: () => w.replica.deferHosts(),

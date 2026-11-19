@@ -2,6 +2,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
 import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
+import { isAcpProvider } from '../core/engine.js';
 import { homedir } from 'node:os';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
@@ -17,10 +18,11 @@ import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { HostApi } from './remote-host.js';
 import type { PtyOpened, TerminalOptions } from './terminal-host.js';
 import type { StartForWork as StartForWorkAnswer } from './start-on-demand.js';
-import type { Attachment } from '../core/prompt-content.js';
+import { attachmentKind, type Attachment } from '../core/prompt-content.js';
 import type { BytesResult, FileOpResult, OpenResult } from './files-host.js';
 import type { TreeNode } from '../core/files-panel.js';
 import { droneRefusal, type WorkstationRole } from '../core/workstation-role.js';
+import { decideConnectLink } from '../core/connect-link.js';
 import type { AppSourceKind } from '../core/app-inbox.js';
 import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
@@ -35,6 +37,8 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
+import { isPromptAction } from '../core/prompt-delivery.js';
+import { answerAccounts, isAccountsMethod, type AccountsPort } from './accounts-protocol.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -59,6 +63,8 @@ export interface LocalOwnerDeps {
         signedIn(): boolean;
         role(): WorkstationRole | null;
         workstations(): Promise<TynnWorkstationList>;
+        /** The Tynn this host is signed in to (Tynn #896, 2b-4); absent or null = none known. */
+        host?(): string | null;
         setRole(workstationId: string, role: WorkstationRole, code: string): Promise<RoleChange>;
         rereadRole(): void;
         shares: NonNullable<TynnNetworkBridge['shares']>;
@@ -77,7 +83,8 @@ export interface HostApiDeps {
     /** The roster should be read again: an agent was restarted (Tynn #563). */
     rosterChanged?(): void;
     marketplace?: () => MarketplaceApi | null;
-    gapps?: () => GAppsApi | null;
+    /** The GApp book; `context` is the caller RemoteHost admitted, whose window opens an app (Tynn #898 step 2d-4b). */
+    gapps?: (context?: CallContext) => GAppsApi | null;
     /** The GApp book changed: a signal; the window reads the list (Tynn #596). */
     gappsChanged?: { subscribe(listener: () => void): () => void };
     localTerminals?: NativeTerminalPort;
@@ -115,16 +122,23 @@ export interface HostApiDeps {
         prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean | Promise<boolean>;
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
-        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: import('../core/prompt-delivery.js').PromptAction): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;
+        /** `Stop this call` (Tynn #855): one running call's processes end, the turn goes on (`SessionHost.stopToolCall`). Absent = refused. */
+        stopToolCall?(agentId: AgentRecord['id'], toolCallId: string): Promise<{ ok: true; ended: number } | { ok: false; reason: string }>;
         /** `Resume now`: the login held for its rate limit opens (Tynn #794) — one account's when named (Tynn #478). */
         resumeLimit(provider: string, accountId?: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
         promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): ({ ok: true } | { ok: false; reason: string | null }) | Promise<{ ok: true } | { ok: false; reason: string | null }>;
         subscribe(listener: (agentId: string) => void): () => void;
     };
+    /**
+     * A MESSAGE'S FILES THAT ARE NOT AN IMAGE OR TEXT, SAVED HERE (Tynn #829): into the agent's workspace on THIS host
+     * (main/chat-uploads.ts `saveChatUploads`), each then naming where it went. Absent = such a file is refused, said.
+     */
+    saveUploads?(record: AgentRecord, files: readonly Attachment[]): Promise<{ ok: true; files: Attachment[] } | { ok: false; reason: string }>;
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
     registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
     /**
@@ -132,6 +146,17 @@ export interface HostApiDeps {
      * `window: false`); the person's machine opens its own window on it. `ended`: that window closed. Absent = Take over
      * is refused with where to do it, as before.
      */
+    /**
+     * SIGN-INS (Tynn #896): the provider's own login, started on this host for the caller, whose window shows it
+     * (host-sign-ins.ts). Absent = this host cannot start one, said in words.
+     */
+    signIns?: import('./host-sign-ins.js').HostSignIns;
+    /** The banner's crash report (Tynn #897, 2c-2), built by genie-host. Absent = this host cannot send one, said in words. */
+    crashReports?: { draft(): { text: string }; send(text: string, notes: string): Promise<unknown> };
+    /** A provider's program (Tynn #577; #897 2c-3), kept by genie-host (host-provider-programs.ts). Absent = said in words. */
+    providerPrograms?: import('./host-provider-programs.js').HostProviderPrograms;
+    /** The throwaway shell (Tynn #897, 2c-4), opened by genie-host in the caller's window (scratch-terminal.ts). Absent = said in words. */
+    scratchTerminals?: { open(workspaceId: string | null, context?: CallContext): import('./scratch-terminal.js').ScratchAnswer };
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -272,6 +297,8 @@ export interface HostApiDeps {
         subscribe(listener: (room: Readonly<Record<string, Headroom>>) => void): () => void;
     };
     retryPausedAccount?(provider: string): void;
+    /** The host's account book (Tynn #895): the account chips' read, rename/forget and Not now. Absent = no accounts here. */
+    accounts?: AccountsPort;
     features: {
         /** The admitted caller, so view state can stay with the connection that requested it (Tynn #720). */
         snapshot(context: CallContext): Promise<FeatureData>;
@@ -302,6 +329,9 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? '')
 const num = (v: unknown): number | undefined => (typeof v === 'number' && v > 0 ? Math.floor(v) : undefined);
 const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
+/** A host with no sign-ins wired (a test's, or one still starting) says so. */
+export const SIGN_IN_UNAVAILABLE = 'this host cannot start a sign-in';
+
 export function buildHostApi(deps: HostApiDeps): HostApi {
     const agent = (id: unknown): AgentRecord | null => deps.find(str(id));
     /** The typing relay's listeners: each event stream (onEvent) while it is open (Tynn #730). */
@@ -323,6 +353,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
         if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
+        if (isAccountsMethod(method)) return answerAccounts(deps.accounts, method, args);
         switch (method) {
             case 'appInbox.state':
                 return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };
@@ -366,6 +397,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (refused) return { ok: false, reason: refused };
                 return network.workstations();
             }
+            // A pasted share link, decided HERE with the host's Tynn and the role Tynn gave it; the window opens it (2b-4).
+            case 'tynnNetwork.classifyLink': {
+                const network = owner().tynnNetwork;
+                const host = network.hasAccount() && network.signedIn() ? network.host?.() ?? null : null;
+                return decideConnectLink(str(args[0]), host, network.role());
+            }
             case 'tynnNetwork.setRole': {
                 const network = owner().tynnNetwork, [workstationId, role, code] = args;
                 const refused = droneRefusal(network.role());
@@ -408,19 +445,38 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 // A remote window's Stop this turn or Interrupt and send: only `interrupt` is an interrupt (Tynn #672 part 3).
                 return r ? deps.host.cancel(r.id, cancelIntent(args[1])) : { ok: false, reason: 'unknown agent' };
             }
+            case 'stopToolCall': {
+                // Stop this call (Tynn #855): the person's, from any window or phone; the call's own processes only.
+                const r = agent(args[0]);
+                if (!r) return { ok: false, reason: 'unknown agent' };
+                if (typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'Stop this call names the call' };
+                if (!deps.host.stopToolCall) return { ok: false, reason: 'this host cannot stop one call; Stop the turn instead' };
+                return deps.host.stopToolCall(r.id, args[1]);
+            }
             case 'prompt': {
                 const r = agent(args[0]);
                 const text = str(args[1]);
+                // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
+                let attachments: Attachment[] | null = null;
+                if (Array.isArray(args[2])) {
+                    attachments = attachmentsOf(args[2]);
+                    if (!r) return { ok: false, reason: 'unknown agent' };
+                    if (attachments === null || attachments.length === 0) return { ok: false, reason: 'an attachment is not a file' };
+                    // ANY FILE (Tynn #829): saved into the agent's workspace on THIS host first — one that is not an image
+                    // or text goes as its path. A refused save is said, and nothing is started or sent.
+                    if (attachments.some((a) => attachmentKind(a) === 'file')) {
+                        if (!deps.saveUploads) return { ok: false, reason: `${attachments.find((a) => attachmentKind(a) === 'file')!.name} was not sent: this host cannot save a file that is not an image or text into a workspace` };
+                        const saved = await deps.saveUploads(r, attachments);
+                        if (!saved.ok) return { ok: false, reason: saved.reason };
+                        attachments = saved.files;
+                    }
+                }
                 // THE FIRST MESSAGE STARTS IT (q_04ce323c), as the composer's does; a refused start is said, nothing sent.
                 if (r && (deps.startForYourMessage || deps.startForWork) && (text.length > 0 || Array.isArray(args[2]))) {
                     const started = deps.startForYourMessage ? await deps.startForYourMessage(r) : await deps.startForWork!(r);
                     if (!started.ok) return { ok: false, reason: started.reason };
                 }
-                // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
-                if (Array.isArray(args[2])) {
-                    const attachments = attachmentsOf(args[2]);
-                    if (!r) return { ok: false, reason: 'unknown agent' };
-                    if (attachments === null || attachments.length === 0) return { ok: false, reason: 'an attachment is not a file' };
+                if (attachments !== null && r) {
                     if (!deps.host.promptWith) return { ok: false, reason: 'this host does not take files in a message' };
                     const sent = await deps.host.promptWith(r.id, text, attachments, 'you');
                     return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
@@ -436,7 +492,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'resolvePrompt': {
                 const r = agent(args[0]);
                 const action = args[2];
-                if (!r || typeof args[1] !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
+                // Withdraw / Edit a queued message (Tynn #843) cross from a Pilot window exactly as Send / Discard do.
+                if (!r || typeof args[1] !== 'string' || !isPromptAction(action)) return { ok: false, reason: 'Invalid draft action.' };
                 return deps.host.resolvePrompt?.(r.id, args[1], action) ?? { ok: false, reason: 'This host does not support queued drafts.' };
             }
             case 'answerApproval': {
@@ -659,13 +716,36 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.applyOffer ? deps.workspaceOps.applyOffer(args[0], args[1]) : { ok: false, reason: 'this host does not watch a workspace’s repo' };
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
-            case 'addWorkspace':
-                throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':
                 if (!deps.takeOver) throw new Error('takeOver opens a window on the host; do it there');
                 return deps.takeOver.start(str(args[0]));
+            // The provider's own login, for the host's owner (RemoteHost checks that); Genie never handles a credential.
             case 'providerLogin':
-                throw new Error('providerLogin opens the provider login in a window on the host; do it there');
+                return deps.signIns ? deps.signIns.providerLogin(str(args[0]), context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
+            case 'logins.design':
+                return deps.signIns ? deps.signIns.design(context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
+            case 'accounts.switch':
+                return deps.signIns ? deps.signIns.switchAccount(str(args[0]), args[1], context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
+            // The crash report: the draft, and only what the person sends (Tynn #386 part 4; #897 2c-2).
+            case 'crashReport.draft':
+                return deps.crashReports ? deps.crashReports.draft() : { text: '' };
+            case 'crashReport.send':
+                if (!deps.crashReports) return { ok: false, reason: 'this host cannot send a crash report' };
+                return typeof args[0] === 'string' && typeof args[1] === 'string' ? deps.crashReports.send(args[0], args[1]) : { ok: false, reason: 'A crash report needs its text.' };
+            // The .exe the owner picked on this host's disk for a batch-wrapped provider (Tynn #577; #897 2c-3).
+            case 'providers.chooseProgram':
+                if (!deps.providerPrograms) return { ok: false, reason: 'this host cannot keep a provider’s program' };
+                if (typeof args[0] !== 'string' || !isAcpProvider(args[0])) return { ok: false, reason: 'No provider named.' };
+                if (typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'No program chosen.' };
+                return deps.providerPrograms.choose(args[0], args[1]);
+            // The throwaway shell (Tynn #378, #761; #897 2c-4): the workspace's, or Genie's own for null. Who may is RemoteHost's.
+            case 'terminals.scratch':
+                if (!deps.scratchTerminals) return { ok: false, reason: 'this host cannot open a scratch terminal' };
+                if (args[0] !== null && args[0] !== undefined && typeof args[0] !== 'string') return { ok: false, reason: 'No workspace named.' };
+                return deps.scratchTerminals.open(typeof args[0] === 'string' ? args[0] : null, context);
+            // The tray's Log in names a provider, not an agent (Tynn #896, 2b-2b).
+            case 'logins.provider':
+                return deps.signIns ? deps.signIns.loginFor(str(args[0]), context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
             case 'features.setBrowserBounds':
                 throw new Error("features.setBrowserBounds places a view on the host's own window; nothing to do remotely");
             case 'terminals.open': {
@@ -788,6 +868,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             const wants = options?.wantsAgent ?? (() => true);
             const agents = new Coalescer<string>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: (agentId) => { if (wants(agentId)) listener(`agent:${agentId}`, deps.detailFor(agentId)); }, schedule: deps.schedule ?? realSchedule, now: deps.now ?? (() => Date.now()) });
             const offs = [
+                // An agent that BECAME wanted is pushed as it is now (Tynn #862): a change to it before then was not built
+                // (`wants`), so a phone opening a chat never got the ledger that landed while its watch was opening.
+                options?.onAgentsWanted?.((agentIds) => { for (const agentId of agentIds) agents.request(agentId); }) ?? (() => {}),
                 // This machine's own windows on their own channel: inline when it fits a frame, else a revision (Tynn #564).
                 deps.subscribeSnapshot((s) => { listener('snapshot', s); listener(LOCAL_EVENTS.snapshot, s); }),
                 deps.host.subscribe((agentId) => agents.request(agentId)),

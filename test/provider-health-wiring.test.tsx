@@ -22,7 +22,10 @@ function code(file: string): string {
 }
 
 describe('installed and signed in come from a measurement', () => {
-    it.each(['src/main/main.ts', 'src/main/genie-host.ts'])('%s: providerInstalled reads the health book, never providerBinary', (file) => {
+    it('the window measures no provider itself: genie-host does (Tynn #896, 2b-3)', () => {
+        expect(code('src/main/main.ts')).not.toMatch(/providerInstalled\s*:|ProviderHealthBook/);
+    });
+    it.each(['src/main/genie-host.ts'])('%s: providerInstalled reads the health book, never providerBinary', (file) => {
         const src = code(file);
         const lines = src.split('\n').filter((l) => /providerInstalled\s*:/.test(l));
         expect(lines.length).toBeGreaterThan(0);

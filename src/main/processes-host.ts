@@ -1,3 +1,4 @@
+import type { ProcessLog } from '../core/output-tail.js';
 import type { CreateProcessInput, HostedProcess, KeptProcess, ProcessBook } from './process-book.js';
 import type { ProcessScheduler, RunNowResult } from './process-scheduler.js';
 import type { ProcessStatus, RestartPolicy } from './process-supervisor.js';
@@ -14,7 +15,7 @@ export interface ProcessesDump {
     readonly kept: readonly KeptProcess[];
 }
 
-const WINDOW_CALLS = new Set(['prepare', 'create', 'start', 'restart', 'stop', 'remove', 'enableSchedule', 'pauseSchedule', 'runNow']);
+const WINDOW_CALLS = new Set(['prepare', 'create', 'start', 'restart', 'stop', 'remove', 'enableSchedule', 'pauseSchedule', 'runNow', 'log']);
 
 type ProcessesParts = { book: ProcessBook; scheduler?: ProcessScheduler | null; supervisor?: { onChange(listener: (status: ProcessStatus) => void): () => void } };
 
@@ -70,6 +71,8 @@ export class ProcessesService {
  */
 export type ProcessBookApi = Pick<ProcessBookReplica, 'list' | 'owns' | 'create' | 'start' | 'restart' | 'stop' | 'remove' | 'enableSchedule' | 'pauseSchedule' | 'onChange'> & {
     prepare(input: CreateProcessInput): ReturnType<ProcessBook['prepare']> | Promise<ReturnType<ProcessBook['prepare']>>;
+    /** A process's whole kept output, earlier Genies' included (Tynn #860): the host's book reads it. */
+    log(id: string, lines?: number): ProcessLog | null | Promise<ProcessLog | null>;
 };
 
 /** The host's process book, as a window lists and manages it (P3.3c). Reads synchronous; every action the host's. */
@@ -105,6 +108,8 @@ export class ProcessBookReplica {
     async enableSchedule(id: string): Promise<void> { await this.#call('enableSchedule', [id]); }
     async pauseSchedule(id: string): Promise<void> { await this.#call('pauseSchedule', [id]); }
     async runNow(id: string): Promise<RunNowResult> { return (await this.#call('runNow', [id])) as RunNowResult; }
+    /** The host's kept output for this process (Tynn #860): asked when the person opens its Log. */
+    async log(id: string, lines?: number): Promise<ProcessLog | null> { return (await this.#call('log', lines === undefined ? [id] : [id, lines])) as ProcessLog | null; }
 
     onChange(listener: () => void): () => void {
         this.#listeners.add(listener);

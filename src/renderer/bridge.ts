@@ -180,7 +180,7 @@ export interface GenieBridge {
          * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): a Take Over window HERE on that host's terminal. Main keeps the
          * ticket for the window it opens, never in its URL or title; that window reads it once (`takeOverTicket`).
          */
-        openTakeOver?(url: string, terminalId: string, ticket: string, name?: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        openTakeOver?(url: string, terminalId: string, ticket: string, name?: string | null, route?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** This Take Over window's ticket, read once; `null` when there is none (or it was read already). */
         takeOverTicket?(): Promise<string | null>;
     };
@@ -279,16 +279,18 @@ export interface GenieBridge {
      */
     /** `intent`: `stop` (Stop this turn, the default) latches the agent until the person acts; `interrupt` (Interrupt and send) does not. */
     cancelTurn(agentId: string, intent?: 'stop' | 'interrupt'): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `Stop this call` (Tynn #855): ONE running tool call ends — its own processes — and the turn goes on, the agent told. */
+    stopToolCall?(agentId: string, toolCallId: string): Promise<{ ok: true; ended: number } | { ok: false; reason: string }>;
     /** `Resume now`: the agent's provider login, held for its rate limit, opens at once (Tynn #794). */
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */
-    providerLogin(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    providerLogin(agentId: string): Promise<SignInResult>;
     /**
      * SWITCH ACCOUNT, one click (Tynn #482): the provider's own login in its one home, in a window with the steps. How it came out
      * arrives as an `account-switch` action. Absent on an older host.
      */
     /** `choose`: the account the person pressed Switch on, named in the login's steps (Tynn #483). */
-    switchAccount?(provider: string, choose?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    switchAccount?(provider: string, choose?: string): Promise<SignInResult>;
     /** Every known account with its readings, and the standing switch offers (Tynn #483); `null` while the host cannot answer. */
     accounts?(): Promise<AccountsSnapshot | null>;
     /** Rename or forget a known account (Tynn #484); a refusal comes back as its reason. */
@@ -298,15 +300,15 @@ export interface GenieBridge {
     /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
     accountRetry?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to Claude Design` (#1081): the interactive `claude` in the login window on this machine. Absent on an older host. */
-    designLogin?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    designLogin?(agentId: string): Promise<SignInResult>;
     /** Design sign-in for the machine (Tynn #480), from the accounts popover or Settings: no agent needed. Absent on an older host. */
-    designSignIn?(): Promise<{ ok: true } | { ok: false; reason: string }>;
+    designSignIn?(): Promise<SignInResult>;
     /**
      * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.
      */
     prompt(agentId: string, text: string, attachments?: readonly Attachment[]): Promise<{ ok: boolean; reason?: string }>;
-    resolvePrompt(agentId: string, promptId: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
+    resolvePrompt(agentId: string, promptId: string, action: import('../core/prompt-delivery.js').PromptAction): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * Answer a parked approval, with the PROVIDER'S own option id.
      *
@@ -321,14 +323,6 @@ export interface GenieBridge {
     answerApproval(agentId: string, optionId: string, note?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** The New agent form's answer (renderer/components/NewAgentModal.tsx): created, or the host's refusal in words. */
     addAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string } | { ok: false; reason: string }>;
-    /**
-     * Open the folder picker and register what the user chose.
-     *
-     * The first-run invitation's one action. Genie never guesses a path and never writes into
-     * a folder before showing what it found there.
-     */
-    addWorkspace(): void;
-
     /**
      * TAKE OVER — open the agent's TUI in a terminal in a NEW window (§1). The main process
      * opens the terminal in the agent's workspace and the window on it; Genie then only
@@ -347,9 +341,13 @@ export interface GenieBridge {
      * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
      * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
      */
-    /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). This machine's own window only. */
-    chooseProviderProgram?(provider: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
-    scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+    /**
+     * Keep the .exe for a provider hidden behind a batch wrapper (Tynn #577): a path on the HOST's disk, picked with the
+     * window's host-disk picker; genie-host writes it (providers.chooseProgram, the owner's; #897 2c-3). Every window.
+     */
+    chooseProviderProgram?(provider: string, path: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
+    /** The workspace's throwaway shell, genie-host's (terminals.scratch; #897 2c-4); another machine's answer carries its ticket. */
+    scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string; route?: string; ticket?: string } | { ok: false; reason: string }>;
     /** A workspace's terminals view in a NEW window (Tynn #706, the Dashboard's windows column). Absent = this window cannot open one (a remote window). */
     popOutTerminals?(workspaceId: string): Promise<void>;
 
@@ -627,7 +625,12 @@ export interface GenieBridge {
     } | undefined;
     artboard?: {
         read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
-        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
+        /**
+         * The person's action on the board: a verdict, a pin, or (genie#847) `delete` one item, `clear-decided` / `clear-all` /
+         * `clear-everything` (postId ''), or `restore` a cleared entry (postId = its .trash id). A clear answers with how many
+         * items it moved and the .trash entry that holds them, for Undo.
+         */
+        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin' | 'delete' | 'clear-decided' | 'clear-all' | 'clear-everything' | 'restore', comment: string): Promise<{ ok: true; delivered: boolean; cleared?: number; trashId?: string | null } | { ok: false; error: string }>;
     } | undefined;
 
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */
@@ -709,7 +712,13 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * WHAT THE PRELOAD EXPOSES: the remaining native window ports. Protocol reads and patch watches are assembled by
  * {@link pageBridge}; an agent's ledger is rebuilt once in the page, never copied whole across contextBridge per event.
  */
-export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
+/**
+ * A SIGN-IN's answer (Tynn #896): genie-host started the provider's own login. This machine's window is opened by the
+ * host; another machine's window opens its own on `route` with `ticket`.
+ */
+export type SignInResult = { ok: true; terminalId?: string; route?: string; ticket?: string } | { ok: false; reason: string };
+
+export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
@@ -776,6 +785,10 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(local.agentWire);
     const bridge: GenieBridge = { ...preload, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
+        accounts: local.accounts, accountsAct: local.accountsAct, dismissSwitchOffer: local.dismissSwitchOffer,
+        crashReport: local.crashReport,
+        chooseProviderProgram: local.chooseProviderProgram,
+        scratchTerminal: local.scratchTerminal,
         marketplace: local.marketplace,
         gapps: local.gapps,
         appInbox: local.owner.appInbox,

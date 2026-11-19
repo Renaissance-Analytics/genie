@@ -51,7 +51,7 @@ describe('host feature group three with no window (Tynn #720)', () => {
     });
     it('Tynn sign-in retains its supplied link without claiming a browser was opened', async () => {
         expect((await act({ kind: 'integrations.tynnSignIn' })).integrations?.tynn).toMatchObject({ signInUrl: 'https://tynn.example.com/genie/sign-in', message: null });
-        expect(f.accountCalls).toEqual([['tynn.start']]); expect(f.invokeWindow).not.toHaveBeenCalled();
+        expect(f.accountCalls).toEqual([['tynn.start']]);
     });
     it('a returned Tynn code refusal stays visible beside the retained link', async () => {
         await act({ kind: 'integrations.tynnSignIn' });
@@ -93,7 +93,7 @@ describe('host feature group three with no window (Tynn #720)', () => {
     it('issuing a PIN updates the actual host rather than a window replica', async () => {
         const data = await act({ kind: 'remote.issuePin' });
         expect(data.remote?.pin).toEqual(f.access.remote.activePin());
-        expect(data.remote?.pin?.code).toMatch(/^\d{6}$/); expect(f.invokeWindow).not.toHaveBeenCalled();
+        expect(data.remote?.pin?.code).toMatch(/^\d{6}$/);
     });
     it('Lock and Unlock change the owned remote service', async () => {
         expect((await act({ kind: 'remote.lock' })).remote?.locked).toBe(true); expect(f.access.remote.locked()).toBe(true);

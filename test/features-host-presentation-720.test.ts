@@ -62,7 +62,7 @@ describe('host features present only in the requesting window (Tynn #720)', () =
         expect(answer.toolchain?.refusals ?? []).toEqual([]);
     });
     it('a login refusal stays on its row with its actual reason', async () => {
-        Object.assign(f.a, { login: async () => ({ ok: false, reason: 'fixture caller login closed' }) });
+        f.signInState.refusal = 'fixture caller login closed';
         await f.answer({ kind: 'toolchain.check', force: true });
         const answer = await f.answer({ kind: 'toolchain.login', tool: 'codex' });
         expect(answer.toolchain?.refusals).toEqual([{ tool: 'codex', reason: 'fixture caller login closed' }]);
@@ -115,6 +115,8 @@ describe('host features present only in the requesting window (Tynn #720)', () =
         it(`the window error action ${option} reaches only the caller error owner`, async () => {
             const error = item({ id: MAIN_ERROR_DECK_PREFIX + 'fixture', source: 'genie', agentId: null,
                 answer: { kind: 'inline', options: ['dismiss', 'retry', 'open-log', 'report'].map(id => ({ id, label: id, tone: 'neutral' as const })) } });
+            // The caller's own window holds its error record (Tynn #861: an answer is resolved against the record held).
+            Object.assign(f.a.mainErrors!, { deckItems: () => [error] });
             await f.answer({ kind: 'deck.answer', item: error, optionId: option });
             expect(f.calls).toEqual([{ owner: CALLER_A.connectionId, effect, value: error.id }]);
         });

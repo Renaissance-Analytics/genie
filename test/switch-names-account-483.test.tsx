@@ -27,8 +27,8 @@ describe('the steps name the account to choose', () => {
     it.each(['claude', 'codex'] as const)('%s: "choose <account>" in the steps', (provider) => {
         expect(accountSwitchSteps(provider, ADA).join('\n')).toContain(`choose ${ADA}`);
     });
-    it('CONTROL: with no account named the steps are R2\'s, choosing "the other account"', () => {
-        expect(accountSwitchSteps('claude').join('\n')).toContain('choose the other account');
+    it('CONTROL: with no account named (Use another account, Tynn #850) the steps say to pick or create a different one', () => {
+        expect(accountSwitchSteps('claude').join('\n')).toContain('choose a different account');
         expect(accountSwitchSteps('claude', undefined)).toEqual(accountSwitchSteps('claude'));
     });
 });
@@ -75,9 +75,9 @@ describe('a Switch on one account names it', () => {
         click(pop.querySelector('[data-action="switch-offer-switch"]')!);
         expect(onSwitchAccount.mock.calls).toEqual([['claude', ADA], ['claude', ADA]]);
     });
-    it('main puts it in the login window\'s route; the preload and the bridge carry it', () => {
-        expect(source('src/main/main.ts')).toMatch(/loginRoute\(started\.terminalId, provider, true, choose\)/);
-        expect(source('src/main/preload.ts')).toMatch(/switchAccount: \(provider, choose\) => ipcRenderer\.invoke\('genie:account-switch', provider, choose\)/);
+    it('genie-host puts it in the login window\'s route (Tynn #896); the bridge carries it', () => {
+        expect(source('src/main/host-sign-ins.ts')).toMatch(/loginRoute\(id, provider, true, named\)/);
+        expect(source('src/renderer/remote-bridge.ts')).toMatch(/answer<SignInResult>\('accounts\.switch', provider, choose \?\? null\)/);
         expect(source('src/renderer/App.tsx')).toMatch(/switching=\{parsed\.switching\} choose=\{parsed\.choose\}/);
     });
 });

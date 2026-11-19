@@ -3,13 +3,13 @@ import type { PairRequest } from '../core/pair-confirm.js';
 import type { PinEnded } from '../core/remote.js';
 import type { RemoteAccessEvent, RemoteAccessStatus } from './remote-access-host.js';
 import type { Device } from './remote-devices.js';
-import { isLocalEvent, type RemoteHost } from './remote-host.js';
+import { type RemoteHost } from './remote-host.js';
 
 /**
  * REMOTE ACCESS, READ AND DRIVEN FROM A WINDOW (Tynn #409, host split P5d.1): the client side of `genie.remote-access`.
  * The listener, the paired devices, the PIN, the pair prompts, the baton and the lock are genie-host's
  * (remote-access-host.ts); Settings → Workstation reads them here and drives them through `engine.remoteAccess`. The
- * window's own events reach remote connections through `forwardEvents`.
+ * window forwards no events: it is one of genie-host's connections (Tynn #898 step 2d-4b).
  */
 
 /** What Settings → Workstation reads of remote access: genie-host's (this replica) or, on the emergency path, the window's own. */
@@ -92,27 +92,6 @@ export class RemoteAccessReplica implements RemoteAccessView {
         this.#rebase(event.status);
     }
 
-    /**
-     * The window's own events (the snapshot, features…) reach remote connections through genie-host — ONLY WHAT THEY WANT
-     * (Tynn #662). Every agent change used to build the agent's whole detail (its ledger of thousands of rows) and send it
-     * to genie-host every 50 ms, with nothing connected to receive it: on the memory soak, ~50 GB allocated in window main
-     * every 5 minutes and lines of 10 M characters into the host 12 times a second. genie-host's status says what its
-     * connections want (`RemoteHost.wanted`); an agent nobody wants is not even built (`wantsAgent`), and nothing is sent
-     * while nobody listens. A status without it (an older host) is sent everything, as before.
-     */
-    forwardEvents(onEvent: (listener: (channel: string, payload: unknown) => void, options?: { wantsAgent?: (agentId: string) => boolean }) => () => void): () => void {
-        const wantsAgent = (agentId: string): boolean => {
-            const w = this.#status.wants;
-            return w === undefined || (w.remote && (w.all || w.agents.includes(agentId)));
-        };
-        const wanted = (channel: string): boolean => {
-            const w = this.#status.wants;
-            if (w === undefined) return true;
-            if (channel.startsWith('agent:')) return wantsAgent(channel.slice('agent:'.length));
-            return isLocalEvent(channel) ? w.local : w.remote;
-        };
-        return onEvent((channel, payload) => { if (wanted(channel)) void this.#call('event', [channel, payload]).catch(() => {}); }, { wantsAgent });
-    }
 
     #rebase(status: RemoteAccessStatus): void {
         this.#status = status;

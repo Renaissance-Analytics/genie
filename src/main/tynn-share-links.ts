@@ -115,3 +115,16 @@ export async function revokeShareLink(
     }
     return { ok: true };
 }
+
+/**
+ * A HOST'S SHARE LINKS, over its Tynn session (Tynn #898 step 2d-2b): genie-host answers them for every remote client, as
+ * a window did. The workstation is read at each call (it registers after start); `endSessions` re-checks the relay's
+ * live sessions after a revoke.
+ */
+export function shareLinksOver(ports: { request: SessionRequest; workstation: () => string | null; endSessions?: () => Promise<void> }) {
+    return {
+        list: (workspaceId: string | null) => listShareLinks(ports.request, ports.workstation(), workspaceId),
+        mint: (input: { workspaceId: string | null; capability: 'control' | 'readonly'; expiresInDays: number }) => mintShareLink(ports.request, ports.workstation(), input),
+        revoke: (linkId: string) => revokeShareLink(ports.request, ports.workstation(), linkId, ports.endSessions),
+    };
+}

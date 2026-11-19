@@ -19,6 +19,8 @@ import {
     parseMessage,
     REMOTE_PROTOCOL,
     CONTROL_METHODS as CONTROL_METHOD_LIST,
+    ACCOUNTS_METHODS,
+    SIGN_IN_METHODS,
     type BatonEvent,
     type CallContext,
     type CompanionEvent,
@@ -28,6 +30,7 @@ import {
     type ServerTransport,
     type WireMessage,
 } from '../core/remote-protocol.js';
+import { CAP_UNSUPPORTED_RESULT, SUPPORT_WINDOW_DAYS, negotiate, offerOf, remoteOffer, supports, type HostUpdateAnswer, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
 import type { Device, DeviceStore } from './remote-devices.js';
 import { guestRefusal, pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
@@ -53,6 +56,20 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
+
+/**
+ * WHICH AGENTS' DETAILS A LISTENER WANTS (genie#1346, Tynn #662, Tynn #862).
+ *  - `wantsAgent`: whether an agent's detail is wanted now. A change to one nobody wants is not even built — so it is
+ *    LOST for anyone who comes to want it later.
+ *  - `onAgentsWanted`: what makes up for that. The host registers a listener; the side that knows the wants calls it with
+ *    the agents that just became wanted, and the host pushes each one's detail as it is now. A phone opening a chat is
+ *    the case (Tynn #862): its watch's own detail read starts the ledger's read, and the ledger can land before the
+ *    watch is wanted — dropped, and nothing sent it again until the agent next changed (the person's own send).
+ */
+export interface AgentEventOptions {
+    readonly wantsAgent?: (agentId: string) => boolean;
+    readonly onAgentsWanted?: (listener: (agentIds: readonly string[]) => void) => () => void;
+}
 
 /**
  * The most one kept image's reply may be, as JSON, for another device (Tynn #642): 512 KB, so it fits one frame. This
@@ -81,7 +98,8 @@ export interface HostApi {
     /** Release transient view state for this admitted connection; never an invocation from the wire. */
     releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
-    readonly gapps?: () => GAppsApi | null;
+    /** The GApp book; an app's window opens in the caller's own window (`context`, Tynn #898 step 2d-4b). */
+    readonly gapps?: (context?: CallContext) => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
     /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
     readonly tynnWatch?: TynnWatchPort;
@@ -91,8 +109,9 @@ export interface HostApi {
     /**
      * Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`.
      * `wantsAgent`: whether anyone listening wants an agent's detail now — one nobody wants is not built (genie#1346).
+     * `onAgentsWanted`: told when agents BECOME wanted, the host pushes each one's detail as it is now (Tynn #862).
      */
-    onEvent(listener: (channel: string, payload: unknown) => void, options?: { wantsAgent?: (agentId: string) => boolean }): () => void;
+    onEvent(listener: (channel: string, payload: unknown) => void, options?: AgentEventOptions): () => void;
     workspaceOfAgent(agentId: string): string | null;
     /** The workspace a terminal is in — what decides whether a guest receives its output. Absent = a guest receives none. */
     workspaceOfTerminal?(terminalId: string): string | null;
@@ -117,7 +136,9 @@ const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'termi
 
 // 'workspaces.create' too: New can create a repository under the host owner's GitHub and declare it on their Tynn (Add workspace parity 11).
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
-const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke'];
+const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke', 'crashReport.draft', 'crashReport.send', 'providers.chooseProgram', ...ACCOUNTS_METHODS];
+/** One of the sign-ins (Tynn #896), checked in one place: #signInRefusal. */
+const isSignIn = (method: string): boolean => (SIGN_IN_METHODS as readonly string[]).includes(method);
 
 /** What a guest of ONE workspace may never do, whichever workspace it names: the workstation's roster (Tynn #688). */
 const GUEST_ROSTER_METHODS: readonly string[] = ['workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.setGoverns'];
@@ -181,7 +202,17 @@ interface Connection {
      * TUI, and, once its window lost the baton or left, why it may type no more.
      */
     companion: { parentId: string; terminalId: string; started: boolean; revoked: string | null } | null;
+    /** What this connection and this host agreed in hello/welcome (Tynn #894); `null` until then, or outside the window. */
+    negotiated: Negotiated | null;
+    /**
+     * Outside the support window (Tynn #894): why, in words naming both schemas. The connection is UPDATE-ONLY: it may read
+     * `host.version` and ask `host.update`, and every other call is refused with this reason and `code: 'version'`.
+     */
+    outside: string | null;
 }
+
+/** The host-update port's stand-in until the launcher step wires it (Tynn #894). */
+const stubHostUpdate = (hostName: string) => async (): Promise<HostUpdateAnswer> => ({ started: false, stub: true, reason: `${hostName} cannot update itself from here yet: host updates are wired to the launcher in a later step` });
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
 const PHONE_REFUSES = (method: string): boolean => method.startsWith('terminals.');
@@ -192,19 +223,6 @@ const LOCAL_EVENTS = new Set<string>(['workspace-settings-changed', ...Object.va
 /** Whether an event is for this host's LOCAL connections only (the window's own doors), never a remote one. */
 export function isLocalEvent(channel: string): boolean {
     return LOCAL_EVENTS.has(channel);
-}
-
-/**
- * WHAT THE HOST API'S EVENTS MUST CARRY FOR THIS HOST'S CONNECTIONS (Tynn #662): `remote` = a remote connection hears
- * the non-local events; `all` = one of them hears every agent (a window that is not a phone), else `agents` = the agents
- * a phone watches; `local` = a local connection hears the local events. What a window that forwards its events to
- * genie-host builds and sends, and nothing more.
- */
-export interface EventWants {
-    readonly remote: boolean;
-    readonly all: boolean;
-    readonly agents: readonly string[];
-    readonly local: boolean;
 }
 
 /** A push a connection does not receive. */
@@ -238,9 +256,19 @@ export class RemoteHost {
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
     readonly #createLocalUploads: (() => LocalUploads | Promise<LocalUploads>) | undefined;
+    readonly #localSnapshot: ((connectionId: string) => Readonly<Record<string, unknown>> | null) | undefined;
     readonly #hostName: string;
     /** This Genie's build, said in `welcome` with the wire's protocol (P10.1e). */
     readonly #build: string;
+    /**
+     * This host's track, build, schema, window floor and capabilities, said in `welcome` and negotiated with each hello
+     * (Tynn #894). Read at each hello: the catalog's elements are capabilities, and a plugin turned on adds one.
+     */
+    readonly #offer: () => ProtocolOffer;
+    /** Asks for this host's update (Tynn #894): a stub until the launcher step wires it. */
+    readonly #requestUpdate: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer>;
+    /** CONFERENCE MODE: several owners asking at once start one update, and every one of them hears its answer. */
+    #updating: Promise<HostUpdateAnswer> | null = null;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
     readonly #devices: DeviceStore;
@@ -274,6 +302,8 @@ export class RemoteHost {
      * no one — main at 78–98 % of a core for seconds on the owner's machine with many agents.
      */
     #stopListening: (() => void) | null = null;
+    /** The host API's listeners for agents that became wanted (Tynn #862, `AgentEventOptions.onAgentsWanted`). */
+    readonly #agentsWanted = new Set<(agentIds: readonly string[]) => void>();
     /** Take over tickets not yet presented (Tynn #529 part A): by ticket, the window that asked and its terminal. */
     readonly #tickets = new Map<string, { parentId: string; terminalId: string; started: boolean; expiresAt: number; cancel: () => void }>();
     readonly #schedule: (ms: number, fn: () => void) => () => void;
@@ -285,8 +315,12 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null; schedule?: (ms: number, fn: () => void) => () => void; protocol?: ProtocolOffer | (() => ProtocolOffer); requestUpdate?: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer> }) {
         this.#api = deps.api;
+        const protocol = deps.protocol;
+        const build = deps.build ?? 'dev';
+        this.#offer = typeof protocol === 'function' ? protocol : protocol ? () => protocol : () => remoteOffer('host', build);
+        this.#requestUpdate = deps.requestUpdate ?? stubHostUpdate(deps.hostName);
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
         this.#build = deps.build ?? 'dev';
@@ -298,6 +332,7 @@ export class RemoteHost {
         this.#now = deps.now ?? Date.now;
         this.#openPage = deps.openPage;
         this.#createLocalUploads = deps.createLocalUploads;
+        this.#localSnapshot = deps.localSnapshot;
         this.#staging = new UploadStaging({ now: this.#now });
         this.#schedule = deps.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); });
         deps.transport.onConnection((socket) => this.#accept(socket));
@@ -306,21 +341,14 @@ export class RemoteHost {
     /** Someone is connected and known: hear the host API (once, however many connect). */
     #listen(): void {
         if (![...this.#connections.values()].some((connection) => connection.auth !== null)) return;
-        this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), { wantsAgent: (agentId) => this.#wantsAgent(agentId) });
-    }
-
-    /** What this host's connections want of the events now (Tynn #662): said in genie-host's status to the window that feeds them. */
-    wanted(): EventWants {
-        let remote = false, all = false, local = false;
-        const agents = new Set<string>();
-        for (const c of this.#connections.values()) {
-            if (c.auth === null) continue;
-            if (c.local) { local = true; continue; }
-            remote = true;
-            if (c.profile !== 'mobile') all = true;
-            else for (const id of c.watching.keys()) agents.add(id);
-        }
-        return { remote, all, agents: all ? [] : [...agents].sort(), local };
+        this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), {
+            wantsAgent: (agentId) => this.#wantsAgent(agentId),
+            // Tynn #862: told when a phone's watch is recorded, the host API pushes that agent as it is now.
+            onAgentsWanted: (listener) => {
+                this.#agentsWanted.add(listener);
+                return () => { this.#agentsWanted.delete(listener); };
+            },
+        });
     }
 
     /** Someone wants this agent's detail: a window that is not a phone (it hears every agent), or a phone watching it. */
@@ -567,7 +595,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null, negotiated: null, outside: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -625,6 +653,16 @@ export class RemoteHost {
     async #onFrame(connection: Connection, text: string): Promise<void> {
         const parsed = parseMessage(text);
         if (!parsed.ok) {
+            /*
+             * A CALL THIS HOST DOES NOT KNOW (Tynn #894) is answered with its id, so the caller's promise settles: a newer
+             * client asking an older host. A client that did not negotiate `unsupported-result` (an older Genie) hears the
+             * connection-level refusal it already reads first (its own skew check), then the result.
+             */
+            if (connection.auth !== null && parsed.code === 'unsupported' && parsed.id !== undefined) {
+                if (!supports(connection.negotiated, CAP_UNSUPPORTED_RESULT)) this.#refuse(connection, parsed.reason, false);
+                this.#send(connection, { kind: 'result', id: parsed.id, ok: false, reason: parsed.reason, code: 'unsupported' });
+                return;
+            }
             this.#refuse(connection, parsed.reason, connection.auth === null);
             return;
         }
@@ -722,6 +760,16 @@ export class RemoteHost {
             const refused = connection.local ? TICKET_FOREIGN : this.#redeem(connection, message.companion);
             if (refused !== null) { connection.auth = null; connection.deviceId = null; return this.#refuse(connection, refused, true); }
         }
+        /*
+         * THE VERSIONS, BOTH WAYS (Tynn #894), once the connection is somebody: this host's offer against the client's.
+         * Outside the fixed window the connection is still admitted, UPDATE-ONLY, so the client can read the host's version
+         * and trigger its update (the owner, 2026-11-18); nothing else answers it. Per connection: several people connected
+         * at once each negotiate for themselves.
+         */
+        const offer = this.#offer();
+        const agreed = negotiate(offer, offerOf(message));
+        connection.negotiated = agreed.ok ? agreed.negotiated : null;
+        connection.outside = agreed.ok ? null : `${this.#hostName}: ${agreed.reason}`;
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -733,9 +781,15 @@ export class RemoteHost {
             // The mode the person here set (Tynn #732): a window that comes back on view only takes no baton.
             ...(!connection.local && this.#viewOnly.has(connection.auth.label) ? { viewOnly: true as const } : {}),
             ...(token ? { token } : {}),
-            // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
+            // The version handshake (P10.1e), additive: an old client reads the fields above as it always has. Both ways
+            // since Tynn #894: the host's floor and capabilities too, so the client negotiates the same answer.
             protocol: REMOTE_PROTOCOL,
             build: this.#build,
+            ...(offer.track ? { track: offer.track } : {}),
+            schema: offer.schema,
+            minSchema: offer.minSchema,
+            capabilities: offer.capabilities,
+            ...(connection.outside !== null ? { compatible: false as const, code: 'version' as const, reason: connection.outside } : {}),
         });
         this.#listen();
         if (!connection.local) this.#changed();
@@ -745,10 +799,12 @@ export class RemoteHost {
         const auth = connection.auth!;
         const ok = (value: unknown): WireMessage => ({ kind: 'result', id, ok: true, value });
         const refuse = (reason: string): WireMessage => ({ kind: 'result', id, ok: false, reason });
+        // UPDATE-ONLY outside the support window (Tynn #894): the version and the update, nothing else. The update is
+        // `host.update` (the launcher's, later) or this host's own updater today (`updates.*`, the upgrade class, Tynn #822).
+        const updating = method === 'host.version' || method === 'host.update' || (!(CONTROL_METHOD_LIST as readonly string[]).includes(method) && capabilityOf(method as RemoteMethod) === 'upgrade');
+        if (connection.outside !== null && !updating) return { kind: 'result', id, ok: false, reason: connection.outside, code: 'version' };
 
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
-        // A local window takes over through its own window opener (genie:take-over), never this door.
-        if (connection.local && method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; this window does it itself`);
 
         // A TAKE OVER WINDOW (Tynn #529 part A): reads as any window; types into its one terminal while its window drives.
         const companion = connection.companion;
@@ -877,6 +933,21 @@ export class RemoteHost {
                 if (!auth.isOwner) return refuse(`only the host owner may unlock ${this.#hostName}`);
                 this.unlock(connection.id);
                 return ok({ locked: false });
+            // THE HOST'S VERSION AND WINDOW (Tynn #894), read at any time, so a client sees a host to update while connected.
+            case 'host.version': {
+                const offer = this.#offer();
+                return ok({ track: offer.track, build: offer.build ?? this.#build, schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities, windowDays: SUPPORT_WINDOW_DAYS });
+            }
+            /*
+             * A CLIENT TRIGGERS THE HOST'S UPDATE (Tynn #894; the owner, 2026-11-18). The owner's, from any of their devices;
+             * never a share-link guest's. Not a write on the baton: in conference mode anyone's owner device may ask while
+             * someone else drives, and several asking at once start one update, each told its answer.
+             */
+            case 'host.update': {
+                if (!auth.isOwner) return refuse(`only ${this.#hostName}'s owner may update it`);
+                const running = this.#updating ?? (this.#updating = this.#requestUpdate({ label: auth.label, connectionId: connection.id }).finally(() => { this.#updating = null; }));
+                try { return ok(await running); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
             case 'agent.watch':
                 if (connection.local) return this.#watchLocalAgent(connection, String(args[0] ?? ''), true) ? ok({ watching: true }) : refuse('this host does not offer agent details');
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
@@ -933,6 +1004,10 @@ export class RemoteHost {
         // Only the owner changes the host itself — a guest of the whole host included.
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
+        // Genie's own scratch terminal (null: the home folder, the tray's) is the host owner's (Tynn #897, 2c-4).
+        if (!auth.isOwner && method === 'terminals.scratch' && (args[0] ?? null) === null) return refuse(`Genie’s own terminal on ${this.#hostName} is its owner’s; open the workspace’s`);
+        const signIn = this.#signInRefusal(connection, method);
+        if (signIn) return refuse(signIn);
         // A guest browses inside what it was given; the owner, the whole disk (Genie 1's approved scope, Tynn #835).
         // A guest's picker opens in what it was given, never at the host's home (Tynn #527): the host is not asked.
         if (!auth.isOwner && method === 'host.home') {
@@ -947,7 +1022,6 @@ export class RemoteHost {
             if (!roots.some((r) => within(target, r))) return refuse(`${target} is outside what this link shares`);
         }
         if (capability === 'host-only') {
-            if (method === 'addWorkspace') return refuse(`${method} opens a folder picker on ${this.#hostName}; do it there`);
             if (method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; do it there`);
             return refuse(`${method} places a view on ${this.#hostName}'s own window; there is nothing to do remotely`);
         }
@@ -965,7 +1039,7 @@ export class RemoteHost {
 
         if (isGappMethod(method)) {
             if (!connection.local || !this.#connections.has(connection.id)) return refuse('GApp actions need this machine\'s own local window.');
-            try { return ok(await dispatchGapps(() => this.#api.gapps?.() ?? null, method.slice('gapps.'.length), args)); }
+            try { return ok(await dispatchGapps(() => this.#api.gapps?.(this.#callContext(connection)) ?? null, method.slice('gapps.'.length), args)); }
             catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
         }
         if (isMarketplaceMethod(method)) {
@@ -1012,6 +1086,7 @@ export class RemoteHost {
             // paired devices and the connections. Only an owner sees them.
             // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
             // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
+            if (connection.local && method === 'snapshot') return ok(this.#content(connection).jsonResult(this.#windowSnapshot(connection, value), method));
             if (connection.local && (method === 'snapshot' || method === 'agentDetail' || method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
             // ONE KEPT IMAGE (Tynn #642): a sent image can be up to 5 MB, so this machine's window takes it as a blob, never
             // a frame over the door's cap; another device takes one whose reply is at most REMOTE_ATTACHMENT_MAX_BYTES
@@ -1021,12 +1096,19 @@ export class RemoteHost {
                 const json = JSON.stringify(value);
                 if (json !== undefined && Buffer.byteLength(json) > REMOTE_ATTACHMENT_MAX_BYTES) return ok({ ok: false, reason: 'this image is too large to show on another device' });
             }
+            // AN ACTION'S REPLY TO ANOTHER DEVICE (Tynn #861): as its `features` push is sent, never the whole snapshot raw. A
+            // phone holds no feature state (#forPhone sends it none), so it is told only that the action was done; another
+            // device's window gets the snapshot without pairing requests when it fits, else a revision it reads. Sent raw,
+            // a busy host's snapshot was over the frame cap, and a done answer came back to the phone as "too large".
+            if (method === 'features.act') return ok(this.#actReply(connection, value));
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
-            // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
-            if (method === 'takeOver') {
+            // The TUI started (or was open): a ticket for another machine's own Take Over window, which presents it (Tynn #529
+            // A). This machine's windows need none: genie-host asks the caller's window process to open it (Tynn #896).
+            if ((method === 'takeOver' || isSignIn(method) || method === 'terminals.scratch') && !connection.local) {
                 const started = value as { ok?: unknown; terminalId?: unknown; started?: unknown } | null;
-                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true) });
+                // A sign-in's login terminal is this ask's: its companion closing cancels the login (genie-host takeOverEnded).
+                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true || isSignIn(method) || method === 'terminals.scratch') });
             }
             return ok(value);
         } catch (error) {
@@ -1040,6 +1122,18 @@ export class RemoteHost {
     }
 
     /** Who this call came from (Tynn #578): what this host admitted, the door's or the relay's proof, never the hello's say-so. */
+    /**
+     * THE SIGN-INS' ONE CHECK (Tynn #896): `providerLogin`, `logins.design`, `accounts.switch` and `logins.provider` (the
+     * tray's) start the provider's own login on this host, for its OWNER only (a share-link guest is refused, as Take Over from another machine is). STEP 3
+     * adds its step-up here (a second factor from a paired device, the owner's choice of which actions need it), and
+     * nowhere else.
+     */
+    #signInRefusal(connection: Connection, method: string): string | null {
+        if (!isSignIn(method)) return null;
+        if (!connection.auth?.isOwner) return `only the owner of ${this.#hostName} can sign in to its accounts`;
+        return null;
+    }
+
     #callContext(connection: Connection): CallContext {
         const auth = connection.auth!, pre = connection.socket.preAuth;
         const origin = connection.local ? (pre?.window === 'main' ? 'local-window' : 'remote-window') : pre ? 'relay' : 'device';
@@ -1096,7 +1190,24 @@ export class RemoteHost {
         if (!this.#stopListening) this.#listen();
         // A newly watched agent is one the forwarding window must now send (Tynn #662).
         if (first) this.#changed();
+        // And what changed while the watch was being opened (Tynn #862): the detail read above is what starts the ledger's
+        // read, and a ledger that landed before this watch was recorded was dropped (`#forPhone`: not watching yet).
+        // The host API pushes the agent as it is now — on the next turn, so it reaches the phone AFTER this answer (its
+        // first push may go at once, and a phone holds no window and no listener for the agent before the answer lands),
+        // as a patch on that window. A watch gone by then (unwatched, or the connection closed) asks for nothing.
+        if (first) this.#schedule(0, () => {
+            if (!this.#connections.has(connection.id) || !connection.watching.has(agentId)) return;
+            for (const wanted of [...this.#agentsWanted]) wanted([agentId]);
+        });
         return { seq: opened.state.seq, detail: rest, rows: opened.rows };
+    }
+
+    /** `features.act`'s reply to another device (Tynn #861): a revision for a phone or a snapshot over the cap, else the snapshot as pushed. */
+    #actReply(connection: Connection, value: unknown): unknown {
+        if (connection.profile === 'mobile') return { revision: ++this.#featuresRevision };
+        let answer = withoutPairRequests(value);
+        if (!connection.auth?.isOwner) answer = withoutRemoteSecrets(answer);
+        return Buffer.byteLength(JSON.stringify(answer) ?? '') > REMOTE_FRAME_MAX_BYTES - 4 * 1024 ? { revision: ++this.#featuresRevision } : answer;
     }
 
     /** A phone hears `snapshot`, and `agent:<id>` for an agent it watches as a patch on its window; nothing else. */
@@ -1187,8 +1298,18 @@ export class RemoteHost {
         const windows = [...this.#connections.values()].filter((c) => c.auth !== null && c.local);
         if (windows.length === 0) return;
         const revision = ++this.#snapshotRevision;
-        const inline = Buffer.byteLength(JSON.stringify(snapshot)) <= LOCAL_EVENT_MAX_BYTES;
-        for (const c of windows) this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.snapshot, payload: inline ? { revision, snapshot } : { revision } });
+        for (const c of windows) {
+            const own = this.#windowSnapshot(c, snapshot);
+            const inline = Buffer.byteLength(JSON.stringify(own)) <= LOCAL_EVENT_MAX_BYTES;
+            this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.snapshot, payload: inline ? { revision, snapshot: own } : { revision } });
+        }
+    }
+
+    /** A window's own additions (its renderer notice; gate renderer-crash B3/B4) on its snapshot, and on no other connection's. */
+    #windowSnapshot(connection: Connection, snapshot: unknown): unknown {
+        if (!connection.local || !snapshot || typeof snapshot !== 'object') return snapshot;
+        const own = this.#localSnapshot?.(connection.id);
+        return own ? { ...(snapshot as Record<string, unknown>), ...own } : snapshot;
     }
 
     #broadcast(channel: string, payload: unknown): void {

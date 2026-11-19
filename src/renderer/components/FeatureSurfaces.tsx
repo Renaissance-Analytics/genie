@@ -24,7 +24,7 @@ import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
 import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
-import type { FeatureAction, FeatureData, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
+import type { FeatureAction, FeatureData, ProcessLogOpen, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -45,7 +45,7 @@ import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
 import { flowSummary } from '../../core/flow-canvas.js';
 import { pausedWords } from '../../core/flow-pills.js';
-import { describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
+import { describeSchedule, formatLastRun, formatNextRun, lastFailure } from '../../core/scheduled-task.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
@@ -181,6 +181,9 @@ export function KnowledgeSurface({ data, onAction, workspaces = [] }: SurfacePro
 }
 
 const OUTCOME_LABEL = { ran: 'ran', failed: 'failed', held: 'held back', stopped: 'stopped by quit' } as const;
+/** A run's outcome in words: one a person or an agent stopped says who (Tynn #833). */
+const outcomeLabel = (r: { outcome: keyof typeof OUTCOME_LABEL; stoppedBy?: string | undefined }): string =>
+    r.outcome === 'stopped' && r.stoppedBy !== undefined ? (r.stoppedBy === 'you' ? 'stopped by you' : `stopped by ${r.stoppedBy}`) : OUTCOME_LABEL[r.outcome];
 const OUTCOME_COLOR = { ran: 'green', failed: 'red', held: 'amber', stopped: 'amber' } as const;
 
 type FlowRecordView = NonNullable<FeatureData['flows']>['flows'][number];
@@ -210,13 +213,14 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
             {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
             {last ? (
                 <span data-flow-last={last.outcome} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
-                    <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[last.outcome]}</Badge>
+                    <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{outcomeLabel(last)}</Badge>
                     {new Date(last.at).toLocaleString()}
                 </span>
             ) : (
                 <span className="text-xs text-[var(--fg-4)]">not run yet</span>
             )}
             <span className="ml-auto flex gap-3">
+                {f.inFlight ? <Button size="xs" type="button" data-flow-stop={f.id} className="text-[13px] text-[var(--danger)]" title="Stop this run now" onClick={() => onAction({ kind: 'flows.stop', flowId: f.id })}>Stop</Button> : null}
                 <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.runNow', flowId: f.id })}>Run now</Button>
                 {f.armed ? (
                     <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</Button>
@@ -243,16 +247,16 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                         Runs · last {runs.length}
                     </summary>
                     <ol className="mt-1 flex flex-col gap-1">
-                        {[...runs].reverse().map((r, i) => (
+                        {[...runs].reverse().map((r, i) => { const index = runs.length - 1 - i; return (
                             <li key={`${runs.length - i}:${r.at}`} data-flow-run={r.outcome} className="flex items-baseline gap-2 text-xs">
-                                <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
+                                <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{outcomeLabel(r)}</Badge>
                                 <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
                                 <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : r.trigger === 'file' ? `when ${r.file ?? 'a file'} was added` : 'on schedule'}</span>
-                                {r.nodes ? <Button size="xs" type="button" className="text-[var(--fg-3)]" onClick={open} title="Open the flow; pick this run to see it on the canvas">on the canvas</Button> : null}
+                                <Button size="xs" type="button" data-flow-review={String(index)} className="text-[var(--fg-3)]" title="Open this run's review" onClick={() => onAction({ kind: 'flows.openEditor', flowId: f.id, run: index })}>Review</Button>
                                 {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
                                 {r.steps && r.steps.length > 0 ? <RunSteps steps={r.steps} /> : null}
                             </li>
-                        ))}
+                        );})}
                     </ol>
                 </details>
             ) : null}
@@ -612,7 +616,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
-                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} {...(commandRun ? { commandRun } : {})} />
+                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} processLog={hosting.processLog ?? null} {...(commandRun ? { commandRun } : {})} />
                         </Tabs.Panel>
                         <Tabs.Panel value="services">
                             <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} onNavigate={onNavigate} />
@@ -687,9 +691,11 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun, processLog = null }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string }; processLog?: ProcessLogOpen | null }) {
     const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     const wsName = (id: string) => (workspaces.length > 0 ? workspaceLabel(workspaces, id) : null);
+    // The Log the person opened (Tynn #860): shown while its process is still listed.
+    const opened = processLog ? processes.find((p) => p.id === processLog.processId) ?? null : null;
     return (
         <div className="flex flex-col">
             <div className="flex items-center justify-end px-5 py-2">
@@ -718,6 +724,7 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                                 <span className="ml-auto flex shrink-0 items-center gap-1.5">
                                     {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
                                     <RowMenu items={acts.menu} onRun={run} />
+                                    {logButton(p.id, onAction)}
                                 </span>
                                 {p.commandRun || (p.log && p.log.lines > 0) ? (
                                     <details data-process-log={p.id} className="basis-full">
@@ -732,6 +739,58 @@ export function ProcessesPanel({ processes, workspaces, onAction, now, commandRu
                     })}
                 </ul>
             )}
+            {opened ? (
+                <Modal open onClose={() => onAction({ kind: 'hosting.closeProcessLog' })} size="lg">
+                    <Modal.Header>{opened.name}</Modal.Header>
+                    <Modal.Body>
+                        <ProcessLogView process={opened} log={processLog!} />
+                    </Modal.Body>
+                </Modal>
+            ) : null}
+        </div>
+    );
+}
+
+/**
+ * A process's Log (Tynn #860): opens its whole kept output, earlier Genies' included, and a scheduled task's runs. An icon
+ * button like the row's others (Tynn #708: icons, named by their label), always last on the line.
+ */
+function logButton(processId: string, onAction: SurfaceProps['onAction']) {
+    // Drawn in place (no component of its own): the row's buttons stay in the row's element tree, as scheduledRow's do.
+    return <Button type="button" variant="circle" size="sm" icon="file-text" aria-label="Log" title="Log" data-open-log={processId} onClick={() => onAction({ kind: 'hosting.openProcessLog', processId })} />;
+}
+
+const RUN_WORD: Record<string, string> = { ok: 'Ran', failed: 'Failed', skipped: 'Skipped' };
+const RUN_COLOR: Record<string, 'green' | 'red' | 'amber'> = { ok: 'green', failed: 'red', skipped: 'amber' };
+
+/**
+ * WHAT THE LOG SHOWS (Tynn #860; the owner: "anything that executes tasks needs to provide a log I can read"). A scheduled
+ * task's runs first, newest first: how each ended, when it started and ended, WHY a run failed, and what a nudge sent.
+ * Then the output Genie kept — across Genie restarts, with Genie's own line where one took over — or that there is none.
+ */
+export function ProcessLogView({ process: p, log }: { process: NonNullable<FeatureData['hosting']>['processes'][number]; log: ProcessLogOpen }) {
+    const runs = p.schedule?.runs ?? [];
+    const nudge = p.schedule?.kind === 'agent-nudge';
+    return (
+        <div data-process-log-view={p.id} className="flex flex-col gap-3 text-xs">
+            {p.schedule ? (
+                runs.length > 0 ? (
+                    <ol data-scheduled-runs className="flex flex-col gap-1.5">
+                        {runs.map((r) => (
+                            <li key={`${r.at}:${r.status}`} data-scheduled-run={r.status} className="flex flex-wrap items-baseline gap-2">
+                                <Badge color={RUN_COLOR[r.status] ?? 'zinc'} variant="soft" size="sm">{RUN_WORD[r.status] ?? r.status}</Badge>
+                                <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()} → {new Date(r.endedAt).toLocaleTimeString()}</span>
+                                {r.reason ? <span data-scheduled-run-reason className="basis-full text-[var(--danger)]">{r.reason}</span> : null}
+                                {r.sent ? <span className="basis-full text-[var(--fg-3)]">Sent: <span className="text-[var(--fg-2)]">{r.sent}</span></span> : null}
+                            </li>
+                        ))}
+                    </ol>
+                ) : <p className="text-[var(--fg-3)]">No runs yet.</p>
+            ) : null}
+            {log.dropped > 0 ? <p className="text-[var(--fg-4)]">{log.dropped} earlier {log.dropped === 1 ? 'line was' : 'lines were'} cut</p> : null}
+            {log.text !== '' || !nudge ? (
+                <pre data-process-log-text className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono">{log.text === '' ? 'No output' : log.text}</pre>
+            ) : null}
         </div>
     );
 }
@@ -799,6 +858,8 @@ function scheduledRow({ p, up, now, onAction, workspace = null }: { p: NonNullab
     const s = p.schedule!;
     const nudge = s.kind === 'agent-nudge';
     const status = up ? 'Running now' : s.enabled ? 'Scheduled' : 'Paused — not firing';
+    // Why the last run failed or was skipped, on the row (Tynn #860); its Log has every run.
+    const failure = lastFailure(s);
     const acts = scheduledActions(p);
     const run = (a: RowAction) => { for (const act of a.acts) onAction(act); };
     return (
@@ -811,10 +872,12 @@ function scheduledRow({ p, up, now, onAction, workspace = null }: { p: NonNullab
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
                 {acts.primary.map((a) => <RowIconButton key={a.id} action={a} onRun={run} />)}
                 <RowMenu items={acts.menu} onRun={run} />
+                {logButton(p.id, onAction)}
             </span>
             <span className="basis-full text-xs text-[var(--fg-3)]">
                 {describeSchedule(s.cron)} · Next run: {formatNextRun(s.nextRunAt, now)} · Last run: {formatLastRun(s.lastRunAt, s.lastRunStatus, now)}
             </span>
+            {failure ? <span data-run-reason className="basis-full text-xs text-[var(--danger)]">{failure}</span> : null}
             {nudge ? (
                 <span className="basis-full text-xs text-[var(--fg-3)]">Each run nudges {s.agent} with: <span className="text-[var(--fg-2)]">{s.prompt}</span></span>
             ) : null}
@@ -911,7 +974,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                 <div className="flex items-center gap-3">
                                     <span className="text-sm font-medium">{engineName(i)}</span>
                                     <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : workspaceLabel(workspaces, scope.workspaceId)}</Badge>
-                                    <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status}</Badge>
+                                    <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status === 'unknown' ? 'state unknown' : status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
                                     <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
                                     {i.engine === 'custom' && i.image ? <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
@@ -921,7 +984,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                     </span>
                                 </div>
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
-                                {status === 'docker-not-running' && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
+                                {(status === 'docker-not-running' || status === 'unknown') && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
                                 {confirming === i.id ? <DeleteDataConfirm instance={i} workspaces={workspaces} onAction={onAction} onCancel={() => setConfirming(null)} /> : null}
                                 {services.updating?.serviceId === i.id ? (
                                     <div data-service-update-confirm={i.id} className="flex flex-col gap-2 rounded-md border border-[var(--border-1)] p-3 text-sm">
@@ -1463,16 +1526,26 @@ function formatBytes(bytes: number): string {
 }
 
 /** Genie's one Playwright browser install: version, size, Update (Tynn #604). Every workspace and worktree uses it. */
+/** A version typed into the Playwright section, as the install it asks for (Tynn #846): x.y.z's Chromium, or `null`. */
+export function playwrightInstallChosen(text: string): FeatureAction | null {
+    const version = text.trim();
+    return /^\d+\.\d+\.\d+$/.test(version) ? { kind: 'toolchain.installPlaywright', version, browsers: ['chromium'], consent: true } : null;
+}
+
 function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { playwright: NonNullable<NonNullable<FeatureData['toolchain']>['playwright']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const newest = playwright.sets[0]?.version ?? null;
     const outdated = playwright.latest !== null && newest !== playwright.latest;
+    // Any version, typed (Tynn #846): a project pinned to an older Playwright gets its own set beside the others.
+    const [chosen, setChosen] = useState('');
+    const chosenAction = playwrightInstallChosen(chosen);
     return (
         <section data-playwright-browsers={playwright.sets.length} className="border-b border-[var(--border-1)]">
             <div className="flex items-center gap-3 px-5 pt-3">
                 <h3 className="text-sm font-medium">Playwright browsers</h3>
                 <span data-playwright-size="" className="text-xs text-[var(--fg-3)]">{formatBytes(playwright.totalBytes)}</span>
+                <span data-playwright-stable={playwright.stable} className="text-xs text-[var(--fg-3)]">Stable: {playwright.stable}</span>
             </div>
-            <p className="px-5 py-1 text-xs text-[var(--fg-3)]">One install for every workspace and worktree: <span className="font-mono">{playwright.browsersPath}</span></p>
+            <p className="px-5 py-1 text-xs text-[var(--fg-3)]">One install for every workspace and worktree, kept by Genie: it installs the stable version, and each version a project pins, by itself. <span className="font-mono">{playwright.browsersPath}</span></p>
             {refusals.map((r) => (
                 <p key={r.version ?? 'latest'} data-playwright-refusal={r.version ?? 'latest'} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
             ))}
@@ -1480,17 +1553,22 @@ function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { pla
                 {playwright.sets.map((s) => (
                     <li key={s.version} data-playwright-version={s.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
                         <span className="font-medium">Playwright {s.version}</span>
+                        {s.version === playwright.stable ? <span data-playwright-stable-set={s.version} className="rounded bg-[var(--bg-3)] px-1.5 text-[11px] text-[var(--fg-2)]">stable</span> : null}
                         <span className="text-xs text-[var(--fg-3)]">{s.browsers.join(', ')}</span>
-                        {s.version === newest && outdated ? (
-                            <Button size="xs" type="button" data-playwright-update={playwright.latest} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: s.browsers, consent: true })}>Update to {playwright.latest}</Button>
+                        {!s.ready ? (
+                            <Button size="xs" type="button" data-playwright-reinstall={s.version} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: s.version, browsers: s.browsers, consent: true })}>Its browsers are gone: install again</Button>
+                        ) : s.version === newest && outdated && playwright.latest !== null ? (
+                            <Button size="xs" type="button" data-playwright-update={playwright.latest} disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: playwright.latest, browsers: s.browsers, consent: true })}>Add {playwright.latest}</Button>
                         ) : null}
                     </li>
                 ))}
             </ul>
             <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                 {playwright.sets.length === 0 ? (
-                    <Button size="xs" type="button" data-playwright-install="latest" disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: ['chromium'], consent: true })}>Install Chromium</Button>
+                    <Button size="xs" type="button" data-playwright-install="stable" disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: null, browsers: ['chromium'], consent: true })}>Install Chromium (Playwright {playwright.stable})</Button>
                 ) : null}
+                <input data-playwright-version-input="" value={chosen} onChange={(e) => setChosen(e.target.value)} placeholder="1.62.1" aria-label="Playwright version to install" className="w-24 rounded-lg border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono text-[13px]" />
+                <Button size="xs" type="button" data-playwright-install-chosen="" disabled={busy || chosenAction === null} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => { if (chosenAction) { onAction(chosenAction); setChosen(''); } }}>Install this version</Button>
                 {newest !== null ? playwright.optional.filter((b) => !(playwright.sets[0]?.browsers ?? []).includes(b)).map((b) => (
                     <Button size="xs" key={b} type="button" data-playwright-add={b} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPlaywright', version: newest, browsers: [b], consent: true })}>Add {b}</Button>
                 )) : null}

@@ -1,5 +1,6 @@
 import { clockAmPm } from './clock-words.js';
 import { isSleeping } from './agent-status.js';
+import { stalledWords } from './hung-call.js';
 import { limitTitle } from './limit-words.js';
 import type { Fidelity } from './dashboard-view.js';
 import { observedState, type TakeOverProbe } from './observed.js';
@@ -121,6 +122,8 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
     // SIGNED OUT of its provider (the owner, 2026-10-18): what to do, never Broken — the header's `Log in` fixes it.
     if (session.accountPaused) return { word: `Account paused · ${session.accountPaused.words}`, elapsed: null, tone: 'bad' };
     if (session.signedOut) return { word: 'Signed out · log in to continue', elapsed: null, tone: 'warn' };
+    // ENDED AS STALLED (Tynn #855): said for what it is, never Working and never a quiet Idle.
+    if (session.stalled && session.turnState !== 'working') return { word: stalledWords(session.stalled), elapsed: null, tone: 'bad' };
     if (session.failure !== null) {
         const when = session.failure.at == null ? '' : ` ${hhmm(session.failure.at)}`;
         return { word: `Broken · ${session.failure.reason}${when}`, elapsed: null, tone: 'bad' };

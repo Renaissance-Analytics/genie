@@ -1,8 +1,9 @@
+import { hostHashOf } from './update-kind.js';
 import type { RowsPatch } from './agent-push-wire.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { LiveSession } from './roster.js';
 import type { TimedEvent } from './stream-view.js';
-import { parseFrame, type Frame } from './remote-protocol.js';
+import { parseFrame, type Frame, type FrameRefusal } from './remote-protocol.js';
 
 /**
  * THE AGENT ENGINE ON THE WIRE (the host split, phase 1 — `.ai/plans/genie-2-host-split-2026-10-31.md` in the envelope).
@@ -18,8 +19,11 @@ import { parseFrame, type Frame } from './remote-protocol.js';
  * credentials, prepared with the OS secret store Electron owns).
  */
 
-/** Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced. */
-export const ENGINE_PROTOCOL = 3;
+/**
+ * Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced.
+ * 4: the window's protocol connections ride this link (`engine.protocol`, Tynn #898 step 2d-4b); a host of 3 has no tunnel.
+ */
+export const ENGINE_PROTOCOL = 4;
 
 /**
  * What a link says in its `hello`. A WINDOW answers the host's calls to it (a forwarded tool, an elevation); the Genie
@@ -54,15 +58,8 @@ export const ENGINE_METHODS = [
     // A provider's model list, for an agent not running yet (beta.61.1): asked of the provider's CLI by genie-host, which has
     // the process supervisor. `[provider, refresh]`.
     'engine.providerModels',
-    // The persisted legacy account home for this machine's own login/status UI (S3); no credentials.
-    'engine.providerAccount',
     // After a login: ask the provider who the account is now (Tynn #477). `[provider]`.
     'engine.refreshAccountIdentity',
-    // A provider sign-in for one account, run in the host (Tynn #479). `[provider, accountId?]`; `[accountId]` cancels.
-    'engine.login',
-    'engine.cancelLogin',
-    // SWITCH ACCOUNT (Tynn #753): open the provider's own login in its one home, with the steps. No agent is touched. `[provider]`.
-    'engine.switchAccount',
     // SWITCH OFFERS (Tynn #481): the offers genie-host makes when the active account's chosen window is near its limit. `[]`;
     // Not now on one: `[offerId]`.
     'engine.switchOffers',
@@ -117,10 +114,6 @@ export const ENGINE_METHODS = [
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
-    // Host-owned draft files: only bounded ranges cross to the window. Handles belong to this engine connection.
-    'engine.drafts.fileOpen',
-    'engine.drafts.fileRead',
-    'engine.drafts.fileClose',
     // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
     // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
     'engine.supervisor',
@@ -148,7 +141,6 @@ export const ENGINE_METHODS = [
     'engine.updater',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
-    'engine.features',
     'engine.featureQuestion',
     'client.featureEffect',
     'engine.processes',
@@ -184,6 +176,11 @@ export const ENGINE_METHODS = [
     'engine.workstation',
     // Another machine's socket, dialled by the host; the window holds a channel (P3.4 cut e): `[method, args]`.
     'engine.deviceLink',
+    // THE WINDOW'S PROTOCOL CONNECTIONS, TUNNELLED (Tynn #898 step 2d-4b: protocol-tunnels.ts, window-tunnel.ts): `[op,
+    // tunnel, payload]` with call id 0, a notification, in order on this one socket. `open {window, label}`, `frame text`,
+    // `close reason`, `browser state`. genie-host's RemoteHost answers them; its frames come back as `protocol.frame`.
+    // A LOCAL window's link only: genie-host admits each as this machine's own window.
+    'engine.protocol',
     // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
     'engine.remoteAccess',
     // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
@@ -211,8 +208,9 @@ export const ENGINE_METHODS = [
     // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
     // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
     'client.elevate',
-    // A remote method genie-host does not own yet, done by the newest local window (Tynn #409): `[method, args]`.
-    'client.remoteInvoke',
+    // What only a window can do, asked of the window process that owns the caller (Tynn #898 step 2d-4b): `[op, args]`.
+    // `trash [path]` (Electron's shell.trashItem), `gapps.open [id]` / `gapps.preview [id]` (an app's BrowserWindow).
+    'client.windowOp',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];
@@ -222,7 +220,7 @@ export const isEngineMethod = (m: unknown): m is EngineMethod => typeof m === 's
 export type EngineFrame = Frame<EngineMethod>;
 
 /** A frame of the engine protocol, or why not: the remote bridge's parser over this table. */
-export function parseEngineFrame(text: string): { ok: true; message: EngineFrame } | { ok: false; reason: string } {
+export function parseEngineFrame(text: string): { ok: true; message: EngineFrame } | FrameRefusal {
     return parseFrame(text, isEngineMethod);
 }
 
@@ -315,8 +313,9 @@ export interface WireAttachment {
     readonly name: string;
     readonly type: string;
     readonly b64: string;
+    /** Saved into the workspace by the host (Tynn #829): where, as `Attachment.saved`. */
+    readonly saved?: { readonly path: string; readonly type: string; readonly size: number };
 }
-
 /** Where the host writes what a window needs to find and trust it (`<genieHome>/runtime/host.json`). */
 export interface HostRecord {
     readonly pid: number;
@@ -348,7 +347,10 @@ export type HostDecision = { readonly kind: 'start' } | { readonly kind: 'adopt'
 export function hostDecision(record: HostRecord | null, alive: (pid: number) => boolean, want: { protocol: number; build: string }): HostDecision {
     if (record === null || !alive(record.pid)) return { kind: 'start' };
     if (record.protocol !== want.protocol) return { kind: 'replace', record, why: `protocol ${record.protocol}, this window speaks ${want.protocol}` };
-    if (record.build !== want.build) return { kind: 'replace', record, why: `build ${record.build}, this window is ${want.build}` };
+    // The same host by its hash, whatever the version (Tynn #413): a client-only update's window adopts the host that kept running.
+    if (record.build !== want.build && !(hostHashOf(record.build) !== null && hostHashOf(record.build) === hostHashOf(want.build))) {
+        return { kind: 'replace', record, why: `build ${record.build}, this window is ${want.build}` };
+    }
     return { kind: 'adopt', record };
 }
 

@@ -164,7 +164,7 @@ describe('R1: the host resolves the ACTIVE account for launches, probes, Take Ov
     it('the session host, model list, health, status and window account all read the active account', () => {
         const host = source('src/main/genie-host.ts');
         expect(host).toContain('activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null');
-        expect(host).toContain('providerAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null');
+        expect(host).not.toContain('providerAccount: provider =>'); // the window's account read is retired (Tynn #896, 2b-3)
         expect(host).toContain('realListModels(provider, accounts.activeFor(provider))');
         expect(host).toContain('checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.activeFor(provider))');
         expect(host).not.toContain('accounts.defaultFor(');
@@ -177,7 +177,7 @@ describe('R1: the host resolves the ACTIVE account for launches, probes, Take Ov
         expect(source('src/main/genie-host.ts')).toContain('host.resumeLimit(record.provider);');
     });
     it('the window’s sign-in names the provider, and signs in the active account', () => {
-        expect(source('src/main/main.ts')).toContain('signIn!(record.provider)');
+        expect(source('src/main/host-sign-ins.ts')).toContain('return loginFor(provider, context);');
     });
 });
 

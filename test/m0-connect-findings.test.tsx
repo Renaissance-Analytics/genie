@@ -155,8 +155,11 @@ describe('3. a refusal on a drone says it is a drone — the role read again fro
         expect(reread).not.toHaveBeenCalled();
     });
 
-    it('wired: both the list and the grant go through it in main, with a fresh read of the role', () => {
-        const list = /workstations: async \(\) => \{([^]*?)\n {20}\},/.exec(main)?.[1] ?? '';
+    it('wired: both the list (genie-host’s owner operations) and the grant (main) go through it, with a fresh read of the role', () => {
+        // "Your workstations" is genie-host's answer for every client (Tynn #898 steps 2d-3b and 2d-4b2).
+        const ops = strip(readFileSync(new URL('../src/main/host-owner-ops.ts', import.meta.url), 'utf8'));
+        expect(ops).toMatch(/const rereadRole = async \(\): Promise<WorkstationRole \| null> => \{ await tynn\.readRole\(\); return tynn\.role\(\); \};/);
+        const list = /workstations: async \(\) => \{([^]*?)\n {12}\},/.exec(ops)?.[1] ?? '';
         const open = /ipcMain\.handle\('genie:relay-open'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
         for (const handler of [list, open]) {
             expect(handler).toContain('wordTynnRefusal(');

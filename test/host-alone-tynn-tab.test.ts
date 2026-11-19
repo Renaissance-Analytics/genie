@@ -36,7 +36,7 @@ function ports(tab: Record<string, unknown> = {}): HostAlonePorts {
     const engine = { probe: () => null, subscribe: () => () => {}, ledgerFor: () => [], rowsFor: () => [], turnsFor: () => 0, recentStderrFor: () => [], refusals: new Map(), needsNewDriver: () => false, notice: () => true } as unknown as HostAloneEngine;
     return {
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => '/w', startRefusal: () => null,
-        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false,
+        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true,
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
@@ -54,8 +54,8 @@ function ports(tab: Record<string, unknown> = {}): HostAlonePorts {
     } as unknown as HostAlonePorts;
 }
 
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
-    return hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone });
+function gate(alone: HostApi): HostApi {
+    return hostRemoteApi({ hostName: 'alphar', own: {}, alone });
 }
 
 beforeEach(async () => {
@@ -119,25 +119,29 @@ describe('the Tynn tab with no window', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected the window answers, and genie-host is not asked (CONTROL)', async () => {
+    it('genie-host answers it itself: no window is asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports());
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('workspaces.tynnBoard', ['tynn', {}])).toBe('window answered workspaces.tynnBoard');
-        expect(invoke).not.toHaveBeenCalled();
-        expect(requests).toEqual([]);
+        const api = gate(alone);
+        await api.invoke('workspaces.tynnBoard', ['tynn', {}]);
+        expect(invoke).toHaveBeenCalledWith('workspaces.tynnBoard', ['tynn', {}], undefined);
     });
 
-    it('the live view\'s change reads stay the window\'s own (CONTROL)', async () => {
-        await expect(gate(hostAloneApi(ports())).invoke('workspaces.tynnBoardChanges', ['tynn', {}, null, []])).rejects.toThrow('open Genie on alphar');
+    it('the live view\'s change reads are genie-host\'s too (Tynn #898 step 2d-3a): read through its Tynn account', async () => {
+        requests.length = 0;
+        const answer = await gate(hostAloneApi(ports())).invoke('workspaces.tynnBoardChanges', ['tynn', {}, 'c1', []]);
+        expect(JSON.stringify(answer)).not.toMatch(/open Genie on/);
+        expect(requests.length).toBeGreaterThan(0);
     });
 });
 
 describe('the wiring', () => {
     const src = (path: string) => readFileSync(path, 'utf8');
 
-    it('the window and genie-host answer through the same code', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) expect(src(file), file).toContain('workspaceTynnApi(');
+    it('genie-host answers every client, this machine\'s window too, through that code; main answers none itself', () => {
+        expect(src('src/main/host-alone-api.ts')).toContain('workspaceTynnApi(');
+        // main builds no host API (Tynn #898 step 2d-4b2): its window is served by genie-host's.
+        expect(src('src/main/main.ts')).not.toContain('workspaceTynnApi(');
     });
 
     it('genie-host gives it its own account and its own page reader, the one a window\'s page reads go through', () => {

@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { measureArtboardPage } from './artboard-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { installArtboardMainTrace, validateArtboardMainTrace } from './artboard-main-trace.mjs';
-import { createWallGapGauge, installMeasurementHostLaunch } from './artboard-gap-probe.mjs';
+import { createWallGapGauge, installMeasurementHostLaunch, readHostPhases } from './artboard-gap-probe.mjs';
 
 const WIN = process.platform === 'win32', BASELINE = process.argv.includes('--baseline'), OUT = resolve('smoke-out'), PORT = 9346, INSPECT = 9347, started = Date.now(), sessions = [], reports = [];
 const TRACE = process.argv.includes('--trace-main');
@@ -199,7 +199,7 @@ try {
     }
     async function measure(label, input, beforeRead = async () => ({})) {
         await page.evaluate('Object.assign(window.__artboardWire,{maxBytes:0,forbidden:0,pages:0,items:0,invalidPages:0,oversizedEvents:0});true');
-        await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.methods={};s.gap=0;s.worstGap=null;s.lastMethod=null;s.startedMs=s.last=performance.now();s.startedWallMs=Date.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;s.maxCallBytes=0;s.oversizedCalls=0;s.handles=[];s.gauge.reset();globalThis.__artboardPhases={events:[],dropped:0};return true;})()');
+        await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.methods={};s.gap=0;s.worstGap=null;s.lastMethod=null;s.startedMs=s.last=performance.now();s.startedWallMs=Date.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;s.maxCallBytes=0;s.oversizedCalls=0;s.handles=[];s.gauge.reset();return true;})()');
         await page.evaluate('((create)=>{const s=window.__artboardRow={ticks:0,last:performance.now(),maxGapMs:0,gauge:create()};s.timer=setInterval(()=>{const now=performance.now();s.maxGapMs=Math.max(s.maxGapMs,now-s.last);s.last=now;s.ticks++;s.gauge.beat();},16);return true;})((' + createWallGapGauge.toString() + '))');
         const at = async (step) => page.evaluate('(()=>{const s=window.__artboardRow;(s.marks??=[]).push([' + JSON.stringify(step) + ',Math.round(performance.now())]);return true;})()');
         await at('state-before'); const stateBefore = await page.evaluate('window.genieTest.localProtocol.state()');
@@ -207,17 +207,20 @@ try {
         await at('read'); const value = await run(input);
         await at('wire'); const wire = await page.evaluate('window.__artboardWire');
         await at('native');
-        const native = await main.evaluate('((s)=>({startedMs:s.startedMs,startedWallMs:s.startedWallMs,endedMs:performance.now(),endedWallMs:Date.now(),ticks:s.ticks,ticksBefore:s.ticksBefore,maxGapMs:s.gap,worstGap:s.worstGap,rssBefore:s.rssBefore,rssPeak:Math.max(s.rss,process.memoryUsage().rss),methods:s.methods,maxCallBytes:s.maxCallBytes,oversizedCalls:s.oversizedCalls,connections:s.handles.length,artboardPhases:globalThis.__artboardPhases,gapGauge:(s.gauge.beat(),s.gauge.snapshot())}))(globalThis.__artboardMain)');
+        const native = await main.evaluate('((s)=>({startedMs:s.startedMs,startedWallMs:s.startedWallMs,endedMs:performance.now(),endedWallMs:Date.now(),ticks:s.ticks,ticksBefore:s.ticksBefore,maxGapMs:s.gap,worstGap:s.worstGap,rssBefore:s.rssBefore,rssPeak:Math.max(s.rss,process.memoryUsage().rss),methods:s.methods,maxCallBytes:s.maxCallBytes,oversizedCalls:s.oversizedCalls,connections:s.handles.length,gapGauge:(s.gauge.beat(),s.gauge.snapshot())}))(globalThis.__artboardMain)');
+        // The build runs in genie-host (Tynn #898 step 2d-4b): its phases come from the owned host's log, in this row's wall window.
+        const launchNow = await main.evaluate('globalThis.__artboardHostLaunch?.snapshot()');
+        const artboardPhases = readHostPhases(readFileSync(join(root, '.genie', 'logs', 'genie-host.log'), 'utf8'), launchNow?.injectedPids ?? [], native.startedWallMs, native.endedWallMs);
         await at('state-after'); const stateAfter = await page.evaluate('window.genieTest.localProtocol.state()');
         await at('end');
         const rowClock = await page.evaluate('(()=>{const s=window.__artboardRow;clearInterval(s.timer);s.gauge.beat();const gauge=s.gauge.snapshot();return {ticks:s.ticks,maxGapMs:Math.max(s.maxGapMs,performance.now()-s.last),gaps:gauge.gaps,dropped:gauge.dropped,marks:s.marks??[]};})()');
-        const row = { label, ...value, wire, native, rowClock, ...extra }; reports.push(row); console.log('ARTBOARD ' + JSON.stringify(row));
+        const row = { label, ...value, wire, native, artboardPhases, rowClock, ...extra }; reports.push(row); console.log('ARTBOARD ' + JSON.stringify(row));
         demand(value.heartbeat.before > 0 && value.heartbeat.after > 0 && value.concurrentSettings.ok && native.ticks > native.ticksBefore, 'ArtBoard live clock and concurrent settings controls');
         demand(stateBefore.phase === 'ready' && stateAfter.phase === 'ready' && stateBefore.revision === stateAfter.revision, 'the app keeps its same ready page connection');
         demand(wire.maxBytes <= 1048576 && wire.forbidden === 0 && wire.invalidPages === 0 && wire.oversizedEvents === 0 && native.oversizedCalls === 0, 'ArtBoard frame/content/metadata limits');
         demand(native.gapGauge.dropped === 0 && value.heartbeat.dropped === 0 && rowClock.dropped === 0, 'the ArtBoard measurement gap gauges dropped records');
         if (!BASELINE) {
-            demand(native.artboardPhases?.dropped === 0 && ['metadata-build', 'artifact-open', 'projection'].every(phase => native.artboardPhases.events.some(event => event.phase === phase)) && !native.artboardPhases.events.some(event => event.phase === 'native-build' || event.phase === 'resolve-board'), 'ArtBoard metadata/file-source timing positive controls');
+            demand(artboardPhases.dropped === 0 && ['metadata-build', 'artifact-open', 'projection'].every(phase => artboardPhases.events.some(event => event.phase === phase)) && !artboardPhases.events.some(event => event.phase === 'native-build' || event.phase === 'resolve-board'), 'ArtBoard metadata/file-source timing positive controls');
             demand(native.methods['artboard.read'] === 1 && native.methods['blob.open'] > 0 && wire.pages >= 2 && wire.items === input.expect.count && native.connections === 1, 'ArtBoard metadata pages and blobs use the app connection');
             demand(native.maxGapMs < 250 + idle.mainMs && value.heartbeat.maxGapMs < 250 + idle.pageClockMs && rowClock.maxGapMs < 250 + idle.pageClockMs && native.rssPeak - native.rssBefore < 100 * 1024 * 1024, 'ArtBoard transfer blocked a clock or retained excessive main memory');
         }
@@ -265,7 +268,8 @@ finally {
     }
     try { await page?.evaluate('clearInterval(window.__artboardRow?.timer);true'); } catch {}
     try { await main?.evaluate('(async()=>{await globalThis.__artboardPost?.stop();delete globalThis.__artboardPost;delete globalThis.__artboardBoard;globalThis.__artboardMain?.stop();return true;})()'); } catch {}
-    try { await main?.evaluate('process.getBuiltinModule("node:module").createRequire(process.execPath)("electron").app.quit();true'); } catch {}
+    // Ended, not quit (Tynn #916): a quit asks first when anything runs, and that box blocks main until genie-host's hang watchdog starts a new window.
+    try { await main?.evaluate('process.getBuiltinModule("node:module").createRequire(process.execPath)("electron").app.exit(0);true'); } catch {}
     for (const session of sessions) session.socket.close(); await sleep(1000); if (app?.exitCode === null) { try { app.kill('SIGTERM'); } catch {} }
     const record = root ? json(join(root, '.genie', 'runtime', 'host.json')) : null;
     if (hostRecord && record?.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt && Number.isFinite(record.startedAt) && record.startedAt >= started) { try { process.kill(record.pid, 'SIGTERM'); } catch {} }
@@ -277,7 +281,7 @@ finally {
     const finalHead = head(); if (initialHead && finalHead && initialHead !== finalHead) { code = 1; failure = 'checkout HEAD changed during the measurement'; }
     const scriptHashes = {}; for (const path of ['scripts/artboard-cdp.mjs', 'scripts/artboard-measure-page.mjs', 'scripts/artboard-main-trace.mjs', 'scripts/artboard-gap-probe.mjs', 'scripts/artboard-host-gauge.mjs', 'src/main/official-tools.ts', 'src/main/stall-profile.ts']) { try { scriptHashes[path] = sha(readFileSync(path)); } catch { scriptHashes[path] = null; } }
     const result = { code, baseline: BASELINE, traceMain: TRACE, platform: process.platform, head: finalHead, initialHead, scriptHashes, root, failure, reports, startup,
-        limits: ['P4 server stays in main', 'startup and one-time scoped native-runner import reported separately', 'direct existing native plugin runner in owned Electron main; MCP/provider dispatch unmeasured', 'oracle hash verification outside transfer latency', '16ms sampled main RSS; transient peak and genie-host peak unmeasured', 'physical VM and installed-ASAR gates remain coordinator-owned'] };
+        limits: ['the ArtBoard build runs in genie-host; its phases are read from the owned host log by pid and wall window', 'startup and one-time scoped native-runner import reported separately', 'direct existing native plugin runner in owned Electron main; MCP/provider dispatch unmeasured', 'oracle hash verification outside transfer latency', '16ms sampled main RSS; transient peak and genie-host peak unmeasured', 'physical VM and installed-ASAR gates remain coordinator-owned'] };
     mkdirSync(OUT, { recursive: true }); writeFileSync(join(OUT, 'artboard-result.json'), JSON.stringify(result, null, 2));
     for (const [name, path] of [['lifecycle', root ? join(root, '.genie', 'runtime', 'lifecycle.log') : null], ['electron', ownedElectronLog ? join(OUT, 'artboard-electron.log') : null]]) {
         try { const tail = logTail(path); writeFileSync(join(OUT, 'artboard-' + name + '-tail.log'), tail); console.log('ARTBOARD_LOG_TAIL ' + name + ' ' + JSON.stringify(tail)); } catch { console.log('ARTBOARD_LOG_TAIL ' + name + ' unavailable'); }

@@ -49,7 +49,7 @@ async function droneHost() {
     const live: Array<{ close(): void }> = [];
     const alone: HostApi = { invoke: async () => null, onEvent: () => () => {}, workspaceOfAgent: () => null };
     const host = new RemoteHost({
-        api: hostRemoteApi({ hostName: 'drone', own: {}, window: { connected: () => false, invoke: async () => null }, alone }),
+        api: hostRemoteApi({ hostName: 'drone', own: {}, alone }),
         hostName: 'drone', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing,
         transport: { onConnection: (l) => { accept = l; return () => { accept = null; }; } },
     });

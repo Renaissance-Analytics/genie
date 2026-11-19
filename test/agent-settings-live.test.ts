@@ -64,9 +64,10 @@ describe('the registry names the agent whose record changed', () => {
     });
 });
 
-describe('main pushes the agent detail when its record changes', () => {
-    // Comments stripped first, so a sentence about the wiring cannot stand in for the wiring.
-    const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8')
+describe('the agent detail is pushed when its record changes', () => {
+    // Comments stripped first, so a sentence about the wiring cannot stand in for the wiring. Every client is served by
+    // genie-host's answers (Tynn #898 step 2d-4b2), so they are where the registry's record changes are given.
+    const hostAlone = readFileSync(new URL('../src/main/host-alone-api.ts', import.meta.url), 'utf8')
         .split(/\r?\n/)
         .map((line) => line.replace(/\/\/.*$/, ''))
         .join('\n');
@@ -83,7 +84,7 @@ describe('main pushes the agent detail when its record changes', () => {
         expect(heard).toEqual(['record', 'session']);
     });
 
-    it('a remote connection: the host api is given the registry\'s record changes', () => {
-        expect(main.match(/subscribeAgentRecords:\s*\(cb\)\s*=>\s*registry!\.subscribeAgentRecords\(cb\)/g) ?? []).toHaveLength(1);
+    it('a remote connection: genie-host\'s host api is given the registry\'s record changes', () => {
+        expect(hostAlone.match(/subscribeAgentRecords:\s*\(listener\)\s*=>\s*registry\.subscribeAgentRecords\(listener\)/g) ?? []).toHaveLength(1);
     });
 });

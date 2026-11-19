@@ -160,6 +160,9 @@ describe('the window delegates the WIP door', () => {
     // P4 family 12 (Tynn #561): the HostApi is the one way in; the native IPC handler is gone.
     it('the HostApi uses the host-backed door, and no native IPC handler is left', () => {
         expect(main).not.toContain("'genie:workspace-tynn-page'");
-        expect(main).toContain('...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage)');
+        // genie-host's answers serve every client's Tynn tab (Tynn #898 step 2d-4b2: main builds no host API), over its own
+        // board and page reader.
+        expect(readFileSync(new URL('../src/main/host-alone-api.ts', import.meta.url), 'utf8')).toContain('...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query))');
+        expect(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8')).toContain('tynnTab: { board: hostTynnBoard, readPage: readHostTynnPage }');
     });
 });

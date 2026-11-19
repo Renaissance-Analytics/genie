@@ -14,7 +14,7 @@ import { loginRoute, loginTerminalOf, LoginHost } from '../src/main/login-host.j
 const source = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8').replace(/\r\n/g, '\n');
 
 describe('R2: what the person is told to do', () => {
-    it('Claude Code: log out, then log in and choose the other account', () => {
+    it('Claude Code: log out, then log in and choose a different account', () => {
         const words = accountSwitchSteps('claude').join('\n');
         expect(words).toContain('/logout');
         expect(words).toContain('/login');

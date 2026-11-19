@@ -139,29 +139,31 @@ describe('the agent view tabs and its settings sub-tabs are react-fancy Tabs', (
     });
 });
 
-describe('the agent’s breadcrumb is react-fancy Breadcrumbs', () => {
+describe('the agent’s own views are react-fancy Tabs in the bar, and there are no crumbs', () => {
+    /*
+     * The crumbs ("Tynn.ai / atlas") went with the one bar (the owner on beta.64: no row duplicating the tab's name); the
+     * agent's Stream/Changes/Shells/Settings are a segmented control at the bar's right end: still a menu, so still Tabs.
+     */
     const session = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as unknown as LiveSession;
     const html = renderToStaticMarkup(
         <AgentView agent={{ id: 'a1', name: 'atlas', provider: 'claude', fidelity: 'declared', cwd: '/w/tynn' }} session={session} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null}
             onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} />,
     );
 
-    it('a <nav aria-label="Breadcrumb">: the workspace is a crumb that leads back, the agent is the current page', () => {
-        expect(html).toMatch(/<nav data-react-fancy-breadcrumbs="" aria-label="Breadcrumb"/);
-        const crumb = control(html, 'data-crumb="tynn"')!;
-        expect(crumb.open).toContain('data-react-fancy-breadcrumbs-item=""');
-        expect(crumb.open).not.toContain(BUTTON);
-        expect(crumb.open).toContain('data-nav="genie://workspace/tynn"');
-        expect(crumb.text).toBe('Tynn.ai');
-        // The title is ON the crumb element: a truncated crumb is read whole only through it.
-        expect(crumb.open).toContain('title="Back to Tynn.ai"');
-        expect(html).toMatch(/<span(?=[^>]*data-agent-name="")[^>]*title="atlas"/);
-        expect(html).toMatch(/<span(?=[^>]*data-react-fancy-breadcrumbs-item="")(?=[^>]*aria-current="page")[^>]*data-agent-name=""[^>]*>atlas<\/span>/);
+    it('each view is a react-fancy tab (role="tab", not a Button), named; the one on screen is selected', () => {
+        const views = html.slice(html.indexOf('data-agent-subviews'), html.indexOf('data-bar-actions'));
+        for (const t of ['stream', 'changes', 'shells', 'settings']) {
+            const tab = control(views, `data-tab="${t}"`)!;
+            expect(tab, t).toMatchObject({ tag: 'button', tab: true });
+            expect(tab.open, t).not.toContain(BUTTON);
+            expect(tab.open, t).toMatch(/aria-label="[A-Z][a-z]+"/);
+        }
+        expect(control(views, 'data-tab="stream"')!.open).toContain('aria-selected="true"');
     });
 
-    it('the slash is the Breadcrumbs separator (decoration, hidden from a screen reader), not part of the crumb’s name', () => {
-        const nav = html.slice(html.indexOf('data-react-fancy-breadcrumbs=""'), html.indexOf('</nav>', html.indexOf('data-react-fancy-breadcrumbs=""')));
-        expect(nav).toMatch(/<span aria-hidden="true"><span[^>]*>\/<\/span><\/span>/);
+    it('no breadcrumbs anywhere on the page (COUNTED: zero)', () => {
+        expect(html.match(/data-react-fancy-breadcrumbs/g) ?? []).toHaveLength(0);
+        expect(html).not.toContain('data-crumb=');
     });
 });
 

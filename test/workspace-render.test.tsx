@@ -43,13 +43,14 @@ describe('the Workspace surface, before any terminal exists', () => {
     });
 
     // REWRITTEN 2026-11-16 (the owner: "the different headers based on the view"): the one ViewHeader, the agent view's.
-    it('shows the workspace name and path in the one view header', () => {
+    // REWRITTEN 2026-11-17 (the owner on beta.64: one bar, "tabs along the top"): no header row; the strip is the bar.
+    it('draws the one bar, the workspace\'s path the selected tab\'s tooltip', () => {
         const { terminals } = fakeTerminals();
-        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
+        const html = renderToStaticMarkup(<Workspace view="home" workspace={workspace} terminals={terminals} />);
 
-        expect(html).toContain('>tynn<');
-        expect(html).toContain('C:\\_Projects\\tynn.ai');
-        expect(html).toMatch(/<header data-view-header=""[^>]*\bmin-h-11\b/);
+        expect(html).toMatch(/<nav data-view-header=""[^>]*data-top-bar=""[^>]*\bmin-h-8\b/);
+        expect(html).toContain('title="C:\\_Projects\\tynn.ai"');
+        expect(html).not.toContain('<header data-view-header');
     });
 
     it('offers a way to open a terminal — TWICE, in the strip and in the empty state', () => {

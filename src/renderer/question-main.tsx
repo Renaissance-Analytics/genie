@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client';
 import type { QuestionMedia } from '../core/question-media.js';
 import { extractFileRefs, type AskFileRef } from '../core/ask-file-refs.js';
 import type { DeckItem } from '../core/deck.js';
+import type { DisplayPost } from '../core/artboard.js';
+import { visualRefsOf } from '../core/question-visuals.js';
 import { activeQuestion, dropDraft, mergeDrafts, putDraft, type QuestionDraft, type QuestionDrafts } from '../core/question-drafts.js';
 import { QuestionApp } from './components/QuestionApp.js';
 import { registerAppIcons } from './icons.js';
@@ -33,6 +35,8 @@ interface QuestionBridge {
     file?(id: string, path: string): Promise<{ ok: true; path: string; text: string } | { ok: true; path: string; media: QuestionMedia } | { ok: false; reason: string }>;
     openInFiles?(id: string, path: string): Promise<boolean>;
     drawer?(open: boolean): Promise<void>;
+    /** The shown question's visuals (Tynn #835): its ArtBoard posts, from its workspace or the machine that asked. */
+    visuals?(id: string): Promise<{ ok: true; posts: DisplayPost[] } | { ok: false; reason: string }>;
 }
 type Drawer = { path: string; text?: string; media?: QuestionMedia; line?: number | null; error?: string };
 
@@ -54,6 +58,8 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
     const [drafts, setDrafts] = useState<QuestionDrafts>({});
     const [existing, setExisting] = useState<{ id: string; set: ReadonlySet<string> | null } | null>(null);
     const [drawer, setDrawer] = useState<(Drawer & { id: string }) | null>(null);
+    // The drawer filling the window (core/preview-full.ts): it belongs to the file open, so another file or none puts it back.
+    const [drawerFull, setDrawerFull] = useState<{ id: string; path: string } | null>(null);
     useEffect(() => {
         const receive = (v: View) => {
             setView(v);
@@ -91,6 +97,17 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
             .catch(() => { if (live) setExisting({ id: shown, set: null }); });
         return () => { live = false; };
     }, [bridge, shown, named]);
+    // THE SHOWN QUESTION'S VISUALS (Tynn #835): asked for when the question shown (or its revision) changes and it has any.
+    const [visuals, setVisuals] = useState<{ key: string; posts: DisplayPost[]; error?: string } | null>(null);
+    const visualKey = shownItem && shownItem.answer.kind === 'form' && visualRefsOf(shownItem.answer.questions ?? []).length > 0 ? `${shownItem.id}:${shownItem.revision ?? 0}` : '';
+    useEffect(() => {
+        if (!shown || visualKey === '' || !bridge.visuals) return;
+        let live = true;
+        bridge.visuals(shown)
+            .then((r) => { if (live) setVisuals(r.ok ? { key: visualKey, posts: r.posts } : { key: visualKey, posts: [], error: r.reason }); })
+            .catch((error: unknown) => { if (live) setVisuals({ key: visualKey, posts: [], error: error instanceof Error ? error.message : String(error) }); });
+        return () => { live = false; };
+    }, [bridge, shown, visualKey]);
     // The drawer belongs to the question it was opened from: another question shown closes it, and the window narrows back.
     const open = drawer !== null && drawer.id === shown ? drawer : null;
     useEffect(() => {
@@ -110,6 +127,7 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
     };
     const closeFile = () => {
         setDrawer(null);
+        setDrawerFull(null);
         void bridge.drawer?.(false);
     };
     return (
@@ -121,6 +139,9 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
             drafts={drafts}
             existing={existing !== null && existing.id === shown ? existing.set : null}
             drawer={open}
+            visuals={visuals !== null && visuals.key === visualKey && visualKey !== '' ? { posts: visuals.posts, ...(visuals.error ? { error: visuals.error } : {}) } : null}
+            drawerFull={open !== null && drawerFull !== null && drawerFull.id === open.id && drawerFull.path === open.path}
+            onDrawerFull={(full) => setDrawerFull(full && open ? { id: open.id, path: open.path } : null)}
             onOpenInFiles={(path) => { if (shown) void bridge.openInFiles?.(shown, path); }}
             {...(bridge.file ? { onOpenFile: openFile, onCloseFile: closeFile } : {})}
             onPick={(id) => {

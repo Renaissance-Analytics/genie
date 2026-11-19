@@ -33,7 +33,7 @@ import { chatPickAfter, chatSubjectFor, resolveChatAgent } from '../core/chat-sc
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
 import { rewrittenAddress, routeFor, windowBridge, windowChromeOf } from './window-address.js';
-import { answerOutcome, remoteQuestionFeed } from './remote-questions-feed.js';
+import { answerOutcome, remoteQuestionFeed, visualsOutcome } from './remote-questions-feed.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -1095,11 +1095,24 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => { window.genie?.remoteQuestions?.report(questionFeed.host, questionFeed.items); }, [questionFeed.host, questionFeed.items]);
     const questionAct = useRef<((action: FeatureAction) => Promise<unknown>) | null>(null);
     questionAct.current = remote.state?.connected === true && resolvedBridge ? (action) => resolvedBridge.features.act(action) : null;
-    useEffect(() => window.genie?.remoteQuestions?.onAct?.((action) => answerOutcome(() => {
-        const act = questionAct.current;
-        if (!act) throw new Error('this window is no longer connected to that machine');
-        return act(action);
-    })), []);
+    // The connected machine's ArtBoard, for a question's visuals (Tynn #835): the reader this window's ArtBoard tab uses.
+    const questionArtboard = useRef<NonNullable<GenieBridge['artboard']> | null>(null);
+    questionArtboard.current = remote.state?.connected === true ? resolvedBridge?.artboard ?? null : null;
+    useEffect(() => window.genie?.remoteQuestions?.onAct?.((action) => {
+        // A connected machine's question's VISUALS (Tynn #835): read from its ArtBoard, through this window, as its tab reads them.
+        if ((action as { kind: string }).kind === 'deck.visuals') {
+            const artboard = questionArtboard.current;
+            return visualsOutcome((action as unknown as { item: DeckItem }).item, (workspaceId) => {
+                if (!artboard) throw new Error('this window is no longer connected to that machine');
+                return artboard.read(workspaceId);
+            });
+        }
+        return answerOutcome(() => {
+            const act = questionAct.current;
+            if (!act) throw new Error('this window is no longer connected to that machine');
+            return act(action);
+        });
+    }), []);
     // A workspace's designed tabs, once its settings are read (its tab addresses resolve from them).
     const [tabsByWorkspace, setTabsByWorkspace] = useState<ReadonlyMap<string, ReadonlyArray<{ id: string; name: string }>>>(() => new Map());
     const addressContext: AddressContext | null = snapshot.workstation && snapshot.workspaces
@@ -1203,12 +1216,23 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
     useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed') readAccounts(); }), [resolvedBridge, readAccounts]);
     // DESIGN SIGN-IN for the machine (Tynn #480): one click from the Claude popover or Settings.
+    /**
+     * ANOTHER MACHINE'S TERMINAL, HERE (Tynn #529 part A; sign-ins, Tynn #896): its host started a Take Over TUI or a
+     * provider's own login and answered with a ticket; this window opens its own window on it. This machine's window is
+     * opened by its host, so a local answer carries no ticket and nothing is done here.
+     */
+    const openCompanion = useCallback((r: { ok: true; terminalId?: string; ticket?: string; route?: string }, title: string) => {
+        if (!remote.state?.connected || !r.ticket || !r.terminalId) return;
+        const opened = remote.url ? window.genie?.remoteWindows?.openTakeOver?.(remote.url, r.terminalId, r.ticket, remote.state.host, r.route) : undefined;
+        if (!opened) { showAlert({ title, body: 'This window cannot open a Take Over window for another machine.' }); return; }
+        void opened.then((o) => { if (!o.ok) showAlert({ title, body: o.reason }); });
+    }, [remote.state?.connected, remote.state?.host, remote.url, showAlert]);
     const designSignIn = useCallback(() => {
-        void resolvedBridge?.designSignIn?.().then((r) => { if (!r.ok) showAlert({ title: 'Design sign-in could not start', body: r.reason }); }, () => {});
-    }, [resolvedBridge, showAlert]);
+        void resolvedBridge?.designSignIn?.().then((r) => { if (!r.ok) { showAlert({ title: 'Design sign-in could not start', body: r.reason }); return; } openCompanion(r, 'Design sign-in'); }, () => {});
+    }, [resolvedBridge, showAlert, openCompanion]);
     const switchAccount = useCallback((provider: string, choose?: string) => {
-        void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) showAlert({ title: 'The switch could not start', body: r.reason }); }, () => {});
-    }, [resolvedBridge, showAlert]);
+        void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) { showAlert({ title: 'The switch could not start', body: r.reason }); return; } openCompanion(r, 'Switch account'); }, () => {});
+    }, [resolvedBridge, showAlert, openCompanion]);
     const accountsAct = useCallback(async (action: AccountsAction): Promise<AccountsActResult> => {
         const r = (await resolvedBridge?.accountsAct?.(action)) ?? { ok: false as const, reason: 'Genie’s host is not connected yet.' };
         readAccounts();
@@ -1225,7 +1249,7 @@ function DesktopApp({ bridge }: AppProps) {
         // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
         if (action.kind === 'account-switch') {
             const outcome = accountSwitchOutcomeOf(action.outcome);
-            if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider); }));
+            if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider).then((r) => { if (r.ok) openCompanion(r, 'Switch account'); }, () => {}); }));
             return;
         }
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
@@ -1644,6 +1668,17 @@ function DesktopApp({ bridge }: AppProps) {
     const [modelsAsked, setModelsAsked] = useState(0);
     // A Refresh is ONE ask of the provider again (it starts its CLI), never carried over to the next agent opened.
     const refreshModels = useRef(false);
+    /*
+     * A PROVIDER'S PROGRAM (Tynn #577; #897 2c-3): the .exe behind a batch wrapper, picked on the HOST's disk with this
+     * window's host-disk picker (never this machine's own dialog), so any of the owner's windows can choose it; genie-host
+     * keeps it. Cancelled = nothing chosen and nothing said. A choice reads the models again.
+     */
+    const chooseProviderProgram = pickHostPath && resolvedBridge?.chooseProviderProgram
+        ? (provider: string): Promise<{ ok: true } | { ok: false; reason?: string }> =>
+            pickHostPath({ mode: 'file', title: `Choose ${provider}'s program`, extensions: ['exe', 'com'] })
+                .then((picked) => (typeof picked === 'string' ? resolvedBridge.chooseProviderProgram!(provider, picked) : { ok: false as const }))
+                .then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; })
+        : null;
     const modelsAgent = useRef<string | null>(null);
     const modelsWanted = parsed.surface === 'agent' && parsed.tab === 'settings';
     const modelsProvider = detail?.agent.provider ?? null;
@@ -1687,7 +1722,7 @@ function DesktopApp({ bridge }: AppProps) {
               model: detail?.agent.model ?? null,
               ...(modelChoices !== undefined ? { models: modelChoices } : {}),
               onRefreshModels: () => { refreshModels.current = true; setModelsAsked((n) => n + 1); },
-              ...(resolvedBridge.chooseProviderProgram ? { onChooseProviderProgram: (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) } : {}),
+              ...(chooseProviderProgram ? { onChooseProviderProgram: chooseProviderProgram } : {}),
               onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', model ?? 'the provider default', r.apply ?? { when: 'next-start' }) : r.reason })); if (r.ok) setModelsAsked((n) => n + 1); }); },
               onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools', r.apply ?? { when: 'next-start' }) : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
@@ -2048,6 +2083,7 @@ function DesktopApp({ bridge }: AppProps) {
             <FlowEditorWindow
                 flowId={parsed.flowId}
                 workspaceId={parsed.workspaceId}
+                run={parsed.run ?? null}
                 hibernated={flowWorkspaceId !== null && hiddenWorkspaceIds.has(flowWorkspaceId)}
                 data={features}
                 workspaces={snapshot.workspaces ?? []}
@@ -2221,6 +2257,8 @@ function DesktopApp({ bridge }: AppProps) {
             onSend={(id, text, attachments) => (id ? send(id, text, attachments ?? []) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: 'No agent to send to.' }))}
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}
+            // Withdraw / Edit a queued message (Tynn #843): the host takes it back, here and from a Pilot window alike.
+            onResolveQueued={chatThread && resolvedBridge ? (promptId, action) => resolvedBridge.resolvePrompt(chatThread.agentId, promptId, action) : undefined}
             answeringApproval={answering}
             approvalRefusal={approvalRefusal}
             onAnswerApproval={(id, optionId, note, approval) => answerApproval(id, optionId, note ?? '', approval ?? null)}
@@ -2332,7 +2370,6 @@ function DesktopApp({ bridge }: AppProps) {
                 // The route says where the panel is: on this workspace, `?files=detached`.
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address) : undefined}
-            onPopOutTerminals={resolvedBridge?.popOutTerminals ? (id) => { void resolvedBridge.popOutTerminals!(id); } : undefined}
             onBringBackFiles={(id) => moveFilePanel(() => filesWindows?.bringBack(id), () => {
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
             }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }), () => (window.location.hash.slice(1) || DEFAULT_ROUTE) === address)}
@@ -2346,26 +2383,25 @@ function DesktopApp({ bridge }: AppProps) {
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => {
                 if (!r.ok) { if (!remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); return; }
                 // Another machine's agent (Tynn #529 part A): its TUI started there; its Take Over window opens HERE.
-                if (!remote.state?.connected || !r.ticket) return;
-                const opened = remote.url ? window.genie?.remoteWindows?.openTakeOver?.(remote.url, r.terminalId, r.ticket, remote.state.host) : undefined;
-                if (!opened) { showAlert({ title: 'Take over', body: 'This window cannot open a Take Over window for another machine.' }); return; }
-                void opened.then((o) => { if (!o.ok) showAlert({ title: 'Take over', body: o.reason }); });
+                openCompanion(r, 'Take over');
             }, (error: unknown) => showAlert({ title: 'Take over', body: error instanceof Error ? error.message : String(error) })); }}
             {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
-            {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
+            {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId).then((r) => { if (r.ok) openCompanion(r, 'Terminal'); return r; }) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
             onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId, intent) => { void resolvedBridge?.cancelTurn(agentId, intent); }}
+            // Stop this call (Tynn #855): a refusal (no process of its own, not running) is said, never dropped.
+            onStopToolCall={(agentId, toolCallId) => { void resolvedBridge?.stopToolCall?.(agentId, toolCallId).then((r) => { if (!r.ok) showAlert({ title: 'Stop this call', body: r.reason }); }, () => {}); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
-            onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
+            onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId).then((r) => { if (r.ok) openCompanion(r, 'Log in'); else showAlert({ title: 'Log in', body: r.reason }); }, () => {}); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
-            onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
-            onChooseProviderProgram={resolvedBridge?.chooseProviderProgram ? (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) : undefined}
+            onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId).then((r) => { if (r.ok) openCompanion(r, 'Design sign-in'); else showAlert({ title: 'Design sign-in', body: r.reason }); }, () => {}); }}
+            onChooseProviderProgram={chooseProviderProgram ?? undefined}
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}
-            // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
+            // The title bar's search icon (left of GApps; the box until beta.65) opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
             onOpenPalette={() => setPaletteOpen(true)}
             windowScope={windowScope}
         />

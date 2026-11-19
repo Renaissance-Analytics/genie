@@ -318,20 +318,3 @@ export function traceSummary(events, { top = 15 } = {}) {
     };
 }
 
-/**
- * The row's own fixture git, bounded (Tynn #536: spawnSync git ETIMEDOUT on the Windows runner, genie#1718). `run` is
- * tried up to `attempts` times while it times out, `reset` between tries; any other failure is thrown at once.
- */
-export function retryOnTimeout(run, { attempts = 2, reset = () => {} } = {}) {
-    const tries = [];
-    for (let i = 1; ; i += 1) {
-        const started = Date.now();
-        try { const value = run(i); tries.push({ attempt: i, ms: Date.now() - started, ok: true }); return { value, tries }; }
-        catch (error) {
-            const timedOut = error?.code === 'ETIMEDOUT' || /ETIMEDOUT/.test(String(error?.message ?? ''));
-            tries.push({ attempt: i, ms: Date.now() - started, ok: false, timedOut });
-            if (!timedOut || i >= attempts) { error.tries = tries; throw error; }
-            reset(i);
-        }
-    }
-}

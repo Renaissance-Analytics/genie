@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CLIPBOARD_WRITE_CHANNEL } from '../src/core/clipboard-wire.js';
-import { IPC_INVENTORY } from '../src/core/ipc-inventory.js';
+import { IPC_INVENTORY, MOVE_STEPS, WINDOW_CAPABILITIES } from '../src/core/ipc-inventory.js';
 import { LOCAL_FRAME_CHANNELS } from '../src/core/local-frame.js';
 import { FEATURE_CHANNELS } from '../src/renderer/bridge.js';
 
@@ -67,14 +67,57 @@ describe('P4 IPC inventory', () => {
         expect(new Set(inventoried).size).toBe(inventoried.length);
     });
 
-    const KNOWN = /^(protocol:.+|protocol-door|window-port|browser-process|later:.+)$/;
-    it('names a protocol method, a window port, the Genie browser process, or the reason it is deferred', () => {
-        for (const [, destination] of IPC_INVENTORY) expect(destination).toMatch(KNOWN);
+    /*
+     * THE GUARD (Tynn #898 step 2e, story #899). A client is a dumb terminal: the window keeps only what is the window's own.
+     * Every row is the protocol door, another process's, a NAMED window capability, or a NAMED step that moves it onto the
+     * one protocol. "window-port" and "later:" said neither what the window keeps nor why, and are gone.
+     */
+    const KNOWN = new RegExp(`^(protocol-door|browser-process|doctor-process|window:(${WINDOW_CAPABILITIES.join('|')})|move:(${MOVE_STEPS.join('|')}))$`);
+    it('names the protocol door, another process, a window capability, or the step that moves it', () => {
+        for (const [channel, destination] of IPC_INVENTORY) expect(destination, channel).toMatch(KNOWN);
+    });
+
+    it('the window capabilities are exactly the window-local operations, and nothing that reaches the host', () => {
+        expect([...WINDOW_CAPABILITIES].sort()).toEqual(['chrome', 'clipboard', 'feature-effect', 'file-dialog', 'gapp-window', 'host-wait', 'os-shell', 'pop-out', 'site-panel', 'stall-report', 'take-over-window', 'trash'].sort());
     });
 
     it('CONTROL: a destination nobody knows is not one', () => {
         expect('browser-proces').not.toMatch(KNOWN);
-        expect('later').not.toMatch(KNOWN);
+        expect('window-port').not.toMatch(KNOWN);
+        expect('later:question window').not.toMatch(KNOWN);
+        expect('window:agents').not.toMatch(KNOWN);
+        expect('move:2z').not.toMatch(KNOWN);
+        expect('window:chrome').toMatch(KNOWN);
+        expect('move:2b').toMatch(KNOWN);
+    });
+
+    /*
+     * THE RATCHET: what still reaches a host feature off the one protocol, frozen here, by the step that moves it (the
+     * coordinator, 2026-11-19). This list only shrinks: a channel leaves it in the PR that moves it. A new row cannot join
+     * it, and a row on it cannot be re-labelled a window capability while its handler is still registered.
+     */
+    const STILL_TO_MOVE: Readonly<Record<string, string>> = {
+        // 2f (#912): the question window's answers and reads, the device/relay frame path, the relay browser open, host-wait's act.
+        'question:answer': '2f', 'question:dismiss': '2f', 'question:files': '2f', 'question:file': '2f', 'question:visuals': '2f',
+        'genie:device-open': '2f', 'genie:relay-open': '2f', 'genie:relay-send': '2f', 'genie:relay-close': '2f',
+        'genie:browser-window-open': '2f', 'host-wait:act': '2f',
+    };
+    const moveRows = (rows: readonly (readonly [string, string])[]) => rows.filter(([, d]) => d.startsWith('move:')).map(([c, d]) => [c, d.slice('move:'.length)] as const);
+    const ratchet = (rows: readonly (readonly [string, string])[], registeredNow: readonly string[]) => ({
+        joined: moveRows(rows).filter(([c, step]) => STILL_TO_MOVE[c] !== step).map(([c]) => c).sort(),
+        relabelled: Object.keys(STILL_TO_MOVE).filter((c) => registeredNow.includes(c) && !moveRows(rows).some(([m]) => m === c)).sort(),
+    });
+
+    it('THE RATCHET: every still-to-move row is on the frozen list under its step, and every frozen channel still registered is still to move', () => {
+        expect(ratchet(IPC_INVENTORY, registered)).toEqual({ joined: [], relabelled: [] });
+    });
+
+    it('CONTROL: the ratchet notices a new still-to-move row and a frozen one re-labelled a window capability', () => {
+        expect(ratchet([['genie:new-host-thing', 'move:2b']], []).joined).toEqual(['genie:new-host-thing']);
+        expect(ratchet([['question:answer', 'move:2c']], []).joined).toEqual(['question:answer']);
+        expect(ratchet([['question:answer', 'window:pop-out']], ['question:answer']).relabelled).toEqual(['question:answer']);
+        // A frozen channel whose handler is gone needs no row (the stale check removes it): the list shrinks.
+        expect(ratchet([], [])).toEqual({ joined: [], relabelled: [] });
     });
 
     // Tynn #562: which process answers each browser row. The browser process runs genie-browser-electron.ts; the window keeps
@@ -94,15 +137,23 @@ describe('P4 IPC inventory', () => {
             expect(readFileSync(src('browser-process.ts'), 'utf8')).toContain("from './genie-browser-electron.js'");
         });
 
-        it('a window port is never registered in the browser process\'s file', () => {
-            expect(rowsFor('window-port').filter((channel) => browserFile.includes(channel))).toEqual([]);
+        const windowRows = () => IPC_INVENTORY.filter(([, d]) => d.startsWith('window:')).map(([channel]) => channel);
+
+        it('a window capability is never registered in the browser process\'s file', () => {
+            expect(windowRows().filter((channel) => browserFile.includes(channel))).toEqual([]);
         });
 
-        it('the site panels and the window\'s opener are window ports', () => {
+        it('doctor-process is exactly what doctor mode registers besides the clipboard, and no window row is doctor\'s', () => {
+            const doctorFile = channels(readFileSync(src('doctor.ts'), 'utf8'), 'doctor.ts').filter((channel) => channel !== CLIPBOARD_WRITE_CHANNEL);
+            expect(doctorFile.length).toBeGreaterThan(0);
+            expect(rowsFor('doctor-process').sort()).toEqual([...doctorFile].sort());
+        });
+
+        it('the site panels are the window\'s site-panel capability; the window\'s opener moves in 2f (its relay mode)', () => {
             const panels = channels(readFileSync(src('site-panels-electron.ts'), 'utf8'), 'site-panels-electron.ts');
             expect(panels.length).toBeGreaterThan(0);
-            expect(panels.filter((channel) => !rowsFor('window-port').includes(channel))).toEqual([]);
-            expect(rowsFor('window-port')).toContain('genie:browser-window-open');
+            expect(panels.filter((channel) => !rowsFor('window:site-panel').includes(channel))).toEqual([]);
+            expect(rowsFor('move:2f')).toContain('genie:browser-window-open');
         });
     });
 

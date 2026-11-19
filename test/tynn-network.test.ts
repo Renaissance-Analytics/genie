@@ -28,9 +28,9 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
     it('lists Tynn’s rows, never this machine itself, each once', async () => {
         const asked: string[] = [];
         const rows = [
-            { id: 'ws_me', name: 'this desk', status: 'active', is_local: true, connectable: true, source: 'owner' },
-            { id: 'ws_cloud', name: 'cloud box', status: 'active', is_local: false, connectable: true, source: 'owner' },
-            { id: 'ws_cloud', name: 'cloud box', status: 'active', is_local: false, connectable: true, source: 'owner' },
+            { id: 'ws_me', name: 'this desk', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true },
+            { id: 'ws_cloud', name: 'cloud box', status: 'active', is_local: false, connectable: true, source: 'owner', registered_by_you: true },
+            { id: 'ws_cloud', name: 'cloud box', status: 'active', is_local: false, connectable: true, source: 'owner', registered_by_you: true },
             { id: 'ws_pat', name: 'Pat’s laptop', status: 'active', is_local: true, connectable: false, source: null },
         ];
         const result = await connectableWorkstations(async (path, init) => { asked.push(`${init.method} ${path}`); return json(200, { workstations: rows }); }, new Set(['ws_me']));
@@ -38,7 +38,7 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
         expect(result).toEqual({
             ok: true,
             workstations: [
-                { id: 'ws_cloud', name: 'cloud box', active: true, connectable: true, local: false, source: 'owner', role: null, online: null },
+                { id: 'ws_cloud', name: 'cloud box', active: true, connectable: true, local: false, source: 'owner', mine: true, role: null, online: null },
             ],
         });
     });
@@ -49,7 +49,7 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
         // is switched off (not connectable, but yours) stays, and a live link guest's row stays.
         const rows = [
             { id: 'ws_spent', name: 'Kim’s desk', status: 'active', is_local: true, connectable: false, source: null },
-            { id: 'ws_mine_off', name: 'old box', status: 'inactive', is_local: false, connectable: false, source: 'owner' },
+            { id: 'ws_mine_off', name: 'old box', status: 'inactive', is_local: false, connectable: false, source: 'owner', registered_by_you: true },
             { id: 'ws_live_link', name: 'Lee’s desk', status: 'active', is_local: true, connectable: true, source: 'share' },
         ];
         const result = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set());
@@ -173,6 +173,7 @@ describe('startRelayHost — this Genie reachable over the Tynn relay', () => {
         const relay = fakeRelay(verifyHost);
         const statuses: RelayHostStatus[] = [];
         const host = startRelayHost({
+            signedInHere: () => 'user_1',
             ports: { ticket: async () => ({ ticket: 't1', relayEndpoint: 'wss://relay.example.com' }), keys: async () => [], introspect: async () => false },
             socket: relay.socket,
             workstationId: 'ws_me',
@@ -192,6 +193,7 @@ describe('startRelayHost — this Genie reachable over the Tynn relay', () => {
     it('Tynn will not give a ticket: unavailable, in Tynn’s words, and no socket opened', async () => {
         const relay = fakeRelay(verifyHost);
         const host = startRelayHost({
+            signedInHere: () => 'user_1',
             ports: { ticket: async () => { throw new Error('No relay is configured for this workstation, so it cannot be reached over Tynn.'); }, keys: async () => [], introspect: async () => false },
             socket: relay.socket,
             workstationId: 'ws_me',

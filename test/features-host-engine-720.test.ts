@@ -1,3 +1,4 @@
+import type { CallContext } from '../src/core/remote-protocol.js';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,6 @@ import { versionDir } from '../src/core/toolchain-defaults.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
 import { FeatureCallers } from '../src/main/feature-callers.js';
-import { featureReplica } from '../src/main/feature-replica.js';
 import { featureWindow } from '../src/main/feature-window.js';
 import { adoptFeatureEnvironment } from '../src/main/feature-native-toolchain.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
@@ -21,47 +21,10 @@ const closers: Array<() => void | Promise<void>> = [];
 beforeEach(async () => { f = await groupTwoFixture(); });
 afterEach(async () => { for (const close of closers.splice(0).reverse()) await close(); await f.close(); });
 
-describe('the production feature route (Tynn #720)', () => {
-    it('two engine windows with the same local caller id keep separate state and use only their own effects', async () => {
-        const callers = new FeatureCallers(() => f.service);
-        Object.assign(f.service.ports, { presentation: callers.presentation.bind(callers) });
-        const server = new SessionEngineServer({ token: 'fixture', build: 'fixture', features: callers });
-        const connect = async (owner: string) => {
-            const view = { url: null as string | null, canGoBack: false, canGoForward: false };
-            const effect = vi.fn(async (_id: string, method: string, args: unknown[]) => {
-                if (method === 'browser.navigate') view.url = String(args[0]);
-                return { value: null, browser: view };
-            });
-            const client = new SessionEngineClient({ onFeatureEffect: effect });
-            const [host, window] = memoryPair(); server.accept(host, { local: true });
-            expect(await client.connect(window, 'fixture')).toMatchObject({ ok: true });
-            closers.push(() => window.close());
-            const replica = featureReplica(() => client, () => view);
-            const context = { ...groupTwoContext, origin: 'local-window' as const, connectionId: 'same-local-id', label: owner };
-            return { replica, context, effect };
-        };
-        const a = await connect('A'), b = await connect('B');
-        await a.replica.act({ kind: 'knowledge.search', query: 'private A' }, a.context);
-        await b.replica.act({ kind: 'knowledge.search', query: 'private B' }, b.context);
-        const shown = await a.replica.act({ kind: 'browser.navigate', url: 'https://fixture.gen/' }, a.context);
-        expect(shown.browser.url).toBe('https://fixture.gen/');
-        expect(a.effect).toHaveBeenCalledExactlyOnceWith('same-local-id', 'browser.navigate', ['https://fixture.gen/']);
-        expect(b.effect).not.toHaveBeenCalled();
-        expect((await a.replica.snapshot(a.context)).knowledge.query).toBe('private A');
-        expect((await b.replica.snapshot(b.context)).knowledge.query).toBe('private B');
-        a.replica.releaseCaller?.(a.context);
-        expect((await a.replica.snapshot(a.context)).knowledge.query).toBe('');
-        expect((await b.replica.snapshot(b.context)).knowledge.query).toBe('private B');
-    });
-
-    it('a non-local engine connection cannot enter the feature route', async () => {
-        const callers = new FeatureCallers(() => f.service), server = new SessionEngineServer({ token: 'fixture', build: 'fixture', features: callers });
-        const [host, window] = memoryPair(); server.accept(host);
-        const client = new SessionEngineClient(); closers.push(() => window.close());
-        expect(await client.connect(window, 'fixture')).toMatchObject({ ok: true });
-        expect(await client.call('engine.features', ['snapshot', [], groupTwoContext, null])).toMatchObject({ ok: false, reason: expect.stringMatching(/own window/) });
-    });
-
+/* The engine server's engine.features route is retired (Tynn #898 step 2e-2, #914): every client reaches the features over
+ * the one protocol, and a tunnelled connection's effects are held by split-2d4b-window-tunnel. What stays here is the
+ * window's own effect gate and the toolchain defaults. */
+describe('the window\'s feature effects and the toolchain defaults (Tynn #720)', () => {
     it('a window effect needs the exact live admitted protocol connection, including after navigation', async () => {
         const ipc = new EventEmitter();
         const door = localProtocolDoor(ipc as never); closers.push(() => door.dispose());

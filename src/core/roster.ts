@@ -6,7 +6,9 @@ import type { AgentRow, Delivery } from './dashboard-view.js';
 import type { AgentRecord } from './identity.js';
 import type { TurnState } from './session.js';
 import type { ProviderExtensions } from './provider-commands.js';
+import type { ProviderStopState } from './provider-stops.js';
 import { isSleeping } from './agent-status.js';
+import type { RunningCall, StalledTurn } from './hung-call.js';
 
 /**
  * RECORD + LIVE SESSION → DASHBOARD ROW.
@@ -36,6 +38,12 @@ import { isSleeping } from './agent-status.js';
  * about drivers. Every nullable field means **Genie has not been told**, never zero.
  */
 export interface LiveSession {
+    /**
+     * The last turn its PROVIDER stopped (Tynn #859): the code verbatim, what it means and what to do
+     * (core/provider-stops.ts), how many times this session has stopped for that reason, and the provider's own message and
+     * details, kept apart for a quote (Tynn #921). Absent / `null` = none.
+     */
+    providerStop?: ProviderStopState | null | undefined;
     /**
      * The provider login's rate-limit gate as this agent sees it (Tynn #793/#794): `open`, or paused until a reset,
      * retrying on a stated backoff, or waiting for the person. Absent = not reported (an older snapshot).
@@ -108,6 +116,12 @@ export interface LiveSession {
     /** What started this turn and the tool it is in now (core/turn-now.ts); absent or `null` = not reported. */
     asked?: string | null | undefined;
     tool?: string | null | undefined;
+    /** The call the turn is in now, with its command and start (Tynn #855); absent or `null` = none, or an older host. */
+    call?: RunningCall | null | undefined;
+    /** The turn Genie ended as stalled (Tynn #855), until a turn starts again; absent or `null` = none. */
+    stalled?: StalledTurn | null | undefined;
+    /** When the provider last sent anything (Tynn #855); absent or `null` = not known. */
+    lastEventAt?: number | null | undefined;
     /**
      * The model IN USE, as the provider reported it (a notice carrying `particle.academy/model`); the latest report
      * wins. `null` or absent (an older remote host does not send it) = not reported — never the model Genie asked for, which is the agent's setting, not a reading.
@@ -172,6 +186,8 @@ export function agentRowFor(
         session === null ? 'stopped'
         : session.pendingApproval !== null ? 'waiting'
         : session.failure !== null ? 'broken'
+        // ENDED AS STALLED (Tynn #855): never Working, never a quiet Idle either.
+        : session.stalled != null && session.turnState !== 'working' ? 'broken'
         : !session.running || session.turnState === 'stopped' || session.stoppedByYou === true ? 'stopped'
         : session.running && session.turnState === 'working' ? 'working'
         // Between turns: Cooling for COOLING_MS, sorted with Working, so a turn ending does not reorder the board.
@@ -198,9 +214,12 @@ export function agentRowFor(
         fixes: session?.failure?.fixes ?? [],
         step: session?.plan ? `${session.plan.step}/${session.plan.of}` : null,
         target: session?.plan?.doing ?? null,
+        // The plan cell's hover lists every step (Tynn #918): the host's own copy, never one a window kept.
+        planSteps: session?.planSteps ?? null,
         // The workspace dashboard's card (q_09d1f4a0): what it was asked, and the tool it is in now.
         asked: session?.asked ?? null,
         tool: session?.tool ?? null,
+        stalled: session?.stalled ?? null,
         // Byte activity, and only for an observed agent. A declared one reports a plan, so
         // there is nothing to measure and nothing to draw.
         activity: null,

@@ -189,7 +189,7 @@ describe('from this machine\'s window to the host, composed (Tynn #732)', () => 
 
     beforeEach(async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie2-drive-modes-compose-'));
-        services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, hostName: 'alphar', remoteTransport: { onConnection: (cb) => { accept = cb; return () => {}; } } });
+        services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, remoteHost: { hostName: 'alphar', transport: { onConnection: (cb) => { accept = cb; return () => {}; } } } });
     });
     afterEach(async () => {
         await services.shutdown();

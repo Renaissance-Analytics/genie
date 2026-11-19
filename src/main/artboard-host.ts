@@ -42,7 +42,7 @@ export interface ReviewDeps {
     readonly now: () => string;
 }
 
-export type ReviewResult = { ok: true; delivered: boolean } | { ok: false; error: string };
+export type ReviewResult = { ok: true; delivered: boolean; cleared?: number; trashId?: string | null } | { ok: false; error: string };
 
 export async function reviewArtBoardPost(root: string, postId: string, review: { verdict: Review['verdict']; comment?: string | undefined }, deps: ReviewDeps): Promise<ReviewResult> {
     const board = await boardPosts(root);

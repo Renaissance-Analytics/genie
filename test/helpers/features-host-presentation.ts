@@ -35,7 +35,6 @@ export async function presentationFixture() {
                 forward: async () => { record(owner, 'forward'); view.url = 'https://next.gen/'; view.canGoBack = true; },
                 reload: async () => { record(owner, 'reload'); } },
             rendererNotice: { dismiss: async () => { record(owner, 'renderer-notice'); return { ok: true }; } },
-            login: async provider => { record(owner, 'login', provider); return { ok: true }; },
             githubOpen: async target => { record(owner, 'github', target); },
             tailscaleInstall: async () => {
                 const result = await installTailscale({ platform: 'linux', installed: () => null,
@@ -67,7 +66,13 @@ export async function presentationFixture() {
         deferHosts: () => { record('host', 'defer-hosts'); },
         deckItems: () => deckItems,
     };
-    Object.assign(f.service.ports, { presentation: resolve, system, deck });
+    // A feature's login is genie-host's (Tynn #896): started for this caller, whose own window opens it; recorded by caller.
+    const signInState = { refusal: null as string | null };
+    const signIn = async (provider: string, context: CallContext) => {
+        if (signInState.refusal) return { ok: false as const, reason: signInState.refusal };
+        record(context.connectionId, 'login', provider); return { ok: true as const };
+    };
+    Object.assign(f.service.ports, { presentation: resolve, system, deck, signIn });
     const invoke = (action: FeatureAction, context = CALLER_A) => resultOf(f.act(action, context));
     const answer = async (action: FeatureAction, context = CALLER_A): Promise<FeatureData> => {
         const result = await invoke(action, context); expect(result, result.ok ? undefined : result.reason).toMatchObject({ ok: true });
@@ -97,7 +102,7 @@ export async function presentationFixture() {
         return { entered: entered.promise, release: () => finish.resolve(), start: () => invoke({ kind: 'settings.set', key: 'publisher_checks_off', value: false }, context) };
     };
     const close = async () => { for (const release of holds.splice(0)) release(); await f.settle(); await f.close(); };
-    return { ...f, answer, invoke, calls, windows, history, a, b, resolve, record, system, systemCalls, systemFailure,
+    return { ...f, answer, invoke, calls, windows, history, a, b, resolve, record, system, systemCalls, systemFailure, signInState,
         attention, deck, deckItems, deliveries, cli, holds, holdSetting, addWindow, close };
 }
 export type PresentationFixture = Awaited<ReturnType<typeof presentationFixture>>;

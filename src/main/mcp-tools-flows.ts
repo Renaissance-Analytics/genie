@@ -1,8 +1,9 @@
+import type { StopAnswer } from './flow-scheduler.js';
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import { flowNodes } from '../core/flow-form.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 
 /**
@@ -31,7 +32,15 @@ import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 /** What the tool acts on: the flow store, and the scheduler's Run now. Main wires the composition's. */
 export interface FlowsPort {
     readonly store: Pick<import('./flows-host.js').FlowsApi, 'list' | 'get' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove'>;
-    readonly runNow: (flowId: string) => Promise<FlowRun>;
+    /** `by`: who pressed it (Tynn #839), recorded on the run: here, always the calling agent. */
+    readonly runNow: (flowId: string, by?: Actor) => Promise<FlowRun>;
+    /** Stop a flow's run in flight (Tynn #833). Absent = this Genie cannot stop runs. */
+    readonly stopRun?: (flowId: string, by: Actor) => Promise<StopAnswer>;
+    /**
+     * The person's approval for an agent's action (the ApprovalQueue gate); absent = nobody to ask. `call`: the MCP call
+     * waiting on it (genie#1360), so a client that goes away ends its wait denied instead of leaving it on the Deck.
+     */
+    readonly approve?: (caller: Caller, action: string, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
 }
 
 export interface FlowToolsDeps {
@@ -47,7 +56,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 /** How many runs `list` shows per flow; `get` shows every run the store keeps. */
 export const LIST_RUNS = 5;
 const NOT_HERE = 'this Genie keeps no flows (doctor mode runs none); nothing was done';
-const ACTIONS = 'list, get, create, update, arm, disarm, runNow, remove';
+const ACTIONS = 'list, get, create, update, arm, disarm, runNow, stop, remove';
 /** Genie's step kinds that act in a workspace, by their `workspace` config (flow-kinds.ts). */
 // genie#1204: the file trigger WATCHES a workspace and the move CHANGES one — held to the same own-workspace rule.
 const WORKSPACE_STEPS = new Set(['genie/terminal_run', 'genie/knowledge_add', 'genie/file_added', 'genie/file_move']);
@@ -151,8 +160,23 @@ export function flowTools(deps: FlowToolsDeps): Registration[] {
                         // Started, not awaited, as the Flows tab's Run now is: a prompted agent's turn can take minutes. The
                         // outcome lands in the flow's runs (a run already going is recorded held). A rejection here is a flow
                         // removed while it ran, which has no runs left to read.
-                        void port.runNow(f.id).catch(() => {});
+                        // Recorded as started by this agent (Tynn #839: the run review says who).
+                        void port.runNow(f.id, me).catch(() => {});
                         return ok({ ok: true, started: f.id, note: 'running now; its outcome lands in the flow’s runs (`flows get`)' });
+                    }
+                    case 'stop': {
+                        // Tynn #833: an agent stops a run of a flow it made; anyone else's — the person's — only with their approval.
+                        const f = find();
+                        if (typeof f === 'string') return err(f);
+                        if (!port.stopRun) return err('this Genie cannot stop a flow’s run from here; nothing was stopped');
+                        const own = f.createdBy.kind === 'agent' && f.createdBy.id === caller.agentId;
+                        if (!own) {
+                            if (!port.approve) return err(`"${f.name}" was made by ${byName(f.createdBy)}: stopping its run needs the person’s approval, and there is nobody to ask here. Nothing was stopped`);
+                            const verdict = await port.approve(caller, 'flows.stop', `stop the run of the flow “${f.name}”`, context);
+                            if (verdict !== 'allowed') return err(`the person did not approve stopping "${f.name}"; nothing was stopped`);
+                        }
+                        const r = await port.stopRun(f.id, me);
+                        return r.ok ? ok({ ok: true, stopped: f.id, note: 'its run ends now and is recorded stopped (`flows get`)' }) : err(r.reason);
                     }
                     case 'remove': {
                         const f = find();
@@ -190,13 +214,14 @@ export const FLOWS_TOOL: BuiltinTool = declareBuiltinTool(
         + '`arm` {id} — refused to agents and recorded on the flow, so the person sees it. '
         + '`disarm` {id}. '
         + '`runNow` {id} — one run of an ARMED flow, now; its outcome lands in its runs (`get`). '
+        + '`stop` {id} — stop the flow’s run in flight now (its command is killed); a flow you made at once, the person’s only with their approval. '
         + '`remove` {id} — only a flow you created.',
     {
         type: 'object',
         properties: {
             terminalId: MIRRORED_TERMINAL_ID,
-            action: { type: 'string', enum: ['list', 'get', 'create', 'update', 'arm', 'disarm', 'runNow', 'remove'] },
-            id: { type: 'string', description: 'get / update / arm / disarm / runNow / remove: the flow’s id, from `list`.' },
+            action: { type: 'string', enum: ['list', 'get', 'create', 'update', 'arm', 'disarm', 'runNow', 'stop', 'remove'] },
+            id: { type: 'string', description: 'get / update / arm / disarm / runNow / stop / remove: the flow’s id, from `list`.' },
             name: { type: 'string', description: 'create / update: what to call it (queue watcher).' },
             document: { type: 'object', description: 'create / update: the fancy-flow document, { version: 1, graph: { nodes, edges } }.' },
         },

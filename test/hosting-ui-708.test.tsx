@@ -88,7 +88,8 @@ describe('Processes: one line per process, and an Add process form that opens on
     const r = rowOf(html, 'data-process="p1"');
 
     it('Stop is the icon button, the command is small monospace, Restart waits in the menu', () => {
-        expect(labels(r)).toEqual(['Stop', 'More actions']);
+        // Tynn #860: and the Log, last.
+        expect(labels(r)).toEqual(['Stop', 'More actions', 'Log']);
         expect(buttonTexts(r).every((t) => t === '')).toBe(true);
         expect(r).toMatch(/font-mono[^"]*"[^>]*>php artisan queue:work/);
         expect(r).not.toMatch(/font-mono[^"]*"[^>]*>[^<]*queue worker/);
@@ -103,7 +104,7 @@ describe('Processes: one line per process, and an Add process form that opens on
     });
     it('a service command keeps only its Stop, with no menu', () => {
         const run = rowOf(render('processes', data({ processes: [row({ id: 'command-1', commandRun: true })] })), 'data-process="command-1"');
-        expect(labels(run)).toEqual(['Stop']);
+        expect(labels(run)).toEqual(['Stop', 'Log']);
     });
 });
 

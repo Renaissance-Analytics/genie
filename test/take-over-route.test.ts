@@ -44,7 +44,8 @@ describe('one parser for the Take Over window\'s hash', () => {
         const strip = (t: string) => t.split(/\r?\n/).map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1')).join('\n');
         const main = strip(readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8'));
         const app = strip(readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8'));
-        expect(main).toMatch(/const route = takeOverRouteOf\(terminalId\);/);
+        // A sign-in's companion opens on its login route when that is the same terminal's (Tynn #896).
+        expect(main).toMatch(/const route = loginRoute \?\? takeOverRouteOf\(terminalId\);/);
         expect(app).toMatch(/takeOverTerminalOf\(window\.location\.hash\) !== null/);
         expect(app).not.toContain("startsWith('#genie://takeover/')");
     });

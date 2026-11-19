@@ -45,8 +45,9 @@ describe('the release workflow', () => {
         // The notes go to the repository the workflow runs in, never a named other one.
         expect(wf).toMatch(/gh release edit[^\n]*--repo "?\$\{\{\s*github\.repository\s*\}\}"?/);
         expect(wf).not.toMatch(/--repo Renaissance-Analytics\//);
-        expect(wf).toMatch(/--publish always/);
-        // Windows builds with --publish never, verifies, then uploads those exact files with gh.
+        // Both platforms build with --publish never, then upload those exact files with gh (Windows after its verification;
+        // both after their feed names the host it carries, Tynn #413).
+        expect(wf).not.toMatch(/--publish always/);
         expect(wf).toMatch(/gh release upload/);
     });
 

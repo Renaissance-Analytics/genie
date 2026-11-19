@@ -428,11 +428,13 @@ describe('the actions cross to the host only from a local window', () => {
         });
     });
 
-    it('the engine answers a local window only, and the host hands it the book (source guard)', () => {
+    it('the engine answers a local window only, and the host hands it the book and serves the protocol\'s gapps from it (source guard)', () => {
         const server = readFileSync(join('src', 'main', 'session-engine-server.ts'), 'utf8');
         expect(server).toMatch(/if \(method === 'engine\.gapps'\) \{\s*if \(!conn\.local \|\| !conn\.window\) throw/);
-        expect(readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8')).toMatch(/gappBook \? \{ gapps: gappsApi\(gappBook, gappAsk, /);
-        expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).toMatch(/gapps: \(\) => withGappWindows\(agentEngineLink\?\.client\)/);
+        const host = readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8');
+        expect(host).toMatch(/gappBook \? \{ gapps: gappsApi\(gappBook, gappAsk, /);
+        // The window's gapps calls are genie-host's answers over that book (Tynn #898 step 2d-4b2), not main's.
+        expect(host).toMatch(/gapps: \(\) => \(gappBook \? gappsApi\(gappBook, gappAsk, gappPreviews \?\? undefined\) : null\),/);
     });
 
     it('the shell gives the title bar the store\'s actions (source guard)', () => {

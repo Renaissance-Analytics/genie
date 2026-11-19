@@ -11,6 +11,7 @@ import type { PanelPrefs } from '../../core/files-panel-prefs.js';
 import { EditorWand } from './EditorWand.js';
 import { EditorCursor, PanelClickToEnd, WordWrapSync } from './EditorSync.js';
 import { CopyAnnounce } from './CopyText.js';
+import { PreviewFullButton, PreviewFullFrame, usePreviewFull } from './PreviewFull.js';
 import type { CopyState } from './ChatProse.js';
 
 /**
@@ -230,6 +231,8 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
 
 export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions, active: activeProp, pluginTabs = [], prefs, onPrefs, baseline, theme, unsaved = [], git = {}, copied }: FilesPanelProps) {
     const rows = { unsaved: new Set(unsaved), git };
+    // The open file filling the window (core/preview-full.ts; the owner, beta.65). Esc or the crumb's button restores it.
+    const previewFull = usePreviewFull();
     const wordWrap = prefs?.wordWrap === true;
     const treeHidden = prefs?.treeHidden === true;
     // The tab in front: the container's word when it gives one (a plugin tab has no `open`), else the open text file.
@@ -458,11 +461,16 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             )
                         ) : open.ok ? (
                             <div data-file-column={open.path} className="flex min-h-0 min-w-0 flex-1 flex-col">
-                                {/* THE CRUMB (the board): the path, segment by segment, over the editor. */}
+                                {/* FULL WINDOW: the column's content fills the window below the title bar; the column keeps its box. */}
+                                <PreviewFullFrame full={previewFull.full} window="main" className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                {/* THE CRUMB (the board): the path, segment by segment, over the editor; the full-window control at its end. */}
                                 <div data-file-crumb={open.path} className="flex shrink-0 items-center border-b border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
+                                    <span className="min-w-0 flex-1 truncate">
                                     {fileCrumb(open.path).map((seg, i) => (
                                         <span key={`${i}-${seg}`}>{i > 0 ? <span className="mx-1">/</span> : null}{seg}</span>
                                     ))}
+                                    </span>
+                                    <PreviewFullButton full={previewFull.full} onToggle={previewFull.toggle} />
                                 </div>
                                 {/* THE EDITOR IS THE PANE (Tynn #840; Genie 1's genie#603): fancy-code's CodeEditor fills the column and
                                     its Panel is the one scroller. FileViewer was a content-high block — the editor shrank to its text and
@@ -492,6 +500,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 {/* THE STATUS BAR (the board): the cursor (Ln, Col — inside the editor, item 15), language · line ending ·
                                     encoding · who is in the file. A media file has no cursor; its bar is drawn here. */}
                                 {resolveFileKind({ filename: open.path }).kind === 'media' ? <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} /> : null}
+                                </PreviewFullFrame>
                             </div>
                         ) : (
                             <div data-tab-error className="m-4 rounded-lg border border-[var(--danger)] p-3 text-sm">

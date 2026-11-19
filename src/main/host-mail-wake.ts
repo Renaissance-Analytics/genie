@@ -22,6 +22,47 @@ import { startRefusal } from './workspace-ops-host.js';
  * The start uses the host's own environment and the workspace variables the last window handed over; with no window
  * since the host began, a woken agent has the host's environment only.
  */
+/** What the host's wake did for one agent (Tynn #860): started it, found it running, or why it would not. */
+export type HostWake = { readonly ok: true; readonly started: boolean } | { readonly ok: false; readonly reason: string; readonly name?: string };
+
+/** The ports the host's one wake needs. */
+export interface HostWakePorts {
+    readonly host: Pick<SessionHost, 'probe' | 'start'>;
+    readonly registry: Pick<HostRegistry, 'mailParticipantVisible' | 'find' | 'workspace' | 'listAgents'>;
+    readonly settings: Pick<SettingsStore, 'snapshotFor'>;
+    readonly osaDir: string;
+    readonly safeMode?: () => boolean;
+}
+
+/**
+ * THE HOST'S ONE WAKE (lifted out of the mail wake for Tynn #860; the owner, 2026-11-18: "a scheduled nudge WAKES its
+ * agent through the host's one wake path, the same as mail"). Start a stopped agent for work that has arrived for it, under
+ * the refusals a person's start has, each said by name and starting nothing: a hibernating workspace, safe mode (Tynn #386:
+ * nothing starts by itself; a running agent is still reached), the workspace's agent cap. Mail, IssueWatch's push and a
+ * scheduled nudge all come through here.
+ */
+export function hostAgentWake(p: HostWakePorts): (agentId: string) => Promise<HostWake> {
+    const cwdFor = (record: AgentRecord): string => (record.workspaceId === OS_WORKSPACE ? p.osaDir : p.registry.workspace(record.workspaceId)?.path ?? p.osaDir);
+    // The SAME refusal a person's start gets (workspace-ops-host.ts): an asleep workspace, the agent cap.
+    const refusal = (record: AgentRecord): string | null => startRefusal({ registry: p.registry }, record, {
+        running: p.registry.listAgents().filter((a) => a.workspaceId === record.workspaceId && p.host.probe(a.id as AgentId)?.running === true).length,
+        cap: agentCapFrom(p.settings.snapshotFor(record.workspaceId)),
+    });
+    return async (agentId) => {
+        if (!p.registry.mailParticipantVisible(agentId)) return { ok: false, reason: 'its workspace is hibernating, so nothing is started' };
+        const record = p.registry.find(agentId);
+        if (!record) return { ok: false, reason: 'no such agent' };
+        // SAFE MODE (Tynn #386): no stopped agent is started by itself. A running one (the person started it) is reached as ever.
+        if (p.safeMode?.() === true && p.host.probe(record.id as AgentId)?.running !== true) {
+            return { ok: false, name: record.name, reason: 'Genie is in safe mode, so nothing is started by itself' };
+        }
+        const started = await startForWork({ probe: (id) => p.host.probe(id), start: (r, cwd) => p.host.start(r, cwd), cwdFor, startRefusal: refusal }, record);
+        if (!started.ok) return { ok: false, name: record.name, reason: started.reason };
+        if (started.started || p.host.probe(record.id as AgentId)?.running === true) return { ok: true, started: started.started };
+        return { ok: false, name: record.name, reason: 'it has a session that is not running' };
+    };
+}
+
 export function wireHostMailWake(p: {
     readonly inbox: InboxStore;
     readonly host: SessionHost;
@@ -39,28 +80,13 @@ export function wireHostMailWake(p: {
     readonly safeMode?: () => boolean;
 }): () => void {
     const reminders = new ReminderBook();
-    const cwdFor = (record: AgentRecord): string => (record.workspaceId === OS_WORKSPACE ? p.osaDir : p.registry.workspace(record.workspaceId)?.path ?? p.osaDir);
-    // The SAME refusal a person's start gets (workspace-ops-host.ts): an asleep workspace, the agent cap.
-    const refusal = (record: AgentRecord): string | null => startRefusal({ registry: p.registry }, record, {
-        running: p.registry.listAgents().filter((a) => a.workspaceId === record.workspaceId && p.host.probe(a.id as AgentId)?.running === true).length,
-        cap: agentCapFrom(p.settings.snapshotFor(record.workspaceId)),
-    });
+    // The host's one wake (hostAgentWake): a refusal is said in the log, and the notice waits.
+    const hostWake = hostAgentWake(p);
     const wake = async (agentId: string): Promise<boolean> => {
-        if (!p.registry.mailParticipantVisible(agentId)) {
-            p.log('a notice waits: its workspace is hibernating, so nothing is started');
-            return false;
-        }
-        const record = p.registry.find(agentId);
-        if (!record) return false;
-        // SAFE MODE (Tynn #386): no stopped agent is started for its mail or IssueWatch's push. A running one (the person
-        // started it) is told as ever; for a stopped one the notice waits.
-        if (p.safeMode?.() === true && p.host.probe(record.id as AgentId)?.running !== true) {
-            p.log(`a notice for ${record.name} waits: Genie is in safe mode, so nothing is started by itself`);
-            return false;
-        }
-        const started = await startForWork({ probe: (id) => p.host.probe(id), start: (r, cwd) => p.host.start(r, cwd), cwdFor, startRefusal: refusal }, record);
-        if (!started.ok) { p.log(`a notice for ${record.name} waits: ${started.reason}`); return false; }
-        return started.started || p.host.probe(record.id as AgentId)?.running === true;
+        const woke = await hostWake(agentId);
+        if (woke.ok) return true;
+        if (woke.reason !== 'no such agent' && woke.reason !== 'it has a session that is not running') p.log(woke.name ? `a notice for ${woke.name} waits: ${woke.reason}` : `a notice waits: ${woke.reason}`);
+        return false;
     };
     const offMail = wireInboxPush({
         inbox: p.inbox,

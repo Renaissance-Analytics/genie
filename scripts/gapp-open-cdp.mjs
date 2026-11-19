@@ -88,7 +88,7 @@ function seedInstalledApp(home) {
     }] }));
 }
 
-let app, root, log, code = 1;
+let app, root, log, hostRecord, code = 1;
 try {
     demand(process.env.CI === 'true' || process.env.GENIE_TEST_MACHINE === '1', 'refused: this runs the real app, so only on CI or a test machine (GENIE_TEST_MACHINE=1, set by scripts/ci/linux.sh)');
     demand(existsSync('dist/main/entry.js'), 'run from a built checkout');
@@ -112,6 +112,8 @@ try {
     const page = await Cdp.connect(target.webSocketDebuggerUrl);
     await waitForPageProbe(page);
     await until('a ready page connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'));
+    // This run's own genie-host, by its record: it is started detached, so the window's tree kill below does not reach it.
+    try { hostRecord = JSON.parse(readFileSync(join(root, '.genie', 'runtime', 'host.json'), 'utf8')); } catch { /* read again at the end */ }
 
     await until('the GApps icon', () => page.evaluate('(() => { const b = document.querySelector(\'[data-feature="GApps"]\'); if (!b) return false; b.click(); return true; })()'));
     // The store reads the book when it opens: the installed app's row, then its Open button, clicked as a person does.
@@ -146,6 +148,12 @@ try {
 } finally {
     if (app?.pid) {
         try { if (WIN) execFileSync('taskkill', ['/pid', String(app.pid), '/t', '/f'], { stdio: 'ignore' }); else process.kill(-app.pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+    // Its genie-host and what it started (Tynn #916: they outlived the row), only while the record still names the same host.
+    if (root) {
+        let record = null; try { record = JSON.parse(readFileSync(join(root, '.genie', 'runtime', 'host.json'), 'utf8')); } catch { /* none written */ }
+        const host = record && Number.isInteger(record.pid) && (!hostRecord || (record.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt)) ? record.pid : null;
+        if (host !== null) { try { if (WIN) execFileSync('taskkill', ['/pid', String(host), '/t', '/f'], { stdio: 'ignore' }); else process.kill(host, 'SIGTERM'); } catch { /* already gone */ } }
     }
     if (log !== undefined) closeSync(log);
     await sleep(500);

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TakeOverProbe } from '../src/core/observed.js';
 import type { AgentRecord } from '../src/core/identity.js';
-import { hostAloneApi, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
+import { hostAloneApi, HOST_ALONE_METHODS, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
 import { hostRemoteApi } from '../src/main/remote-access-host.js';
 import type { HostApi } from '../src/main/remote-host.js';
 import { Registry } from '../src/main/registry.js';
@@ -257,7 +257,7 @@ describe('the Pilot\'s Take Over window with no window here', () => {
     }
     const ports = (terminalsApi: unknown, over: Record<string, unknown> = {}) => ({
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => '/w', startRefusal: () => null,
-        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false, headroom: { view: () => ({}), subscribe: () => () => {} },
+        models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, headroom: { view: () => ({}), subscribe: () => () => {} },
         attention: { finished: () => [], answer: async () => true, lists: { done: async () => true } },
         approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [], involving: () => [] }, deliverToAgent: async () => true,
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
@@ -266,8 +266,8 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         ...over,
     }) as unknown as HostAlonePorts;
-    const gate = (alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}, more: Record<string, unknown> = {}) =>
-        hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window }, alone, ...more } as never);
+    const gate = (alone: HostApi, more: Record<string, unknown> = {}) =>
+        hostRemoteApi({ hostName: 'alphar', own: {}, alone, ...more } as never);
 
     beforeEach(async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie2-take-over-'));
@@ -297,17 +297,15 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         expect(seen).toEqual([['terminal-data', { id: 'term_1', data: 'hi' }], ['terminal-exit', { id: 'term_1', exitCode: 0 }]]);
     });
 
-    it('opening or listing terminals is not part of this: still "open a window" (CONTROL)', async () => {
-        const api = gate(hostAloneApi(ports(term().api)));
-        await expect(api.invoke('terminals.open', ['tynn', {}])).rejects.toThrow('open Genie on alphar');
-        await expect(api.invoke('terminals.list', ['tynn'])).rejects.toThrow('open Genie on alphar');
+    it('opening and listing terminals are genie-host\'s too since Tynn #898 (step 2d-2), with the Take Over calls', () => {
+        for (const method of ['terminals.open', 'terminals.list', 'terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close'] as const) expect(HOST_ALONE_METHODS.has(method)).toBe(true);
     });
 
-    it('with a window connected the window answers the terminal calls (CONTROL)', async () => {
+    it('genie-host answers the terminal calls itself: no window is asked (Tynn #898)', async () => {
         const t = term();
-        const api = gate(hostAloneApi(ports(t.api)), { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('terminals.write', ['term_1', 'ls'])).toBe('window answered terminals.write');
-        expect(t.calls).toEqual([]);
+        const api = gate(hostAloneApi(ports(t.api)));
+        await api.invoke('terminals.write', ['term_1', 'ls']);
+        expect(t.calls).toEqual(['write term_1 ls']);
     });
 
     it('a Pilot\'s agent detail shows the TUI as Observed', async () => {
@@ -317,18 +315,16 @@ describe('the Pilot\'s Take Over window with no window here', () => {
         expect(await api.invoke('agentDetail', [record.id])).toMatchObject({ takeOver: { terminalId: 'term_1' } });
     });
 
-    it('Take over itself is genie-host\'s, with a window or without', async () => {
+    it('Take over itself is genie-host\'s', async () => {
         const own = vi.fn(async () => ({ ok: true, terminalId: 'term_1', started: true }));
-        for (const connected of [false, true]) {
-            const api = hostRemoteApi({ hostName: 'alphar', own: { takeOver: own }, window: { connected: () => connected, invoke: async () => { throw new Error('the window was asked'); } } });
-            expect(await api.invoke('takeOver', [atlas.id])).toMatchObject({ terminalId: 'term_1' });
-        }
-        expect(own).toHaveBeenCalledTimes(2);
+        const api = hostRemoteApi({ hostName: 'alphar', own: { takeOver: own } });
+        expect(await api.invoke('takeOver', [atlas.id])).toMatchObject({ terminalId: 'term_1' });
+        expect(own).toHaveBeenCalledTimes(1);
     });
 
     it('when a Pilot\'s Take Over window closes, the remote host can end the TUI', () => {
         const ended = vi.fn();
-        const api = gate(hostAloneApi(ports(term().api)), {}, { takeOverEnded: ended });
+        const api = gate(hostAloneApi(ports(term().api)), { takeOverEnded: ended });
         api.takeOverEnded?.('term_1');
         expect(ended).toHaveBeenCalledWith('term_1');
     });
@@ -340,17 +336,21 @@ describe('the wiring', () => {
     it('genie-host owns it: the Pilot\'s call, its end, the window\'s link, the Observed row and the tools\' caller', () => {
         const host = src('src/main/genie-host.ts');
         expect(host).toContain('new TakeOverService(');
-        expect(host).toMatch(/own: \{[^\n]*takeOver: async \(args\) => takeOverService\.start\(args\[0\]\)/);
-        expect(host).toMatch(/takeOverEnded: \(terminalId\) => takeOverService\.ended\(terminalId\)/);
+        // Every client's call, the window's too (Tynn #896): started here, with who asked.
+        expect(host).toMatch(/takeOver: async \(args, context\) => \{\s*const started = takeOverService\.start\(args\[0\]\);/);
+        // Another machine's window closing ends its TUI, or cancels its sign-in (Tynn #896).
+        // Its scratch terminal too since 2c-4 (Tynn #897): another machine's companion window closing ends it.
+        expect(host).toMatch(/takeOverEnded: \(terminalId\) => \{ takeOverService\.ended\(terminalId\); logins\?\.cancel\(terminalId\); hostScratchTerminals\.windowClosed\(terminalId\); \}/);
         expect(host).toMatch(/takeOver: takeOverService,/);
         expect(host).toMatch(/phoneRegistry\.setObservedProbe\(/);
         expect(host).toMatch(/takeOverCaller: \(id\) => takeOverHost\.callerFor\(id\)/);
     });
 
-    it('a window with a genie-host asks it, and opens only its own window', () => {
+    it('the window starts no Take Over: genie-host asks it to open the window (Tynn #896), and only its deck reads the replica', () => {
         const main = src('src/main/main.ts');
+        expect(main).not.toMatch(/takeOvers\??\.start\(/);
+        expect(main).toMatch(/openTerminalWindow: \(route\) => openTakeOverWindow\(route, 'user-gesture'\)/);
         expect(main).toContain('agentEngineLink.client.takeOvers()');
-        expect(main).toMatch(/await takeOvers\.start\(raw\)/);
     });
 
     it('the tools\' caller is found with no window having told the host', () => {

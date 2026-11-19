@@ -23,8 +23,10 @@ const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
 describe('the tab note', () => {
     it('on the Stream: the live count; on Files: where it opens', () => {
         // Two timed rows inside the window: the turn marker 50 s ago and the edit 30 s ago — the span runs from the earliest.
-        expect(render()).toMatch(/data-tab-note="live"[^>]*>2 events in the last 50s</);
-        expect(render({ tab: 'changes' })).toMatch(/data-tab-note="files"[^>]*>Changes open the workspace file panel, filtered to atlas</);
+        // The note is the pulse's tooltip in the one bar (the owner on beta.64: as few words as possible), not a line of words.
+        expect(render()).toMatch(/data-tab-note="live"[^>]*title="2 events in the last 50s"/);
+        expect(render({ tab: 'changes' })).toMatch(/data-tab-note="files"[^>]*title="Changes open the workspace file panel, filtered to atlas"/);
+        expect(render()).not.toMatch(/>2 events in the last 50s</);
     });
 });
 

@@ -14,8 +14,8 @@ import { Store } from '../src/main/store.js';
 /*
  * A PILOT'S AGENT OPERATIONS WITH EVERY WINDOW CLOSED (Tynn #553, host split P5d.5a). genie-host answers every `agents.*`
  * call itself, with the same operations the window runs (agent-ops-host.ts over one shared set of ports), so an agent can
- * be set up, switched or deleted from another machine while nothing is open here. With a window connected the window
- * answers, as it always has.
+ * be set up, switched or deleted from another machine while nothing is open here, and with a window open too
+ * (Tynn #898: no remote method is sent to a window).
  */
 
 let dir = '';
@@ -84,7 +84,6 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         },
         models: { get: async (provider: string, options?: { refresh?: boolean }) => { calls.push(`models ${provider} ${options?.refresh === true}`); return { models: [{ id: 'opus' }] }; } },
         providerInstalled: (provider: string) => provider === 'codex',
-        windowConnected: () => false,
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
         terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
@@ -94,11 +93,10 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
 }
 
 /** The gate a Pilot's call comes through, with no window connected. */
-function gate(alone: HostApi, window: Partial<{ connected: () => boolean; invoke: HostApi['invoke'] }> = {}): HostApi {
+function gate(alone: HostApi): HostApi {
     return hostRemoteApi({
         hostName: 'alphar',
         own: {},
-        window: { connected: () => false, invoke: async () => { throw new Error('the window was asked'); }, ...window },
         alone,
     });
 }
@@ -246,13 +244,13 @@ describe('they do what the window\'s do', () => {
 });
 
 describe('the gate', () => {
-    it('with a window connected the window answers, and genie-host is not asked (CONTROL)', async () => {
+    it('genie-host answers it itself: no window is asked (Tynn #898)', async () => {
         const alone = hostAloneApi(ports(engine()));
         const invoke = vi.spyOn(alone, 'invoke');
-        const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('agents.setMode', [atlas.id, 'automated'])).toBe('window answered agents.setMode');
-        expect(invoke).not.toHaveBeenCalled();
-        expect(registry.find(atlas.id)?.mode).toBe('manual');
+        const api = gate(alone);
+        await api.invoke('agents.setMode', [atlas.id, 'automated']);
+        expect(invoke).toHaveBeenCalledWith('agents.setMode', [atlas.id, 'automated'], undefined);
+        expect(registry.find(atlas.id)?.mode).toBe('automated');
     });
 
     it('the caller\'s context travels with the call', async () => {
@@ -260,11 +258,6 @@ describe('the gate', () => {
         const invoke = vi.spyOn(alone, 'invoke');
         await gate(alone).invoke('agents.diagnose', [atlas.id], RESTRICTED_CALL_CONTEXT);
         expect(invoke).toHaveBeenCalledWith('agents.diagnose', [atlas.id], RESTRICTED_CALL_CONTEXT);
-    });
-
-    it('a family not moved yet still says to open a window (CONTROL: this is not an open door)', async () => {
-        const api = gate(hostAloneApi(ports(engine())));
-        await expect(api.invoke('addAgent', ['tynn', {}])).rejects.toThrow('open Genie on alphar');
     });
 });
 
@@ -277,11 +270,13 @@ describe('the wiring', () => {
         expect(host).toMatch(/new Registry\(new HostRegistryStore\(\{ call: \(store, method, args\) => stores\.call\(store, method, args\)/);
     });
 
-    it('the window and genie-host answer through one adapter over one set of ports', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) {
-            expect(src(file)).toContain('agentOpsApi(');
-            expect(src(file)).toContain('agentOpsPorts(');
-        }
+    it('genie-host answers every client through the one adapter; the window keeps no agent operations of its own', () => {
+        expect(src('src/main/host-alone-api.ts')).toContain('agentOpsApi(');
+        expect(src('src/main/host-alone-api.ts')).toContain('agentOpsPorts(');
+        // main builds no host API (Tynn #898 step 2d-4b2): it answers no agent operation, and restarts through the ports.
+        expect(src('src/main/main.ts')).not.toContain('agentOpsApi(');
+        // …and no duplicate ports for restarts of its own (Tynn #896, 2b-3): MCP recovery and Try again are genie-host's.
+        expect(src('src/main/main.ts')).not.toContain('agentOpsPorts(');
         expect(src('src/main/host-alone-api.ts')).not.toContain("windowOnly<HostApiDeps['agentOps']>");
     });
 

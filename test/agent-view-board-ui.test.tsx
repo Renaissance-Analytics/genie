@@ -21,17 +21,17 @@ const toolRow: TimedEvent = { id: 'e1', at: 1_000, event: { kind: 'tool', toolKi
 const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
     renderToStaticMarkup(<AgentView agent={agent} session={running} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={14} cost={null} onNavigate={() => {}} onSelect={() => {}} onTakeOver={() => {}} now={() => 1_000_000} workspace={workspace} {...props} />);
 
-describe('the header', () => {
-    it('breadcrumb, fidelity dot, name, provider chip, the pill in turns', () => {
+// REWRITTEN for the one bar (the owner on beta.64, 2026-11-17): no crumbs, the agent's state at the bar's right end.
+describe('the bar', () => {
+    it('no crumbs; fidelity dot, provider chip (its logo; the engine its tooltip), the pill in turns', () => {
         const html = render();
-        expect(control(html, 'data-crumb="tynn"')).toMatchObject({ tag: 'button', fancy: false, text: 'Tynn.ai' });
-        expect(control(html, 'data-crumb="tynn"')!.open).toContain('data-react-fancy-breadcrumbs-item=""');
+        expect(html).not.toContain('data-crumb=');
         expect(html).toContain('data-fidelity="declared"');
-        // The provider is its LOGO, then the engine (genie#1266): no provider word.
-        expect(html).toMatch(/data-provider-chip="claude"[^>]*><span[^>]*data-provider-logo="claude"[\s\S]*?<\/svg><\/span>ACP</);
+        // The provider is its LOGO (genie#1266): no provider word, and the engine is the chip's tooltip, not words.
+        expect(html).toMatch(/data-provider-chip="claude"[^>]*title="[^"]*· ACP"[^>]*><span[^>]*data-provider-logo="claude"[\s\S]*?<\/svg><\/span><\/span>/);
         expect(html).toContain('data-pill="Turn 14 · running"');
         const observed = render({ agent: { ...agent, fidelity: 'observed', provider: 'aider' }, session: null, tab: 'activity', takeOver: { terminalId: 't', startedAt: 0, lastOutputAt: 1_000_000 - 10_000, bursts: [] } });
-        expect(observed).toMatch(/data-provider-chip="aider"[^>]*><span[^>]*aria-label="aider"[^>]*data-provider-logo="aider"[^>]*><span[^>]*>A<\/span><\/span>pty</);
+        expect(observed).toMatch(/data-provider-chip="aider"[^>]*title="[^"]*· pty"[^>]*><span[^>]*aria-label="aider"[^>]*data-provider-logo="aider"[^>]*><span[^>]*>A<\/span><\/span><\/span>/);
         expect(observed).toContain('data-pill="Active · last output 10s ago"');
     });
 
@@ -39,12 +39,16 @@ describe('the header', () => {
         const live = render({ ops, session: { ...running, cancelTurn: true }, onCancelTurn: () => {} });
         expect(live.split('data-action="stop-turn"').length - 1).toBe(1);
         expect(live.split('data-action="restart"').length - 1).toBe(1);
-        expect(live).toMatch(/data-action="take-over"[^>]*>[^<]*(<[^>]*>[^<]*)*⌘⇧T/);
-        expect(live).toMatch(/data-action="chat"[^>]*>[^<]*(<[^>]*>[^<]*)*⌘J/);
+        // The chords ride the icons' tooltips.
+        expect(live).toMatch(/<button(?=[^>]*data-action="take-over")[^>]*title="Take over \(⌘⇧T\)"/);
+        expect(live).toMatch(/<button(?=[^>]*data-action="chat")[^>]*title="Chat \(⌘J\)"/);
         expect(live).toContain('data-action="agent-more"');
         const dead = render({ ops, session: broken });
         expect(dead.split('data-action="restart"').length - 1).toBe(1);
-        expect(dead).toContain('data-action="open-terminal"');
+        // The agent's TUI is never called a terminal (Tynn #851): the Broken header offers it as what it is.
+        // An icon in the one bar: "Open TUI" is its name (aria-label), its tooltip says what it is for.
+        expect(dead).toMatch(/<button(?=[^>]*data-action="open-tui-header")(?=[^>]*aria-label="Open TUI")[^>]*title="Open the agent’s TUI: diagnostics and logins"/);
+        expect(dead).not.toContain('Open terminal');
         expect(dead).not.toContain('data-action="stop-turn"');
         expect(dead).toContain('data-pill="Broken · ACP stream closed · exit 137"');
     });

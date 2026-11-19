@@ -17,8 +17,6 @@ import { GAPP_METHODS } from '../src/core/gapps.js';
 
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
-    addWorkspace: 'addWorkspace opens a folder picker on the host; do it there',
-    providerLogin: 'providerLogin opens the provider login in a window on the host; do it there',
     'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
 };
 const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
@@ -39,7 +37,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.localBegin': [{ kind: 'write', id: 'quiet' }], 'terminals.localChunk': ['ticket', 'x'], 'terminals.localFinish': ['ticket'],
     'terminals.localWatch': ['view', null, 'quiet'], 'terminals.localReady': ['view'], 'terminals.localAck': ['view', 1], 'terminals.localUnwatch': ['view'],
     snapshot: [], agentDetail: ['missing'], openAgent: ['agent_a'], stopAgent: ['agent_a'],
-    cancelTurn: ['agent_a'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'],
+    cancelTurn: ['agent_a'], stopToolCall: ['agent_a', 't1'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'], 'logins.design': [], 'accounts.switch': ['claude'], 'logins.provider': ['claude'],
     prompt: ['agent_a', 'hello'], resolvePrompt: ['agent_a', 'draft_1', 'send'],
     addAgent: ['work', { name: 'new', purpose: 'contract', provider: 'claude' }],
     answerApproval: ['agent_a', 'allow', 'note'],
@@ -71,7 +69,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],
     'workspaces.setSetting': ['work', 'theme', 'dark'], 'workspaces.resetSetting': ['work', 'theme'],
     'workspaces.setGoverns': ['work', []], 'workspaces.setDefaultAgent': ['work', null], 'workspaces.setMcpServer': ['work', 'slack', false],
-    'workspaces.setColor': ['work', 'blue'], 'workspaces.savePreview': ['work'], 'workspaces.save': ['work', {}], 'workspaces.cloneOffers': ['work'], 'workspaces.applyOffer': ['work', 'flow:.flows/a.json'], addWorkspace: [], takeOver: ['agent_a'],
+    'workspaces.setColor': ['work', 'blue'], 'workspaces.savePreview': ['work'], 'workspaces.save': ['work', {}], 'workspaces.cloneOffers': ['work'], 'workspaces.applyOffer': ['work', 'flow:.flows/a.json'], takeOver: ['agent_a'],
     'terminals.open': ['work', { cols: 80, rows: 24 }], 'terminals.write': ['term_1', 'hello'],
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],
@@ -81,6 +79,8 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     // Tynn #616: "Quit now" / "Upgrade now" during the safe-point wait. No wait in flight here: false, both ways.
     'updates.forceDrain': [],
     headroom: [], accountRetry: ['agent_a'],
+    // Client/host split step 2a (Tynn #895): the account chips, for every client.
+    'accounts.list': [], 'accounts.act': [{ kind: 'rename', id: 'acct_1', label: 'Work' }], 'accounts.dismissOffer': ['offer_1'],
     'inbox.sendFile': ['agent_a', 'hello', 'sample.txt', 'b2s='],
     'files.children': ['work', ''], 'files.open': ['work', 'missing.txt'],
     'files.readMedia': ['work', 'missing.png'], 'files.upload': ['work', '', null],
@@ -105,7 +105,7 @@ Object.assign(ROWS, {
     'appInbox.state': ['work'], 'appInbox.createKey': ['work', 'fixture'], 'appInbox.revokeKey': ['work', 'key_fixture'],
     'appInbox.source': ['work', 'allow', 'site', 'site_fixture'],
     'deviceLink.hosts': [], 'deviceLink.forget': ['wss://example.test/genie'], 'deviceLink.adopt': ['wss://example.test/genie', 'synthetic-token'],
-    'tynnNetwork.workstations': [], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
+    'tynnNetwork.workstations': [], 'tynnNetwork.classifyLink': ['https://tynn.example/invites/accept/tok_fixture'], 'crashReport.draft': [], 'crashReport.send': ['the report', 'my notes'], 'providers.chooseProgram': ['claude', 'C:\\fixture\\claude.exe'], 'terminals.scratch': ['work'], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
     'tynnNetwork.shares.list': [null], 'tynnNetwork.shares.mint': [{ workspaceId: null, capability: 'readonly', expiresInDays: 7 }], 'tynnNetwork.shares.revoke': ['share_fixture'],
 });
 type ResultFrame = Extract<WireMessage, { kind: 'result' }>;
@@ -247,7 +247,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
 });
 
 const VOID_CALLS: Record<string, (bridge: ReturnType<typeof connectRemote>['bridge']) => void> = {
-    openAgent: (b) => b.openAgent('agent_a'), stopAgent: (b) => b.stopAgent('agent_a'), addWorkspace: (b) => b.addWorkspace(),
+    openAgent: (b) => b.openAgent('agent_a'), stopAgent: (b) => b.stopAgent('agent_a'),
     'terminals.write': (b) => b.terminals.write('term_1', 'hello'),
     'terminals.resize': (b) => b.terminals.resize('term_1', 80, 24), 'terminals.close': (b) => b.terminals.close('term_1'),
 };

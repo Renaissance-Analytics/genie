@@ -138,9 +138,8 @@ describe('the bridge over the wire', () => {
         expect(await bridge.resolvePrompt('agent_a', 'draft1', 'send')).toEqual({ ok: true });
         expect(api.calls).toContainEqual({ method: 'resolvePrompt', args: ['agent_a', 'draft1', 'send'] });
         expect(await bridge.takeOver('agent_a')).toEqual({ ok: true, terminalId: 'term_9', started: true, ticket: expect.any(String) });
-        bridge.addWorkspace();
-        await tick();
-        expect(remote.state().lastRefusal).toBe('addWorkspace opens a folder picker on alphar; do it there');
+        // The old addWorkspace (it only refused) is retired: every client adds through previewAdd / confirmAdd (Tynn #897, 2c-1).
+        expect((bridge as unknown as { addWorkspace?: unknown }).addWorkspace).toBeUndefined();
 
         expect(await bridge.terminals.open('tynn', { cols: 80, rows: 24 })).toEqual({ id: 'term_9', pid: 9, shell: 'sh', scrollback: '' });
         expect(await bridge.terminals.list('tynn')).toEqual([{ id: 'term_9', pid: 9, shell: 'sh' }]);

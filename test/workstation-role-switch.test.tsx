@@ -71,9 +71,9 @@ describe('setWorkstationRole — asking Tynn', () => {
 describe('the list carries each workstation’s role from Tynn', () => {
     it('exactly pilot or drone, else unknown', async () => {
         const rows = [
-            { id: 'a', name: 'a', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'pilot' },
-            { id: 'b', name: 'b', status: 'active', is_local: false, connectable: true, source: 'owner', role: 'drone' },
-            { id: 'c', name: 'c', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'admin' },
+            { id: 'a', name: 'a', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'pilot' },
+            { id: 'b', name: 'b', status: 'active', is_local: false, connectable: true, source: 'owner', registered_by_you: true, role: 'drone' },
+            { id: 'c', name: 'c', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'admin' },
         ];
         const out = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set());
         expect(out.ok && out.workstations.map((w) => w.role)).toEqual(['pilot', 'drone', null]);
@@ -82,8 +82,8 @@ describe('the list carries each workstation’s role from Tynn', () => {
 
 describe('the switch on each workstation (a pilot only)', () => {
     const rows = { ok: true as const, workstations: [
-        { id: 'ws_desk', name: 'desk', active: true, connectable: true, local: true, source: 'owner', role: 'pilot' as const },
-        { id: 'ws_cloud', name: 'cloud', active: true, connectable: true, local: false, source: 'owner', role: 'drone' as const },
+        { id: 'ws_desk', name: 'desk', active: true, connectable: true, local: true, source: 'owner', mine: true, role: 'pilot' as const },
+        { id: 'ws_cloud', name: 'cloud', active: true, connectable: true, local: false, source: 'owner', mine: true, role: 'drone' as const },
         { id: 'ws_guest', name: 'pat', active: true, connectable: true, local: true, source: 'invite', role: 'pilot' as const },
     ] };
     const row = (html: string, id: string) => { const at = html.slice(html.indexOf(`data-tynn-workstation-row="${id}"`)); return at.slice(0, at.indexOf('</li>')); };
@@ -144,7 +144,6 @@ describe('the code prompt: the code, Confirm, its step, then success or the reas
 
 describe('wired', () => {
     const strip = (text: string): string => text.split(/\r?\n/).map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1')).join('\n');
-    const main = strip(readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8'));
     const preload = strip(readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8'));
     const app = strip(readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8'));
     const account = strip(readFileSync(new URL('../src/main/tynn-account.ts', import.meta.url), 'utf8'));
@@ -152,16 +151,20 @@ describe('wired', () => {
     const client = strip(readFileSync(new URL('../src/renderer/remote-bridge.ts', import.meta.url), 'utf8'));
     const session = strip(readFileSync(new URL('../src/renderer/local-session.ts', import.meta.url), 'utf8'));
 
-    it('the host API refuses a drone before asking Tynn through main, then re-reads this machine’s role', () => {
+    it('the host API refuses a drone before asking Tynn through genie-host’s account, then re-reads this machine’s role', () => {
+        // The owner's operations are genie-host's for every client (Tynn #898 steps 2d-3b and 2d-4b2): host-owner-ops.ts.
+        const ops = strip(readFileSync(new URL('../src/main/host-owner-ops.ts', import.meta.url), 'utf8'));
+        const host = strip(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8'));
         const handler = /case 'tynnNetwork\.setRole': \{([^]*?)\n {12}\}/.exec(api)?.[1] ?? '';
-        const port = /setRole: \(id, role, code\) => \{([^]*?)\n {20}\},/.exec(main)?.[1] ?? '';
         expect(handler).toContain('droneRefusal(network.role())');
-        expect(main).toContain('role: () => workstationRoleNow');
+        expect(ops).toContain('role: () => tynn.role(),');
+        expect(host).toContain('role: () => relayHostService.role(),');
         expect(handler).toContain('network.setRole(workstationId, role, code)');
         expect(handler.indexOf('droneRefusal')).toBeLessThan(handler.indexOf('network.setRole('));
         expect(handler).toContain('if (result.ok) network.rereadRole()');
-        expect(main).toContain('rereadRole: () => { void readWorkstationRoleNow?.(); }');
-        expect(port).toContain('setWorkstationRole((path, init) => account.request(path, init), id, role, code)');
+        expect(ops).toContain('rereadRole: () => { void tynn.readRole().catch(() => {}); },');
+        expect(host).toContain('readRole: () => relayHostService.readRole(),');
+        expect(ops).toContain('setRole: (workstationId, role, code) => { const a = account(); return setWorkstationRole((path, init) => a.request(path, init), workstationId, role, code); },');
     });
 
     it('the same local client exposes it through the page session', () => {

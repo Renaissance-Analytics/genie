@@ -50,10 +50,11 @@ describe('the tray’s scratch terminal is disposable and ends with its window',
         expect(host.finished(id)).toBeNull();
     });
 
-    it('main’s tray handler opens it through the same ScratchTerminals that every Take Over window’s close reaches', () => {
+    it('main’s tray handler asks genie-host for Genie’s own (terminals.scratch, null); main keeps no ScratchTerminals (Tynn #897, 2c-4)', () => {
         // Comment lines dropped by LINE, CRLF-safe: a guard that matched a comment would pass on prose.
         const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-        expect(main).toMatch(/openScratchTerminal\(\{ scratch: scratchTerminals, home: homedir\(\) \}\)/);
-        expect(main).toMatch(/win\.on\('closed', \(\) => \{[^}]*scratchTerminals\?\.windowClosed\(terminalId\)/);
+        expect(main).toMatch(/onScratchTerminal: \(\) => \{\s*void ownProtocol\.call\('terminals\.scratch', \[null\]\)/);
+        expect(main).not.toContain('scratchTerminals?.windowClosed');
+        expect(main).not.toContain('new ScratchTerminals(');
     });
 });

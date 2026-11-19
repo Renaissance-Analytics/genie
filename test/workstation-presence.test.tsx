@@ -17,11 +17,11 @@ const json = (status: number, body: unknown) => ({ ok: status >= 200 && status <
 describe('connectableWorkstations carries Tynn\'s `online`', () => {
     it('true and false as Tynn says; absent or anything but a boolean is "not known" (null), never a guess', async () => {
         const rows = [
-            { id: 'on', name: 'On', status: 'active', is_local: true, connectable: true, source: 'owner', online: true },
-            { id: 'off', name: 'Off', status: 'active', is_local: true, connectable: true, source: 'owner', online: false },
-            { id: 'unknown', name: 'Unknown', status: 'active', is_local: true, connectable: true, source: 'owner', online: null },
-            { id: 'old-tynn', name: 'Old', status: 'active', is_local: true, connectable: true, source: 'owner' },
-            { id: 'odd', name: 'Odd', status: 'active', is_local: true, connectable: true, source: 'owner', online: 'yes' },
+            { id: 'on', name: 'On', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, online: true },
+            { id: 'off', name: 'Off', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, online: false },
+            { id: 'unknown', name: 'Unknown', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, online: null },
+            { id: 'old-tynn', name: 'Old', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true },
+            { id: 'odd', name: 'Odd', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, online: 'yes' },
         ];
         const result = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set());
         expect(result.ok && Object.fromEntries(result.workstations.map((w) => [w.id, w.online]))).toEqual({ on: true, off: false, unknown: null, 'old-tynn': null, odd: null });
@@ -29,9 +29,9 @@ describe('connectableWorkstations carries Tynn\'s `online`', () => {
 });
 
 const LIST = { ok: true as const, workstations: [
-    { id: 'ws_on', name: 'Aionima', active: true, connectable: true, local: true, source: 'owner', role: 'pilot' as const, online: true },
-    { id: 'ws_off', name: 'Foundation', active: true, connectable: true, local: true, source: 'owner', role: 'drone' as const, online: false },
-    { id: 'ws_unknown', name: 'Cloudy', active: true, connectable: true, local: false, source: 'owner', role: 'drone' as const, online: null },
+    { id: 'ws_on', name: 'Aionima', active: true, connectable: true, local: true, source: 'owner', mine: true, role: 'pilot' as const, online: true },
+    { id: 'ws_off', name: 'Foundation', active: true, connectable: true, local: true, source: 'owner', mine: true, role: 'drone' as const, online: false },
+    { id: 'ws_unknown', name: 'Cloudy', active: true, connectable: true, local: false, source: 'owner', mine: true, role: 'drone' as const, online: null },
 ] };
 const row = (html: string, id: string) => { const at = html.slice(html.indexOf(`data-tynn-workstation-row="${id}"`)); return at.slice(0, at.indexOf('</li>')); };
 /** The visible words of a fragment: tags (and their attributes) removed. */
@@ -68,7 +68,7 @@ describe('each row shows whether the machine is online: a dot, its words on hove
     });
 
     it('a list from a Tynn that does not say (no `online` field) shows the not-known dot', () => {
-        const old = renderToStaticMarkup(<TynnWorkstationRows list={{ ok: true, workstations: [{ id: 'ws_old', name: 'Old', active: true, connectable: true, local: true, source: 'owner' }] }} />);
+        const old = renderToStaticMarkup(<TynnWorkstationRows list={{ ok: true, workstations: [{ id: 'ws_old', name: 'Old', active: true, connectable: true, local: true, source: 'owner', mine: true }] }} />);
         expect(row(old, 'ws_old')).toContain('data-online="unknown"');
     });
 });

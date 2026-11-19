@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { measureFilesWatchPage } from './files-watch-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { initFixtureRepo } from './fixture-git-repo.mjs';
 
 const WIN = process.platform === 'win32', BASELINE = process.argv.includes('--baseline'), OUT = resolve('smoke-out'), PORT = 9344, INSPECT = 9345, started = Date.now(), sessions = [], reports = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -45,7 +46,7 @@ try {
     execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env, stdio: 'pipe', timeout: 15000, windowsHide: true });
     writeFileSync(join(root, '.genie', 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'tynn', path: workspace }])); writeFileSync(join(root, '.genie', 'runtime', 'agents.json'), '[]');
     const git = args => execFileSync('git', ['-c', 'user.name=Watch fixture', '-c', 'user.email=watch@example.test', ...args], { cwd: workspace, encoding: 'utf8', stdio: 'pipe', timeout: 15000, windowsHide: true });
-    writeFileSync(join(workspace, 'watched.txt'), 'baseline'); git(['init']); git(['add', '.']); git(['commit', '-m', 'watch baseline']);
+    writeFileSync(join(workspace, 'watched.txt'), 'baseline'); initFixtureRepo(git, 'watch baseline'); // no auto-maintenance child per commit (Tynn #732)
     for (let i = 0; i < 6000; i++) writeFileSync(join(workspace, `entry-${String(i).padStart(5, '0')}-${'x'.repeat(150)}.txt`), '');
     const fd = openSync(join(OUT, 'files-watch-electron.log'), 'w'), electron = resolve('node_modules/electron', WIN ? 'dist/electron.exe' : 'dist/electron');
     const args = ['.', `--remote-debugging-port=${PORT}`, `--inspect=${INSPECT}`, `--user-data-dir=${join(root, 'profile')}`]; if (!WIN) args.push('--no-sandbox');
@@ -94,7 +95,8 @@ try {
 finally {
     try { await page?.evaluate('window.__filesWatchRun&&(window.__filesWatchRun.live=false,window.__filesWatchRun.offs.forEach(off=>off()),clearInterval(window.__filesWatchRun.timer));true'); } catch {}
     try { await main?.evaluate('globalThis.__watchMain?.stop();true'); } catch {}
-    try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.quit();true"); } catch {}
+    // Ended, not quit (Tynn #916): a quit asks first when anything runs, and that box blocks main until genie-host's hang watchdog starts a new window.
+    try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.exit(0);true"); } catch {}
     for (const session of sessions) session.socket.close(); await sleep(1000); if (app?.exitCode === null) { try { app.kill('SIGTERM'); } catch {} }
     const record = root ? json(join(root, '.genie', 'runtime', 'host.json')) : null;
     if (hostRecord && record?.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt && Number.isFinite(record.startedAt) && record.startedAt >= started) { try { process.kill(record.pid, 'SIGTERM'); } catch {} }

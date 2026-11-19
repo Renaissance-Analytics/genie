@@ -66,7 +66,8 @@ describe('main and the renderers pass notes, never drop them', () => {
         const main = strip('../src/main/main.ts');
         // Another machine's question (Tynn #726) is answered on that machine, with the same notes; this machine's as before.
         expect(main.match(/answer:\s*async\s*\(item,\s*selections,\s*notes\)\s*=>\s*\{\s*if\s*\(remoteQuestions\.owns\(item\.id\)\)\s*return remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.answerForm',\s*selections,\s*notes\s*\}\);\s*await questionAction\(\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
-        expect(main).toContain("const reply = await client.call('engine.featureQuestion', [action]);");
+        // Encoded for the wire like any client's answer (Tynn #861): the id, the picks, the notes.
+        expect(main).toContain("const reply = await client.call('engine.featureQuestion', [deckActionForWire(action)]);");
         const server = strip('../src/main/session-engine-server.ts');
         expect(server).toContain("if (!conn.local || !conn.window || !this.#options.features) throw new Error('questions need this machine’s own window');");
         expect(server).toContain("return this.#options.features.call(conn.id, 'act', [action], { connectionId: 'question-window', origin: 'local-window',");

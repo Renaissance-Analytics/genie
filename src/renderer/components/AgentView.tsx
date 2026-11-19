@@ -17,7 +17,7 @@ import type { McpRow } from '../../core/agent-mcp.js';
 import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
 import { FidelityDot } from './Dashboard.js';
 import { Flash } from './Flash.js';
-import { ViewHeader } from './ViewHeader.js';
+import { BAR_ACTION, TopBar } from './TopBar.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -36,6 +36,7 @@ import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
 import { isOsAgent, OS_AGENT_POLICY_NOTE } from '../../core/os-agent.js';
 import { TurnStop } from './TurnStop.js';
+import { RunningCall } from './RunningCall.js';
 import type { DeletePlan, ProviderSwitchState } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
 import { approvalPlacement, approvalPolicySentence, budgetFor, parkedDivider, planFor, statePill, tabsFor } from '../../core/agent-view.js';
@@ -66,6 +67,7 @@ import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 import { turnCards } from '../../core/turn-cards.js';
 import type { StreamLayout } from '../../core/route.js';
 import { costWords } from '../../core/cost-words.js';
+import { ProviderQuote } from './ProviderQuote.js';
 
 /**
  * THE AGENT VIEW — the most important screen.
@@ -103,6 +105,17 @@ const TAB_LABEL: Record<AgentTab, string> = {
     terminal: 'Terminal',
     activity: 'Activity',
     settings: 'Settings',
+};
+
+/** Each of the agent's own views as an icon in the bar's segmented control; its name is the control's label and tooltip. */
+const TAB_ICON: Record<AgentTab, string> = {
+    stream: 'scroll-text',
+    files: 'folder-tree',
+    changes: 'file-code',
+    shells: 'layers',
+    terminal: 'square-terminal',
+    activity: 'gauge',
+    settings: 'settings',
 };
 
 const PILL_TONE = {
@@ -208,6 +221,13 @@ const REPAIR_LABEL = (r: Repair): string =>
     : `restart fresh — ${r.reason}`;
 
 export interface AgentViewProps {
+    /**
+     * THE ONE BAR (TopBar.tsx; the owner on beta.64): the page's top bar, given what the agent puts at its right end (its
+     * state, its own views, its actions). Shell hands in its workspace's tab strip, so an agent opens inside its workspace's
+     * bar exactly as the workspace's own views do. Absent (the Doctor window, an agent with no workspace) = the same bar,
+     * the agent its one tab.
+     */
+    bar?: ((trailing: ReactNode) => ReactNode) | undefined;
     /** The Active Plan column shown (beta.33 item 11: hidden from the workspace tab row's toggle); absent = shown. */
     planOpen?: boolean | undefined;
     /** Where the plan column's width is remembered (genie#1280); `undefined` = the browser's localStorage, `null` = nowhere. */
@@ -300,6 +320,8 @@ export interface AgentViewProps {
      * the agent keeps running. Ending the session is `onStop`, a separate and explicit action.
      */
     onCancelTurn?: ((agentId: string) => void) | undefined;
+    /** `Stop this call` beside the call the turn is in (Tynn #855): only that call ends; the turn goes on, the agent told. */
+    onStopToolCall?: ((agentId: string, toolCallId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
     /** `Log in to <provider>` for a signed-out agent (the owner, 2026-10-18). */
@@ -374,8 +396,8 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
-    chatSubject, approvalInToast = false, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    chatSubject, approvalInToast = false, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, bar, chatInView = false, ops,
+    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onStopToolCall, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -680,36 +702,62 @@ function AgentViewBody({
 
     return (
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
-            {/* ONE HEADER (ViewHeader.tsx; the owner, 2026-11-16): crumbs (back to its workspace, Tynn #805, then the agent),
-                its state (fidelity dot, provider chip, pill), its path, then its actions. */}
-            <ViewHeader
-                crumbs={[
-                    ...(workspace ? [{ label: workspace.name ?? workspace.id, title: `Back to ${workspace.name ?? workspace.id}`, onClick: () => onNavigate(`genie://workspace/${workspace.id}`), attrs: { 'data-crumb': workspace.id, 'data-nav': `genie://workspace/${workspace.id}` } }] : []),
-                    { label: agent.name, attrs: { 'data-agent-name': '' } },
-                ]}
-                path={agent.cwd}
-                status={<>
+            {/* THE ONE BAR (TopBar.tsx; the owner on beta.64: "agents should not have a different header UX than workspaces, the
+                only difference is the main content"): its workspace's tabs, with the agent's state, its own views and its actions
+                at the right end. No crumbs (its tab is its name), the path is its tab's tooltip, no row of its own tabs. */}
+            {(() => {
+                const barEnd = (
+                    <>
+                        <span data-bar-status="" className="flex min-w-0 shrink items-center gap-2 overflow-hidden">
                     <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'cool' ? 'cooling' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
-                    <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
-                    <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
+                    <span data-provider-chip={agent.provider} title={`${providerName(agent.provider)} · ${agent.fidelity === 'observed' ? 'pty' : 'ACP'}`} className="flex shrink-0 items-center text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" /></span>
+                    <span data-pill={pill.word} title={pill.title ?? pill.word} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
                         <span className="size-1.5 rounded-full bg-current" />
-                        {pill.word}
+                        {/* In a bar under 64rem a running turn shows its dot and clock; the words are the pill's tooltip. */}
+                        <span {...(pill.elapsed ? { className: '@max-[64rem]:hidden' } : {})}>{pill.word}</span>
                         {/* A clock only while a turn runs. On an idle agent it counts up forever
                             and reads as work in progress. */}
                         {pill.elapsed ? <span className="font-mono tabular-nums">{pill.elapsed}</span> : null}
                     </span>
-                </>}
-                actions={<>
-                    {/* START, when it is not running (the owner: there was no way to start the genie agent). */}
-                    {actions.start && onStart ? (
-                        <Button size="xs" labelClassName="contents" type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} aria-label="Start" className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
-                            <Icon name="play" size="xs" />
-                            <span className="@max-[46rem]:hidden">Start</span>
-                        </Button>
+                            {/* THE AGENT PULSE (beta.64): the last minute of its work; a fixed slot, so nothing moves. The tab note is its tooltip. */}
+                            {(() => { const n = tabNote(rows, active, agent.name, clock()); return <span {...(n ? { 'data-tab-note': n.kind, title: n.text } : {})} className="flex shrink-0 items-center @max-[64rem]:hidden"><AgentPulse rows={rows} working={session?.running === true && session.turnState === 'working'} now={clock} /></span>; })()}
+                        </span>
+                        {/* ITS OWN VIEWS, a segmented control in the bar (react-fancy Tabs: role="tab", arrow keys; the route's ?tab= is the truth). */}
+                        <span data-agent-subviews="" className="flex shrink-0 items-center rounded-md bg-[var(--bg-2)] p-0.5">
+                            <Tabs activeTab={active} onTabChange={(t) => onNavigate(`genie://agent/${agent.id}?tab=${t}`)} variant="pills">
+                                <Tabs.List className="gap-0.5 bg-transparent p-0 dark:bg-transparent">
+                                    {tabs.map((t) => (
+                                        <Tabs.Tab
+                                            key={t}
+                                            value={t}
+                                            data-tab={t}
+                                            aria-label={TAB_LABEL[t]}
+                                            title={TAB_LABEL[t]}
+                                            className={`flex h-6 items-center justify-center rounded px-1 shadow-none ${
+                                                t === active ? 'bg-[var(--bg-0)] text-[var(--fg-1)] dark:bg-[var(--bg-0)] dark:text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)]'
+                                            }`}
+                                        >
+                                            <Icon name={TAB_ICON[t]} size="xs" />
+                                            {/* The indicator: how many it has running now, on the control, from every view. */}
+                                            {t === 'shells' && shells.count > 0 ? <span data-shells-count={shells.count} className="ml-1 rounded-full bg-[var(--success)] px-1 text-[10px] font-semibold leading-4 text-[var(--bg-1)]">{shells.count}</span> : null}
+                                        </Tabs.Tab>
+                                    ))}
+                                </Tabs.List>
+                            </Tabs>
+                        </span>
+                        <span data-bar-actions="" className="flex shrink-0 items-center">
+                            {actions.start && onStart ? (
+                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="start" aria-label="Start" title="Start: the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} className={BAR_ACTION}>
+                                    <Icon name="play" size="xs" />
+                                </Button>
+                            ) : null}
+                            {/* STOP THIS TURN: the TURN ends, the agent keeps running ("Stop agent" is in More). Its slot is kept while
+                                nothing runs, so the icons beside it do not move as turns start and end. */}
+                            {onCancelTurn ? (actions.stop ? <TurnStop iconOnly onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : <span aria-hidden="true" data-stop-slot="" className="size-6 shrink-0" />) : null}
+                    {/* THE CALL THE TURN IS IN (Tynn #855): its command and age, and Stop this call — only that call ends. */}
+                    {agent.fidelity === 'declared' && session?.call ? (
+                        <RunningCall call={session.call} now={clock()} onStop={onStopToolCall ? () => onStopToolCall(agent.id, session.call!.toolCallId) : undefined} />
                     ) : null}
-                    {/* STOP THIS TURN, while a turn runs that can be stopped: the TURN ends, the agent keeps running. Ending the
-                        session is "Stop agent" in the operations menu. */}
-                    {actions.stop && onCancelTurn ? <TurnStop onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : null}
                     {/* SIGNED OUT (the owner, 2026-10-18): the provider's own login, in a window of its own, with what to do. */}
                     {actions.login && onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"
@@ -758,82 +806,43 @@ function AgentViewBody({
                             Resume now
                         </Button>
                     ) : null}
-                    {/*
-                     * The way to TALK to this agent.
-                     *
-                     * The chat flyout is the only place a human types to an agent — it replaces
-                     * this view's composer — so without a control that opens it, the Agent view
-                     * is read-only and somebody can open an agent and then do nothing with it.
-                     * That is what the first screenshot of this screen showed.
-                     *
-                     * It navigates rather than toggling local state, so the conversation is
-                     * linkable and the subject lives in the URL. Not drawn when the chat is already on the page.
-                     */}
-                    {chatInView ? null : (
-                    <Button size="xs" labelClassName="contents"
-                        type="button"
-                        data-action="chat"
-                        // The destination as an ATTRIBUTE, matching the rail's `data-nav`
-                        // convention. A route that exists only inside a click handler cannot be
-                        // asserted from markup, and "there is a button" is not the same claim as
-                        // "the button goes somewhere" — which is precisely the gap that let a
-                        // finished Conversation UI ship unreachable.
-                        data-nav={chatRoute}
-                        onClick={() => onNavigate(chatRoute)}
-                        aria-label="Chat"
-                        title="Chat (⌘J)"
-                        className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
-                    >
-                        <Icon name="message-square" size="xs" />
-                        <span className="@max-[46rem]:hidden">Chat</span>
-                        <span className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘J</span>
-                    </Button>
-                    )}
-
-                    {/* Take over and Open terminal only where this window can open one: a button with nothing behind it is not drawn. */}
-                    {onTakeOver ? (
-                    <Button size="xs" labelClassName="contents"
-                        type="button"
-                        data-action="take-over"
-                        onClick={() => onTakeOver(agent.id)}
-                        aria-label="Take over"
-                        title="Take over (⌘⇧T)"
-                        className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
-                    >
-                        <Icon name="square-terminal" size="xs" />
-                        <span className="@max-[46rem]:hidden">Take over</span>
-                        <span className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘⇧T</span>
-                    </Button>
-                    ) : null}
-                    {/* In the error state (the board): the Take Over window IS the terminal. */}
-                    {actions.openTerminal && onTakeOver ? (
-                        <Button size="xs" labelClassName="contents" type="button" data-action="open-terminal" aria-label="Open terminal" title="Open terminal" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
-                            <Icon name="square-terminal" size="xs" />
-                            <span className="@max-[46rem]:hidden">Open terminal</span>
-                        </Button>
-                    ) : null}
+                            {/* CHAT: the way to talk to this agent (the flyout); its destination rides data-nav. Not drawn when the chat is on the page. */}
+                            {chatInView ? null : (
+                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="chat" data-nav={chatRoute} onClick={() => onNavigate(chatRoute)} aria-label="Chat" title="Chat (⌘J)" className={BAR_ACTION}>
+                                    <Icon name="message-square" size="xs" />
+                                </Button>
+                            )}
+                            {/* Take over and Open TUI only where this window can open one: a button with nothing behind it is not drawn. */}
+                            {onTakeOver ? (
+                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="take-over" onClick={() => onTakeOver(agent.id)} aria-label="Take over" title="Take over (⌘⇧T)" className={BAR_ACTION}>
+                                    <Icon name="square-terminal" size="xs" />
+                                </Button>
+                            ) : null}
+                            {/* In the error state (the board): the agent's TUI, to diagnose it — called what it is, never "terminal" (Tynn #851). */}
+                            {actions.openTerminal && onTakeOver ? (
+                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="open-tui-header" aria-label="Open TUI" title="Open the agent’s TUI: diagnostics and logins" onClick={() => onTakeOver(agent.id)} className={BAR_ACTION}>
+                                    <Icon name="app-window" size="xs" />
+                                </Button>
+                            ) : null}
                     {ops && menu.length > 0 ? (
                         <>
                             {/* RESTART — THE ONE (genie#1238): whenever it has a session, running or Broken; primary when Broken.
                                 It keeps the conversation, starts a Broken agent again and sends what it is owed. */}
                             {actions.restart ? (
-                                <Button size="xs" labelClassName="contents"
+                                <Button variant="ghost" size="xs" labelClassName="contents"
                                     type="button"
                                     data-action="restart"
                                     title="Restart — same conversation; anything not yet delivered to it is sent once it is up"
                                     onClick={() => ops.onRestart('graceful')}
                                     aria-label="Restart"
-                                    className={actions.openTerminal
-                                        ? 'flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-1 text-xs font-medium text-white hover:bg-[var(--primary-hover)]'
-                                        : 'flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]'}
+                                    className={actions.openTerminal ? `${BAR_ACTION} bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)] hover:text-white` : BAR_ACTION}
                                 >
                                     <Icon name="rotate-ccw" size="xs" />
-                                    <span className="@max-[46rem]:hidden">Restart</span>
                                 </Button>
                             ) : null}
                             <Dropdown placement="bottom-end">
                                 <Dropdown.Trigger>
-                                    <Button size="xs" labelClassName="contents" type="button" data-action="agent-more" aria-label="More operations" className="flex items-center rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                                    <Button size="xs" labelClassName="contents" type="button" data-action="agent-more" aria-label="More operations" title="More" className={BAR_ACTION}>
                                         <Icon name="ellipsis" size="xs" />
                                     </Button>
                                 </Dropdown.Trigger>
@@ -847,9 +856,23 @@ function AgentViewBody({
                             </Dropdown>
                         </>
                     ) : null}
-                </>}
-            />
+                        </span>
+                    </>
+                );
+                if (bar) return bar(barEnd);
+                return (
+                    <TopBar trailing={barEnd}>
+                        <Tabs activeTab="self" onTabChange={() => {}} className="flex min-w-0 items-stretch">
+                            <Tabs.List className="items-stretch border-b-0">
+                                <Tabs.Tab value="self" data-agent-name="" {...(agent.cwd ? { title: agent.cwd } : {})} className="flex shrink-0 items-center border-b-2 border-[var(--fg-1)] px-3 py-0 text-[12px] font-normal text-[var(--fg-1)] dark:border-[var(--fg-1)] dark:text-[var(--fg-1)]">{agent.name}</Tabs.Tab>
+                            </Tabs.List>
+                        </Tabs>
+                    </TopBar>
+                );
+            })()}
 
+            {/* EVERYTHING UNDER THE BAR is the page's body: notices, then the content. */}
+            <div data-view-body="" className="flex min-h-0 flex-1 flex-col">
             {ops?.lastOutcome ? (
                 <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p>
             ) : null}
@@ -920,36 +943,6 @@ function AgentViewBody({
                     </div>
                 </form>
             ) : null}
-
-            {/* Tabs. The set itself is the signal — a missing tab says what Genie cannot see. react-fancy Tabs, not Buttons (the
-                owner, 2026-11-01: "those should not be buttons, it's a menu"): role="tab", the one on screen aria-selected; the
-                route (`?tab=`) stays the source of truth, so a pick navigates. */}
-            <div className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
-                <Tabs activeTab={active} onTabChange={(t) => onNavigate(`genie://agent/${agent.id}?tab=${t}`)} variant="pills">
-                    <Tabs.List className="gap-1 bg-transparent p-0 dark:bg-transparent">
-                        {tabs.map((t) => (
-                            <Tabs.Tab
-                                key={t}
-                                value={t}
-                                data-tab={t}
-                                className={`flex items-center rounded-md px-2.5 py-1 text-[13px] shadow-none ${
-                                    t === active ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)] dark:bg-[var(--bg-3)] dark:text-[var(--fg-1)]' : 'font-normal text-[var(--fg-3)] hover:bg-[var(--bg-2)] dark:text-[var(--fg-3)]'
-                                }`}
-                            >
-                                {TAB_LABEL[t]}
-                                {/* The indicator: how many it has running now, on the tab, from every tab. */}
-                                {t === 'shells' && shells.count > 0 ? <span data-shells-count={shells.count} className="ml-1.5 rounded-full bg-[var(--success)] px-1.5 text-[10px] font-semibold text-[var(--bg-1)]">{shells.count}</span> : null}
-                            </Tabs.Tab>
-                        ))}
-                    </Tabs.List>
-                </Tabs>
-                {/* THE TAB NOTE (the board), right of the tabs: where Files / Changes open; on the Stream, a measurement of the rows. */}
-                <div className="ml-auto flex min-w-0 items-center gap-3">
-                    {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
-                    {/* THE AGENT PULSE (beta.64): the last minute of its work, on every tab; a fixed slot, so nothing moves. */}
-                    <AgentPulse rows={rows} working={session?.running === true && session.turnState === 'working'} now={clock} />
-                </div>
-            </div>
 
             <div className="flex min-h-0 flex-1">
                 {index && indexCollapsed ? (
@@ -1045,8 +1038,10 @@ function AgentViewBody({
                                     <div className="flex items-center gap-2 font-mono text-[12px] text-[var(--danger)]">
                                         <Icon name="circle-alert" size="xs" />
                                         <span>{session.failure.reason}</span>
+                                        {session.providerStop?.code === session.failure.reason && session.providerStop.count > 1 ? <span data-stream-stop-count="">{session.providerStop.count} times</span> : null}
                                     </div>
-                                    <p className="mt-1 text-[var(--fg-3)]">The turn did not finish. The last tool call has no result.</p>
+                                    <p className="mt-1 text-[var(--fg-3)]">{session.providerStop?.code === session.failure.reason ? session.providerStop.words : 'The turn did not finish. The last tool call has no result.'}</p>
+                                    {session.providerStop?.code === session.failure.reason ? <ProviderQuote message={session.providerStop.providerMessage} details={session.providerStop.providerDetails} /> : null}
                                 </div>
                             ) : null}
 
@@ -1111,6 +1106,7 @@ function AgentViewBody({
                             manageTabs: ops?.onSetManageTabs !== undefined, drivePages: ops?.onSetDrivePages !== undefined,
                             issueWatch: ops?.onSetIssueWatch !== undefined && ops.issueWatch !== undefined,
                             persona: persona !== null, skills: session?.extensions != null || ops?.mcp !== undefined,
+                            tui: onTakeOver !== undefined,
                         });
                         const shown = settingsSectionShown(sections, settingsSectionProp ?? ownSettingsSection);
                         const has = new Set(sections.find((s) => s.id === shown)?.controls ?? []);
@@ -1319,6 +1315,18 @@ function AgentViewBody({
                                                         </Button>
                                                     ))}
                                                     {outcomeFor('run')}
+                                                </div>
+                                            ) : null}
+                                            {/* THE AGENT'S TUI (Tynn #851): Take Over on this agent, here and not on the sidebar's terminal button —
+                                                the owner: "a diagnostics ui only really and used for logins". */}
+                                            {has.has('tui') && onTakeOver ? (
+                                                <div data-settings-row="tui" className={rowClass}>
+                                                    <span className={labelClass}>TUI</span>
+                                                    <Button size="xs" type="button" data-action="open-tui" title="Open the agent’s TUI in a window of its own" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
+                                                        <Icon name="square-terminal" size="xs" />
+                                                        Open TUI
+                                                    </Button>
+                                                    {help('Diagnostics and logins.')}
                                                 </div>
                                             ) : null}
                                             {/* REMOVE FROM WORKSPACE (the owner: "purge an agent ... or detach it"): the operations menu's own two items,
@@ -1606,8 +1614,8 @@ function AgentViewBody({
                             {ended.log ? <pre data-process-log="" className="max-h-40 overflow-hidden whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-2 font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{ended.log}</pre> : null}
                             <div className="flex items-center gap-2">
                                 {/* No Restart of its own (genie#1238): the header's Restart is the one, in the same view. */}
-                                {/* The board's `Open terminal` in the block: a Take Over window on this agent — the same door the header offers, where the reader is looking. */}
-                                {onTakeOver ? <Button size="xs" type="button" data-action="open-terminal-rail" onClick={() => onTakeOver(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open terminal</Button> : null}
+                                {/* The board's door in the block: the agent's TUI (Take Over) — the same door the header offers, where the reader is looking. Never called a terminal (Tynn #851). */}
+                                {onTakeOver ? <Button size="xs" type="button" data-action="open-tui-rail" title="Open the agent’s TUI: diagnostics and logins" onClick={() => onTakeOver(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open TUI</Button> : null}
                                 <CopyLogButton text={[ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')} />
                             </div>
                         </section>
@@ -1627,6 +1635,7 @@ function AgentViewBody({
                 {agent.fidelity !== 'observed' && planOpen ? (
                     <PlanColumn name={agent.name} plan={plan} steps={steps} storage={planStorage} onCollapse={onPlanCollapse} onDiscuss={onDiscussStep} />
                 ) : null}
+            </div>
             </div>
         </div>
     );

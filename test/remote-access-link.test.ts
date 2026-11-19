@@ -40,6 +40,8 @@ let server: SessionEngineServer;
 const tailnet: Array<(c: ServerConnection) => void> = [];
 const links: Array<() => void> = [];
 let access: RemoteAccessHost;
+/** genie-host's own answers, as each case builds them (`null` = still being built at boot). */
+let answers: ((method: string, args: unknown[], context: unknown) => Promise<unknown>) | null = null;
 
 beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie2-remote-access-link-'));
@@ -47,19 +49,18 @@ beforeEach(async () => {
     token = before.pair('glenn’s phone').token;
     await before.flushed();
     tailnet.length = 0;
+    answers = null;
     access = await RemoteAccessHost.open({
         home, hostName: 'alphar', now,
         transport: { onConnection: (cb) => { tailnet.push(cb); return () => {}; } },
         api: hostRemoteApi({
             hostName: 'alphar',
             own: { 'updates.state': async () => ({ phase: 'idle' }) },
-            window: { connected: () => server.newestLocalWindow() !== null, invoke: (m, a, c) => server.remoteInvoke(m, a, c) },
+            alone: () => (answers ? { invoke: (m, a, c) => answers!(m, a, c), onEvent: () => () => {}, workspaceOfAgent: () => null } : null),
         }),
     });
     const service = new RemoteAccessService(access, {
         switch: { apply: async () => {}, restart: async () => {}, stop: async () => {} },
-        newestWindow: () => server.newestLocalWindow(),
-        windowEvent: () => {},
         send: (owner, event) => server.remoteAccessEvent(owner, event),
     });
     server = new SessionEngineServer({ token: TOKEN, build: 't', remoteAccess: service });
@@ -73,11 +74,11 @@ async function leave(): Promise<void> {
 }
 afterEach(leave);
 
-async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: unknown[], context: unknown) => Promise<unknown>) {
+async function windowOn(local: boolean) {
     const [h, raw] = memoryPair();
     server.accept(h, { local });
     const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-    const client = new SessionEngineClient({ ...(onRemoteInvoke ? { onRemoteInvoke } : {}) });
+    const client = new SessionEngineClient({});
     expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
     links.push(() => t.close());
     return { client, close: () => t.close() };
@@ -104,23 +105,26 @@ describe('remote access over the engine link', () => {
         await expect(local.client.call('engine.remoteAccess', ['status', []])).resolves.toMatchObject({ ok: true, value: { host: 'alphar', devices: [{ label: 'glenn’s phone' }] } });
     });
 
-    it('what the host does not own goes to the newest LOCAL window; a non-local one is never asked; with none, refused', async () => {
+    it('genie-host answers every call itself, with local and non-local windows linked or none (Tynn #898 step 2d-2b)', async () => {
         const p = phone();
         await p.hello({ kind: 'token', token });
-        await windowOn(false, async () => ({ fromWindow: 'not-local' }));
-        expect(await p.call('snapshot')).toMatchObject({ kind: 'result', ok: false, reason: 'alphar answers snapshot only while a Genie window is open there: open Genie on alphar' });
-        const local = await windowOn(true, async (method) => ({ fromWindow: method }));
-        expect(await p.call('snapshot')).toMatchObject({ kind: 'result', ok: true, value: { fromWindow: 'snapshot' } });
-        local.close();
+        // Still being built at boot: told to try again, never sent to a window.
+        await windowOn(true);
+        expect(await p.call('host.home')).toMatchObject({ kind: 'result', ok: false, reason: 'alphar\'s services are still starting; try again in a moment' });
+        answers = async (method) => ({ fromHost: method });
+        expect(await p.call('host.home')).toMatchObject({ kind: 'result', ok: true, value: { fromHost: 'host.home' } });
+        await windowOn(false);
+        expect(await p.call('host.home')).toMatchObject({ kind: 'result', ok: true, value: { fromHost: 'host.home' } });
+        for (const close of links.splice(0)) close();
         await settle();
-        expect(await p.call('snapshot')).toMatchObject({ kind: 'result', ok: false });
+        expect(await p.call('host.home')).toMatchObject({ kind: 'result', ok: true, value: { fromHost: 'host.home' } });
     });
 
-    it('a window answering for the host is told who really asked: a phone stays a device (P4, Tynn #578)', async () => {
+    it('genie-host\'s answers are told who really asked: a phone stays a device (P4, Tynn #578)', async () => {
         const p = phone();
         await p.hello({ kind: 'token', token });
         const seen: unknown[] = [];
-        await windowOn(true, async (_method, _args, context) => { seen.push(context); return null; });
+        answers = async (_method, _args, context) => { seen.push(context); return null; };
         expect(await p.call('snapshot')).toMatchObject({ kind: 'result', ok: true });
         expect(seen).toEqual([expect.objectContaining({ origin: 'device', isOwner: true, label: 'phone' })]);
     });
@@ -145,7 +149,9 @@ describe('with genie-host linked, the window starts no listener and opens no dev
     it('main.ts builds no tailnet listener', () => {
         expect(main).not.toMatch(/remoteListener\(/);
     });
-    it('compose.ts opens the device file only without genie-host', () => {
-        expect(compose).toMatch(/input\.remoteAccess\s*\?\s*DeviceStore\.memory\(/);
+    // A client serves no remote connection (Tynn #898 step 2d-4b2): compose opens no device store at all, host-less or not.
+    it('compose.ts opens no device file, with genie-host or without', () => {
+        expect(compose).not.toMatch(/DeviceStore/);
+        expect(compose).toMatch(/remote: input\.remoteAccess,/);
     });
 });

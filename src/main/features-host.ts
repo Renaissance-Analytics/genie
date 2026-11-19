@@ -59,7 +59,6 @@ export interface HostFeaturePresentation extends Pick<FeaturePorts, 'rendererNot
         forward(): void | Promise<void>;
         reload(): void | Promise<void>;
     };
-    readonly login?: (provider: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly githubOpen?: NonNullable<FeaturePorts['githubAccount']>['openPage'];
     readonly tailscaleInstall?: NonNullable<FeaturePorts['tailscale']>['install'];
 }
@@ -85,6 +84,8 @@ export interface HostFeaturesPorts {
     readonly mailRefusal: (address: string) => string | null;
     readonly workspaceIds: () => readonly string[];
     readonly runFlow: (id: string) => Promise<unknown>;
+    /** The person's Stop on a flow's run (Tynn #833). Absent = this host cannot stop runs. */
+    readonly stopFlow?: (id: string) => Promise<{ ok: boolean; reason?: string }>;
     /** Resume now for the provider limit holding this agent's login (Tynn #749). */
     readonly resumeAgentLimit?: (agentId: string) => void;
     readonly refreshPlugins: () => Promise<void>;
@@ -95,6 +96,11 @@ export interface HostFeaturesPorts {
     readonly presentation?: (context: CallContext) => HostFeaturePresentation | null;
     readonly system?: Pick<FeaturePorts, 'safeMode' | 'hangNotice'>;
     readonly deck?: HostFeatureDeckPorts;
+    /**
+     * A feature's login (toolchain.login, Tynn #896): the provider's own login, started on this host for this caller, whose
+     * window shows it (host-sign-ins.ts). Absent = this host cannot start one.
+     */
+    readonly signIn?: (provider: string, context: CallContext) => Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
@@ -142,7 +148,7 @@ export class HostFeatures {
             settings: ports.settings, knowledge: ports.knowledge, flows: ports.flows, inbox: ports.inbox, attention: ports.attention,
             agentAddresses: () => ports.roster().map(record => ({ address: agentAddress(record, ports.workspaceSlugs?.() ?? new Map()), agentId: record.id, name: record.name })),
             resolveAddress: address => ports.resolveAddress(address), mailRefusal: address => ports.mailRefusal(address),
-            workspaceIds: () => ports.workspaceIds(), flowScheduler: { runNow: id => ports.runFlow(id) },
+            workspaceIds: () => ports.workspaceIds(), flowScheduler: { runNow: id => ports.runFlow(id), ...(ports.stopFlow ? { stopRun: (id: string) => ports.stopFlow!(id) } : {}) },
             ...(ports.resumeAgentLimit ? { resumeAgentLimit: (id: string) => ports.resumeAgentLimit!(id) } : {}),
             pluginsRefresh: () => ports.refreshPlugins(),
         };
@@ -229,7 +235,11 @@ export class HostFeatures {
         const machine = this.ports.machine?.effectsFor?.(context) ?? this.ports.machine?.effects;
         const tc = machine?.toolchain;
         const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,
-            login: async provider => ui?.login ? ui.login(provider) : { ok: false, reason: 'no login is wired into this Genie' },
+            login: async provider => {
+                const started = await this.ports.signIn?.(provider, context);
+                if (!started) return { ok: false, reason: 'this host cannot start a sign-in' };
+                return started.ok ? { ok: true } : { ok: false, reason: started.reason };
+            },
             checking: run => {
                 if (this.#closed) return;
                 if (run) this.#checkRuns.set(token, run); else this.#checkRuns.delete(token);
@@ -390,7 +400,7 @@ const OWN_WINDOW = 'this feature action needs its caller’s own admitted local 
 function needsPresentation(action: FeatureAction): boolean {
     // Site opening keeps the shared hosting handler's canonical no-browser refusal; it receives only this caller's port.
     return action.kind === 'flows.openEditor' || action.kind === 'flows.newFlow'
-        || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss' || action.kind === 'toolchain.login'
+        || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss'
         || action.kind === 'integrations.githubOpen' || action.kind === 'tailscale.install'
-        || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && action.item.source === 'genie' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));
+        || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && typeof action.item?.id === 'string' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));
 }

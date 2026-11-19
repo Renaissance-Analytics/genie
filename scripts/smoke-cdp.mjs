@@ -383,19 +383,31 @@ if (typeof agentRow === 'string') {
     check(s.tab === true && s.active === true, '18. the Stream tab is present and selected');
     check(s.body !== null, '19. the Stream body renders — an empty state, not nothing', String(s.body));
 
-    // 54. THE HEADER PER THE BOARD (re-audit, 2026-10-12): `{workspace} /` breadcrumb, the provider chip (the provider's
-    // LOGO, named for hover and screen readers, then `ACP` — genie#1266: no provider word), the pill in the board's words (`Turn N · running` / `Idle` / `No turns yet` / `Not started` / `Broken · …`), and the
-    // chords on Take over and Chat. One right column at most (never the old 420px Inspector beside a 260px rail).
-    const header = await cdp.evaluate(`JSON.stringify({
-        crumb: Boolean(document.querySelector('[data-crumb]')),
-        chip: document.querySelector('[data-provider-chip]')?.textContent ?? null,
-        logo: document.querySelector('[data-provider-chip] [data-provider-logo] svg') ? (document.querySelector('[data-provider-chip] [data-provider-logo]')?.getAttribute('aria-label') ?? '') : null,
-        pill: document.querySelector('[data-pill]')?.getAttribute('data-pill') ?? null,
-        chords: (document.querySelector('[data-action="take-over"]')?.textContent ?? '').includes('⌘⇧T') && (document.querySelector('[data-action="chat"]')?.textContent ?? '').includes('⌘J'),
-        columns: document.querySelectorAll('[data-right-column]').length,
-    })`);
+    // 54. ONE BAR (the owner on beta.64, 2026-11-17: "agents should not have a different header UX than workspaces"): the
+    // agent page's first child is its workspace's tab strip, and nothing else of chrome — no breadcrumb, no second row of
+    // tabs. At its right end: the provider chip (the provider's LOGO, named; `ACP` is its tooltip, not words), the pill in
+    // the board's words (`Turn N · running` / `Idle` / `No turns yet` / `Not started` / `Broken · …`), the agent's own views
+    // as a segmented control, and Take over / Chat as icons whose tooltips carry the chords. One right column at most.
+    const header = await cdp.evaluate(`JSON.stringify((() => {
+        const surface = document.querySelector('[data-surface="agent"]');
+        const bar = surface?.firstElementChild ?? null;
+        return {
+            bar: Boolean(bar?.hasAttribute('data-top-bar') && bar.hasAttribute('data-workspace-tabs')),
+            bars: document.querySelectorAll('[data-surface="agent"] [data-top-bar]').length,
+            crumb: Boolean(document.querySelector('[data-crumb], [data-react-fancy-breadcrumbs]')),
+            subviews: Boolean(bar?.querySelector('[data-agent-subviews] [data-tab="stream"]')),
+            chip: (bar?.querySelector('[data-provider-chip]')?.textContent ?? '').trim(),
+            chipTitle: bar?.querySelector('[data-provider-chip]')?.getAttribute('title') ?? null,
+            logo: bar?.querySelector('[data-provider-chip] [data-provider-logo] svg') ? (bar.querySelector('[data-provider-chip] [data-provider-logo]')?.getAttribute('aria-label') ?? '') : null,
+            pill: bar?.querySelector('[data-pill]')?.getAttribute('data-pill') ?? null,
+            // Chat is not drawn while this agent's chat is the docked one (it would open what is open); otherwise it carries ⌘J.
+            chords: (bar?.querySelector('[data-action="take-over"]')?.getAttribute('title') ?? '').includes('⌘⇧T') && (bar?.querySelector('[data-action="chat"]') ? (bar.querySelector('[data-action="chat"]').getAttribute('title') ?? '').includes('⌘J') : document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') === surface?.getAttribute('data-agent')),
+            height: bar ? Math.round(bar.getBoundingClientRect().height) : null,
+            columns: document.querySelectorAll('[data-right-column]').length,
+        };
+    })())`);
     const h = JSON.parse(header || '{}');
-    check(h.crumb && (h.chip ?? '').trim() === 'ACP' && Boolean(h.logo) &&/^(Turn \d+ · |Idle$|No turns yet$|Not started$|Broken · )/.test(h.pill ?? '') && h.chords && h.columns <= 1, '54. the Agent view header is the board\'s: breadcrumb, provider chip, pill in turns, chords, one right column', header);
+    check(h.bar && h.bars === 1 && !h.crumb && h.subviews && h.chip === '' && /ACP/.test(h.chipTitle ?? '') && Boolean(h.logo) && /^(Turn \d+ · |Idle$|No turns yet$|Not started$|Broken · )/.test(h.pill ?? '') && h.chords && h.height >= 32 && h.columns <= 1, '54. the Agent view has ONE bar, its workspace\'s strip: no crumbs, its views and icon actions at its right end, one right column', header);
 
     // 51. EVERY TAB HAS A BODY (board audit, 2026-10-12: only Stream had one). Changes lists this agent's changed files or
     // says there are none. No Files tab (the owner, 2026-11-16): files are the workspace's Files tab. Then back to Stream,

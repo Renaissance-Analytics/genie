@@ -21,10 +21,25 @@ import { GAPP_METHODS, type GAppMethod } from './gapps.js';
  */
 
 /**
- * The remote wire's version, said in `welcome` with the host's build (P10.1e): a client sees what it is talking to. Raised
- * only for a change an older client cannot read; a new field an old client ignores is not one.
+ * The remote wire's number from before schemas (P10.1e), still said in `welcome` for clients that read it (beta.64 and
+ * older check it is at least 1). 2 = this side also says a schema. Compatibility is judged on the SCHEMA, never on this.
  */
-export const REMOTE_PROTOCOL = 1;
+export const REMOTE_PROTOCOL = 2;
+
+/**
+ * THE WIRE'S SCHEMA (Tynn #894; the owner, 2026-11-18): the protocol's version, a date. Every track's build carries it
+ * (`<schema>-<release>[.<hotfix>]`), and each side accepts the other within the FIXED support window
+ * (core/protocol-version.ts `SUPPORT_WINDOW_DAYS`). Moved to the day of a change an older side cannot read; a field an
+ * older side ignores, or a feature it may lack (a capability), is not one.
+ */
+export const REMOTE_SCHEMA = '2026.11.18';
+
+/**
+ * THE ACCOUNT CHIPS (client/host split step 2a, Tynn #895): every known provider account and the standing switch offers,
+ * renaming or forgetting one, and Not now on an offer. The host's account book, for every client (main/accounts-protocol.ts).
+ */
+export const ACCOUNTS_METHODS = ['accounts.list', 'accounts.act', 'accounts.dismissOffer'] as const;
+export type AccountsMethod = (typeof ACCOUNTS_METHODS)[number];
 
 export const REMOTE_METHODS = [
     'snapshot',
@@ -32,8 +47,15 @@ export const REMOTE_METHODS = [
     'openAgent',
     'stopAgent',
     'cancelTurn',
+    // Stop this call (Tynn #855): one hung tool call ends, the turn goes on.
+    'stopToolCall',
     'resumeLimit',
     'providerLogin',
+    // The machine's design sign-in and a switch of account (Tynn #896): the provider's own login, like providerLogin.
+    'logins.design',
+    'accounts.switch',
+    // The tray's Log in, by provider (Tynn #896, 2b-2b): the provider's own login, like the others.
+    'logins.provider',
     'prompt',
     'resolvePrompt',
     'addAgent',
@@ -110,9 +132,10 @@ export const REMOTE_METHODS = [
     'workspaces.cloneOffers',
     'workspaces.applyOffer',
     'workspaces.setMcpServer',
-    'addWorkspace',
     'takeOver',
     'terminals.open',
+    // The throwaway shell (Tynn #378, #761; #897 2c-4): a workspace's, or Genie's own (null, the owner's), in its own window.
+    'terminals.scratch',
     'terminals.write',
     'terminals.resize',
     'terminals.close',
@@ -142,6 +165,13 @@ export const REMOTE_METHODS = [
     'deviceLink.forget',
     'deviceLink.adopt',
     'tynnNetwork.workstations',
+    // The banner's crash report (Tynn #386 part 4; #897 2c-2): the draft, and the send the person chose. The owner's.
+    'crashReport.draft',
+    'crashReport.send',
+    // A provider's program (Tynn #577; #897 2c-3): the .exe the owner picked on the host's disk for a batch-wrapped provider.
+    'providers.chooseProgram',
+    // "Open a share link…" (Tynn #896, 2b-4): what a pasted link is, against the host's Tynn account and role.
+    'tynnNetwork.classifyLink',
     'tynnNetwork.setRole',
     'tynnNetwork.shares.list',
     'tynnNetwork.shares.mint',
@@ -162,6 +192,7 @@ export const REMOTE_METHODS = [
     ...LOCAL_TERMINAL_METHODS,
     ...MARKETPLACE_METHODS,
     ...GAPP_METHODS,
+    ...ACCOUNTS_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -172,7 +203,11 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+/**
+ * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
+ * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
+ */
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -208,6 +243,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     stopAgent: 'write',
     // `Stop this turn`: the current turn ends, the agent keeps running. A write like stopAgent, agent-scoped like it.
     cancelTurn: 'write',
+    // `Stop this call` (Tynn #855): one running call's processes end; a write like cancelTurn, agent-scoped like it.
+    stopToolCall: 'write',
     // `Resume now` while a provider's login is held for its rate limit (Tynn #794): a write, agent-scoped.
     resumeLimit: 'write',
     prompt: 'write',
@@ -310,6 +347,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // One MCP server on or off as a workspace's default for its agents (Tynn #628): a write, workspace-scoped.
     'workspaces.setMcpServer': 'write',
     'terminals.open': 'write',
+    'terminals.scratch': 'write',
     'terminals.write': 'write',
     'terminals.resize': 'write',
     'terminals.close': 'write',
@@ -328,6 +366,10 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.forget': 'local',
     'deviceLink.adopt': 'local',
     'tynnNetwork.workstations': 'local',
+    'crashReport.draft': 'read',
+    'crashReport.send': 'write',
+    'providers.chooseProgram': 'write',
+    'tynnNetwork.classifyLink': 'local',
     'tynnNetwork.setRole': 'local',
     // Tynn #587: the host being shared makes its own links. Its owner only (OWNER_ONLY, remote-host.ts); making or revoking takes the baton.
     'tynnNetwork.shares.list': 'read',
@@ -346,22 +388,39 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     ...Object.fromEntries(LOCAL_TERMINAL_METHODS.map(method => [method, 'local'])) as Record<LocalTerminalMethod, 'local'>,
     ...Object.fromEntries(MARKETPLACE_METHODS.map(method => [method, 'local'])) as Record<MarketplaceMethod, 'local'>,
     ...Object.fromEntries(GAPP_METHODS.map(method => [method, 'local'])) as Record<GAppMethod, 'local'>,
-    addWorkspace: 'host-only',
     // Tynn #529 part A: from another machine, the TUI starts here and its window opens THERE — a write, on the baton.
     takeOver: 'write',
-    // A provider's login opens a window on the host, for the person at it: like Take Over.
-    providerLogin: 'host-only',
+    // SIGN-INS (Tynn #896, the coordinator's ruling 2026-11-19): the host starts the provider's own login; the client that
+    // asked opens its window, as for Take Over. Writes, for the host's owner only (remote-host.ts #signInRefusal).
+    providerLogin: 'write',
+    'logins.design': 'write',
+    'accounts.switch': 'write',
+    'logins.provider': 'write',
     'features.setBrowserBounds': 'host-only',
+    // The host's account book (Tynn #895): reading it is a read; renaming, forgetting and Not now change it. Every client
+    // gets them; a share-link guest is refused (remote-host.ts OWNER_ONLY).
+    'accounts.list': 'read',
+    'accounts.act': 'write',
+    'accounts.dismissOffer': 'write',
 };
+
+/**
+ * THE SIGN-INS, NAMED ONCE (Tynn #896): an agent's provider login, the machine's design sign-in, a switch of account and
+ * a login by provider (the tray's Log in, 2b-2b).
+ * Each starts the PROVIDER'S OWN login on the host; Genie never reads, writes or relays a credential. They are the host
+ * owner's, and RemoteHost checks them in one place (#signInRefusal), where step 3 adds a step-up check (2FA from a
+ * paired device) without re-plumbing.
+ */
+export const SIGN_IN_METHODS = ['providerLogin', 'logins.design', 'accounts.switch', 'logins.provider'] as const satisfies readonly RemoteMethod[];
 
 export function capabilityOf(method: RemoteMethod): RemoteCapability {
     return CAPABILITIES[method];
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'stopToolCall', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.scratch', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
@@ -434,11 +493,18 @@ export type WireMessage =
      * `companion` (Tynn #529 part A): the ticket a driving window's Take over was answered with — this connection is that
      * window's Take Over window, for that one terminal. Beside `auth`, never in it: a saved hello's auth is rewritten.
      */
-    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string }
+    /** `track`, `build`, `schema`, `minSchema`, `capabilities` (Tynn #894): the client's offer; absent from an older client. */
+    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string; track?: string; build?: string | null; schema?: string; minSchema?: string; capabilities?: readonly string[] }
     /** `readonly` (Tynn #688): the host's word that this connection may only read; absent from an older host. */
     /** `viewOnly` (Tynn #732): the person at the host has set this person to watch only; absent = full control. */
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; viewOnly?: true; token?: string; protocol?: number; build?: string }
-    | { kind: 'refused'; reason: string }
+    /**
+     * `track`, `schema`, `minSchema`, `capabilities` (Tynn #894): the host's offer beside its `protocol` and `build`; absent
+     * from an older host. `compatible: false` (with `code` and `reason`): outside the support window, this connection is
+     * UPDATE-ONLY: `host.version` and `host.update` answer, every other call is refused with `code: 'version'`.
+     */
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; viewOnly?: true; token?: string; protocol?: number; build?: string; track?: string; schema?: string; minSchema?: string; capabilities?: readonly string[]; compatible?: false; code?: RefusalCode; reason?: string }
+    /** `code: 'version'` (Tynn #894): refused for the protocol floor, either side's. */
+    | { kind: 'refused'; reason: string; code?: RefusalCode }
     /**
      * The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). `guest`: a
      * share-link guest waits for the person there to let it in instead (Tynn #731).
@@ -446,14 +512,24 @@ export type WireMessage =
     | { kind: 'pairing'; host: string; expiresAt: number; guest?: true }
     | { kind: 'call'; id: number; method: RemoteMethod | ControlMethod; args: unknown[] }
     | { kind: 'result'; id: number; ok: true; value: unknown }
-    | { kind: 'result'; id: number; ok: false; reason: string }
+    /**
+     * `code` (Tynn #894): `unsupported`, the other side does not know the method (the call settles, nothing hangs);
+     * `version`, the connection is outside the support window and may only read the version and ask for the update.
+     */
+    | { kind: 'result'; id: number; ok: false; reason: string; code?: ResultCode }
     | { kind: 'event'; channel: string; payload: unknown };
+
+export type RefusalCode = 'version';
+export type ResultCode = 'unsupported' | 'version';
+
+/** Why a frame was not parsed. A CALL to a method this side does not know keeps its `id`, so the answer can carry it. */
+export type FrameRefusal = { ok: false; reason: string; id?: number; method?: string; code?: 'unsupported' };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isMethod = (m: unknown): m is RemoteMethod | ControlMethod =>
     typeof m === 'string' && ((REMOTE_METHODS as readonly string[]).includes(m) || (CONTROL_METHODS as readonly string[]).includes(m));
 
-export function parseMessage(text: string): { ok: true; message: WireMessage } | { ok: false; reason: string } {
+export function parseMessage(text: string): { ok: true; message: WireMessage } | FrameRefusal {
     return parseFrame(text, isMethod);
 }
 
@@ -467,7 +543,7 @@ export type Frame<M extends string> =
  * host's `engine.*` table (core/engine-protocol.ts). One envelope — hello, welcome, call, result, event — so the window's
  * link to its own host and a remote window's link to another Genie are the same protocol, validated the same way.
  */
-export function parseFrame<M extends string>(text: string, isMethodOf: (m: unknown) => m is M): { ok: true; message: Frame<M> } | { ok: false; reason: string } {
+export function parseFrame<M extends string>(text: string, isMethodOf: (m: unknown) => m is M): { ok: true; message: Frame<M> } | FrameRefusal {
     let raw: unknown;
     try {
         raw = JSON.parse(text);
@@ -494,13 +570,14 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             if (typeof raw.id !== 'number' || typeof raw.method !== 'string' || !Array.isArray(raw.args)) {
                 return { ok: false, reason: 'a call needs a numeric id, a method and an args array' };
             }
-            if (!isMethodOf(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method` };
+            // Kept with its id (Tynn #894): the receiver answers this call, so the caller's promise settles.
+            if (!isMethodOf(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method`, id: raw.id, method: raw.method, code: 'unsupported' };
             return { ok: true, message: { kind: 'call', id: raw.id, method: raw.method, args: raw.args } };
         }
         case 'result': {
             if (typeof raw.id !== 'number' || typeof raw.ok !== 'boolean') return { ok: false, reason: 'a result needs a numeric id and ok' };
             if (raw.ok) return { ok: true, message: { kind: 'result', id: raw.id, ok: true, value: raw.value } };
-            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
+            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'unsupported' || raw.code === 'version' ? { code: raw.code } : {}) } };
         }
         case 'event':
             if (typeof raw.channel !== 'string') return { ok: false, reason: 'an event needs a channel' };
@@ -509,7 +586,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             if (typeof raw.connectionId !== 'string' || typeof raw.host !== 'string' || typeof raw.isOwner !== 'boolean') return { ok: false, reason: 'a welcome needs connectionId, host and isOwner' };
             return { ok: true, message: raw as unknown as Frame<M> };
         case 'refused':
-            return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
+            return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'version' ? { code: 'version' as const } : {}) } };
         case 'pairing':
             if (typeof raw.host !== 'string' || typeof raw.expiresAt !== 'number') return { ok: false, reason: 'a pairing frame needs host and expiresAt' };
             return { ok: true, message: { kind: 'pairing', host: raw.host, expiresAt: raw.expiresAt, ...(raw.guest === true ? { guest: true as const } : {}) } };

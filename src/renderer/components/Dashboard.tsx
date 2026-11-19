@@ -3,6 +3,7 @@ import { ageLabel, revealOf, type Reveal } from '../../core/reveal.js';
 import { ARC_WINDOW_SECONDS, arcsFor, type Point, type Rect } from '../../core/flight-arcs.js';
 import { FlightPaths } from './FlightPaths.js';
 import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academy/react-fancy';
+import { PlanHover } from './PlanHover.js';
 import { Fragment, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { useNow } from '../use-now.js';
 import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
@@ -40,6 +41,9 @@ import {
     type Fidelity,
     type WorkspaceFault,
 } from '../../core/dashboard-view.js';
+
+/** What a window opener answers when it can say whether it opened (the workspace terminal's `scratchTerminal`). */
+type WindowOpened = { ok: true } | { ok: false; reason: string };
 
 /**
  * THE WORKFLOW DASHBOARD — the landing surface.
@@ -215,8 +219,10 @@ function WaitingItems({ owner, items, row }: { owner: string; items: readonly De
  * THE ROW TRAY (§4.1 `Space`): under its row, read-only plus three doors. Sections the row did not measure are not
  * drawn. Nothing here approves, denies or composes — the Deck resolves; the Dashboard shows.
  */
-function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: string) => void }) {
+function RowTrayView({ row, onNavigate, onTerminal }: { row: AgentRow; onNavigate: (route: string) => void; onTerminal?: (() => void | Promise<WindowOpened>) | undefined }) {
     const tray = trayOf(row);
+    // `Terminal →` (Tynn #857) opens a shell in the workspace through the row's terminal opener; absent = disabled, never a page.
+    const terminal = useTerminalOpener(onTerminal);
     const k = (n: number) => `${Math.round(n / 1000)}k`;
     return (
         <div data-row-tray={row.id} className="flex flex-col gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] py-3 pl-7 pr-5 text-[12px]">
@@ -240,12 +246,35 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
                 </div>
             ) : null}
             <div className="flex gap-2">
-                {tray.doors.map((d) => (
+                {tray.doors.map((d) => d.door === 'terminal' ? (
+                    <Button key={d.door} type="button" size="xs" data-door={d.door} disabled={!terminal.open}
+                        title={terminal.failed === null ? 'Open a terminal in this workspace, in a new window' : `The terminal did not open: ${terminal.failed}`}
+                        data-terminal-failed={terminal.failed !== null ? '' : undefined} className={terminal.failed !== null ? 'text-[var(--danger)]' : undefined}
+                        onClick={(e) => { e.stopPropagation(); terminal.open?.(); }}>{d.label}</Button>
+                ) : (
                     <Button key={d.door} type="button" size="xs" data-door={d.door} onClick={(e) => { e.stopPropagation(); onNavigate(d.route); }}>{d.label}</Button>
                 ))}
             </div>
         </div>
     );
+}
+
+/**
+ * A terminal opener with its last failure (Tynn #851, #857): `open` starts it and clears the last failure; an answer of
+ * `{ ok: false }` or a throw is kept as `failed`, the reason the button says. No opener = no `open` (the button is disabled).
+ */
+function useTerminalOpener(onTerminal: (() => void | Promise<WindowOpened>) | undefined): { failed: string | null; open: (() => void) | undefined } {
+    const [failed, setFailed] = useState<string | null>(null);
+    const open = onTerminal ? () => {
+        setFailed(null);
+        let answer: void | Promise<WindowOpened>;
+        try { answer = onTerminal(); } catch (error) { setFailed(error instanceof Error ? error.message : String(error)); return; }
+        void Promise.resolve(answer).then(
+            (r) => { if (r && !r.ok) setFailed(r.reason); },
+            (error: unknown) => setFailed(error instanceof Error ? error.message : String(error)),
+        );
+    } : undefined;
+    return { failed, open };
 }
 
 function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting, switchOffer }: {
@@ -269,7 +298,7 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     /** What waits on this agent: its badges, and whether its items are open under the row. Absent = nothing waits (or no Deck). */
     waiting?: { badges: readonly WaitingBadge[]; open: boolean; onToggle: () => void } | undefined;
     /** The windows column (Tynn #706): absent = this row has none (Genie's own, or a workspace this window may not open). */
-    windows?: { onTerminal?: (() => void) | undefined; onFiles?: (() => void) | undefined } | undefined;
+    windows?: { onTerminal?: (() => void | Promise<WindowOpened>) | undefined; onFiles?: (() => void) | undefined } | undefined;
     /** Its provider's standing switch offer (Tynn #483): one click starts the switch. Absent = none. */
     switchOffer?: { offer: SwitchOffer; onSwitch: (provider: string, choose?: string) => void } | undefined;
 }) {
@@ -279,6 +308,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
     const target = targetOf(row);
     const comms = commsOf(row);
     const context = contextOf(row);
+    // A Terminal that did not open is said on the row's windows button (Tynn #851), never a dead click; the next try clears it.
+    const { failed: terminalFailed, open: openTerminal } = useTerminalOpener(windows?.onTerminal);
 
     return (
         <div
@@ -323,12 +354,13 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
 
             <div className="flex min-w-0 items-center gap-2">
                 {target?.kind === 'target' ? (
-                    <>
+                    // Hovered, the whole plan (Tynn #918); the step and target stay as they are.
+                    <PlanHover plan={target.plan}>
                         {target.step ? (
                             <span className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">{target.step}</span>
                         ) : null}
                         <span className="truncate text-[var(--fg-2)]">{target.text}</span>
-                    </>
+                    </PlanHover>
                 ) : null}
 
                 {/*
@@ -421,11 +453,13 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 {windows ? (
                     <Dropdown placement="bottom-end">
                         <Dropdown.Trigger>
-                            <Button type="button" variant="ghost" size="xs" icon="app-window" data-windows-menu={row.id} aria-label={`Open ${row.name} in a new window`} title="Open in a new window" disabled={!windows.onTerminal && !windows.onFiles} className="px-1 text-[var(--fg-3)]" />
+                            <Button type="button" variant="ghost" size="xs" icon="app-window" data-windows-menu={row.id} aria-label={`Open ${row.name} in a new window`}
+                                title={terminalFailed === null ? 'Open in a new window' : `The terminal did not open: ${terminalFailed}`} data-terminal-failed={terminalFailed !== null ? '' : undefined}
+                                disabled={!windows.onTerminal && !windows.onFiles} className={`px-1 ${terminalFailed !== null ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`} />
                         </Dropdown.Trigger>
                         <Dropdown.Items>
                             {WINDOW_ENTRIES.map((entry) => {
-                                const open = entry.kind === 'terminal' ? windows.onTerminal : windows.onFiles;
+                                const open = entry.kind === 'terminal' ? openTerminal : windows.onFiles;
                                 return (
                                     <Dropdown.Item key={entry.kind} disabled={!open} onClick={() => open?.()}>
                                         <span data-windows-entry={entry.kind} className="flex items-center gap-2 text-xs"><Icon name={entry.icon} size="xs" />{entry.label}</span>
@@ -501,8 +535,11 @@ export interface DashboardProps {
      * no badges, no "Needs you" chip, no Genie row.
      */
     waiting?: DashboardWaiting | undefined;
-    /** The windows column's openers (Tynn #706): a workspace's terminals view, or its Files, in a NEW window. Absent = disabled. */
-    onOpenTerminalWindow?: ((workspaceId: string) => void) | undefined;
+    /**
+     * The windows column's openers (Tynn #706): a SHELL in the workspace (Tynn #851 — not a Genie window on its Terminals
+     * view), or its Files, in a NEW window. The terminal's answer, when given, says whether it opened. Absent = disabled.
+     */
+    onOpenTerminalWindow?: ((workspaceId: string) => void | Promise<WindowOpened>) | undefined;
     onOpenFilesWindow?: ((workspaceId: string) => void) | undefined;
     /** A workspace-share window's workspace (Tynn #690/#691): the column offers that workspace only. Absent = a workstation window. */
     scopeWorkspaceId?: string | null | undefined;
@@ -560,7 +597,7 @@ interface ArcState {
     readonly reducedMotion: boolean;
 }
 
-function useFlightPaths(shown: readonly AgentRow[]) {
+function useFlightPaths(shown: readonly AgentRow[], colorOf: (row: AgentRow) => string | null | undefined) {
     const surface = useRef<HTMLDivElement | null>(null);
     const [state, setState] = useState<ArcState | null>(null);
     const pending = useRef<{ x: number; y: number } | null>(null);
@@ -622,7 +659,7 @@ function useFlightPaths(shown: readonly AgentRow[]) {
     const row = state ? shown.find((r) => r.id === state.focus) : undefined;
     const paths = state && row
         ? {
-            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, obstacles: state.obstacles, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), pointer: state.pointer }),
+            arcs: arcsFor({ focus: state.focus, links: row.links ?? [], order: shown.map((r) => r.id), targets: state.targets, obstacles: state.obstacles, names: Object.fromEntries(shown.map((r) => [r.id, r.name])), colors: Object.fromEntries(shown.map((r) => [r.id, colorOf(r)])), pointer: state.pointer }),
             size: state.size,
             pointer: state.pointer,
             reducedMotion: state.reducedMotion,
@@ -671,10 +708,15 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     const focused = focusedId ?? ownFocus;
     const [ownReveal, setOwnReveal] = useState<string | null>(null);
     const reveal = revealOf(shown, revealId ?? ownReveal);
-    const arcs = useFlightPaths(shown);
+    // An arc is drawn in its sender's workspace colour: the dot in the Workspace column.
+    const arcs = useFlightPaths(shown, (row) => workspaces?.find((workspace) => workspace.id === row.workspaceId)?.color);
     const arcHandlers = arcs.handlers;
     const [ownTray, setOwnTray] = useState<string | null>(null);
     const openTray = trayId ?? ownTray;
+    // Whether a row may open windows (Tynn #706: never Genie's own row, only workspaces this window may open), and its shell
+    // opener: one for the windows column and the tray's `Terminal →` (Tynn #851, #857).
+    const opensWindows = (row: AgentRow) => row.id !== genie?.id && windowEntriesFor(row.workspaceId, scopeWorkspaceId).length > 0;
+    const terminalOpenerFor = (row: AgentRow) => opensWindows(row) && onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined;
     const go = (route: string) => { if (onNavigate) onNavigate(route); else if (route.startsWith('genie://agent/')) onOpenAgent(route.slice('genie://agent/'.length)); };
     const visibleIds = shown.map((row) => row.id);
     useEffect(() => {
@@ -822,8 +864,8 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={row.id === genie?.id || windowEntriesFor(row.workspaceId, scopeWorkspaceId).length === 0 ? undefined : { onTerminal: onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined, onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined }} />
-                    {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={opensWindows(row) ? { onTerminal: terminalOpenerFor(row), onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined } : undefined} />
+                    {openTray === row.id ? <RowTrayView row={row} onNavigate={go} onTerminal={terminalOpenerFor(row)} /> : null}
                     {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}
                 {/* THE GENIE ROW: what belongs to no agent (a flow signal, a workstation item, Genie's own asks), and what waits on an agent with no row on screen. */}

@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PLAYWRIGHT_BROWSERS_ENV, PLAYWRIGHT_ENDPOINT_ENV } from '../src/core/playwright-managed.js';
+import { PLAYWRIGHT_BROWSERS_ENV, PLAYWRIGHT_ENDPOINT_ENV, PLAYWRIGHT_STABLE } from '../src/core/playwright-managed.js';
 import { PLAYWRIGHT_NOTE_ENV, PlaywrightHost, mainCheckoutOf, osConnections } from '../src/main/playwright-host.js';
 import { installPlaywrightBrowsers, linkWorktreeModules, listPlaywrightBrowsers, type PlaywrightBrowsersFs } from '../src/main/playwright-browsers.js';
 import type { PlaywrightServerPorts } from '../src/main/playwright-server.js';
@@ -57,7 +57,11 @@ function hostOver(files: Record<string, string>, opts: { optIn?: boolean; starte
     return { host, started, links, fs };
 }
 
-const manifest = (sets: Record<string, string[]>) => ({ [join(TC, 'playwright', 'sets.json')]: JSON.stringify({ sets }) });
+/** A recorded set AND its browsers' revision folders in Genie's folder: a set is installed only when both are there (Tynn #846). */
+const manifest = (sets: Record<string, string[]>) => ({
+    [join(TC, 'playwright', 'sets.json')]: JSON.stringify({ sets }),
+    ...Object.fromEntries([...new Set(Object.values(sets).flat())].map((b) => [join(TC, 'playwright', 'browsers', `${b}-1000`, 'INSTALLATION_COMPLETE'), ''])),
+});
 
 describe('a workspace’s Playwright variables', () => {
     it('hands a matching project the server endpoint and starts the server for it', () => {
@@ -149,7 +153,8 @@ describe('installing the browsers', () => {
         const calls: Array<{ binary: string; args: readonly string[]; env?: Readonly<Record<string, string>> }> = [];
         return { fs, calls, ports: { platform: 'linux' as const, toolchainDir: TC, fs, run: async (binary: string, args: readonly string[], options?: { readonly env?: Readonly<Record<string, string>> }) => {
             calls.push({ binary, args, ...(options?.env ? { env: options.env } : {}) });
-            if (args[0] === 'install' && args.includes('--prefix')) fs.writeText(join(TC, 'playwright', 'cli', '1.57.0', 'node_modules', 'playwright', 'cli.js'), '');
+            const pkg = args.find((a) => a.startsWith('playwright@'));
+            if (args[0] === 'install' && args.includes('--prefix') && pkg) fs.writeText(join(TC, 'playwright', 'cli', pkg.slice('playwright@'.length), 'node_modules', 'playwright', 'cli.js'), '');
             return { stdout: args[0] === 'view' ? '1.57.0\n' : '', exitCode: exit };
         } } };
     }
@@ -184,10 +189,11 @@ describe('installing the browsers', () => {
         expect(r.calls).toHaveLength(0);
     });
 
-    it('updates to the newest when asked for no version', async () => {
+    it('installs the STABLE version when asked for no version, and never asks the registry which is newest (Tynn #846)', async () => {
         const r = ports();
         const out = await installPlaywrightBrowsers(null, ['chromium'], true, r.ports);
-        expect(out).toMatchObject({ kind: 'installed', version: '1.57.0' });
+        expect(out).toMatchObject({ kind: 'installed', version: PLAYWRIGHT_STABLE });
+        expect(r.calls.some((c) => c.args[0] === 'view')).toBe(false);
     });
 
     it('lists the sets and the newest Playwright', async () => {

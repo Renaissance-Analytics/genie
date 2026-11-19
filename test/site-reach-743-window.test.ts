@@ -16,6 +16,8 @@ beforeEach(async () => {
     // The fixture host has no front door (no bundled Caddy), so its own hosts sync refuses; this test is about the window
     // the answer opens in, so the host's hosts sync is a recorder that answers "already right".
     Object.assign(f.deck, { syncHosts: async () => { f.record('host', 'sync-hosts'); return { changed: false, elevated: false }; } });
+    // The host's Deck holds the ask (Tynn #861): an answer is resolved against it.
+    f.deckItems.push(reach);
 });
 afterEach(async () => { await f?.close(); });
 

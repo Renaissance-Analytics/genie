@@ -32,11 +32,11 @@ describe('genie.remote-access in the catalog', () => {
         const listener = { on: false };
         const access = await RemoteAccessHost.open({
             home, hostName: 'alphar', transport: { onConnection: () => () => {} },
-            api: hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => null } }),
+            api: hostRemoteApi({ hostName: 'alphar', own: {} }),
         });
         const service = new RemoteAccessService(access, {
             switch: { apply: async () => { listener.on = true; }, restart: async () => {}, stop: async () => { listener.on = false; } },
-            newestWindow: () => null, windowEvent: () => {}, send: () => {},
+            send: () => {},
         });
         const handler = (name: string) => name.slice('remoteAccess.'.length);
         const payload = REMOTE_ACCESS_ELEMENT.payload as { start: string; stop: string; health: string };

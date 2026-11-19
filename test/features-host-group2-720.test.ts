@@ -173,7 +173,6 @@ describe('host feature group two with no window (Tynn #720)', () => {
     it('opening a site without the callers own window refuses visibly rather than queuing success', async () => {
         const site = await f.seedSite();
         expect(await refusal({ kind: 'hosting.openSite', siteId: site.id })).toMatchObject({ ok: false, reason: 'this Genie has no browser to open a site in' });
-        expect(f.invokeWindow).not.toHaveBeenCalled();
     });
     it('Trust and Sync hosts preserve host refusals while Retry uses the existing host operation', async () => {
         const expected = await f.hosting.trustCertificate(); expect(expected.ok).toBe(false);
@@ -225,11 +224,10 @@ describe('host feature group two with no window (Tynn #720)', () => {
         expect(log?.lines).toBe(40); expect(log?.text).toContain('fixture line 59'); expect(log?.text).not.toContain('fixture line 0\n');
         f.visible.clear(); expect((await read()).hosting?.processes).toEqual([]);
     });
-    it('group two stays host authoritative with zero, one and two connected windows', async () => {
+    it('group two is host authoritative (Tynn #898: no remote method is sent to a window)', async () => {
         const engine = await f.seedEngine(), site = await f.seedSite();
-        for (const count of [0, 1, 2, 0]) { f.windows(count); const data = await read();
-            expect(data.services?.instances[0]?.instance.id).toBe(engine.id); expect(data.hosting?.sites[0]?.id).toBe(site.id); }
-        expect(f.invokeWindow).not.toHaveBeenCalled();
+        const data = await read();
+        expect(data.services?.instances[0]?.instance.id).toBe(engine.id); expect(data.hosting?.sites[0]?.id).toBe(site.id);
     });
     it('owned engine, site and process-book changes reach feature subscribers', async () => {
         const events = f.changes(), engine = await f.seedEngine(); await settleFeatures();

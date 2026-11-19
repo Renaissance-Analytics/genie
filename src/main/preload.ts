@@ -3,8 +3,6 @@ import { LOCAL_FRAME_CHANNELS, type LocalFramePort } from '../core/local-frame.j
 import { FEATURE_CHANNELS, type PreloadBridge } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
-import type { AccountsSnapshot } from '../core/accounts-view.js';
-import type { AccountsActResult } from '../core/account-settings.js';
 import { browserStallEnv, watchRendererStalls } from './renderer-stalls.js';
 
 /**
@@ -43,20 +41,9 @@ const bridge: PreloadBridge = {
         return () => ipcRenderer.removeListener('genie:action', listener);
     },
 
-    providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
-    switchAccount: (provider, choose) => ipcRenderer.invoke('genie:account-switch', provider, choose) as Promise<{ ok: true } | { ok: false; reason: string }>,
-    accounts: () => ipcRenderer.invoke('genie:accounts') as Promise<AccountsSnapshot | null>,
-    accountsAct: (action) => ipcRenderer.invoke('genie:accounts-act', action) as Promise<AccountsActResult>,
-    dismissSwitchOffer: (id) => ipcRenderer.invoke('genie:switch-offer-dismiss', id) as Promise<boolean>,
-    designSignIn: () => ipcRenderer.invoke('genie:design-sign-in') as Promise<{ ok: true } | { ok: false; reason: string }>,
-    designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
 
     workspaces: {
-    },
-
-    addWorkspace: () => {
-        void ipcRenderer.invoke('genie:add-workspace');
     },
 
     /**
@@ -64,31 +51,14 @@ const bridge: PreloadBridge = {
      * channels carrying the terminal id, so one listener per window serves every terminal;
      * the renderer's reducer keeps what belongs to its workspace.
      */
-    crashReport: {
-        draft: () => ipcRenderer.invoke('genie:crash-report-draft') as Promise<{ text: string }>,
-        send: (text, notes) => ipcRenderer.invoke('genie:crash-report-send', text, notes) as Promise<import('../renderer/components/SafeModeBanner.js').CrashReportAnswer>,
-    },
-
-    takeOver: (agentId) =>
-        ipcRenderer.invoke('genie:take-over', agentId) as Promise<
-            { ok: true; terminalId: string } | { ok: false; reason: string }
-        >,
-
-    chooseProviderProgram: (provider) =>
-        ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
 
     popOutTerminals: (workspaceId) => ipcRenderer.invoke('genie:terminals-popout', workspaceId) as Promise<void>,
-
-    scratchTerminal: (workspaceId) =>
-        ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<
-            { ok: true; terminalId: string } | { ok: false; reason: string }
-        >,
 
     // A known remote host in its own window (Tynn #819).
     remoteWindows: {
         open: (url, name) => ipcRenderer.invoke('genie:remote-open-window', url, name) as Promise<void>,
         // Take over from another machine (Tynn #529 part A): this machine's Take Over window on that host's terminal.
-        openTakeOver: (url, terminalId, ticket, name) => ipcRenderer.invoke('genie:remote-takeover-open', url, terminalId, ticket, name) as Promise<{ ok: true } | { ok: false; reason: string }>,
+        openTakeOver: (url, terminalId, ticket, name, route) => ipcRenderer.invoke('genie:remote-takeover-open', url, terminalId, ticket, name, route) as Promise<{ ok: true } | { ok: false; reason: string }>,
         takeOverTicket: () => ipcRenderer.invoke('genie:takeover-ticket') as Promise<string | null>,
         // Main asks THIS remote window to reconnect (its connection dropped and the person pressed Open; M0 finding 2).
         onReconnectAsked: (listener) => {

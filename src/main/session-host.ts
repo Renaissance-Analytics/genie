@@ -1,4 +1,5 @@
 import { isOsAgent } from '../core/os-agent.js';
+import type { Liveness, StalledReason } from '../core/hung-call.js';
 import { type AccountRecord, type ProviderAccountHome } from '../core/accounts.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
@@ -133,7 +134,7 @@ import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
-import { promptDeliveries } from '../core/prompt-delivery.js';
+import { promptDeliveries, type PromptAction, type PromptDelivery } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -1497,11 +1498,21 @@ export class SessionHost {
     }
 
     /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
-    resolvePrompt(agentId: AgentId, id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }> {
+    resolvePrompt(agentId: AgentId, id: string, action: PromptAction): Promise<{ ok: true } | { ok: false; reason: string }> {
+        // Edit on a message already WITHDRAWN (kept in the thread, Tynn #843): out of the thread, as Discard takes a draft —
+        // decided by the record itself, below; anything else that is no longer queued answers why.
+        let notQueued: { ok: false; reason: string } | null = null;
+        if (action === 'withdraw' || action === 'edit') {
+            const taken = this.withdrawQueued(agentId, id, action);
+            if (taken.ok || action === 'withdraw') return Promise.resolve(taken);
+            notQueued = taken;
+            action = 'discard';
+        }
         const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
             await this.settled();
             const { rows } = await readPromptRows(this.#store(), agentId);
             const status = promptDeliveries(rows).get(id);
+            if (notQueued !== null && status !== 'withdrawn') return notQueued;
             const row = rows.find(({ event: e }) => e.kind === 'message' && e.pending?.id === id)?.event;
             if (!row || row.kind !== 'message' || !row.pending || !status || status === 'sent' || status === 'discarded') return { ok: false, reason: 'This draft was already sent or discarded.' };
             const session = this.#running.get(agentId)?.session;
@@ -1532,27 +1543,55 @@ export class SessionHost {
     }
 
     /**
+     * WITHDRAW / EDIT ONE OF YOUR QUEUED MESSAGES (Tynn #843): the host operation behind the chat's buttons, from this
+     * window, the engine and a Pilot window alike (`resolvePrompt`). SYNCHRONOUS on purpose: the session takes it out of
+     * the very queue the turn's end drains (`AgentSession.withdrawPrompt`), in one step, so delivery and withdraw cannot
+     * interleave; whichever comes first wins. `withdraw` keeps it in the thread marked Withdrawn; `edit` drops it (its
+     * words went back to the composer). Lost: the person is told, in words, that the agent already has it.
+     */
+    withdrawQueued(agentId: AgentId, id: string, action: 'withdraw' | 'edit'): { ok: true } | { ok: false; reason: string } {
+        const session = this.#running.get(agentId)?.session;
+        const taken = session?.running ? session.withdrawPrompt(id, action === 'edit' ? 'discarded' : 'withdrawn') : 'gone';
+        if (taken === 'not-yours') return { ok: false, reason: 'Only your own messages can be withdrawn.' };
+        if (taken !== 'gone') {
+            this.#emit(agentId);
+            return { ok: true };
+        }
+        const status = this.#deliveryOf(agentId, id);
+        if (status === 'withdrawn' || status === 'discarded') return { ok: false, reason: 'This message was already withdrawn.' };
+        if (status === 'undelivered' || status === 'carried') return { ok: false, reason: 'This message is no longer queued: it was kept as not delivered. Remove it, or send it again.' };
+        return { ok: false, reason: 'Too late to withdraw: the agent already has it. The turn ended and it was delivered before Withdraw arrived.' };
+    }
+
+    /** What became of one prompt, as this host's ledger for the agent says now. */
+    #deliveryOf(agentId: AgentId, id: string): PromptDelivery | undefined {
+        return promptDeliveries(this.ledgerFor(agentId)).get(id);
+    }
+
+    /**
      * A PROMPT FOR AN AGENT WITH NO SESSION TO TAKE IT, KEPT AS OWED (genie#1238): the resume prompt after a relaunch whose
      * start was refused (its previous run still ending, its folder gone) used to be dropped — `prompt` answered false and
      * nothing was written. It is recorded in the agent's thread as a message not delivered, so the chat shows it and the
      * next Restart delivers it (`deliverOwed`). Serialised with the other draft actions.
      */
     recordOwed(agentId: AgentId, text: string, by: string | null): Promise<void> {
-        const record = async (): Promise<void> => {
-            const id = randomUUID();
-            const run = randomUUID();
-            // The rows a session writes for a prompt it queued and could not deliver (`promptRow`, `#leaveQueuedAsDrafts`).
-            const yours = by === null || by === 'you';
-            await openAgentThread(this.#store(), agentId).record([
-                { kind: 'message', speaker: yours ? 'you' : 'peer', peerName: yours ? null : by, text, pending: { id, content: null }, [RUN_FIELD]: run },
-                { kind: 'prompt_delivery', id, status: 'undelivered', [RUN_FIELD]: run },
-            ]);
-            this.#histories.delete(agentId);
-            this.#emit(agentId);
-        };
+        const record = (): Promise<void> => this.#writeOwed(agentId, text, by);
         const result = this.#promptActions.then(record, record);
         this.#promptActions = result.catch(() => undefined);
         return result;
+    }
+
+    /** The rows a session writes for a prompt it queued and could not deliver (`promptRow`, `#leaveQueuedAsDrafts`). */
+    async #writeOwed(agentId: AgentId, text: string, by: string | null): Promise<void> {
+        const id = randomUUID();
+        const run = randomUUID();
+        const yours = by === null || by === 'you';
+        await openAgentThread(this.#store(), agentId).record([
+            { kind: 'message', speaker: yours ? 'you' : 'peer', peerName: yours ? null : by, text, pending: { id, content: null }, [RUN_FIELD]: run },
+            { kind: 'prompt_delivery', id, status: 'undelivered', [RUN_FIELD]: run },
+        ]);
+        this.#histories.delete(agentId);
+        this.#emit(agentId);
     }
 
     /**
@@ -1562,9 +1601,10 @@ export class SessionHost {
      * the order written, keeping its id (`AgentSession.redeliver`), so its delivery row settles that message and nothing is
      * owed twice: one already waiting in this run is skipped, one sent or discarded is not owed. Serialised with the chat's
      * Send/Discard (`resolvePrompt`), so a draft is never both resent and sent. Resolves to how many were handed over; 0
-     * when the agent has no running session.
+     * when the agent has no running session. `only` narrows it to the prompts of the senders it accepts: a flow's prompts
+     * at the agent's next run (Tynn #826), leaving the person's drafts for them.
      */
-    deliverOwed(agentId: AgentId, then?: { text: string; by: string }): Promise<number> {
+    deliverOwed(agentId: AgentId, then?: { text: string; by: string }, only?: (by: string | null) => boolean): Promise<number> {
         const deliver = async (): Promise<number> => {
             await this.settled();
             const entry = this.#running.get(agentId);
@@ -1583,6 +1623,8 @@ export class SessionHost {
                 if (e.kind !== 'message' || !e.pending) continue;
                 const status = states.get(e.pending.id);
                 if (status !== 'queued' && status !== 'undelivered' && status !== 'carried') continue;
+                // `only`: whose prompts this delivery is for — the flows' own at an agent's next run (Tynn #826), never the person's drafts.
+                if (only && !only(e.speaker === 'you' ? 'you' : e.peerName ?? null)) continue;
                 if (entry.session.hasQueuedPrompt(e.pending.id)) continue;
                 try {
                     // Held, then sent together below (Tynn #702): one at a time, each after the first waited for a turn of its own.
@@ -1715,6 +1757,34 @@ export class SessionHost {
         return true;
     }
 
+    /**
+     * STOP THIS CALL (Tynn #855): end exactly the processes one running call started; the turn goes on and the agent is told
+     * (`AgentSession.endToolCall`). `cause`: the person's Stop this call, or the no-output timeout.
+     */
+    async stopToolCall(agentId: AgentId, toolCallId: string, cause: 'you' | 'timeout'): Promise<{ ok: true; ended: number } | { ok: false; reason: string }> {
+        const entry = this.#running.get(agentId);
+        if (!entry || !entry.session.running) return { ok: false, reason: 'the agent is not running' };
+        const result = await entry.session.endToolCall(toolCallId, cause);
+        this.#emit(agentId);
+        return result;
+    }
+
+    /** Is the agent's provider there (Tynn #855; `AgentSession.alive`): `dead` with no session. */
+    async checkAlive(agentId: AgentId, timeoutMs = 10_000): Promise<Liveness> {
+        const entry = this.#running.get(agentId);
+        if (!entry) return 'dead';
+        return entry.session.alive(timeoutMs);
+    }
+
+    /** End the agent's turn as stalled (Tynn #855; `AgentSession.endStalled`); `false` with no session or no turn. */
+    endStalled(agentId: AgentId, reason: StalledReason, silentMs: number): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        const ended = entry.session.endStalled(reason, silentMs);
+        if (ended) this.#emit(agentId);
+        return ended;
+    }
+
     /** Whether the agent's last turn ended on the PERSON's Stop (`AgentSession.stoppedByYou`); `false` with no session. */
     stoppedByYou(agentId: AgentId): boolean {
         return this.#running.get(agentId)?.session.stoppedByYou ?? false;
@@ -1730,16 +1800,48 @@ export class SessionHost {
         return this.handOff(agentId, text, by, context) !== null;
     }
 
-    /** A flow's prompt for a busy agent, held in its queue for the turn's end (Tynn #704; `AgentSession.queueForTurnEnd`). `null` = no session to take it. */
-    queueFlowPrompt(agentId: AgentId, text: string, by: string, replacing: string | null): { id: string } | null {
+    /**
+     * A FLOW'S PROMPT, HANDED OVER NOW (Tynn #826): exactly as a typed message goes (`AgentSession.deliver`) — into the
+     * running turn where the provider reads a message mid-turn (Claude), held by the session for that turn's end where it
+     * refuses one (Codex), a new turn when idle. `replacing`: a prompt this flow handed earlier that is still held, dropped
+     * first so one waits, never two. Answers `{ id: null }` when the agent has it, `{ id }` while it is held, and `null`
+     * when there is no session to take it.
+     */
+    deliverFlowPrompt(agentId: AgentId, text: string, by: string, replacing: string | null): { id: string | null } | null {
         const entry = this.#running.get(agentId);
         if (!entry || !entry.session.running) return null;
-        const id = entry.session.queueForTurnEnd(text, by, replacing);
+        if (replacing !== null && entry.session.hasQueuedPrompt(replacing)) entry.session.discardPrompt(replacing);
+        const id = entry.session.deliver(text, by);
         this.#emit(agentId);
         return { id };
     }
 
-    /** Whether a prompt `queueFlowPrompt` held is still waiting for its turn. */
+    /**
+     * A FLOW'S PROMPT NO RUN COULD TAKE, KEPT (Tynn #826): owed in the agent's thread exactly as `recordOwed` keeps one,
+     * so the chat shows it and the agent's next run gets it (the flows' `deliverOwed(…, only flows)`; any Restart too).
+     * What this same flow kept earlier and is still owed is discarded first: one waits, never two.
+     */
+    keepFlowPrompt(agentId: AgentId, text: string, by: string): Promise<void> {
+        const keep = async (): Promise<void> => {
+            await this.settled();
+            const { rows } = await readPromptRows(this.#store(), agentId);
+            const states = promptDeliveries(rows);
+            const session = this.#running.get(agentId)?.session;
+            for (const { event: e } of rows) {
+                if (e.kind !== 'message' || !e.pending || e.speaker === 'you' || e.peerName !== by) continue;
+                const status = states.get(e.pending.id);
+                if (status !== 'queued' && status !== 'undelivered' && status !== 'carried') continue;
+                if (session?.running && session.hasQueuedPrompt(e.pending.id)) session.discardPrompt(e.pending.id);
+                else await openAgentThread(this.#store(), agentId).record([{ kind: 'prompt_delivery', id: e.pending.id, status: 'discarded', [RUN_FIELD]: randomUUID() }]);
+            }
+            await this.#writeOwed(agentId, text, by);
+        };
+        const result = this.#promptActions.then(keep, keep);
+        this.#promptActions = result.catch(() => undefined);
+        return result;
+    }
+
+    /** Whether a prompt `deliverFlowPrompt` handed is still held, waiting for a turn. */
     isPromptQueued(agentId: AgentId, promptId: string): boolean {
         return this.#running.get(agentId)?.session.hasQueuedPrompt(promptId) ?? false;
     }
@@ -2137,6 +2239,8 @@ export class SessionHost {
         return {
             limit: this.#limitOf(this.#loginFor(entry.provider), entry.session.held),
             signedOut: entry.session.signedOut,
+            // The turn its provider stopped, explained and counted (Tynn #859): the red stop line's words.
+            providerStop: entry.session.providerStop,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),
             accountPaused: entry.session.accountPaused,
@@ -2171,6 +2275,10 @@ export class SessionHost {
             planSteps: readings.planSteps,
             // The workspace dashboard's card (q_09d1f4a0): what started this turn, and the tool it is in now.
             ...(({ prompt, tool }) => ({ asked: prompt, tool }))(readings.turnNow()),
+            // A HUNG CALL, A HUNG TURN (Tynn #855): the call it is in (command, start), the turn ended as stalled, the last event.
+            call: session.runningCall,
+            stalled: session.stalled,
+            lastEventAt: session.lastEventAt,
             model: readings.model,
             extensions: session.extensions,
             // Both, because each alone is a claim: the driver's declaration, and the driver this session actually holds.

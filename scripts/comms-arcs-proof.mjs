@@ -69,7 +69,7 @@ writeFileSync(join(runtime, 'agents.json'), JSON.stringify(AGENTS.map((a) => ({
     id: a.id, workspaceId: a.ws, provider: 'codex', name: a.key, instructions: null, threadId: null,
     createdAt: nowIso, lastUsedAt: null, mode: 'manual', accessScope: 'none',
 })), null, 2));
-writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: 'dark', whats_new_seen_version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version }, null, 2));
+writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: process.env.ARCS_THEME === 'light' ? 'light' : 'dark', whats_new_seen_version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version }, null, 2));
 
 // THE MAIL: [from, to, seconds after MAIL_FROM_S, read?]. meridian is the hovered agent: it sent to sable (read, unanswered),
 // ember (unread), cobalt (read, unanswered) and atlas (unread); vesper wrote to it (read, unanswered), quill (unread).
@@ -107,10 +107,24 @@ class Cdp {
     on(listener) { this.#listeners.push(listener); }
     send(method, params = {}) { const id = this.#next++; return new Promise((r) => { this.#pending.set(id, r); this.#socket.send(JSON.stringify({ id, method, params })); }); }
     async evaluate(expression) {
-        const frame = await Promise.race([this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }), sleep(30_000).then(() => { throw new Error(`no answer in 30 s: ${expression.slice(0, 80)}`); })]);
+        return Cdp.#value(await this.#answer(this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }), expression));
+    }
+    /**
+     * Runs `fn` in the page with `args` passed as real CDP arguments (Runtime.callFunctionOn), never spliced into code: the page
+     * receives the values, not text to evaluate (CodeQL #118/#119). `fn` is a constant function of this script; it sees only
+     * the page's globals and its own arguments. The result comes back by value.
+     */
+    async call(fn, ...args) {
+        const global = Cdp.#value(await this.#answer(this.send('Runtime.evaluate', { expression: 'globalThis' }), 'globalThis'), 'objectId');
+        return Cdp.#value(await this.#answer(this.send('Runtime.callFunctionOn', { objectId: global, functionDeclaration: fn.toString(), arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true }), fn.name || 'a function'));
+    }
+    #answer(request, what) {
+        return Promise.race([request, sleep(30_000).then(() => { throw new Error(`no answer in 30 s: ${what.slice(0, 80)}`); })]);
+    }
+    static #value(frame, key = 'value') {
         if (frame.error) throw new Error(`CDP error: ${JSON.stringify(frame.error)}`);
         if (frame.result?.exceptionDetails) throw new Error(`page threw: ${frame.result.exceptionDetails.exception?.description ?? 'unknown'}`);
-        return frame.result?.result?.value;
+        return frame.result?.result?.[key];
     }
     close() { this.#socket.close(); }
 }
@@ -143,10 +157,11 @@ const check = (name, ok, detail) => { proof.checks.push({ name, ok: Boolean(ok),
 
 let cdp;
 const ev = (expression) => cdp.evaluate(expression);
-async function waitFor(label, expression, ms = 30_000) {
+/** `probe` is an expression for the page, or a function that asks it (cdp.call) and resolves to the answer. */
+async function waitFor(label, probe, ms = 30_000) {
     const until = Date.now() + ms;
     while (Date.now() < until) {
-        try { if (await ev(expression)) return true; } catch { /* no document yet */ }
+        try { if (await (typeof probe === 'function' ? probe() : ev(probe))) return true; } catch { /* no document yet */ }
         await sleep(300);
     }
     proof.notes.push(`timed out waiting for ${label}`);
@@ -214,7 +229,14 @@ const MEASURE = `(() => {
     const b = p.getBBox();
     const r = p.getBoundingClientRect();
     return { peer: g.getAttribute('data-peer'), tone: g.getAttribute('data-tone'), direction: g.getAttribute('data-direction'), d: p.getAttribute('d'), strokeWidth: Number(getComputedStyle(p).strokeWidth.replace('px', '')), opacity: Number(g.getAttribute('opacity')), bbox: { w: b.width, h: b.height }, onScreen: { w: r.width, h: r.height },
-      dots: g.querySelectorAll('[data-arc-dot]').length, pulse: Boolean(g.querySelector('[data-arc-pulse]')), label: g.querySelector('[data-arc-label]')?.textContent ?? null };
+      dots: g.querySelectorAll('[data-arc-dot]').length, pulse: Boolean(g.querySelector('[data-arc-pulse]')), label: g.querySelector('[data-arc-label]')?.textContent ?? null,
+      color: g.getAttribute('data-arc-color'), drawn: getComputedStyle(g).getPropertyValue('--arc').trim(), shadowEnds: (() => {
+        const sh = g.querySelector('path[data-arc-shadow]');
+        if (!sh) return null;
+        const n = sh.getTotalLength();
+        const a = sh.getPointAtLength(0), z = sh.getPointAtLength(n), pa = p.getPointAtLength(0), pz = p.getPointAtLength(p.getTotalLength());
+        return { start: Math.hypot(a.x - pa.x, a.y - pa.y), end: Math.hypot(z.x - pz.x, z.y - pz.y), width: Number(getComputedStyle(sh).strokeWidth.replace('px', '')), filter: sh.getAttribute('filter'), transform: sh.getAttribute('transform') };
+      })() };
   });
   const at = svg.getBoundingClientRect();
   const top = document.elementFromPoint(at.left + 5, at.top + 5);
@@ -251,7 +273,7 @@ try {
     if (wait > 0) await sleep(wait);
     const meridian = by('meridian');
     const cellSel = `[data-surface="dashboard"] [data-agent="${meridian.id}"] [data-comms-cell]`;
-    await waitFor('meridian\'s Comms cell to count its collaborators', `(document.querySelector(${JSON.stringify(cellSel)})?.textContent ?? '').match(/[1-9]/) !== null`, 60_000);
+    await waitFor('meridian\'s Comms cell to count its collaborators', () => cdp.call((sel) => (document.querySelector(sel)?.textContent ?? '').match(/[1-9]/) !== null, cellSel), 60_000);
 
     await startCast(WIDTH, HEIGHT);
     // 1. AT REST: pointer away, nothing drawn.
@@ -262,7 +284,7 @@ try {
     await shot('01-rest');
 
     // 2. HOVER: a real pointer on the Comms icon.
-    const cell = JSON.parse(await ev(`(() => { const r = document.querySelector(${JSON.stringify(cellSel)}).getBoundingClientRect(); const i = document.querySelector(${JSON.stringify(cellSel)} + ' svg')?.getBoundingClientRect() ?? r; return JSON.stringify({ x: i.x + i.width / 2, y: i.y + i.height / 2, left: r.left, right: r.right, top: r.top, bottom: r.bottom }); })()`));
+    const cell = await cdp.call((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); const i = document.querySelector(`${sel} svg`)?.getBoundingClientRect() ?? r; return { x: i.x + i.width / 2, y: i.y + i.height / 2, left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }, cellSel);
     await mouse(cell.x - 2, cell.y);
     await mouse(cell.x, cell.y);
     await sleep(400);
@@ -271,7 +293,7 @@ try {
     check('hovering the Comms icon draws the overlay', hover.overlay === true);
     // The same hover left STILL for 1.5 s, with nothing re-sent: does the overlay stay, and does the browser still say :hover?
     await sleep(1500);
-    proof.idle = JSON.parse(await ev(`JSON.stringify({ overlay: Boolean(document.querySelector('[data-flight-paths]')), hovered: document.querySelector(${JSON.stringify(cellSel)}).matches(':hover') })`));
+    proof.idle = await cdp.call((sel) => ({ overlay: Boolean(document.querySelector('[data-flight-paths]')), hovered: document.querySelector(sel).matches(':hover') }), cellSel);
     say(`idle after 1.5 s still: ${JSON.stringify(proof.idle)}`);
     await mouse(cell.x, cell.y);
     await sleep(300);
@@ -279,7 +301,11 @@ try {
     check('every arc has a real path, a visible stroke and a non-zero size', hover.arcs.length > 0 && hover.arcs.every((a) => a.d.length > 20 && a.strokeWidth > 0 && a.opacity > 0 && a.bbox.w > 5 && a.bbox.h > 5 && a.onScreen.w > 5 && a.onScreen.h > 5), hover.arcs.map((a) => ({ peer: a.peer, bbox: a.bbox, onScreen: a.onScreen, strokeWidth: a.strokeWidth, opacity: a.opacity })));
     check('the overlay never takes a click and sits above the table', hover.pointerEvents === 'none' && Number(hover.z) >= 10, { z: hover.z, pointerEvents: hover.pointerEvents });
     check('the arcs start at the pointer', hover.arcs.every((a) => { const m = /^M([-\d.]+),([-\d.]+)/.exec(a.d); return m !== null; }));
-    check('amber for the unanswered, dots on every arc', hover.arcs.some((a) => a.tone === 'waiting') && hover.arcs.every((a) => a.dots > 0), hover.arcs.map((a) => ({ peer: a.peer, tone: a.tone, direction: a.direction, pulse: a.pulse, label: a.label })));
+    check('a waiting thread is marked, dots on every arc', hover.arcs.some((a) => a.tone === 'waiting') && hover.arcs.every((a) => a.dots > 0), hover.arcs.map((a) => ({ peer: a.peer, tone: a.tone, direction: a.direction, pulse: a.pulse, label: a.label })));
+    // The shadow (owner 2026-11-17): it meets the arc at both contact points, is unblurred and unshifted, never wider than the arc.
+    check('every shadow meets its arc at both contact points (0.5 px), unblurred, never wider than the arc', hover.arcs.every((a) => a.shadowEnds && a.shadowEnds.start < 0.5 && a.shadowEnds.end < 0.5 && !a.shadowEnds.filter && !a.shadowEnds.transform && a.shadowEnds.width <= a.strokeWidth), hover.arcs.map((a) => ({ peer: a.peer, shadow: a.shadowEnds, strokeWidth: a.strokeWidth })));
+    // The sender's colour (owner 2026-11-17): each arc in its sender's workspace colour; meridian's and vesper's workspaces differ.
+    check('arcs are drawn in the sending workspace colour: two workspaces, two colours', hover.arcs.every((a) => /^#[0-9a-f]{6}$/.test(a.color ?? '') && a.drawn !== '') && new Set(hover.arcs.map((a) => a.drawn)).size >= 2, hover.arcs.map((a) => ({ peer: a.peer, direction: a.direction, color: a.color, drawn: a.drawn })));
     check('the other rows dim and the partners are tinted', hover.dimmed > 0 && hover.peers === 6, { dimmed: hover.dimmed, peers: hover.peers });
     holdAt(cell.x, cell.y);
     // No label covers row text or another label, measured in the real layout (getBoundingClientRect of each label and each text leaf).

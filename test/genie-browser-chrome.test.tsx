@@ -16,7 +16,7 @@ const tab = (id: string, over: Partial<BrowserSnapshot['tabs'][number]> = {}) =>
 const snap = (over: Partial<BrowserSnapshot> = {}): BrowserSnapshot => ({ notice: null, tabs: [], active: null, presetId: 'fit', presets, sites: ['tynn.gen', 'moic.gen'], ...over });
 const noop = () => {};
 const handlers = { onNavigate: noop, onOpen: noop, onActivate: noop, onClose: noop, onNewTab: noop, onBack: noop, onForward: noop, onReload: noop, onPreset: noop };
-const render = (s: BrowserSnapshot, extra: { refusal?: string | null } = {}) => renderToStaticMarkup(<GenieBrowserChrome snapshot={s} refusal={extra.refusal ?? null} {...handlers} />);
+const render = (s: BrowserSnapshot, extra: { refusal?: string | null } = {}) => renderToStaticMarkup(<GenieBrowserChrome onSitesMenu={async () => null} snapshot={s} refusal={extra.refusal ?? null} {...handlers} />);
 
 describe('a notice', () => {
     it('says in its own line what the browser cannot do now', () => {

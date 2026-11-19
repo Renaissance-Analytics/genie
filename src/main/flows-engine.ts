@@ -2,7 +2,7 @@ import type { Resolution } from '../core/inbox.js';
 import { fileMover } from './flow-file-move.js';
 import { startFileSource, type RawWatchEvent } from './flow-file-source.js';
 import { FileTriggerWatches, nodeWatch } from './flow-file-watch.js';
-import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
+import { agentPrompter, createFlowRunner, deliverKeptOnNextRun, flowSender, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import type { FlowStore } from './flow-store.js';
 import { ensureFlowToolKinds, questionWaiter, type FlowToolCall } from './flow-tools.js';
@@ -22,7 +22,7 @@ export interface FlowsEngineDeps {
     readonly resolve: (address: string) => Resolution;
     readonly agent: (id: string) => { name: string; workspaceId: string } | null;
     // Typed by what the runner asks of them, so a flow file names no hub (test/flows-acceptance-ci.test.ts holds the set).
-    readonly supervisor: Parameters<typeof supervisedCommand>[0]['supervisor'];
+    readonly supervisor: Parameters<typeof supervisedCommand>[0]['supervisor'] & { stop(id: string): unknown };
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     readonly addKnowledge: (entry: { title: string; body: string; [k: string]: unknown }) => Promise<{ id: string }>;
     readonly attention: Parameters<typeof questionWaiter>[0];
@@ -59,12 +59,14 @@ export function startFlowsEngine(deps: FlowsEngineDeps): FlowsEngine {
             asleep: deps.asleep,
             ports: (flow) => ({
                 ...(deps.escapesPromptValues ? { escapesPromptValues: deps.escapesPromptValues } : {}),
-                promptAgent: agentPrompter({ sessions: deps.sessions, resolve: deps.resolve, agent: deps.agent, asleep: deps.asleep, by: `flow "${flow.name}"` }),
+                promptAgent: agentPrompter({ sessions: deps.sessions, resolve: deps.resolve, agent: deps.agent, asleep: deps.asleep, by: flowSender(flow.name) }),
                 // One supervised process per flow: every run's output lands in the same kept log, after the runs before it.
                 runCommand: supervisedCommand(
                     { supervisor: deps.supervisor, workspacePath: deps.workspacePath, envFor: deps.envFor },
                     { processId: `flow-run:${flow.id}`, name: `flow: ${flow.name}` },
                 ),
+                // STOP (Tynn #833): the flow's running command is its one supervised process.
+                stopCommand: () => { deps.supervisor.stop(`flow-run:${flow.id}`); },
                 // The person armed it (an agent never can), so what it writes is theirs.
                 addKnowledge: async (entry) => deps.addKnowledge({ ...entry, source: 'user' }),
                 // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.
@@ -78,6 +80,8 @@ export function startFlowsEngine(deps: FlowsEngineDeps): FlowsEngine {
         }),
     });
     scheduler.plan();
+    // A flow's prompt KEPT because no run could take it goes when its agent next runs (Tynn #826).
+    const offKept = deliverKeptOnNextRun(deps.sessions);
     // A run Genie quit under resumes now, when the step it reached is safe to run again (genie#1204).
     void scheduler.resumeInterrupted().catch((error: unknown) => console.error(`[flows] resume: ${error instanceof Error ? error.message : String(error)}`));
     // THE FILE TRIGGER (genie#1204): only the workspaces an armed file flow names are watched; what lands there becomes an
@@ -98,6 +102,6 @@ export function startFlowsEngine(deps: FlowsEngineDeps): FlowsEngine {
     return {
         scheduler,
         setToolCaller: (call) => { toolCall = call; handTools(call); },
-        stop: () => { fileWatches.stop(); fileSource.stop(); scheduler.stop(); },
+        stop: () => { offKept(); fileWatches.stop(); fileSource.stop(); scheduler.stop(); },
     };
 }

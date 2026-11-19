@@ -143,6 +143,21 @@ describe('invoke', () => {
         expect(f.calls).toEqual(['cancel:agent_a:interrupt', 'cancel:agent_a:stop', 'cancel:agent_a:stop']);
     });
 
+    it('stopToolCall is `Stop this call` (Tynn #855): it reaches host.stopToolCall with the call, never cancel or stop; refusals are said', async () => {
+        const f = fakes();
+        const stops: string[] = [];
+        const api = buildHostApi({ ...f.deps, host: { ...f.deps.host, stopToolCall: async (id, call) => { stops.push(`${id}:${call}`); return { ok: true, ended: 2 }; } } });
+        expect(await api.invoke('stopToolCall', ['agent_a', 't1'])).toEqual({ ok: true, ended: 2 });
+        expect(stops).toEqual(['agent_a:t1']);
+        expect(f.calls).toEqual([]);
+        expect(await api.invoke('stopToolCall', ['nope', 't1'])).toEqual({ ok: false, reason: 'unknown agent' });
+        expect(await api.invoke('stopToolCall', ['agent_a'])).toEqual({ ok: false, reason: 'Stop this call names the call' });
+        expect(stops).toHaveLength(1);
+        // A host with no stopToolCall refuses in words, and never falls back to stopping the turn.
+        expect(await buildHostApi(f.deps).invoke('stopToolCall', ['agent_a', 't1'])).toMatchObject({ ok: false, reason: expect.stringMatching(/Stop the turn instead/) });
+        expect(f.calls).toEqual([]);
+    });
+
     it('resumeLimit is `Resume now` (Tynn #794): it opens the AGENT’S PROVIDER login, once; an unknown agent is refused', async () => {
         const f = fakes();
         const api = buildHostApi(f.deps);
@@ -190,7 +205,6 @@ describe('invoke', () => {
 
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {
         const api = buildHostApi(fakes().deps);
-        await expect(api.invoke('addWorkspace', [])).rejects.toThrow(/folder picker/);
         await expect(api.invoke('features.setBrowserBounds', [{}])).rejects.toThrow(/host/);
         await expect(api.invoke('workspaces.tynnProjects', [])).rejects.toThrow(/host/);
     });
@@ -310,6 +324,8 @@ describe('events', () => {
  * nobody wants never built.
  */
 describe('the phone’s files, attachments and wanted agents', () => {
+    /** A JPEG's signature, padded to `n` bytes: an image by its bytes (core/prompt-content.ts imageTypeOf). */
+    const jpeg = (n: number) => { const b = new Uint8Array(n); b.set([0xff, 0xd8, 0xff].slice(0, n)); return b; };
     const withFiles = () => {
         const f = fakes();
         const seen: string[] = [];
@@ -341,8 +357,8 @@ describe('the phone’s files, attachments and wanted agents', () => {
 
     it('a prompt with files goes to promptWith — by YOU — and may carry no text; without files it goes there too, so a refusal can say why', async () => {
         const { f, seen, api } = withFiles();
-        expect(await api.invoke('prompt', ['agent_a', 'what is this?', [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes: new Uint8Array(12) }]])).toEqual({ ok: true });
-        expect(await api.invoke('prompt', ['agent_a', '', [{ name: 'IMG_2.jpg', type: 'image/jpeg', bytes: new Uint8Array(3) }]])).toEqual({ ok: true });
+        expect(await api.invoke('prompt', ['agent_a', 'what is this?', [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes: jpeg(12) }]])).toEqual({ ok: true });
+        expect(await api.invoke('prompt', ['agent_a', '', [{ name: 'IMG_2.jpg', type: 'image/jpeg', bytes: jpeg(3) }]])).toEqual({ ok: true });
         expect(await api.invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
         expect(seen).toEqual(['promptWith:agent_a:what is this?:IMG_1.jpg/image/jpeg/12:you', 'promptWith:agent_a::IMG_2.jpg/image/jpeg/3:you', 'promptWith:agent_a:hi::you']);
         expect(f.calls).not.toContain('prompt:agent_a:hi');
@@ -362,8 +378,34 @@ describe('the phone’s files, attachments and wanted agents', () => {
 
     it('promptWith’s refusal (a file the provider cannot take) comes back with its reason', async () => {
         const { f, api } = withFiles();
-        f.deps.host.promptWith = () => ({ ok: false, reason: 'clip.mov: this agent’s provider takes images and text only' });
-        expect(await api.invoke('prompt', ['agent_a', 'x', [{ name: 'clip.mov', type: 'video/quicktime', bytes: new Uint8Array(2) }]])).toEqual({ ok: false, reason: 'clip.mov: this agent’s provider takes images and text only' });
+        f.deps.host.promptWith = () => ({ ok: false, reason: 'shot.jpg: this agent’s provider cannot take an image' });
+        expect(await api.invoke('prompt', ['agent_a', 'x', [{ name: 'shot.jpg', type: 'image/jpeg', bytes: jpeg(4) }]])).toEqual({ ok: false, reason: 'shot.jpg: this agent’s provider cannot take an image' });
+    });
+
+    it('a file that is not an image or text is saved by the host first (Tynn #829); no save here, or a refused save, starts and sends nothing', async () => {
+        const docx = { name: 'Letterhead.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', bytes: new Uint8Array([0x50, 0x4b, 3, 4, 0, 0]) };
+        const { f, seen, api } = withFiles();
+        const started: string[] = [];
+        f.deps.startForWork = async (r) => { started.push(r.id); return { ok: true, started: true }; };
+
+        // No save on this host: refused, naming the file.
+        const none = await api.invoke('prompt', ['agent_a', 'use this', [docx]]) as { ok: boolean; reason?: string };
+        expect(none.ok).toBe(false);
+        expect(none.reason).toMatch(/Letterhead\.docx.*cannot save/);
+
+        // A refused save: its reason, and nothing started or sent.
+        f.deps.saveUploads = async () => ({ ok: false, reason: 'Letterhead.docx was not sent: this workspace is not trusted' });
+        const api2 = buildHostApi(f.deps);
+        expect(await api2.invoke('prompt', ['agent_a', 'use this', [docx]])).toEqual({ ok: false, reason: 'Letterhead.docx was not sent: this workspace is not trusted' });
+        expect(started).toEqual([]);
+        expect(seen.filter((s) => s.startsWith('promptWith'))).toEqual([]);
+
+        // CONTROL: a save that works sends the saved file (no bytes), after the start.
+        f.deps.saveUploads = async (_r, files) => ({ ok: true, files: files.map((a) => ({ ...a, bytes: new Uint8Array(0), saved: { path: `.ai/_dirty/uploads/2026-11-17/${a.name}`, type: a.type, size: a.bytes.byteLength } })) });
+        const api3 = buildHostApi(f.deps);
+        expect(await api3.invoke('prompt', ['agent_a', 'use this', [docx]])).toEqual({ ok: true });
+        expect(started).toEqual(['agent_a']);
+        expect(seen.filter((s) => s.startsWith('promptWith'))).toEqual(['promptWith:agent_a:use this:Letterhead.docx/application/vnd.openxmlformats-officedocument.wordprocessingml.document/0:you']);
     });
 
     it('an agent no listener wants is never built: detailFor is not called for it', async () => {
@@ -385,5 +427,78 @@ describe('the phone’s files, attachments and wanted agents', () => {
         expect(built).toBe(1);
         expect(heard).toEqual(['agent:agent_a']);
         off();
+    });
+});
+
+/**
+ * A PHONE THAT OPENS A CHAT GETS ITS HISTORY (Tynn #862; the owner, 2026-11-18: an agent's messages "didn't appear until I
+ * sent a message"). The phone's `agent.watch` reads the agent's detail, and that first read is what asks the engine for
+ * the ledger (session-engine-client `ledgerFor`): the answer is `rowsPending`, no rows. Only AFTER the answer does the
+ * host record the phone as watching. A ledger the engine already held lands in that gap, while nobody wants the agent:
+ * it was not even built, and nothing sent it again until the next change — the person's own send.
+ *
+ * The cure: when a watch is recorded, the host API pushes that agent's detail as it is now. Whatever changed before the
+ * watch arrives, and nothing is sent for an agent nobody asked for. Driven here exactly as genie-host's RemoteHost drives
+ * its host API (remote-host.ts `#listen`: `wantsAgent`, and `onAgentsWanted` on an agent's first watch); no window relays
+ * anything since Tynn #898 step 2d-4b2.
+ */
+describe('a phone that opens a chat gets its history (Tynn #862)', () => {
+    function rig() {
+        const f = fakes();
+        const scheduled: Array<() => void> = [];
+        f.deps.schedule = (_ms, fn) => { scheduled.push(fn); return () => {}; };
+        let ledger: unknown[] = [];
+        f.deps.detailFor = (id) => (id === 'agent_a' ? { agent: { id }, rows: ledger, rowsPending: ledger.length === 0 } : null) as never;
+        const api = buildHostApi(f.deps);
+        const sent: Array<{ channel: string; payload: unknown }> = [];
+        const watched = new Set<string>();
+        const agentsWanted = new Set<(agentIds: readonly string[]) => void>();
+        const off = api.onEvent((channel, payload) => { if (channel.startsWith('agent:')) sent.push({ channel, payload }); }, {
+            wantsAgent: (agentId) => watched.has(agentId),
+            onAgentsWanted: (listener) => { agentsWanted.add(listener); return () => { agentsWanted.delete(listener); }; },
+        });
+        const run = () => { for (const fn of scheduled.splice(0)) fn(); };
+        const changed = (id: string) => { for (const l of f.listeners.agent) l(id); run(); };
+        // A phone's watch, as RemoteHost records it: only an agent's FIRST watch tells the host API.
+        const watch = (id: string) => { const first = !watched.has(id); watched.add(id); if (first) for (const l of [...agentsWanted]) l([id]); run(); };
+        const unwatch = (id: string) => { watched.delete(id); run(); };
+        return { sent, changed, watch, unwatch, off, setLedger: (rows: unknown[]) => { ledger = rows; } };
+    }
+
+    it('the ledger that landed before the phone’s watch was recorded is sent the moment it is', () => {
+        const r = rig();
+        // The phone's watch read the detail (pending); the ledger lands before the watch is recorded.
+        r.setLedger([{ id: 'r1' }, { id: 'r2' }]);
+        r.changed('agent_a');
+        expect(r.sent).toEqual([]);
+        // The watch is recorded: the agent's detail, as it is NOW, crosses — with its rows.
+        r.watch('agent_a');
+        expect(r.sent).toEqual([{ channel: 'agent:agent_a', payload: { agent: { id: 'agent_a' }, rows: [{ id: 'r1' }, { id: 'r2' }], rowsPending: false } }]);
+        r.off();
+    });
+
+    it('only an agent’s first watch pushes it: a second watch of it sends nothing; one dropped and watched again is sent again', () => {
+        const r = rig();
+        r.setLedger([{ id: 'r1' }]);
+        r.watch('agent_a');
+        expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a']);
+        r.watch('agent_a');
+        expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a']);
+        r.unwatch('agent_a');
+        r.watch('agent_a');
+        expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a', 'agent:agent_a']);
+        r.off();
+    });
+
+    it('an agent nobody wants is still never built or sent; once wanted, it is pushed as it is, and its later changes flow as before', () => {
+        const r = rig();
+        r.watch('agent_b');
+        r.changed('agent_a');
+        expect(r.sent.filter((s) => s.channel === 'agent:agent_a')).toEqual([]);
+        r.watch('agent_a');
+        r.setLedger([{ id: 'r1' }]);
+        r.changed('agent_a');
+        expect(r.sent.filter((s) => s.channel === 'agent:agent_a')).toHaveLength(2);
+        r.off();
     });
 });

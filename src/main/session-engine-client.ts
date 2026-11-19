@@ -1,5 +1,3 @@
-import type { AccountRecord } from '../core/accounts.js';
-import { decodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
@@ -43,7 +41,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { GateView } from '../core/rate-limit-gate.js';
-import { forwardedCallContext, type CallContext, type ClientTransport } from '../core/remote-protocol.js';
+import type { ClientTransport } from '../core/remote-protocol.js';
 import type { LiveSession } from '../core/roster.js';
 import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -81,6 +79,7 @@ import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView, WindowBeatPayload } from '../core/crash-record.js';
+import { toWireAttachment } from './engine-wire.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -102,6 +101,8 @@ export type Awaitable<T> = T | Promise<T>;
 /** What main.ts handed its in-process SessionHost, minus what runs on the host. Same names, same meanings. */
 export interface EngineClientOptions {
     readonly onFeatureEffect?: (connectionId: string, method: string, args: unknown[]) => Promise<unknown>;
+    /** What only a window can do for genie-host (window-tunnel.ts windowOpsHandler): the OS trash, an app's window. */
+    readonly onWindowOp?: (op: string, args: unknown[]) => Promise<unknown>;
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
     readonly onCarryOverSent?: (agentId: AgentId) => void;
     readonly onRedockSent?: (agentId: AgentId, at: string) => void;
@@ -124,8 +125,6 @@ export interface EngineClientOptions {
     readonly onToolSignal?: (signal: unknown) => void;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
-    /** A remote method genie-host does not own yet (Tynn #409): done here, by this window's own host API. Absent = refused. */
-    readonly onRemoteInvoke?: (method: string, args: unknown[], context: CallContext) => Promise<unknown>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
     readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -169,8 +168,6 @@ const EMPTY_GLOBAL: EngineGlobalView = { startedIds: [], heldLogins: [], signedO
 const NO_ROWS: readonly TimedEvent[] = [];
 
 export class SessionEngineClient {
-    readonly #featureInvalidations = new Set<() => void>();
-    onFeatureInvalidated(listener: () => void): () => void { this.#featureInvalidations.add(listener); return () => { this.#featureInvalidations.delete(listener); }; }
     readonly #options: EngineClientOptions;
     #transport: ClientTransport | null = null;
     #welcome: EngineWelcome | null = null;
@@ -183,6 +180,8 @@ export class SessionEngineClient {
     #stopAllLeft: ((left: number) => void) | null = null;
     /** The spawn host's frames by profile (the host split, P2.1), and who hears the link come and go. */
     readonly #spawnListeners = new Map<string, Set<(frame: SpawnFrame) => void>>();
+    /** genie-host's frames for this window's tunnelled protocol connections (Tynn #898 step 2d-4b). */
+    readonly #protocolListeners = new Set<(event: import('./protocol-tunnels.js').TunnelEvent) => void>();
     readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
     /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
     readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
@@ -246,7 +245,12 @@ export class SessionEngineClient {
             let welcomed: EngineWelcome | null = null;
             const handle = (text: string): void => {
                 const parsed = parseEngineFrame(text);
-                if (!parsed.ok) { this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`); return; }
+                if (!parsed.ok) {
+                    // A host's call this window does not know (Tynn #894): answered with its id once linked, so it settles.
+                    if (welcomed !== null && parsed.code === 'unsupported' && parsed.id !== undefined) transport.send(JSON.stringify({ kind: 'result', id: parsed.id, ok: false, reason: parsed.reason, code: 'unsupported' }));
+                    else this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`);
+                    return;
+                }
                 const m = parsed.message;
                 if (welcomed === null) {
                     if (m.kind === 'refused') { finish({ ok: false, reason: m.reason }); transport.close(); return; }
@@ -378,6 +382,14 @@ export class SessionEngineClient {
             case 'engine.callback':
                 this.#onCallback(payload as EngineCallback);
                 return;
+            case 'protocol.frame': {
+                const e = payload as { tunnel?: unknown; kind?: unknown; text?: unknown; reason?: unknown } | null;
+                if (!e || typeof e.tunnel !== 'string') return;
+                const event = e.kind === 'frame' && typeof e.text === 'string' ? { tunnel: e.tunnel, kind: 'frame' as const, text: e.text }
+                    : e.kind === 'closed' ? { tunnel: e.tunnel, kind: 'closed' as const, reason: typeof e.reason === 'string' ? e.reason : 'genie-host closed this connection' } : null;
+                if (event) for (const l of [...this.#protocolListeners]) l(event);
+                return;
+            }
             case 'spawn.frame': {
                 const p = payload as { profile?: unknown; frame?: unknown };
                 const listeners = typeof p?.profile === 'string' ? this.#spawnListeners.get(p.profile) : undefined;
@@ -421,9 +433,6 @@ export class SessionEngineClient {
                 this.hosting().rebase(payload as HostingDump);
                 return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
-            case 'features.invalidated':
-                for (const listener of this.#featureInvalidations) listener();
-                break;
             case 'safeMode.event':
                 this.#setSafeMode(payload as SafeModeView);
                 return;
@@ -549,15 +558,15 @@ export class SessionEngineClient {
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
-            if (method === 'client.elevate') {
-                if (!this.#options.elevate) throw new Error('this window runs no elevation');
-                reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
+            if (method === 'client.windowOp') {
+                if (!this.#options.onWindowOp) throw new Error('this window does no window operations');
+                reply = { kind: 'result', id, ok: true, value: (await this.#options.onWindowOp(String(args[0]), Array.isArray(args[1]) ? args[1] : [])) ?? null };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
-            if (method === 'client.remoteInvoke') {
-                if (!this.#options.onRemoteInvoke) throw new Error('this window answers no remote calls');
-                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), decodeRemoteInvokeArgs(String(args[0]), Array.isArray(args[1]) ? args[1] : []), forwardedCallContext(args[2])) };
+            if (method === 'client.elevate') {
+                if (!this.#options.elevate) throw new Error('this window runs no elevation');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -1033,6 +1042,25 @@ export class SessionEngineClient {
         return () => { this.#filesListeners.delete(listener); };
     }
 
+    /** One op on a tunnel of this window's protocol connections to genie-host's RemoteHost; false while not linked. */
+    protocolSend(op: import('./protocol-tunnels.js').TunnelOp, tunnel: string, payload: unknown): boolean {
+        const t = this.#transport;
+        if (t === null || this.#welcome === null) return false;
+        // A notification (id 0), as a spawn frame is: in order on the one socket, no result per frame.
+        t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.protocol', args: [op, tunnel, payload] }));
+        return true;
+    }
+
+    /** Whether the link is up now (connected, its dump in): a tunnel opens only then. */
+    get linked(): boolean {
+        return this.#transport !== null && this.#welcome !== null;
+    }
+
+    onProtocolFrame(listener: (event: import('./protocol-tunnels.js').TunnelEvent) => void): () => void {
+        this.#protocolListeners.add(listener);
+        return () => { this.#protocolListeners.delete(listener); };
+    }
+
     /** The frames of genie-host's spawn-host child of `profile`. */
     onSpawnFrame(profile: string, listener: (frame: SpawnFrame) => void): () => void {
         let set = this.#spawnListeners.get(profile);
@@ -1225,7 +1253,7 @@ export class SessionEngineClient {
     }
 
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): Promise<{ ok: true } | { ok: false; reason: string | null }> {
-        const wire: WireAttachment[] = attachments.map((a) => ({ name: a.name, type: a.type, b64: Buffer.from(a.bytes).toString('base64') }));
+        const wire: WireAttachment[] = attachments.map(toWireAttachment);
         return this.#value('engine.promptWith', [agentId, text, wire, by], { ok: false, reason: NOT_CONNECTED });
     }
 
@@ -1253,7 +1281,7 @@ export class SessionEngineClient {
         return this.#value('engine.reportPlan', [agentId, steps], false);
     }
 
-    resolvePrompt(agentId: AgentId, id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }> {
+    resolvePrompt(agentId: AgentId, id: string, action: import('../core/prompt-delivery.js').PromptAction): Promise<{ ok: true } | { ok: false; reason: string }> {
         return this.#value('engine.resolvePrompt', [agentId, id, action], { ok: false, reason: NOT_CONNECTED });
     }
 
@@ -1302,31 +1330,6 @@ export class SessionEngineClient {
         await this.#value('engine.refreshAccountIdentity', [provider], false);
     }
 
-    /**
-     * Sign one account of a provider in (Tynn #479). The host runs the sign-in and owns its terminal; the window only shows it.
-     * Two calls for one account join one sign-in. With no account named, the provider's default account.
-     */
-    async login(provider: string, accountId?: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }> {
-        const reply = await this.call('engine.login', accountId === undefined ? [provider] : [provider, accountId]);
-        if (!reply.ok) return { ok: false, reason: reply.reason };
-        return reply.value as { ok: true; terminalId: string } | { ok: false; reason: string };
-    }
-
-    /** The person closed or cancelled the sign-in window: the host kills its terminal and signs nobody in. */
-    async cancelLogin(accountId: string): Promise<void> {
-        await this.#value('engine.cancelLogin', [accountId], false);
-    }
-
-    /**
-     * SWITCH ACCOUNT (Tynn #753): the host opens the provider's own login in its one home; the answer names the terminal and the
-     * steps to show. No agent is stopped or started again.
-     */
-    async switchAccount(provider: string): Promise<{ ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string }> {
-        const reply = await this.call('engine.switchAccount', [provider]);
-        if (!reply.ok) return { ok: false, reason: reply.reason };
-        return reply.value as { ok: true; terminalId: string; instructions: string[] } | { ok: false; reason: string };
-    }
-
     /** Rename or forget a known account (Tynn #484); a refusal, or a host that cannot answer, is its reason. */
     async accountsAct(action: AccountsAction): Promise<AccountsActResult> {
         const reply = await this.call('engine.accountsAct', [action]);
@@ -1350,11 +1353,6 @@ export class SessionEngineClient {
     /** Not now on an offer: it goes, and the host does not make it again in that window. */
     async dismissSwitchOffer(id: string): Promise<boolean> {
         return (await this.#value<unknown>('engine.dismissSwitchOffer', [id], false)) === true;
-    }
-
-    /** The persisted legacy account home, or unknown while the host/book cannot answer. */
-    async providerAccount(provider: string): Promise<Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null> {
-        return this.#value('engine.providerAccount', [provider], null);
     }
 
     /**

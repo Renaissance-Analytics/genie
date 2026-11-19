@@ -20,7 +20,6 @@ describe('host workspace/config and explicit release notes use their owned servi
         expect(mcp.mcpServers.other).toEqual({ command: 'fixture-mcp-server', args: [] });
         expect(JSON.stringify(mcp)).toContain(f.endpoint.url);
         expect(await f.read('.agents/_genie/shared.md')).toContain('`fixture_tool`');
-        expect(f.invokeWindow).not.toHaveBeenCalled();
     });
     it('Sync now uses the canonical writers and reports the actual four target results', async () => {
         await f.hosting.trust.trust('work'); const answer = await f.answer(syncAction());

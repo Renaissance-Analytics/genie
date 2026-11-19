@@ -83,9 +83,9 @@ describe('a replica that misses a revision resnapshots and ends equal to the hos
     });
 });
 
-describe('over the engine connection (protocol 3)', () => {
-    it('ENGINE_PROTOCOL is 3, and catalog.snapshot and catalog.docs are on the allowlist', () => {
-        expect(ENGINE_PROTOCOL).toBe(3);
+describe('over the engine connection (protocol 4)', () => {
+    it('ENGINE_PROTOCOL is 4 (the window tunnel, Tynn #910), and catalog.snapshot and catalog.docs are on the allowlist', () => {
+        expect(ENGINE_PROTOCOL).toBe(4);
         expect(ENGINE_METHODS as readonly string[]).toEqual(expect.arrayContaining(['catalog.snapshot', 'catalog.docs']));
     });
 

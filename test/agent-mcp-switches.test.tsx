@@ -163,7 +163,10 @@ describe('carried to every window', () => {
         expect(src('src/main/host-api.ts')).toContain('return deps.agentOps.setMcpServer(args[0], args[1], args[2]);');
         expect(src('src/renderer/local-session.ts')).toContain('setMcpServer: (id, name, on) => requestAgent((agents) => agents.setMcpServer(id, name, on))');
         expect(src('src/renderer/remote-bridge.ts')).toMatch(/setMcpServer: \(agentId, name, on\) => answer\('agents\.setMcpServer', agentId, name, on\)/);
-        expect(src('src/main/main.ts')).toMatch(/noteMcpSeen\(agentId, reports\.map\(\(r\) => r\.name\)\)/);
+        // Kept by genie-host, which hears every session's report (Tynn #896, 2b-3): host-mcp-recovery.ts, wired in genie-host.
+        expect(src('src/main/host-mcp-recovery.ts')).toMatch(/ports\.noteSeen\(agentId, reports\.map\(\(r\) => r\.name\)\)/);
+        expect(src('src/main/genie-host.ts')).toMatch(/noteMcpSeen\(id as AgentId, names\)/);
+        expect(src('src/main/main.ts')).not.toMatch(/noteMcpSeen\(/);
     });
 
     it('the agent’s Skills page draws the switches from its record', () => {

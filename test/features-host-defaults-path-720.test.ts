@@ -26,7 +26,6 @@ describe('host defaults use the canonical link planner without a window (Tynn #7
             expect(data.toolchain?.defaults?.[lang]).toBe(f.versions[lang]);
             expect(data.toolchain?.result).toBe(`${LANG_LABEL[lang]} ${f.versions[lang]} is now the default — what \`${lang}\` means for Genie's terminals, processes and agents.`);
             expect(f.environment.get('PATH')).toContain(langPathEntries(f.toolchainDir, lang, 'linux')[0]);
-            expect(f.invokeWindow).not.toHaveBeenCalled();
         });
         it(`${lang}: Use the system clears only its default link and retains the installed version`, async () => {
             f.defaults.set(lang, f.versions[lang]); await scan();
@@ -131,6 +130,5 @@ describe('independent controls for the default and PATH fixture (Tynn #720)', ()
         const data = await scan();
         expect(data.toolchain?.defaults?.go).toBe(f.versions.go);
         expect(data.toolchain?.machinePath).toEqual(await f.machinePath.status());
-        expect(f.invokeWindow).not.toHaveBeenCalled();
     });
 });

@@ -175,6 +175,10 @@ describe('pushes are one at a time, the latest state always last (core/latest-pu
         expect(owner).toContain('if (!this.#closed) for (const listener of this.#listeners) listener(data);');
         expect(owner).toContain('#changed(): void { if (!this.#closed && this.#listeners.size > 0) this.#push.request(); }');
         expect(owner).toMatch(/onEngineStatusesLate: \(\) => this\.#changed\(\)/);
-        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toContain('hostFeatures.onChange(() => engine.featuresChanged());');
+        // Every client hears the push through RemoteHost, from genie-host's HostFeatures; the engine link's own
+        // features.invalidated event is retired with the engine.features route (Tynn #898 step 2e-2).
+        const host = readFileSync('src/main/genie-host.ts', 'utf8');
+        expect(host).toMatch(/phoneApi = hostAloneApi\(\{\s*hostName: hostname\(\),\s*features: hostFeatures,/);
+        expect(host).not.toContain('engine.featuresChanged(');
     });
 });

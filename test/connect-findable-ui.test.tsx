@@ -35,7 +35,7 @@ describe('an empty list of your Tynn workstations says what to do on the other m
 
     it('CONTROL: a list with a machine in it shows the machine, not the steps', () => {
         const html = renderToStaticMarkup(
-            <ConnectRemote {...base} tynnWorkstations={{ ok: true, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner' }] }} onOpenWorkstation={() => {}} />,
+            <ConnectRemote {...base} tynnWorkstations={{ ok: true, workstations: [{ id: 'ws_a', name: 'studio', active: true, connectable: true, local: true, source: 'owner', mine: true }] }} onOpenWorkstation={() => {}} />,
         );
         expect(html).toContain('data-tynn-workstation-row="ws_a"');
         expect(html).not.toContain(GUIDANCE);
@@ -121,10 +121,11 @@ describe('wired: the shell hands the title bar its connect, and the palette offe
         expect(bar).toMatch(/\bconnect=\{remote \|\| scoped \|\| !remoteConnect \|\| !mayBrowse\(features\.remote\?\.tynnWorkstation\?\.role \?\? null\) \? undefined : /);
     });
 
-    it('main opens a pasted link through dispatchConnectLink, with the role Tynn gave it, never one the window sends', () => {
+    it('main opens a pasted link as genie-host decided it, with the role Tynn gave the host, never one the window sends (Tynn #896, 2b-4)', () => {
         const handler = /ipcMain\.handle\('genie:connect-link'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
-        expect(handler).toContain('dispatchConnectLink(');
-        expect(handler).toContain('workstationRoleNow');
+        expect(handler).toContain("ownProtocol.call('tynnNetwork.classifyLink'");
+        expect(handler).toContain('actOnConnectLink(');
+        expect(handler).not.toContain('workstationRoleNow');
         expect(handler).toContain('shell.openExternal');
         expect(handler).toContain('openRemoteWindow(`relay:${');
     });

@@ -18,7 +18,8 @@ describe('messages', () => {
         expect(parseMessage('not json')).toEqual({ ok: false, reason: 'not JSON' });
         expect(parseMessage(JSON.stringify({ kind: 'dance' }))).toEqual({ ok: false, reason: 'unknown message kind "dance"' });
         expect(parseMessage(JSON.stringify({ kind: 'call', id: 'x', method: 'snapshot', args: [] }))).toEqual({ ok: false, reason: 'a call needs a numeric id, a method and an args array' });
-        expect(parseMessage(JSON.stringify({ kind: 'call', id: 1, method: 'eval', args: [] }))).toEqual({ ok: false, reason: '"eval" is not a bridge method' });
+        // Tynn #894: refused, and kept with its id so the receiver answers that call instead of leaving it to hang.
+        expect(parseMessage(JSON.stringify({ kind: 'call', id: 1, method: 'eval', args: [] }))).toEqual({ ok: false, reason: '"eval" is not a bridge method', id: 1, method: 'eval', code: 'unsupported' });
     });
 });
 
@@ -37,10 +38,15 @@ describe('the capability table', () => {
         expect(capabilityOf('updates.check')).toBe('upgrade');
         expect(capabilityOf('updates.download')).toBe('upgrade');
         expect(capabilityOf('updates.install')).toBe('upgrade');
-        expect(capabilityOf('addWorkspace')).toBe('host-only');
+        // The old addWorkspace only refused; every client adds through workspaces.previewAdd / confirmAdd (Tynn #897, 2c-1).
+        expect(REMOTE_METHODS as readonly string[]).not.toContain('addWorkspace');
         // Tynn #529 part A: Take over from another machine is a write — it needs the baton — and its window opens THERE.
         expect(capabilityOf('takeOver')).toBe('write');
-        expect(capabilityOf('providerLogin')).toBe('host-only');
+        // Sign-ins (Tynn #896): the provider's own login, started on the host for the owner's client, which opens its window.
+        expect(capabilityOf('providerLogin')).toBe('write');
+        expect(capabilityOf('logins.design')).toBe('write');
+        expect(capabilityOf('accounts.switch')).toBe('write');
+        expect(capabilityOf('logins.provider')).toBe('write');
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
@@ -106,7 +112,19 @@ describe('the capability table', () => {
         // 163 with `workspaces.savePreview` (a read) and `workspaces.save` (a write): Save to repo (Tynn #756), the owner's, workspace-scoped.
         // 165 with `workspaces.cloneOffers` (a read) and `workspaces.applyOffer` (a write): the offers a clone's repo brings (Tynn #756), the owner's, workspace-scoped.
         // 166 with `agents.typing` (what a composer holds, relayed to the other windows on the agent, Tynn #730): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(166);
+        // 169 with `accounts.list` (a read), `accounts.act` and `accounts.dismissOffer` (writes): the account chips on the one
+        // protocol, for every client of the owner's (client/host split step 2a, Tynn #895).
+        // 171 since `logins.design` and `accounts.switch` (Tynn #896): the design sign-in and a switch of account, writes.
+        // 172 with `logins.provider` (Tynn #896, 2b-2b): the tray's Log in by provider, a write, the owner's.
+        // 173 with `tynnNetwork.classifyLink` (Tynn #896, 2b-4): a pasted share link, decided by the host; local, like workstations.
+        // 172 again without the old `addWorkspace` (Tynn #897, 2c-1): it only ever refused.
+        // 174 with `crashReport.draft` (a read) and `crashReport.send` (a write), the owner's (Tynn #897, 2c-2).
+        // 175 with `providers.chooseProgram` (a write, the owner's): a provider's .exe, picked on the host's disk (Tynn #897, 2c-3).
+        // 176 with `terminals.scratch` (a write, workspace-scoped; the home one the owner's): the throwaway shell (Tynn #897, 2c-4).
+        // 177 with `stopToolCall` (a write, agent-scoped): Stop this call, one hung tool call ends (Tynn #855).
+        expect(REMOTE_METHODS.length).toBe(177);
+        expect(capabilityOf('accounts.list')).toBe('read');
+        expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.typing');
         expect(capabilityOf('agents.attachment')).toBe('read');

@@ -2,46 +2,58 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
-import { inMemoryPair, type ClientTransport, type ServerConnection } from '../src/core/remote-protocol.js';
+import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
 import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { AgentWindows, connectRemote } from '../src/renderer/remote-bridge.js';
 
 /*
- * A PHONE'S PHOTO SINCE THE HOST SPLIT (Tynn #657). The phone talks to genie-host; genie-host stages the bytes, and a
- * connected window answers the prompt through the engine link's reverse call (`client.remoteInvoke`). Driven end to end on
- * the real chain: the phone's bridge → genie-host's remote host (staging) → the engine link → the window's host API
- * `prompt` → `promptWith`. The bytes the agent gets must be the bytes the phone sent, as bytes, with their names.
+ * A PHONE'S PHOTO SINCE THE HOST SPLIT (Tynn #657). The phone talks to genie-host; genie-host stages the bytes and its own
+ * host API answers the prompt (Tynn #898 step 2d-2b: no call goes to a window, so no bytes cross JSON). Driven end to end
+ * on the real chain: the phone's bridge → genie-host's remote host (staging) → its host API `prompt` → `promptWith`. The
+ * bytes the agent gets must be the bytes the phone sent, as bytes, with their names.
  */
 
-const TOKEN = 'attach-657-token';
 const now = () => 1_000_000;
 
 let home = '';
 let token = '';
-let server: SessionEngineServer;
 let access: RemoteAccessHost;
 const tailnet: Array<(c: ServerConnection) => void> = [];
 const closers: Array<() => void> = [];
 const sent: Array<{ agentId: string; text: string; attachments: ReadonlyArray<{ name: string; type: string; bytes: unknown }> }> = [];
 const uploads: Array<{ workspaceId: string; dir: string; name: string; bytes: unknown }> = [];
+/** What reached the host's save of a file that is not an image or text (Tynn #829): the agent, and the names. */
+const saves: Array<{ agentId: string; workspaceId: string; names: string[] }> = [];
 
 const AGENT = { id: 'agent_a', name: 'atlas', workspaceId: 'ws_1' };
 
-/** The window's own host API, as main.ts builds it, over a fake session host that records what reached `promptWith`. */
-function windowHostApi() {
+/** genie-host's host API (host-alone-api.ts builds the same one), over a fake session host recording `promptWith`. */
+function hostApi() {
+    const none = () => () => {};
     const deps = {
+        // genie-host's API is its remote connections' event source too: what a hello subscribes to (host-api.ts onEvent).
+        snapshot: () => ({ agents: [], workspaces: [], deckItems: [], signals: {} }),
+        subscribeSnapshot: none,
+        subscribeAgentRecords: none,
+        detailFor: () => null,
+        terminals: { onData: none, onExit: none, list: () => [] },
+        features: {},
+        workspaceOps: {},
         find: (id: string) => (id === AGENT.id ? AGENT : null),
         host: {
+            subscribe: none,
             promptWith: async (agentId: string, text: string, attachments: ReadonlyArray<{ name: string; type: string; bytes: unknown }>) => {
                 sent.push({ agentId, text, attachments });
                 return { ok: true };
             },
             prompt: async () => true,
+        },
+        // The host's save (main/chat-uploads.ts): a docx is marked saved at its workspace path; an image is left as it is.
+        saveUploads: async (record: { id: string; workspaceId: string }, files: ReadonlyArray<{ name: string; type: string; bytes: Uint8Array }>) => {
+            saves.push({ agentId: record.id, workspaceId: record.workspaceId, names: files.map((f) => f.name) });
+            return { ok: true, files: files.map((f) => (f.name.endsWith('.docx') ? { ...f, bytes: new Uint8Array(0), saved: { path: `.ai/_dirty/uploads/2026-11-17/${f.name}`, type: f.type, size: f.bytes.byteLength } } : f)) };
         },
         files: {
             upload: async (workspaceId: string, dir: string, name: string, bytes: unknown) => {
@@ -55,6 +67,7 @@ function windowHostApi() {
 
 beforeEach(async () => {
     sent.length = 0;
+    saves.length = 0;
     uploads.length = 0;
     tailnet.length = 0;
     home = await mkdtemp(join(tmpdir(), 'genie2-phone-attach-657-'));
@@ -64,22 +77,8 @@ beforeEach(async () => {
     access = await RemoteAccessHost.open({
         home, hostName: 'alphar', now,
         transport: { onConnection: (cb) => { tailnet.push(cb); return () => {}; } },
-        api: hostRemoteApi({
-            hostName: 'alphar',
-            own: {},
-            window: { connected: () => server.newestLocalWindow() !== null, invoke: (m, a, c) => server.remoteInvoke(m, a, c) },
-        }),
+        api: hostRemoteApi({ hostName: 'alphar', own: {}, alone: hostApi() }),
     });
-    server = new SessionEngineServer({ token: TOKEN, build: 't' });
-
-    // This machine's window, linked to genie-host, answering what the host does not own with its own host API.
-    const api = windowHostApi();
-    const [h, raw] = memoryPair();
-    server.accept(h, { local: true });
-    const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-    const client = new SessionEngineClient({ onRemoteInvoke: (method, args, context) => api.invoke(method as never, args, context) });
-    expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
-    closers.push(() => t.close());
 });
 
 afterEach(async () => {
@@ -106,7 +105,7 @@ const bytesOf = (n: number, seed: number, head: readonly number[]) => {
     return b;
 };
 
-describe('a phone\'s files in a message, through genie-host and the window (Tynn #657)', () => {
+describe('a phone\'s files in a message, through genie-host (Tynn #657)', () => {
     it('a JPEG, a PNG and a text file reach promptWith as Uint8Array bytes equal to what the phone sent, with their names', async () => {
         const c = await phone();
         // Bigger than one upload chunk, so each crosses in several.
@@ -131,7 +130,24 @@ describe('a phone\'s files in a message, through genie-host and the window (Tynn
         });
     });
 
-    it('a phone\'s file upload reaches the window\'s files.upload as the same bytes', async () => {
+    it('a remote Pilot\'s .docx is saved on the HOST, in the agent\'s workspace, and the agent gets its path (Tynn #829)', async () => {
+        const c = await phone();
+        const docx = bytesOf(53_248, 5, [0x50, 0x4b, 0x03, 0x04]);
+        const png = bytesOf(1_000, 3, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        expect(await c.bridge.prompt(AGENT.id, 'use this letterhead', [{ name: 'Letterhead.docx', type, bytes: docx }, { name: 'shot.png', type: 'image/png', bytes: png }])).toEqual({ ok: true });
+
+        expect(saves).toEqual([{ agentId: AGENT.id, workspaceId: 'ws_1', names: ['Letterhead.docx', 'shot.png'] }]);
+        expect(sent).toHaveLength(1);
+        const [doc, shot] = sent[0]!.attachments as ReadonlyArray<{ name: string; bytes: Uint8Array; saved?: unknown }>;
+        expect(doc!.saved).toEqual({ path: '.ai/_dirty/uploads/2026-11-17/Letterhead.docx', type, size: 53_248 });
+        expect(doc!.bytes.byteLength).toBe(0);
+        // CONTROL: the image beside it still reaches the agent as its bytes.
+        expect(shot!.saved).toBeUndefined();
+        expect(Buffer.from(shot!.bytes).equals(Buffer.from(png))).toBe(true);
+    });
+
+    it('a phone\'s file upload reaches genie-host\'s files.upload as the same bytes', async () => {
         const c = await phone();
         const bytes = bytesOf(200_000, 11, [0xff, 0xd8, 0xff]);
         const r = await c.bridge.files.upload!('ws_1', 'docs', 'IMG_1.jpg', bytes);
@@ -142,7 +158,7 @@ describe('a phone\'s files in a message, through genie-host and the window (Tynn
         expect(Buffer.from(uploads[0]!.bytes as Uint8Array).equals(Buffer.from(bytes))).toBe(true);
     });
 
-    it('control: a text-only message from the phone reaches the window over the same link', async () => {
+    it('control: a text-only message from the phone reaches genie-host over the same link', async () => {
         const c = await phone();
         expect(await c.bridge.prompt(AGENT.id, 'just text')).toEqual({ ok: true });
         expect(sent).toEqual([{ agentId: AGENT.id, text: 'just text', attachments: [] }]);

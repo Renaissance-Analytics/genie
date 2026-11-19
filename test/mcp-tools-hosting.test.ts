@@ -156,7 +156,7 @@ afterEach(async () => {
 describe('services: reading', () => {
     it('catalog: the engines Genie offers with their versions and images — never MinIO, which can only be taken over', async () => {
         // The real first composition must expose costs, including a positive completion; a missing observer is not zero cost.
-        expect(composeStages.map(sample => sample.stage)).toEqual(expect.arrayContaining(['local-staging', 'settings', 'agent-stores', 'hosting', 'ready']));
+        expect(composeStages.map(sample => sample.stage)).toEqual(expect.arrayContaining(['runtime-directory', 'settings', 'agent-stores', 'hosting', 'ready']));
         for (const sample of composeStages) { expect(Number.isFinite(sample.elapsedMs) && sample.elapsedMs >= 0).toBe(true); expect(sample.totalMs).toBeGreaterThanOrEqual(sample.elapsedMs); }
         const r = await call('services', 't-example', { action: 'catalog' });
         expect(r.isError).toBe(false);

@@ -1,5 +1,7 @@
 import type { FeatureAction } from '../renderer/features.js';
 import { approvalNoteText } from '../core/approval-note.js';
+import type { DeckItem } from '../core/deck.js';
+import { deckAnswerNotes, deckNoteRefusal } from '../core/deck-answer-wire.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { HUMAN } from '../core/inbox.js';
 import type { AttentionStore } from './attention-store.js';
@@ -15,6 +17,11 @@ import type { InboxStore } from './inbox-store.js';
 export type DeckAnswerAction = Extract<FeatureAction, { kind: 'deck.answer' | 'deck.answerForm' }>;
 
 export interface DeckAnswerPorts {
+    /**
+     * THE HOST'S OWN DECK (Tynn #861): what an answer is resolved against. An answer names an item by id; its title, its
+     * agent, its options and whether it was forwarded are read here, never from the copy a client sent.
+     */
+    deckItems(): readonly DeckItem[];
     readonly attention: Pick<AttentionStore, 'answer' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
     /** As the window's approvals API types it (a replica may answer later); read exactly as the feature action always did. */
     readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean> };
@@ -30,13 +37,38 @@ export interface DeckAnswerPorts {
     /** `retryHostCopy`, `openLog` (Tynn #693): the window's. `openLog` answers why it could not open, or `null`. */
     /** A rate-limit alert's kept notice (Tynn #748): Dismiss forgets it. */
     readonly limitNotices?: { dismiss(id: string): boolean };
-    readonly mainErrors?: { dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
+    /** A Playwright install Genie could not finish (Tynn #846): Retry installs it again, Dismiss puts it away. */
+    readonly playwrightNotices?: { retry(id: string): Promise<boolean>; dismiss(id: string): boolean };
+    /** A turn Genie ended as stalled (Tynn #855): Stop or Restart the agent, or Dismiss; `false` when there is no such item. */
+    readonly stalledTurns?: { act(agentId: string, action: 'stop' | 'restart' | 'dismiss'): Promise<boolean> };
+    /** `deckItems`: the window's own record of them, the items an answer to one is resolved against (Tynn #861). */
+    readonly mainErrors?: { deckItems?(): readonly DeckItem[] | Promise<readonly DeckItem[]>; dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
 }
 
 const NEEDS_WINDOW = (what: string): string => `${what} needs Genie’s window on this machine: open Genie there`;
 
+/** No longer on this host's Deck: answered, dismissed, withdrawn — or never one of its items. */
+export const DECK_ITEM_GONE = 'This is no longer waiting here: it was answered, dismissed or withdrawn. Nothing was sent.';
+
+/** The item this answer names, as THIS host holds it; `null` when it holds none by that id. */
+async function ownItem(ports: DeckAnswerPorts, id: unknown): Promise<DeckItem | null> {
+    if (typeof id !== 'string' || id === '') return null;
+    const own = ports.deckItems().find((i) => i.id === id);
+    if (own) return own;
+    // Genie's own record of an error its window's process caught (main-errors.ts) is that process's, asked of it.
+    const errors = ports.mainErrors?.deckItems ? await ports.mainErrors.deckItems() : [];
+    return (Array.isArray(errors) ? errors : []).find((i) => i.id === id) ?? null;
+}
+
 export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPorts): Promise<void> {
-    const command = action.kind === 'deck.answer' ? resolveDeckAnswer(action.item, action.optionId, action.note ?? '') : resolveDeckForm(action.item, action.selections, Array.isArray(action.notes) ? action.notes : [], action.note);
+    // THE ANSWER ONLY (Tynn #861): the id, the option or the picks, the notes. A note over the cap is refused, never cut.
+    const refusal = deckNoteRefusal(deckAnswerNotes(action));
+    if (refusal) throw new Error(refusal);
+    const item = await ownItem(ports, (action.item as { id?: unknown } | null | undefined)?.id);
+    if (!item) throw new Error(DECK_ITEM_GONE);
+    const command = action.kind === 'deck.answer'
+        ? resolveDeckAnswer(item, String(action.optionId), typeof action.note === 'string' ? action.note : '')
+        : resolveDeckForm(item, Array.isArray(action.selections) ? action.selections : [], Array.isArray(action.notes) ? action.notes : [], typeof action.note === 'string' ? action.note : '');
     switch (command.kind) {
         case 'refused':
             throw new Error(command.reason);
@@ -46,6 +78,7 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             // and the Deck then shows the question as it is now.
             const current = ports.attention.pending().find((q) => q.id === command.questionId);
             if (!current) throw new Error('This question is no longer waiting: it was answered, dismissed or withdrawn. Nothing was sent.');
+            // The revision the person answered is the one fact of the item an answer brings: it is checked, never trusted.
             if ((current.revision ?? 0) !== (action.item.revision ?? 0)) {
                 throw new Error(`This question was changed since you opened it (it is on version ${(current.revision ?? 0) + 1} now). Nothing was sent: read it again and answer the current one.`);
             }
@@ -55,12 +88,13 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
         case 'resolve-approval': {
             // THE NOTE REACHES THE AGENT (beta.33 item 16): the tool call gets its verdict; the note follows as your
             // message. Checked BEFORE the answer, so a note that could not be delivered never leaves a silent verdict.
-            const text = action.kind === 'deck.answer' && action.item.agentId
-                ? approvalNoteText({ what: `“${action.item.title}”`, outcome: command.choice === 'allow' ? 'allowed' : 'denied', option: command.choice, note: command.note })
+            // The title quoted and the agent told are the host's own (Tynn #861): a client cannot redirect a note.
+            const text = action.kind === 'deck.answer' && item.agentId
+                ? approvalNoteText({ what: `“${item.title}”`, outcome: command.choice === 'allow' ? 'allowed' : 'denied', option: command.choice, note: command.note })
                 : null;
             if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
             if (!ports.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
-            if (text !== null && !(await ports.deliverToAgent!(action.item.agentId!, text))) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
+            if (text !== null && !(await ports.deliverToAgent!(item.agentId!, text))) throw new Error(`answered — but ${item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
             break;
         }
         case 'list-done':
@@ -115,6 +149,16 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if (!ports.deferTrustCertificate || !ports.deferHosts) throw new Error(NEEDS_WINDOW('putting this off'));
             ports.deferTrustCertificate();
             ports.deferHosts();
+            break;
+        case 'playwright-install':
+            // A Playwright install Genie could not finish (Tynn #846). Retry runs it again: when it fails again the item stays, with why.
+            if (!ports.playwrightNotices) throw new Error('Genie’s Playwright installer is not running here; nothing was done');
+            if (command.retry ? !(await ports.playwrightNotices.retry(command.id)) : !ports.playwrightNotices.dismiss(command.id)) throw new Error(`no Playwright install item ${command.id}`);
+            break;
+        case 'stalled-turn':
+            // A turn Genie ended as stalled (Tynn #855): the agent is stopped or restarted on its conversation here, on its host.
+            if (!ports.stalledTurns) throw new Error('this Genie does not keep stalled turns; nothing was done');
+            if (!(await ports.stalledTurns.act(command.agentId, command.action))) throw new Error(`no stalled turn for ${command.agentId}`);
             break;
         case 'dismiss-limit-alert':
             if (!ports.limitNotices) throw new Error(NEEDS_WINDOW('dismissing a rate-limit alert'));

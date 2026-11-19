@@ -120,21 +120,22 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         const snapshot = vi.fn(async () => ({ workspaces: null }));
         const hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
-        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke) }, takeOver: hibernate } as unknown as PreloadBridge;
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke) }, popOutTerminals: hibernate } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.workspaces, row)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(oldInvoke).not.toHaveBeenCalled();
-        expect(await bridge.takeOver('sample')).toEqual({ ok: false, reason: 'agent still working' });
+        expect(await bridge.popOutTerminals!('sample')).toEqual({ ok: false, reason: 'agent still working' });
         expect(hibernate).toHaveBeenCalledExactlyOnceWith('sample');
     });
     it.each(rows)('$name retires its matching native handler, preload forwarding and inventory row', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
-        expect(main).toContain("ipcMain.handle('genie:take-over'");
-        expect(preload).toContain("'genie:take-over'");
-        expect(inventory).toContain("['genie:take-over', 'window-port']");
+        // A window port that stays (Take over moved to the protocol in step 2b-1, Tynn #896).
+        expect(main).toContain("ipcMain.handle('genie:terminals-popout'");
+        expect(preload).toContain("'genie:terminals-popout'");
+        expect(inventory).toContain("['genie:terminals-popout', 'window:pop-out']");
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);

@@ -114,19 +114,19 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const source = serve(deps); vi.stubGlobal('window', { genieLocalProtocol: source.framePort() });
         const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         const snapshot = vi.fn(async () => ({ workspaces: null })), hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
-        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: {}, takeOver: hibernate, agents: oldAgents(oldInvoke) } as unknown as PreloadBridge;
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: {}, popOutTerminals: hibernate, agents: oldAgents(oldInvoke) } as unknown as PreloadBridge;
         const bridge = pageBridge(preload); expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.agents, row)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args); expect(oldInvoke).not.toHaveBeenCalled();
-        expect(await bridge.takeOver('work')).toEqual({ ok: false, reason: 'agent still working' });
+        expect(await bridge.popOutTerminals!('work')).toEqual({ ok: false, reason: 'agent still working' });
         expect(hibernate).toHaveBeenCalledExactlyOnceWith('work');
     });
     it.each(rows)('$name retires its native handler, preload forwarding and inventory row', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         expect(main).toContain("ipcMain.handle('genie:window-overlay-colors-current'");
         expect(preload).toContain("ipcRenderer.invoke('genie:window-overlay-colors-current'");
-        expect(inventory).toContain("['genie:window-overlay-colors-current', 'window-port']");
+        expect(inventory).toContain("['genie:window-overlay-colors-current', 'window:chrome']");
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);
@@ -260,9 +260,10 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         expect(operation).toHaveBeenCalledExactlyOnceWith('agent_a', null);
     });
     // The retired mutations all touched the registry on completion, including refusal/throw.
-    // Check the composition root retains that hook on the existing protocol adapters.
+    // Check the composition root retains that hook on the existing protocol adapters: genie-host's answers, which serve
+    // every client since main stopped building a host API (Tynn #898 step 2d-4b2).
     it.each(['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setIssueWatch', 'setPermissions', 'setModel'])('%s retains the native completion refresh in the shared adapter', (method) => {
-        expect(readFileSync('src/main/main.ts', 'utf8')).toContain('agentOps: agentOpsApi(agentOps, () => registry?.touch(), () => host)');
+        expect(readFileSync('src/main/host-alone-api.ts', 'utf8')).toContain('agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine())');
         const adapter = readFileSync('src/main/agent-ops-api.ts', 'utf8');
         const line = adapter.slice(adapter.indexOf('export function agentOpsApi')).split('\n').find((line) => line.trimStart().startsWith(`${method}:`));
         expect(line !== undefined).toBe(true);

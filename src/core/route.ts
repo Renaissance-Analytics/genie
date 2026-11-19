@@ -55,7 +55,12 @@ export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 
 export type WorkspacePanel = 'files';
 /** `tab:<id>` is a tab the person designed (Tynn #282, core/workspace-tabs.ts). */
 export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | 'tynn' | 'artboard' | 'storage' | `tab:${string}`;
-const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn', 'artboard', 'storage'];
+/**
+ * A workspace's named views. THE ONE LIST: the window's address (core/address.ts) names its tabs from it, so a view added
+ * here is a tab the address can carry. ArtBoard (#739) and Storage (#697) were added here only, and the address wrote them
+ * as the Dashboard: their tabs did nothing (beta.64).
+ */
+export const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn', 'artboard', 'storage'];
 /** A designed tab's id, as `core/workspace-tabs.ts` mints it; anything else in `view=` falls back to the Agents view. */
 const DESIGNED_TAB = /^tab:[A-Za-z0-9-]{1,40}$/;
 function workspaceViewOf(raw: string | null): WorkspaceView {
@@ -106,7 +111,7 @@ export type Route =
      * THE FLOW EDITOR in its own window (genie#1204, Genie 1's genie#505): one flow on fancy-flow's canvas.
      * `genie://flow/<flowId>`, or `genie://flow/new?workspace=<id>` for a new one. No chrome.
      */
-    | ({ surface: 'flow'; flowId: string | null; workspaceId: string | null } & Common)
+    | ({ surface: 'flow'; flowId: string | null; workspaceId: string | null; /** Tynn #860: the run to open in review. */ run?: number | null } & Common)
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
     | ({ surface: PlainFeature } & Common)
     | ({ surface: 'hosting'; tab?: HostingTab; commandRun?: { processId: string; workspaceId: string } } & Common)
@@ -198,7 +203,9 @@ export function parseRoute(input: string): Route {
             // No id is not a window; `new` is a new flow, in the workspace the link names.
             if (!tail) return dashboard(common);
             if (tail === 'new') return { surface: 'flow', flowId: null, workspaceId: params.get('workspace') || null, chat: null, pin: null };
-            return { surface: 'flow', flowId: decodeURIComponent(tail), workspaceId: null, chat: null, pin: null };
+            // `run` (Tynn #860): open on that run's review — its index in the flow's runs; anything else is no run.
+            const run = /^[0-9]+$/.test(params.get('run') ?? '') ? Number(params.get('run')) : null;
+            return { surface: 'flow', flowId: decodeURIComponent(tail), workspaceId: null, run, chat: null, pin: null };
         }
         case 'files': {
             // The popped-out panel (§4.3): no id is not a window; no modifiers either.
@@ -307,6 +314,7 @@ export function formatRoute(route: Route): string {
             break;
         case 'flow':
             if (route.flowId === null && route.workspaceId) params.set('workspace', route.workspaceId);
+            if (route.flowId !== null && typeof route.run === 'number') params.set('run', String(route.run));
             break;
     }
 
@@ -358,3 +366,16 @@ export function carryChat(next: string, current: Route, roster: readonly ChatRos
     return formatRoute({ ...parsedNext, chat: followChat(current.chat, parsedNext, roster, opened), pin: current.pin });
 }
 
+
+/**
+ * Whether the window at `url` is the flow editor `route` names (Tynn #860): one window per flow, whichever run it shows —
+ * a link to a run of a flow already open brings that window up, never a second one. Compared by flow, query aside.
+ */
+export function sameFlowWindow(url: string, route: string): boolean {
+    const hash = url.indexOf('#');
+    if (hash < 0) return false;
+    const flowOf = (r: string) => (r.startsWith('genie://flow/') ? r.slice('genie://flow/'.length).split('?')[0] ?? '' : null);
+    const open = flowOf(url.slice(hash + 1));
+    const wanted = flowOf(route);
+    return open !== null && wanted !== null && open !== '' && open !== 'new' && open === wanted;
+}

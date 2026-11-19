@@ -16,9 +16,9 @@ import { connectableWorkstations } from '../src/main/tynn-network.js';
 
 const json = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 const ROWS = [
-    { id: 'ws_v2_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'pilot' },
-    { id: 'ws_v1_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'pilot' },
-    { id: 'ws_other', name: 'Foundation', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'drone' },
+    { id: 'ws_v2_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'pilot' },
+    { id: 'ws_v1_self', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'pilot' },
+    { id: 'ws_other', name: 'Foundation', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'drone' },
 ];
 
 describe('every Tynn identity this machine holds is left out', () => {
@@ -28,26 +28,34 @@ describe('every Tynn identity this machine holds is left out', () => {
     });
 
     it('CONTROL: another machine with the same NAME is still listed (identity, not name, decides)', async () => {
-        const rows = [...ROWS, { id: 'ws_namesake', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'drone' }];
+        const rows = [...ROWS, { id: 'ws_namesake', name: 'AlphaR', status: 'active', is_local: true, connectable: true, source: 'owner', registered_by_you: true, role: 'drone' }];
         const list = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set(['ws_v2_self', 'ws_v1_self']));
         expect(list.ok && list.workstations.map((w) => w.id)).toEqual(['ws_other', 'ws_namesake']);
     });
 });
 
-describe('wired: main asks with every identity it holds, not the one this launch registered', () => {
+/*
+ * "Your workstations" is answered by genie-host's owner operations for every client (Tynn #898 steps 2d-3b and 2d-4b2):
+ * host-owner-ops.ts lists, and genie-host.ts gives it the stored identity and Genie 1's settings.
+ */
+describe('wired: genie-host asks with every identity this machine holds, not the one this launch registered', () => {
     const strip = (text: string): string => text.split(/\r?\n/).map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1')).join('\n');
-    const main = strip(readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8'));
-    const handler = /workstations: async \(\) => \{([^]*?)\n {20}\},/.exec(main)?.[1] ?? '';
+    const ops = strip(readFileSync(new URL('../src/main/host-owner-ops.ts', import.meta.url), 'utf8'));
+    const host = strip(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8'));
+    const handler = /workstations: async \(\) => \{([^]*?)\n {12}\},/.exec(ops)?.[1] ?? '';
 
-    it('the list handler takes this machine’s ids from thisMachineIds, never from the registration result alone', () => {
+    it('the list handler takes this machine’s ids from thisMachine, never from the registration result alone', () => {
         expect(handler).toContain('connectableWorkstations(');
-        expect(handler).toMatch(/await thisMachineIds\(\)/);
-        expect(handler).not.toContain('tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId');
+        expect(handler).toMatch(/await thisMachine\(a\.host\(\)\)/);
+        expect(handler).not.toContain('tynn.registered()');
     });
 
-    it('thisMachineIds reads the stored Genie 2 identity and Genie 1’s workstation_id', () => {
-        const wiring = /thisMachineIds = \(\)[^]*?;\n/.exec(main)?.[0] ?? '';
-        expect(wiring).toContain('machineIdentity.identity(');
-        expect(wiring).toContain('readV1Settings(v1DatabaseFile())');
+    it('thisMachine reads the stored Genie 2 identity and Genie 1’s workstation_id', () => {
+        const wiring = /const thisMachine = async[^]*?;\n/.exec(ops)?.[0] ?? '';
+        expect(wiring).toContain('tynn.registered()');
+        expect(wiring).toContain('await tynn.stored(host)');
+        expect(wiring).toContain('tynn.v1Settings()');
+        expect(host).toMatch(/stored: async \(host\) => \(await workstationService\.identity\(host\)\)\?\.workstationId \?\? null,/);
+        expect(host).toMatch(/v1Settings: \(\) => \(v1DatabasePath \? readV1Settings\(v1DatabasePath\) : null\),/);
     });
 });

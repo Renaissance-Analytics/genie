@@ -55,7 +55,7 @@ const sidebar = (withOpeners = true) => (
         route="genie://dashboard" deckCount={0} workspaces={[ws('tynn'), ws('fancy')]}
         available={['dashboard', 'genie', 'workspace', 'settings']}
         onNavigate={(r) => navigated.push(r)} railStorage={memory()} agents={AGENTS} onChatAgent={() => {}}
-        {...(withOpeners ? { onOpenAgentTerminal: (id: string) => terminals.push(id), onOpenWorkspaceFiles: (id: string) => files.push(id) } : {})}
+        {...(withOpeners ? { onOpenWorkspaceTerminal: async (id: string) => { terminals.push(id); return { ok: true as const }; }, onOpenWorkspaceFiles: (id: string) => files.push(id) } : {})}
     />
 );
 const $ = (sel: string) => host.querySelector<HTMLElement>(sel);
@@ -133,13 +133,13 @@ describe('the list scrolls', () => {
 describe('the terminal and folder buttons open windows', () => {
     const unit = (id: string) => $(`[data-rail-agent="${id}"]`)!.closest<HTMLElement>('[data-rail-agent-unit]')!;
 
-    it('the terminal button opens that agent’s terminal window and navigates nowhere', () => {
+    it('the terminal button opens a terminal in that agent’s WORKSPACE in a new window and navigates nowhere (Tynn #851)', () => {
         act(() => root.render(sidebar()));
         const button = unit('a_fancy').querySelector<HTMLElement>('[data-agent-open-terminal]');
         expect(button?.tagName).toBe('BUTTON');
-        expect(button?.getAttribute('aria-label')).toBe('Open fancy-one’s terminal in a new window');
+        expect(button?.getAttribute('aria-label')).toBe('Open a terminal in fancy (new window)');
         click(button);
-        expect(terminals).toEqual(['a_fancy']);
+        expect(terminals).toEqual(['fancy']);
         expect(files).toEqual([]);
         expect(navigated).toEqual([]);
     });

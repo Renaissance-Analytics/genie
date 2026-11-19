@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace' | 'gapps'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'marketplace' | 'gapps' | 'crashReport' | 'chooseProviderProgram' | 'scratchTerminal'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -45,7 +45,7 @@ const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a 
 const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'stopToolCall' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     let wasReady = false;
     const everReady = () => wasReady;
@@ -170,15 +170,23 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     const answered = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T | { ok: false; reason: string }> => {
         try { return await read(call); } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
     };
-    const agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent'> = {
+    const agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'stopToolCall' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'> = {
         openAgent: (id) => { void read(async (b) => { b.openAgent(id); }).catch(() => {}); },
         stopAgent: (id) => { void read(async (b) => { b.stopAgent(id); }).catch(() => {}); },
         resumeLimit: (id) => answered((b) => b.resumeLimit(id)),
         cancelTurn: (id, intent) => answered((b) => b.cancelTurn(id, intent)),
+        stopToolCall: (id, toolCallId) => answered((b) => b.stopToolCall ? b.stopToolCall(id, toolCallId) : Promise.resolve({ ok: false as const, reason: 'this Genie cannot stop one call; Stop the turn instead' })),
         prompt: (id, text, attachments) => answered((b) => b.prompt(id, text, attachments)),
         resolvePrompt: (id, promptId, action) => answered((b) => b.resolvePrompt(id, promptId, action)) as never,
         answerApproval: (id, optionId, note) => answered((b) => b.answerApproval(id, optionId, note)),
         addAgent: (workspaceId, input) => answered((b) => b.addAgent(workspaceId, input)),
+        // TAKE OVER (Tynn #896): genie-host starts the TUI and asks this window's process to open its window.
+        takeOver: (id) => answered((b) => b.takeOver(id)),
+        // SIGN-INS (Tynn #896): genie-host starts the provider's own login and asks this window's process to open it.
+        providerLogin: (id) => answered((b) => b.providerLogin(id)),
+        designLogin: (id) => answered((b) => b.designLogin!(id)),
+        designSignIn: () => answered((b) => b.designSignIn!()),
+        switchAccount: (provider, choose) => answered((b) => b.switchAccount!(provider, choose)),
     };
     return {
         // P4 family 9a (Tynn #564). Re-watched on every connection: a new one starts with a whole ledger.
@@ -281,6 +289,19 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         },
         onHeadroom: (listener) => subscribe((bridge) => bridge.onHeadroom!(listener)),
         accountRetry: (id) => requestBridge((bridge) => bridge.accountRetry!(id)),
+        // The banner's crash report (Tynn #897, 2c-2): genie-host's, over this window's protocol connection.
+        crashReport: {
+            draft: async () => { const r = await requestBridge((bridge) => bridge.crashReport!.draft()); return 'text' in r ? r : { text: '' }; },
+            send: (text, notes) => requestBridge((bridge) => bridge.crashReport!.send(text, notes)),
+        },
+        // A provider's program (Tynn #897, 2c-3): the path this window picked on the host's disk, kept by genie-host.
+        chooseProviderProgram: (provider, path) => requestBridge((bridge) => bridge.chooseProviderProgram!(provider, path)),
+        // The throwaway shell (Tynn #897, 2c-4): genie-host opens it and asks this window's process to show it.
+        scratchTerminal: (workspaceId) => requestBridge((bridge) => bridge.scratchTerminal!(workspaceId)),
+        // The account chips (Tynn #895), as the IPC answered them: nothing known while the link is down, its words, false.
+        accounts: async () => { const r = await requestBridge((bridge) => bridge.accounts!()); return r !== null && 'ok' in r ? null : r; },
+        accountsAct: (action) => requestBridge((bridge) => bridge.accountsAct!(action)),
+        dismissSwitchOffer: async (id) => (await requestBridge((bridge) => bridge.dismissSwitchOffer!(id))) === true,
         agents: {
             restart: (id, kind) => requestAgent((agents) => agents.restart(id, kind)),
             previewDelete: (id, outcome, also) => requestAgent((agents) => agents.previewDelete(id, outcome, also)),

@@ -16,6 +16,8 @@ export interface TynnWorkstationRow {
     readonly connectable: boolean;
     readonly local: boolean;
     readonly source: string | null;
+    /** This account registered it and Tynn says owner (Tynn #757); absent/false = shared with you. */
+    readonly mine?: boolean | undefined;
     /** Its Pilot/Drone role as Tynn holds it (genie#1278); `null`/absent = Tynn did not say. */
     readonly role?: 'pilot' | 'drone' | null | undefined;
     /** Connected to its relay now (genie#1278 presence); `null`/absent = not known. */

@@ -2,6 +2,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import { PlanKeepalive, type KeepGoingState, type TurnEndCause } from '../core/plan-keepalive.js';
 import type { LiveSession } from '../core/roster.js';
 import { TurnStallWatchdog, stallMsFrom } from '../core/turn-stall.js';
+import { runningCallWords, stallNoticeText, stalledAutoRestartFrom, toolTimeoutMsFrom, type StalledTurnBook } from '../core/hung-call.js';
 import type { HostRegistry } from './host-registry.js';
 import type { SessionHost } from './session-host.js';
 import type { SettingsStore } from './settings-store.js';
@@ -57,6 +58,10 @@ export function wireHostPlanKeepalive(p: {
     readonly asked: (agentId: AgentId) => boolean;
     readonly settings: Pick<SettingsStore, 'snapshot'>;
     readonly log: (line: string) => void;
+    /** The Deck's stalled turns (Tynn #855): one item per agent whose turn Genie ended as stalled. Absent = not on the Deck. */
+    readonly stalledTurns?: StalledTurnBook;
+    /** Restart an agent on its conversation (the one Restart, genie#1238): `stalled_auto_restart`. Absent = never on its own. */
+    readonly restart?: (agentId: AgentId) => Promise<unknown>;
 }): HostPlanKeepalive {
     const nameOf = (id: string): string => p.registry.find(id)?.name ?? id;
     const read = (id: string): KeepGoingState | null => keepGoingStateOf(p.host, (a) => p.registry.find(a) ?? undefined, p.asked, id as AgentId);
@@ -84,18 +89,42 @@ export function wireHostPlanKeepalive(p: {
             const record = p.registry.find(id);
             const live = p.host.probe(id as AgentId);
             if (!record || !live || !live.running) return null;
-            return { inTurn: p.host.inTurn(id as AgentId), mode: record.mode, waitingOnPerson: p.asked(id as AgentId) || live.pendingApproval !== null };
+            return { inTurn: p.host.inTurn(id as AgentId), mode: record.mode, waitingOnPerson: p.asked(id as AgentId) || live.pendingApproval !== null, call: live.call ?? null };
         },
-        flag: (id, ms) => {
-            p.log(`${nameOf(id)}: no output for ${minutes(ms)} minutes inside one turn`);
-            quietly(() => { p.host.notice(id as AgentId, `This turn has produced no output for ${minutes(ms)} minutes. If the provider is hung, Stop the turn to send a new message.`); });
+        // THE CALL, NAMED (Tynn #855): the notice says which call the turn is in, and since when.
+        flag: (id, ms, call) => {
+            p.log(`${nameOf(id)}: no output for ${minutes(ms)} minutes inside one turn${call ? ` (in ${runningCallWords(call, Date.now())})` : ', no call running'}`);
+            quietly(() => { p.host.notice(id as AgentId, stallNoticeText(ms, call, Date.now())); });
+        },
+        // A HUNG CALL ENDED (Tynn #855): the no-output timeout; the agent is told by the session, the host's log says so.
+        toolTimeoutMs: () => toolTimeoutMsFrom(p.settings.snapshot()),
+        endCall: (id, toolCallId, ms) => {
+            void p.host.stopToolCall(id as AgentId, toolCallId, 'timeout').then(
+                (r) => p.log(r.ok ? `${nameOf(id)}: ended a tool call with no output for ${minutes(ms)} minutes (${r.ended} processes)` : `${nameOf(id)}: could not end a tool call with no output for ${minutes(ms)} minutes: ${r.reason}`),
+                (error: unknown) => p.log(`${nameOf(id)}: ending a hung tool call failed: ${error instanceof Error ? error.message : String(error)}`));
+        },
+        // IS THE PROVIDER THERE (Tynn #855): the process, then a ping when the driver has one (prism G-314).
+        checkAlive: (id) => p.host.checkAlive(id as AgentId, 10_000),
+        stall: (id, ms, reason) => {
+            if (!p.host.endStalled(id as AgentId, reason, ms)) return;
+            p.log(`${nameOf(id)}: turn ended as stalled after ${minutes(ms)} minutes with no events (${reason === 'dead' ? 'its provider process is gone' : 'its provider did not answer'})`);
+            const record = p.registry.find(id);
+            p.stalledTurns?.record({ agentId: id, agentName: nameOf(id), workspaceId: record?.workspaceId ?? null, reason, silentMs: ms, at: Date.now() });
+            if (p.restart && stalledAutoRestartFrom(p.settings.snapshot())) {
+                p.log(`${nameOf(id)}: restarting it on its conversation (Restart a stalled agent is on)`);
+                void p.restart(id as AgentId).then(() => { p.stalledTurns?.clear(id); }, (error: unknown) => p.log(`${nameOf(id)}: the restart after a stalled turn failed: ${error instanceof Error ? error.message : String(error)}`));
+            }
         },
         nudge: (id, ms) => {
             quietly(() => { p.host.prompt(id as AgentId, `Your turn has been silent for ${minutes(ms)} minutes. If you are waiting on something, say what; otherwise carry on with the plan.`, 'genie'); });
         },
     });
-    const offActivity = p.host.subscribe((id) => { if (!own) watchdog.activity(id); });
-    const timer = setInterval(() => { try { watchdog.check(); } catch (error) { p.log(`the stall check failed: ${error instanceof Error ? error.message : String(error)}`); } }, 60_000);
+    const offActivity = p.host.subscribe((id) => {
+        if (!own) watchdog.activity(id);
+        // Its Deck item goes once a turn has started again (the stalled mark clears with it).
+        if (p.stalledTurns?.has(id) && p.host.probe(id)?.stalled == null) p.stalledTurns.clear(id);
+    });
+    const timer = setInterval(() => { try { void watchdog.check(); } catch (error) { p.log(`the stall check failed: ${error instanceof Error ? error.message : String(error)}`); } }, 60_000);
     timer.unref();
 
     return {

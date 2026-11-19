@@ -57,8 +57,11 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('openAgent', 'allow', [A], [[B]]),
         row('stopAgent', 'allow', [A], [[B]]),
         row('cancelTurn', 'allow', [A, 'stop'], [[B, 'stop']]),
+        // Stop this call (Tynn #855): the shared workspace's agent's call; another workspace's is not this link's.
+        row('stopToolCall', 'allow', [A, 't1'], [[B, 't1']]),
         row('resumeLimit', 'allow', [A], [[B]]),
-        row('providerLogin', 'host-only', [A]),
+        // The provider's own login (Tynn #896): the host owner's; a share-link guest is refused.
+        row('providerLogin', 'refuse', [A]),
         row('prompt', 'allow', [A, 'hi'], [[B, 'hi']]),
         row('resolvePrompt', 'allow', [A, 'd1', 'send'], [[B, 'd1', 'send']]),
         row('addAgent', 'allow', ['tynn', { name: 'x' }], [['fancy', { name: 'x' }]]),
@@ -106,7 +109,6 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('workspaces.adoptAgent', 'refuse', ['tynn', 'x']),
         row('workspaces.previewAddFromTynn', 'refuse', ['p', '/w']),
         row('workspaces.confirmAddFromTynn', 'refuse', ['/w', 'p']),
-        row('addWorkspace', 'host-only'),
         // Hibernating, waking or removing a workspace changes the workstation's roster: its own workspace included.
         row('workspaces.hibernate', 'refuse', ['tynn']),
         row('workspaces.wake', 'refuse', ['tynn']),
@@ -144,10 +146,26 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('tynnNetwork.shares.list', 'refuse', [null]),
         row('tynnNetwork.shares.mint', 'refuse', [{ workspaceId: 'tynn' }]),
         row('tynnNetwork.shares.revoke', 'refuse', ['l1']),
+        // The host owner's provider accounts (Tynn #895): every client of the owner's gets them; a guest is refused.
+        row('accounts.list', 'refuse'),
+        row('accounts.act', 'refuse', [{ kind: 'rename', id: 'acct_1', label: 'Work' }]),
+        row('accounts.dismissOffer', 'refuse', ['offer_1']),
+        // The design sign-in and a switch of account (Tynn #896): the provider's own login, the host owner's.
+        row('logins.design', 'refuse'),
+        row('accounts.switch', 'refuse', ['claude']),
+        // The tray's Log in by provider (Tynn #896, 2b-2b): the host owner's too.
+        row('logins.provider', 'refuse', ['claude']),
+        // The crash report (Tynn #897, 2c-2): the host owner's.
+        row('crashReport.draft', 'refuse'),
+        row('crashReport.send', 'refuse', ['the report', 'my notes']),
+        // A provider's program (Tynn #897, 2c-3): the host owner's.
+        row('providers.chooseProgram', 'refuse', ['claude', 'C:\\fixture\\claude.exe']),
     ],
     terminals: [
         row('terminals.open', 'allow', ['tynn', {}], [['fancy', {}]]),
         row('terminals.list', 'allow', ['tynn'], [['fancy']]),
+        // The throwaway shell (Tynn #897, 2c-4): the shared workspace's; another's, or Genie's own (null), is not this link's.
+        row('terminals.scratch', 'allow', ['tynn'], [['fancy'], [null]]),
         row('terminals.attach', 'allow', ['tynn', 'term_t'], [['fancy', 'term_f']]),
         // By terminal id: another workspace's terminal, or one the host cannot place, is not this link's.
         row('terminals.write', 'allow', ['term_t', 'ls'], [['term_f', 'ls'], ['term_unknown', 'ls']]),
@@ -342,7 +360,8 @@ describe('connection controls for a workspace principal', () => {
     const LOCAL_CONTROLS = CONTROL_METHODS.filter((m) => m.startsWith('blob.') || m.startsWith('localUpload.') || m.startsWith('page.') || m.startsWith('files.') || m.startsWith('tynn.') || m.startsWith('activity.') || m === 'content.release');
 
     it('every control is classified: local ones are refused to all relay principals', async () => {
-        const handled = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'];
+        // `host.version` (anyone admitted) and `host.update` (the owner only), Tynn #894: protocol-versioning-894.test.ts.
+        const handled = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'];
         expect(CONTROL_METHODS.filter((m) => !handled.includes(m) && !LOCAL_CONTROLS.includes(m))).toEqual([]);
         for (const who of [WORKSPACE_GUEST, READONLY_GUEST, OWNER]) {
             const { c } = await admitted(who, false);

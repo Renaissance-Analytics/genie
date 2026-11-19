@@ -104,7 +104,7 @@ export function serviceActions(i: ServiceInstance, status: string, o: { warning:
     menu.push({ id: 'logs', label: o.logsOpen ? 'Refresh logs' : 'Logs', icon: 'scroll-text', acts: [{ kind: 'services.logs', serviceId: i.id }] });
     menu.push({
         id: 'update', label: 'Update image…', icon: 'refresh-cw', acts: [{ kind: 'services.update', serviceId: i.id }],
-        ...(status === 'docker-not-running' || status === 'absent' ? { disabled: true } : {}),
+        ...(status === 'docker-not-running' || status === 'absent' || status === 'unknown' ? { disabled: true } : {}),
     });
     menu.push({
         id: 'remove', label: 'Remove, keep data', icon: 'trash-2', danger: true,

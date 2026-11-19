@@ -13,24 +13,26 @@ describe('the production features owner (Tynn #720)', () => {
     });
     it('the window delegates every feature operation and owns no duplicate builder or state', () => {
         const main = source('main');
-        expect(main).toContain('featureReplica(');
+        // Its feature calls are genie-host's answers since Tynn #898 step 2d-4b2 (genie-host.ts hands them its HostFeatures).
+        expect(main).not.toContain('featureReplica(');
+        expect(source('genie-host')).toMatch(/phoneApi = hostAloneApi\(\{\s*hostName: hostname\(\),\s*features: hostFeatures,/);
         for (const removed of ['featureSnapshot(', 'handleFeatureAction(', 'let featureState', 'new HostPicks(', 'const featurePorts:', 'const processPorts =', 'new LatestPush<FeatureData>']) {
             expect(main, removed).not.toContain(removed);
         }
     });
-    it('the engine admits the owning local connection and sends its effects back to that connection', () => {
+    it('the engine sends a tunnelled connection\'s effects back to the window process that owns it; its features route is retired', () => {
         const server = source('session-engine-server');
-        expect(server).toContain("if (method === 'engine.features')");
+        // Every client reaches the features over the one protocol (Tynn #898 step 2e-2): no engine.features route.
+        expect(server).not.toContain("'engine.features'");
         expect(server).toContain('this.#options.features?.dropOwner(conn.id)');
         expect(server).toContain("this.#reverseTo(conn, 'client.featureEffect'");
         const effects = source('feature-window');
         expect(effects).toContain('contentsFor(connectionId)');
         expect(effects).not.toContain('getAllWindows');
     });
-    it('the window follows owned invalidations and releases callers instead of holding feature data', () => {
-        const replica = source('feature-replica');
-        for (const method of ['snapshot', 'act', 'picked', 'soundData', 'releaseCaller', 'onInvalidated']) expect(replica).toContain(method);
-        expect(replica).not.toContain('FeatureState');
+    it('the window holds no feature data: genie-host’s answers serve its features and follow their invalidations', () => {
+        // The window's feature replica went with main's host API (Tynn #898 step 2d-4b2): its protocol is genie-host's.
+        expect(source('main')).not.toContain('featureReplica');
         expect(source('host-api')).toContain('deps.features.onInvalidated');
     });
 });

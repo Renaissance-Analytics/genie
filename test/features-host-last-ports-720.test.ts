@@ -14,9 +14,14 @@ async function ask(name = 'fixture', form = false) {
     const made = await f.attention.ask({ agentId: RECIPIENT, agentName: name, workspaceId: 'work',
         questions: currentQuestions }, { userActive: true });
     // Real agent questions are forms (deck-sources.ts); inline cases below explicitly test the legacy answer contract.
-    return item({ id: made.questionId, answer: form ? { kind: 'form', fields: currentQuestions.length, questions: currentQuestions }
+    const asked = item({ id: made.questionId, answer: form ? { kind: 'form', fields: currentQuestions.length, questions: currentQuestions }
         : { kind: 'inline', options: [{ id: 'Yes', label: 'Yes', tone: 'neutral' }] } });
+    // The host's Deck holds it as asked (Tynn #861: an answer is resolved there); the caller's copy is its own to change.
+    f.deckItems.push(structuredClone(asked));
+    return asked;
 }
+/** The host's Deck holds `held` (Tynn #861); the caller answers by its id. */
+const hold = <T extends ReturnType<typeof item>>(held: T): T => { f.deckItems.push(structuredClone(held)); return held; };
 
 describe('the last host feature ports retain their human action contracts (Tynn #720)', () => {
     it('Leave safe mode uses its existing host operation with no window', async () => {
@@ -47,7 +52,7 @@ describe('the last host feature ports retain their human action contracts (Tynn 
         expect(f.inbox.unread(RECIPIENT)).toHaveLength(1); expect(f.inbox.unread(RECIPIENT)[0]?.from).toBe(HUMAN);
     });
     it('a form answer keeps every selection and per-question note', async () => {
-        const question = await ask(); question.answer = { kind: 'form', fields: 1, questions };
+        const question = await ask('fixture', true);
         await f.answer({ kind: 'deck.answerForm', item: question, selections: [['No']], notes: ['fixture field note'], note: '' });
         expect(f.attention.asked(question.id)).toMatchObject({ selections: [['No']], notes: ['fixture field note'] });
     });
@@ -89,7 +94,7 @@ describe('the last host feature ports retain their human action contracts (Tynn 
         await f.answer({ kind: 'deck.dismissOlder', olderThanMs: 86_400_000 }); expect(older).toHaveBeenCalledExactlyOnceWith(86_400_000);
     });
     it('an approval note reaches its agent with the same allow verdict', async () => {
-        const approval = item({ id: 'appr_fixture', answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'neutral' }] } });
+        const approval = hold(item({ id: 'appr_fixture', answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'neutral' }] } }));
         await f.answer({ kind: 'deck.answer', item: approval, optionId: 'allow', note: 'fixture approval note' });
         expect(f.calls).toEqual([{ owner: 'host', effect: 'approval', value: ['appr_fixture', 'allow'] }]);
         expect(f.deliveries).toHaveLength(1); expect(f.deliveries[0]?.[0]).toBe(RECIPIENT);
@@ -98,13 +103,13 @@ describe('the last host feature ports retain their human action contracts (Tynn 
     it('Done on a real user-list item uses the human actor and notifies its asker', async () => {
         const made = await f.attention.lists.add({ list: 'user', workspaceId: 'work', agentId: RECIPIENT, text: 'Complete fixture task' });
         expect(made.kind).toBe('added'); if (made.kind !== 'added') throw new Error('fixture list was not created');
-        await f.answer({ kind: 'deck.answer', item: item({ id: made.item.id, source: 'user-list' }), optionId: 'yes' });
+        await f.answer({ kind: 'deck.answer', item: hold(item({ id: made.item.id, source: 'user-list' })), optionId: 'yes' });
         expect(f.attention.lists.show({ list: 'user', workspaceId: 'work', agentId: RECIPIENT })[0]?.done).toBe(true);
         expect(f.inbox.unread(RECIPIENT)).toHaveLength(1);
     });
     it('a mail Deck answer records the human read receipt in the real inbox', async () => {
         const message = await f.inbox.send({ from: RECIPIENT, to: HUMAN, text: 'fixture mail' });
-        await f.answer({ kind: 'deck.answer', item: item({ id: message.id, source: 'unread-dm' }), optionId: 'yes' });
+        await f.answer({ kind: 'deck.answer', item: hold(item({ id: message.id, source: 'unread-dm' })), optionId: 'yes' });
         expect(f.inbox.unread(HUMAN)).toHaveLength(0);
     });
     it('own-screen pairing preserves the canonical missing-request refusal', async () => {

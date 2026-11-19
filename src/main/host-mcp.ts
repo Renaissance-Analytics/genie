@@ -37,8 +37,11 @@ export interface WindowView {
     readonly workspaceNames: Readonly<Record<string, string>>;
     /** The person is at the computer (the window's own measure). No window = nobody is. */
     readonly userActive: boolean;
-    /** Terminals the window runs whose agents call Genie (Take Over windows, flow runs): terminal id → caller. */
-    readonly callers: Readonly<Record<string, Caller>>;
+    /**
+     * Terminals the window runs whose agents call Genie: terminal id → caller. Absent = it runs none: a Take Over TUI is
+     * genie-host's (ports.takeOverCaller, Tynn #896).
+     */
+    readonly callers?: Readonly<Record<string, Caller>>;
 }
 
 export interface HostMcpPorts {
@@ -56,6 +59,8 @@ export interface HostMcpPorts {
     readonly processes?: import('./mcp-tools-processes.js').ProcessesPort;
     /** The flows the `flows` tool acts on (P3.3d): the host's store and scheduler. */
     readonly flows?: import('./mcp-tools-flows.js').FlowsPort;
+    /** Genie's Playwright installer and what is on disk, for the `playwright` tool (Tynn #846). */
+    readonly playwright?: import('./mcp-tools-playwright.js').PlaywrightToolPort;
     /** Genie Mail's inboxes and the shared Mailpit, for the `mail` tool (G6): the host's hosting. */
     readonly mail?: import('./mcp-tools-mail.js').MailPort;
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
@@ -105,6 +110,8 @@ export interface HostMcp {
     /** A session's Genie MCP entry: the endpoint, its token and this agent's caller key. */
     sessionServers(record: AgentRecord): McpServer[];
     endpoint(): { url: string; token: string } | null;
+    /** Settled once the server has started, or failed to (said in `status`): what writing a workspace's config waits for. */
+    ready(): Promise<void>;
     status(): { endpoint: { url: string; token: string } | null; verified: Verification | null; tools: McpToolRow[] };
     /**
      * One of the host's own tools, asked by the WINDOW for a caller it knows (a flow's step, P3.1): run here with that
@@ -139,7 +146,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const vouched = injected.get(id);
         if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
-        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers[id] ?? null;
+        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers?.[id] ?? null;
     };
     const settings = ports.settings;
 
@@ -153,6 +160,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             approve: (caller, action, detail, call) => s.approvals.gate(caller, action, detail, call),
             roster: ports.records,
             workspaceSlugs: () => ports.registry.workspaceSlugs(),
+            workspacePath: (id) => workspace(id)?.path ?? null,
             refusalForRecipient: (text) => ports.registry.mailRefusal?.(text) ?? null,
             liveness: (id) => livenessOf(ports.probe(id as AgentId), ports.lastRowAt(id as AgentId)),
             resolveCaller,
@@ -176,6 +184,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.processes ? { processes: ports.processes } : {}),
             ...(ports.flows ? { flows: ports.flows } : {}),
             ...(ports.mail ? { mail: ports.mail } : {}),
+            ...(ports.playwright ? { playwright: ports.playwright } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
             ...(ports.workspaceTrusted ? { workspaceTrusted: ports.workspaceTrusted } : {}),
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
@@ -233,6 +242,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         },
         sessionServers: (record) => genieMcpServers(server?.endpoint() ?? null, book.keyFor(record.id)),
         endpoint: () => server?.endpoint() ?? null,
+        ready: async () => { await starting; },
         status: () => ({ endpoint: server?.endpoint() ?? null, verified, tools }),
         stop: async () => { await server?.stop().catch(() => undefined); await endpointWrite; },
         refreshTools: () => {

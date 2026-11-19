@@ -35,6 +35,20 @@ export class UpdatesReplica {
     rebase(state: UpdateState): void {
         this.#state = state;
         for (const l of [...this.#listeners]) l(state);
+        // WHOEVER ASKED (Tynn #898 step 2d-2b): a phone or another workstation can install through genie-host, so every
+        // window quits when the install restarts (its last step before the helper takes over), not only the one that asked.
+        if (state.phase === 'installing' && state.installing?.step === 'restarting') this.#tellInstalling();
+    }
+
+    #tellInstalling(): void {
+        if (this.#told) return;
+        this.#told = true;
+        for (const l of [...this.#installing]) l();
+    }
+
+    /** This window says it is one, with its pid, each time it links: the host's install spares it and waits for it to go. */
+    async announce(): Promise<void> {
+        await this.#call('window', [this.#pid]);
     }
 
     state(): UpdateState {
@@ -58,10 +72,7 @@ export class UpdatesReplica {
         // This window's pid: the host's teardown leaves its tree, and the helper waits for it to be gone.
         return (this.#call('install', [this.#pid]) as Promise<InstallResult | null>).then((result) => {
             if (result === null) throw new Error('there is nothing downloaded to install');
-            if (this.#state.phase === 'installing' && !this.#told) {
-                this.#told = true;
-                for (const l of [...this.#installing]) l();
-            }
+            if (this.#state.phase === 'installing') this.#tellInstalling();
             return result;
         });
     }

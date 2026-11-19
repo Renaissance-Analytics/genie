@@ -177,15 +177,11 @@ describe('a host path picked on this machine', () => {
     });
 });
 
-describe('a call forwarded from genie-host to a window', () => {
+describe('a call genie-host answers', () => {
     it('keeps who it came from', async () => {
-        const window = vi.fn(async () => 'from-window');
         const alone = vi.fn(async () => 'from-host');
-        const api = hostRemoteApi({ hostName: 'h', own: {}, window: { connected: () => true, invoke: window as never } });
+        const api = hostRemoteApi({ hostName: 'h', own: {}, alone: { invoke: alone as never, onEvent: () => () => {}, workspaceOfAgent: () => null } });
         await (api.invoke as unknown as (m: string, a: unknown[], c: Context) => Promise<unknown>)('snapshot', [], device());
-        expect(window).toHaveBeenCalledExactlyOnceWith('snapshot', [], device());
-        const closed = hostRemoteApi({ hostName: 'h', own: {}, window: { connected: () => false, invoke: window as never }, alone: { invoke: alone as never, onEvent: () => () => {}, workspaceOfAgent: () => null } });
-        await (closed.invoke as unknown as (m: string, a: unknown[], c: Context) => Promise<unknown>)('snapshot', [], device());
         expect(alone).toHaveBeenCalledExactlyOnceWith('snapshot', [], device());
     });
 
@@ -202,11 +198,10 @@ describe('main wires it', () => {
         expect(main).toMatch(/localProtocolDoor\(ipcMain, \{ windowKind: [^\n]*isRemoteWindow\(/);
     });
     it('the feature action decides by the host\'s context, and a forwarded call reaches it', () => {
-        expect(main).toContain('features: featureReplica(() => agentEngineLink!.client, context => {');
-        const replica = readFileSync('src/main/feature-replica.ts', 'utf8');
-        expect(replica).toContain("act: (action, context) => call('act', [action], context)");
-        expect(replica).toContain("[method, args, context, context ? browser(context) : null]");
+        // Every client's feature calls are genie-host's answers, over its own HostFeatures (Tynn #898 step 2d-4b2), with
+        // the caller's context handed on.
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/phoneApi = hostAloneApi\(\{\s*hostName: hostname\(\),\s*features: hostFeatures,/);
+        expect(readFileSync('src/main/host-api.ts', 'utf8')).toContain('return deps.features.act(args[0] as FeatureAction, context);');
         expect(readFileSync('src/main/features-host.ts', 'utf8')).toContain('featureOriginOf(context, caller.picks)');
-        expect(main).toMatch(/onRemoteInvoke: \(method: string, args: unknown\[\], context: CallContext\) =>[^\n]*, args, context\)/);
     });
 });

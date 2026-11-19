@@ -2,8 +2,10 @@ import { limitTitle, limitWords } from './limit-words.js';
 import { chatPlanView, type ChatPlanView } from './chat-plan.js';
 import { planSteps } from './agent-view.js';
 import { isSleeping } from './agent-status.js';
+import { stalledWords } from './hung-call.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
+import type { ProviderStopState } from './provider-stops.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
 import type { AttachmentRef, StreamEvent, ToolKind } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
@@ -68,6 +70,8 @@ export interface ChatMessage {
      * offers "Send now (stop the current turn)". `null`: nothing from the agent in this thread.
      */
     silentSince?: number | null;
+    /** Taken back by the person while it was queued (Tynn #843): never delivered, kept in the thread to edit or remove. */
+    withdrawn?: boolean;
     /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
     promptId?: string;
     /** A failed Send/Discard press, kept beside the draft so it can be tried again. */
@@ -128,6 +132,17 @@ export function waitingStepLabel(step: string): string {
 }
 
 
+/** The stop line's provider stop: Genie's sentence and count, and the provider's own message and details for the quote (#921). */
+export type ProviderStopView = ProviderStopState;
+
+function providerStopView(stop: ProviderStopState): ProviderStopView {
+    return {
+        code: stop.code, words: stop.words, count: stop.count,
+        ...(stop.providerMessage ? { providerMessage: stop.providerMessage } : {}),
+        ...(stop.providerDetails && stop.providerDetails.length > 0 ? { providerDetails: stop.providerDetails } : {}),
+    };
+}
+
 export interface ChatContext {
     text: string;
     tone: 'ok' | 'warn' | 'bad' | 'muted' | 'cool';
@@ -135,6 +150,8 @@ export interface ChatContext {
     title?: string;
     /** `Working · Plan n/m`: the plan's open items, listed when the line is hovered (Tynn #703). Absent = no plan to list. */
     planView?: ChatPlanView;
+    /** A turn its PROVIDER stopped (Tynn #859): the stop in words and how many times it has stopped for that reason. */
+    stop?: ProviderStopView;
 }
 
 export interface ChatThreadView {
@@ -174,7 +191,13 @@ export function chatContext(detail: ChatDetail): ChatContext {
     // Held for its provider's limit (Tynn #794): until when, never Idle.
     const held = limitWords(s.limit);
     if (held) { const title = limitTitle(s.limit); return { text: `Paused · ${held}`, tone: 'warn', ...(title ? { title } : {}) }; }
-    if (s.failure !== null) return { text: `Broken · ${s.failure.reason}`, tone: 'bad' };
+    // ENDED AS STALLED (Tynn #855): the line says so, with how long it was silent.
+    if (s.stalled && s.turnState !== 'working') return { text: stalledWords(s.stalled), tone: 'bad' };
+    if (s.failure !== null) {
+        // A failure the PROVIDER's stop explains (Tynn #859): the red line says what it means and how often, not the bare code.
+        const stop = s.providerStop && s.providerStop.code === s.failure.reason ? s.providerStop : null;
+        return { text: `Broken · ${s.failure.reason}`, tone: 'bad', ...(stop ? { stop: providerStopView(stop) } : {}) };
+    }
     // COMING UP (q_04ce323c): its first message waits for the start, and the line says why.
     if (s.running && s.starting === true && s.turnState !== 'working') return { text: 'Starting', tone: 'muted' };
     if (s.running && s.turnState === 'working') {
@@ -185,7 +208,13 @@ export function chatContext(detail: ChatDetail): ChatContext {
     // Waiting on the Claude Design login (#1081): the line's `Log in to Claude Design` fixes it.
     if (s.designLogin) return { text: 'Claude Design login needed', tone: 'warn' };
     // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21).
-    if (s.running && (s.background ?? 0) > 0) return { text: `Working · ${s.background} in the background`, tone: 'ok' };
+    // ...AND ITS PLAN STAYS IN VIEW (Tynn #918): the background count joins the plan's step, never replaces it.
+    if (s.running && (s.background ?? 0) > 0) {
+        const here = `Working · ${s.background} in the background`;
+        if (!s.plan) return { text: here, tone: 'ok' };
+        const planView = chatPlanView(s.planSteps && s.planSteps.length > 0 ? s.planSteps : planSteps(detail.rows));
+        return { text: `${here} · Plan ${s.plan.step}/${s.plan.of}${s.plan.doing ? ` · ${s.plan.doing}` : ''}`, tone: 'ok', ...(planView ? { planView } : {}) };
+    }
     // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
     if (s.running && s.cooling === true) return { text: 'Cooling', tone: 'cool' };
     if (isSleeping(s, Date.now())) return { text: 'Sleeping', tone: 'muted' };
@@ -252,8 +281,11 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         const delivered = delivery === undefined || delivery === 'sent';
         // `carried` (Tynn #702): kept across the restart an unconfirmed interrupt made, waiting for the new run like a queued one.
         const queued = (delivery === 'queued' || delivery === 'carried') && detail.session?.running === true;
+        // Taken back by the person while it waited (Tynn #843): kept, marked, never delivered and never owed.
+        const withdrawn = delivery === 'withdrawn';
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
+            ...(withdrawn ? { withdrawn: true } : {}),
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
             ...(queued && detail.session?.starting === true ? { queuedForStart: true }
                 : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),

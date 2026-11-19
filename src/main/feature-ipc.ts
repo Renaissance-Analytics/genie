@@ -5,6 +5,7 @@ import { applyHostingFeatureAction, hostingFeatureSnapshot } from './feature-hos
 export { ENGINE_STATUS_WAIT_MS, ROW_LOG_LINES, sitePins } from './feature-hosting.js';
 import { applyPersonalFeatureAction, personalFeatureSnapshot } from './feature-personal.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import type { DeckItem } from '../core/deck.js';
 import { REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
 import { applyFeatureControlAction } from './feature-controls.js';
 import { applyDeckFeatureAction } from './feature-deck.js';
@@ -219,7 +220,7 @@ export interface FeaturePorts {
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
     /** The main process's record of errors it caught and survived (core/main-errors.ts): the Deck's Dismiss on one. */
-    readonly mainErrors?: { dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
+    readonly mainErrors?: { deckItems?(): readonly DeckItem[] | Promise<readonly DeckItem[]>; dismiss(id: string): boolean | Promise<boolean>; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
     /** What's New for the running version, once (Tynn #762): `null` when seen or there are no notes for it. */
     readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it). */
@@ -275,6 +276,8 @@ export interface FeatureState {
     serviceAdding?: ServiceAdding | null;
     /** The engine log the person opened in the Services tab (H6), until they hide it. */
     serviceLogs?: ServiceLogs | null;
+    /** The process whose log the person opened in Hosting → Processes (Tynn #860), until they close it. */
+    processLogOpen?: string | null;
     serviceUpdating?: NonNullable<FeatureData['services']>['updating'];
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;

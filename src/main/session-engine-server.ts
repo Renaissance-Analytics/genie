@@ -1,7 +1,5 @@
-import type { AccountRecord } from '../core/accounts.js';
 import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
-import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { KeyringService } from './keyring-service.js';
@@ -29,7 +27,7 @@ import {
 } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { cancelIntent } from '../core/session.js';
-import type { CallContext, ClientTransport } from '../core/remote-protocol.js';
+import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
@@ -52,6 +50,9 @@ import type { MarketplaceApi } from '../core/marketplace.js';
 import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
 import { dispatchGapps, GAppSessionOwner } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
+import { fromWireAttachment } from './engine-wire.js';
+import type { Attachment } from '../core/prompt-content.js';
+import { isPromptAction } from '../core/prompt-delivery.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -99,6 +100,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** This machine's windows' protocol connections, tunnelled to genie-host's RemoteHost (protocol-tunnels.ts). */
+    readonly protocol?: Pick<import('./protocol-tunnels.js').ProtocolTunnels, 'receive' | 'dropOwner'>;
     readonly features?: FeatureCallers;
     /** This machine as a workstation (P3.4): the host holds its key. */
     readonly workstation?: WorkstationService;
@@ -130,13 +133,6 @@ export interface EngineServerOptions {
     readonly pid?: number;
     /** A provider's model list, from the host's one cache (core/provider-models.ts); `refresh` asks the CLI again. */
     readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
-    /** The host book's persisted legacy account; only this machine's window may ask. */
-    readonly providerAccount?: (provider: string) => Pick<AccountRecord, 'id' | 'provider' | 'home' | 'legacy'> | null;
-    /** A sign-in for one account, run here (Tynn #479). */
-    readonly login?: (provider: string, accountId: string | undefined) => { ok: true; terminalId: string } | { ok: false; reason: string };
-    readonly cancelLogin?: (accountId: string) => void;
-    /** Open the provider's own login in its one home so the person can switch accounts; no agent is touched (Tynn #753). */
-    readonly switchAccount?: (provider: string) => import('./account-switch-host.js').AccountSwitchStart;
     /** The switch offers genie-host keeps (Tynn #481): listed, and dismissed (Not now), by this machine's window only. */
     readonly switchOffers?: { offers(): readonly import('../core/switch-offer.js').SwitchOffer[]; dismiss(id: string): boolean };
     /** Every known account with its readings, and the standing offers (Tynn #483): this machine's window only. No credential. */
@@ -422,17 +418,6 @@ export class SessionEngineServer {
         return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
     }
 
-    /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
-    remoteInvoke(method: string, args: unknown[], context?: CallContext): Promise<unknown> {
-        // Staged bytes cross as base64: the reverse call is JSON (Tynn #657, remote-invoke-wire.ts).
-        return this.#reverse('client.remoteInvoke', [method, encodeRemoteInvokeArgs(method, args), context ?? null], { localOnly: true });
-    }
-
-    /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */
-    newestLocalWindow(): string | null {
-        return [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1)?.id ?? null;
-    }
-
     /** Remote access's status (to every local window) or a bridged connection's frame (to the window that owns it). */
     remoteAccessEvent(owner: string | null, event: unknown): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && (owner === null || conn.id === owner)) this.#event(conn, 'remoteAccess.event', event);
@@ -486,6 +471,8 @@ export class SessionEngineServer {
             }
             const was = conn.authed;
             this.#connections.delete(conn);
+            // A window that said it is one is no longer spared or waited for by an install (Tynn #898).
+            this.#options.updates?.windowDropped(conn.id);
             this.#gappSessionOwners.get(conn)?.closeAll();
             const reviews = this.#marketplaceReviews.get(conn);
             if (reviews) {
@@ -504,8 +491,9 @@ export class SessionEngineServer {
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) this.#options.tynnIssues?.dropOwner(conn.id);
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
-            if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
+            // Every protocol connection this window process tunnelled ends with its link (the page reconnects).
+            if (was) this.#options.protocol?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
         });
     }
@@ -514,6 +502,9 @@ export class SessionEngineServer {
         const parsed = parseEngineFrame(text);
         if (!parsed.ok) {
             if (!conn.authed) conn.transport.close();
+            // A window's call this host does not know (Tynn #894: a client-only update keeps an older host): answered with
+            // its id, so the window's call settles instead of waiting forever.
+            else if (parsed.code === 'unsupported' && parsed.id !== undefined) conn.transport.send(JSON.stringify({ kind: 'result', id: parsed.id, ok: false, reason: parsed.reason, code: 'unsupported' }));
             else this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`);
             return;
         }
@@ -543,6 +534,12 @@ export class SessionEngineServer {
         if (message.kind === 'call') {
             // THE HEARTBEAT (Tynn #386): heard here, before any dispatch — cheap, no reply, no flush.
             if (message.method === 'engine.heartbeat') { this.#options.heartbeat?.beat(conn.id, message.args[0]); return; }
+            // THE WINDOW'S PROTOCOL FRAMES (Tynn #898 step 2d-4b): handed on here, in arrival order, never behind a slow call.
+            if (message.method === 'engine.protocol') {
+                this.#protocol(conn, message.args);
+                if (message.id !== 0) conn.transport.send(JSON.stringify({ kind: 'result', id: message.id, ok: true, value: null }));
+                return;
+            }
             void this.#call(conn, message.id, message.method, message.args);
             return;
         }
@@ -645,27 +642,6 @@ export class SessionEngineServer {
                 profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'this Genie question window' },
                 async () => { throw new Error('the question window provides no other UI effects'); }, null);
         }
-        if (method === 'engine.providerAccount') {
-            if (!conn.local || !conn.window) throw new Error('Provider account homes need this machine’s own window.');
-            if (!this.#options.providerAccount) throw new Error('The provider account book is unavailable.');
-            const account = this.#options.providerAccount(typeof args[0] === 'string' ? args[0] : '');
-            return account ? { id: account.id, provider: account.provider, home: account.home, legacy: account.legacy } : null;
-        }
-        if (method === 'engine.login') {
-            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
-            if (!this.#options.login) throw new Error('Sign-in is not ready in the host yet.');
-            return this.#options.login(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'string' ? args[1] : undefined);
-        }
-        if (method === 'engine.cancelLogin') {
-            if (!conn.local || !conn.window) throw new Error('Sign-in needs this machine’s own window.');
-            this.#options.cancelLogin?.(typeof args[0] === 'string' ? args[0] : '');
-            return true;
-        }
-        if (method === 'engine.switchAccount') {
-            if (!conn.local || !conn.window) throw new Error('Switching accounts needs this machine’s own window.');
-            if (!this.#options.switchAccount) throw new Error('Switching accounts is not ready in the host yet.');
-            return this.#options.switchAccount(typeof args[0] === 'string' ? args[0] : '');
-        }
         if (method === 'engine.accountsAct') {
             if (!conn.local || !conn.window) throw new Error('Accounts need this machine’s own window.');
             if (!this.#options.accountsAct) throw new Error('The accounts are not ready in the host yet.');
@@ -687,12 +663,6 @@ export class SessionEngineServer {
             if (!conn.local || !conn.window) throw new Error('Account identity needs this machine’s own window.');
             await this.#options.refreshAccountIdentity?.(typeof args[0] === 'string' ? args[0] : '');
             return true;
-        }
-        if (method === 'engine.features') {
-            if (!conn.local || !conn.window) throw new Error('features need this machine’s own window connection');
-            if (!this.#options.features) throw new Error('Genie’s feature services are still starting');
-            return this.#options.features.call(conn.id, String(args[0]), Array.isArray(args[1]) ? args[1] : [], args[2],
-                (connectionId, method, rest) => this.#reverseTo(conn, 'client.featureEffect', [connectionId, method, rest]), (args[3] ?? null) as FeatureBrowser | null);
         }
         if (method === 'engine.remoteAccess') {
             if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
@@ -741,9 +711,11 @@ export class SessionEngineServer {
             case 'engine.handOff':
                 return host.handOff(id(), str(1), by(2), (args[3] as Parameters<SessionHost['handOff']>[3]) ?? {});
             case 'engine.promptWith': {
-                const wire = Array.isArray(args[2]) ? (args[2] as WireAttachment[]) : [];
-                const attachments = wire.map((a) => ({ name: a.name, type: a.type, bytes: new Uint8Array(Buffer.from(a.b64, 'base64')) }));
-                return host.promptWith(id(), str(1), attachments, by(3));
+                const wire: readonly WireAttachment[] = Array.isArray(args[2]) ? (args[2] as WireAttachment[]) : [];
+                // A saved file crosses as its path (Tynn #829); a malformed one refuses the message, never a made-up path.
+                const attachments = wire.map(fromWireAttachment);
+                if (attachments.some((a) => a === null)) return { ok: false, reason: 'an attachment did not arrive whole; nothing was sent' };
+                return host.promptWith(id(), str(1), attachments as Attachment[], by(3));
             }
             case 'engine.cancel':
                 // Only `interrupt` is an interrupt; anything else, or nothing, is a Stop (Tynn #672 part 3).
@@ -759,7 +731,9 @@ export class SessionEngineServer {
             case 'engine.reportPlan':
                 return host.reportPlan(id(), Array.isArray(args[1]) ? (args[1] as { content: string; status: string }[]) : []);
             case 'engine.resolvePrompt':
-                return host.resolvePrompt(id(), str(1), args[2] === 'send' ? 'send' : 'discard');
+                // Each action as asked (Tynn #843): a Withdraw read as a Discard would drop the message from the thread.
+                if (!isPromptAction(args[2])) return { ok: false, reason: 'Invalid draft action.' };
+                return host.resolvePrompt(id(), str(1), args[2]);
             case 'engine.recordOwed':
                 await host.recordOwed(id(), str(1), by(2));
                 return true;
@@ -893,7 +867,7 @@ export class SessionEngineServer {
             case 'engine.updates':
                 if (!this.#options.updates) throw new Error('This host runs no updater.');
                 if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
-                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true });
+                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true, connection: conn.id });
             case 'engine.hosting':
                 if (!this.#options.hosting) throw new Error('This host runs no hosting.');
                 if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');
@@ -904,15 +878,6 @@ export class SessionEngineServer {
             case 'engine.stores': {
                 if (!this.#options.stores) throw new Error('This host keeps no stores.');
                 return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);
-            }
-            case 'engine.drafts.fileOpen':
-            case 'engine.drafts.fileRead':
-            case 'engine.drafts.fileClose': {
-                if (!this.#connections.has(conn)) throw new Error('the draft file engine connection is closed');
-                const stores = this.#options.stores; if (!stores) throw new Error('this host keeps no chat drafts');
-                if (method === 'engine.drafts.fileOpen') return stores.draftFileOpen(conn.id, args[0]);
-                if (method === 'engine.drafts.fileRead') return stores.draftFileRead(conn.id, args[0], args[1], args[2]);
-                return stores.draftFileClose(conn.id, args[0]);
             }
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
@@ -1021,6 +986,39 @@ export class SessionEngineServer {
     }
 
     /** A batch or a git result of the file-watch hub, to the window (connection) that owns the views it is for. */
+    /** One op of a window's tunnelled protocol connection (protocol-tunnels.ts): a LOCAL window's link only. */
+    #protocol(conn: Connection, args: unknown[]): void {
+        const [op, tunnel, payload] = args;
+        const send = (event: import('./protocol-tunnels.js').TunnelEvent) => { if (this.#connections.has(conn)) this.#event(conn, 'protocol.frame', event); };
+        if (!this.#options.protocol || conn.helper || !conn.local || !conn.window) {
+            if (typeof tunnel === 'string' && op !== 'close') send({ tunnel, kind: 'closed', reason: 'genie-host tunnels protocol connections for this machine’s own windows only' });
+            return;
+        }
+        this.#options.protocol.receive(conn.id, op, tunnel, payload, send);
+    }
+
+    /** A LOCAL window's link by its id; null when it is gone or is not one. */
+    #localWindow(owner: string): Connection | null {
+        return [...this.#connections].find((c) => c.id === owner && c.authed && c.window && c.local) ?? null;
+    }
+
+    /** A feature effect for a tunnelled connection (a page to open, a sign-in), to the window process that owns it. */
+    featureEffect(owner: string, connectionId: string, method: string, args: unknown[]): Promise<unknown> {
+        const conn = this.#localWindow(owner);
+        if (!conn) return Promise.reject(new Error('the caller’s own window is no longer connected'));
+        return this.#reverseTo(conn, 'client.featureEffect', [connectionId, method, args]);
+    }
+
+    /**
+     * WHAT ONLY A WINDOW CAN DO (Tynn #898 step 2d-4b): the OS trash, an app's window. To `owner`'s window process (the
+     * caller's), or with `null` to the newest local one: every window on this machine moves a file to the same trash.
+     */
+    windowOp(owner: string | null, op: string, args: unknown[]): Promise<unknown> {
+        const conn = owner === null ? [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1) ?? null : this.#localWindow(owner);
+        if (!conn) return Promise.reject(new Error(owner === null ? 'no Genie window is open on this machine' : 'the caller’s own window is no longer connected'));
+        return this.#reverseTo(conn, 'client.windowOp', [op, args]);
+    }
+
     /** A socket to another machine said something: to the window that opened it, and no other. */
     deviceEvent(owner: string, event: DeviceLinkEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'device.event', event);
@@ -1039,10 +1037,6 @@ export class SessionEngineServer {
     /** Features rings go only to the local connection whose views follow the page. */
     tynnFeaturesEvent(owner: string, event: TynnBoardHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnFeatures.event', event);
-    }
-
-    featuresChanged(): void {
-        for (const conn of this.#connections) if (conn.authed && conn.local && conn.window) this.#event(conn, 'features.invalidated', null);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

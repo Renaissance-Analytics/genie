@@ -32,7 +32,7 @@ class PrivateTerminals {
  * THE PHONE'S METHODS, ANSWERED BY GENIE-HOST WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2). genie-host runs the
  * SAME host API the window does (host-api.ts `buildHostApi`), over what it owns: the registry's files, its session host,
  * its attention, inbox and approval stores, the workspaces' files. What a phone asks is answered as the window would
- * answer it; anything else is refused with what to do. While a window is open, the window answers, as before.
+ * answer it; anything else is refused with what to do. Window or not, genie-host answers (Tynn #898).
  */
 
 let dir = '';
@@ -72,6 +72,8 @@ function engine(running = false): HostAloneEngine {
 function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlonePorts {
     return {
         hostName: 'alphar',
+        serviceEnvFor: () => ({}),
+        uploads: { sendFile: async () => ({ ok: false, reason: 'this fixture sends no files' }) },
         registry,
         engine: () => e,
         cwdFor: (r) => (r.workspaceId === 'tynn' ? '/w/tynn' : '/home'),
@@ -84,6 +86,7 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
             lists: { done: async () => true },
         },
         approvals: { resolve: () => true },
+        deckItems: () => [],
         inbox: { unread: () => [], receive: async () => [] as never, involving: () => [] },
         deliverToAgent: async () => true,
         files: {
@@ -94,12 +97,11 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
         },
         models: { get: async () => ({ models: [] }) as never },
         providerInstalled: () => true,
-        windowConnected: () => false,
         tynnTab: { board: () => ({ signedIn: () => false, projectFor: () => null, request: async () => ({ ok: false, status: 404, json: async () => null }) }), readPage: async () => ({ ok: false, state: 'error', reason: 'n/a' }) },
         workspaceLifecycle: { terminals: () => null, supervisor: () => null, engines: () => null, reverifyTrust: async () => {}, github: () => null, tynn: () => null, defaultEnvFile: () => '', stagingDirectory: () => '' },
         colors: { set: async () => ({ ok: true as const }) },
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {}, onChange: () => () => {} },
-        terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
+        terminals: { open: () => { throw new Error('this fixture opens no terminal'); }, attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
         takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
         ...over,
@@ -140,12 +142,24 @@ describe('genie-host answers the phone itself', () => {
         expect(calls).toEqual(['answerApproval allow go ahead', 'resumeLimit claude undefined', 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
     });
 
-    it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {
+    it('with no feature services, a read and any action but the Deck answer are refused as this host cannot (step 2e-3), never by a window', async () => {
         const api = hostAloneApi(ports(engine(true)));
+        // An admitted caller (host-api refuses a read with none before the features are asked).
+        const phone = { connectionId: 'c1', label: 'phone', origin: 'device', profile: 'mobile', isOwner: true, workspaceId: null, readonly: false } as const;
+        await expect(api.invoke('features.snapshot', [], phone)).rejects.toThrow('this host cannot read its features');
+        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('this host cannot run settings.set');
+        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.not.toThrow(/window|open Genie/);
+    });
+
+    it('the Deck answer for a question is answered in the host\'s attention store; any other feature action is refused', async () => {
+        let held: never[] = [];
+        // The host's own Deck holds the question (Tynn #861): the answer is resolved there.
+        const api = hostAloneApi(ports(engine(true), { deckItems: () => held }));
         const item = { id: 'q_1', source: 'agent-question', agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', title: 'Ship it?', blocking: true, priority: 'high', at: 1, answer: { kind: 'inline', options: [{ id: 'yes', label: 'Yes' }] }, forwardedFrom: null };
+        held = [item as never];
         await api.invoke('features.act', [{ kind: 'deck.answer', item, optionId: 'yes' }]);
         expect(calls).toContain('answer q_1 [["yes"]]');
-        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('this host cannot run settings.set');
     });
 
     it('the phone\'s file browser lists the workspace through the host\'s files', async () => {
@@ -167,33 +181,24 @@ describe('genie-host answers the phone itself', () => {
     });
 });
 
-describe('the remote host uses it only while no window is connected', () => {
-    it('the phone\'s methods: the window while one is open, genie-host while none; anything else is refused with none', async () => {
-        let windowOpen = true;
+describe('the remote host uses it whether or not a window is connected (Tynn #898)', () => {
+    it('the phone\'s methods, and every other, are genie-host\'s: no window is asked (step 2d-2b)', async () => {
         const alone = hostAloneApi(ports(engine(true)));
-        const api = hostRemoteApi({
-            hostName: 'alphar', own: {},
-            window: { connected: () => windowOpen, invoke: async (method) => ({ fromWindow: method }) },
-            alone,
-        });
-        expect(await api.invoke('snapshot', [])).toEqual({ fromWindow: 'snapshot' });
-        windowOpen = false;
+        const api = hostRemoteApi({ hostName: 'alphar', own: {}, alone });
         expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
-        await expect(api.invoke('addAgent', ['tynn', {}])).rejects.toThrow('alphar answers addAgent only while a Genie window is open there: open Genie on alphar');
+        expect(typeof (await api.invoke('host.home', []))).toBe('string');
         expect([...PHONE_METHODS].sort()).toEqual(['agentDetail', 'agents.restart', 'answerApproval', 'features.act', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'prompt', 'resumeLimit', 'snapshot']);
     });
 
-    it('genie-host\'s own events reach remote connections only while no window is connected (a window forwards its own)', async () => {
-        let windowOpen = true;
+    it('genie-host\'s own events reach remote connections (Tynn #898)', async () => {
         const alone = { invoke: vi.fn(), onEvent: (l: (c: string, p: unknown) => void) => { emitAlone = l; return () => {}; }, workspaceOfAgent: () => null };
         let emitAlone: (c: string, p: unknown) => void = () => {};
-        const api = hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => windowOpen, invoke: async () => null }, alone });
-        const seen: string[] = [];
-        api.onEvent((channel) => { seen.push(channel); });
-        emitAlone('snapshot', {});
-        windowOpen = false;
+        const api = hostRemoteApi({ hostName: 'alphar', own: {}, alone });
+        const seen: unknown[] = [];
+        api.onEvent((_channel, payload) => { seen.push(payload); });
+        emitAlone('snapshot', { n: 1 });
         emitAlone('snapshot', { n: 2 });
-        expect(seen).toEqual(['snapshot']);
+        expect(seen).toEqual([{ n: 1 }, { n: 2 }]);
     });
 });
 
@@ -209,7 +214,7 @@ describe('a Pilot connecting to a Drone with no window open (beta.61 blocker, Az
         const devices = await DeviceStore.open(dir, { now: Date.now, random: () => 'pilot-token' });
         let accept!: (c: ServerConnection) => void;
         const drone = new RemoteHost({
-            api: hostRemoteApi({ hostName: 'drone', own: {}, window: { connected: () => false, invoke: async () => null }, alone: hostAloneApi(ports(engine(true), { terminals: terminals as never })) }),
+            api: hostRemoteApi({ hostName: 'drone', own: {}, alone: hostAloneApi(ports(engine(true), { terminals: terminals as never })) }),
             hostName: 'drone', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing,
             transport: { onConnection: (l) => { accept = l; return () => {}; } },
         });

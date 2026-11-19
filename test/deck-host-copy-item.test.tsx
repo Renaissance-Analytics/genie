@@ -107,7 +107,8 @@ describe('Try again', () => {
 });
 
 describe('each button reaches its action', () => {
-    const ports = (mainErrors: DeckAnswerPorts['mainErrors']): DeckAnswerPorts => ({ mainErrors } as unknown as DeckAnswerPorts);
+    // The error record the window holds is what an answer is resolved against (Tynn #861): it holds the filed item.
+    const ports = (mainErrors: DeckAnswerPorts['mainErrors']): DeckAnswerPorts => ({ deckItems: () => [], mainErrors: { deckItems: () => [filed().item], ...mainErrors } } as unknown as DeckAnswerPorts);
 
     it('the option says which', () => {
         const { item } = filed();

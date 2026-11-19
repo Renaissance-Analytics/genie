@@ -139,18 +139,20 @@ describe('a model change reaches a running agent', () => {
     });
 });
 
-describe('main wires it', () => {
+describe('genie-host wires it; the window keeps no applier of its own (Tynn #896, 2b-3)', () => {
     // Comments stripped first, so a sentence about the wiring cannot stand in for the wiring.
-    const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8')
+    const window = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../src/main/host-alone-api.ts', import.meta.url), 'utf8')
         .split(/\r?\n/)
         .map((line) => line.replace(/\/\/.*$/, ''))
         .join('\n');
 
     it('every model / tool-setting change asks the applier (window and remote share these ports)', () => {
-        expect(main.match(/applyOnStart:\s*\(id\)\s*=>\s*settingApplier!\.requested\(id\)/g) ?? []).toHaveLength(1);
+        expect(main.match(/applyOnStart:\s*\(id\)\s*=>\s*settingApplier\.requested\(id\)/g) ?? []).toHaveLength(1);
+        expect(window).not.toMatch(/SettingApplier|settingApplier/);
     });
 
     it('every change to an agent\'s session lets a waiting change apply', () => {
-        expect(main.match(/settingApplier\?\.changed\(agentId\)/g) ?? []).toHaveLength(1);
+        expect(main.match(/subscribe\(\(id\) => settingApplier\.changed\(id as AgentId\)\)/g) ?? []).toHaveLength(1);
     });
 });

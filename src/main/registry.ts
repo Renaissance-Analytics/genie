@@ -12,7 +12,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host, and the emergency
  * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
  */
-export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
+export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'beginRestore' | 'restoreStarted' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
@@ -229,20 +229,33 @@ export class Registry {
         await this.#store.writeInterruptedAtQuit(this.#interruptedAtQuit);
     }
 
-    /** Read once and cleared, like the running set: a crash mid-resume prompts nobody twice. */
-    async takeInterruptedAtQuit(): Promise<readonly AgentId[]> {
-        const ids = this.#interruptedAtQuit;
-        this.#interruptedAtQuit = [];
-        await this.#store.writeInterruptedAtQuit([]);
-        return ids;
+    /**
+     * THE RESTORE BEGINS (Tynn #754): the agents the last shutdown recorded, READ and kept on disk. Each leaves the lists
+     * only when its start went through (`restoreStarted`), so a shutdown inside the restore still records the agents
+     * waiting to start. A crash mid-restore starts nobody twice: a started agent is already off the lists.
+     */
+    async beginRestore(): Promise<{ running: readonly AgentId[]; interrupted: readonly AgentId[] }> {
+        const { running, interrupted } = await this.#store.beginRestore();
+        this.#runningAtQuit = this.#known(running);
+        this.#interruptedAtQuit = this.#known(interrupted);
+        return { running: this.#runningAtQuit, interrupted: this.#interruptedAtQuit };
     }
 
-    /** Read once and cleared, so a crash mid-restore does not start anyone twice. */
-    async takeRunningAtQuit(): Promise<readonly AgentId[]> {
-        const ids = this.#runningAtQuit;
-        this.#runningAtQuit = [];
-        await this.#store.writeRunningAtQuit([]);
-        return ids;
+    /** An agent's restore start went through: it leaves the saved lists (unless a shutdown has recorded since). */
+    async restoreStarted(id: AgentId): Promise<void> {
+        if (!(await this.#store.restoreStarted(id))) return;
+        this.#runningAtQuit = this.#runningAtQuit.filter((x) => x !== id);
+        this.#interruptedAtQuit = this.#interruptedAtQuit.filter((x) => x !== id);
+    }
+
+    /** The saved agents a restore has not started yet, as on disk now: what a shutdown record keeps (Tynn #754). */
+    async pendingRestore(): Promise<{ running: readonly AgentId[]; interrupted: readonly AgentId[] }> {
+        const [running, interrupted] = await Promise.all([this.#store.readRunningAtQuit(), this.#store.readInterruptedAtQuit()]);
+        return { running: this.#known(running), interrupted: this.#known(interrupted) };
+    }
+
+    #known(ids: readonly string[]): AgentId[] {
+        return ids.filter((id): id is AgentId => this.#agents.some((a) => a.id === id));
     }
 
     setProbe(probe: SessionProbe): void {

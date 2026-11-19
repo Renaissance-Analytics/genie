@@ -25,14 +25,17 @@ const ws = { id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' };
 const files = {} as never;
 // Passed loosely ON PURPOSE: before the prop exists, the test is red by its assertions, not by a type error.
 const props = (open: () => Promise<Opened>) => ({ onOpenScratchTerminal: open } as Record<string, unknown>);
-const header = (html: string) => html.slice(html.indexOf('data-view-header'), html.indexOf('</header>'));
+// The one bar (TopBar.tsx, the owner on beta.64): its markup up to the view's body; the button sits at its right end.
+const header = (html: string) => html.slice(html.indexOf('data-top-bar'), html.indexOf('data-view-body'));
 
 describe('the button, drawn', () => {
     const html = header(renderToStaticMarkup(<Workspace view="home" workspace={ws} terminals={NO_TERMINALS} files={files} {...props(async () => ({ ok: true }))} />));
 
-    it('a react-fancy Button with an icon and the word Terminal, and a tooltip', () => {
+    // An icon in the one bar (the owner on beta.64: as few words as possible): named Terminal for a screen reader and on hover.
+    it('a react-fancy Button with an icon, named Terminal, and a tooltip', () => {
         const button = control(html, 'data-action="open-scratch-terminal"');
-        expect(button).toMatchObject({ tag: 'button', fancy: true, text: 'Terminal' });
+        expect(button).toMatchObject({ tag: 'button', fancy: true, text: '' });
+        expect(button!.open).toContain('aria-label="Terminal"');
         expect(button!.inner).toContain('<svg');
         expect(button!.open).toMatch(/\stitle="[^"]+"/);
     });

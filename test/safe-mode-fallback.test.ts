@@ -183,9 +183,9 @@ describe('main.ts reads genie-host’s safe mode', () => {
         expect(opened).toBeLessThan(code.indexOf('composeWindowServices('));
     });
 
-    it('the boot restore, the wake and compose all read it', () => {
+    it('the boot restore and compose read it; the window wakes no agent (the mail wake is genie-host’s, Tynn #896 2b-3)', () => {
         expect(code).toMatch(/restoreAfterRelaunch\(\{\s*safeMode: windowSafeNow,/);
-        expect(code).toMatch(/const wakeAgent = windowWake\(\{\s*safeMode: windowSafeNow,/);
+        expect(code).not.toMatch(/windowWake\(/);
         expect(code).toMatch(/composeWindowServices\(\{[\s\S]{0,4000}safeMode: windowSafeNow,/);
     });
 
