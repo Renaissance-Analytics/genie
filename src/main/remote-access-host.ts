@@ -53,7 +53,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
         releaseCaller: context => alone()?.releaseCaller?.(context),
         // THE PORTS RemoteHost READS OFF THE API (Tynn #898 step 2d-3a): genie-host's own, once its answers are built.
         marketplace: () => alone()?.marketplace?.() ?? null,
-        gapps: () => alone()?.gapps?.() ?? null,
+        gapps: (context) => alone()?.gapps?.(context) ?? null,
         invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);

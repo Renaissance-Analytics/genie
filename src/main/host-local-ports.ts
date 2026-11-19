@@ -1,5 +1,6 @@
 import { editorBytesOfDump } from '../core/plugin-editors.js';
 import type { GAppBookApi, GAppsApi } from '../core/gapps.js';
+import type { CallContext } from '../core/remote-protocol.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
 import type { ChatDraftStore } from './chat-draft-store.js';
 import type { HostApiDeps } from './host-api.js';
@@ -17,7 +18,7 @@ import type { TerminalHost } from './terminal-host.js';
  * these parts through the engine link; at 2d-4 it stops, and the window is served here.
  *
  * What only a window can do stays the window's: an app's own window and a workspace's preview of one are Electron
- * windows, so they are refused in words here, as every GApp call was before.
+ * windows. Since step 2d-4b they open in the window that asked (`appWindow`); with no window to ask, refused in words.
  */
 export interface HostLocalSources {
     /** The workspaces a terminal opens in: the roster's, with their folders. */
@@ -44,12 +45,12 @@ export interface HostLocalSources {
      * An app's window, opened by the window that asked (Tynn #898 step 2d-4b): a window-local client operation, done in
      * that window's process (gapp-windows-electron.ts). `context` is the caller RemoteHost admitted; absent = refused in words.
      */
-    readonly appWindow?: (context: import('../core/remote-protocol.js').CallContext | undefined, packageId: string, preview: boolean) => Promise<void>;
+    readonly appWindow?: (context: CallContext | undefined, packageId: string, preview: boolean) => Promise<void>;
     readonly say: (line: string) => void;
     readonly now?: () => Date;
 }
 
-const APP_WINDOW = 'an app’s window opens in a Genie window: open it from Genie on this machine';
+export const APP_WINDOW = 'an app’s window opens in a Genie window: open it from Genie on this machine';
 
 export type HostLocalPorts = Required<Pick<HostApiDeps, 'marketplace' | 'gapps' | 'gappsChanged' | 'localTerminals' | 'localFiles' | 'artboard' | 'chatDrafts'>>;
 
@@ -59,13 +60,14 @@ export function hostLocalPorts(sources: HostLocalSources): HostLocalPorts {
         send: sources.sendFromPerson,
         now: () => (sources.now?.() ?? new Date()).toISOString(),
     };
-    const gapps = (): GAppsApi | null => {
+    const gapps = (context?: CallContext): GAppsApi | null => {
         const book = sources.gapps();
         if (!book) return null;
+        const appWindow = sources.appWindow;
         return {
             ...book,
-            open: async () => { throw new Error(APP_WINDOW); },
-            preview: async () => { throw new Error(APP_WINDOW); },
+            open: async (id) => { if (!appWindow) throw new Error(APP_WINDOW); await appWindow(context, id, false); },
+            preview: async (id) => { if (!appWindow) throw new Error(APP_WINDOW); await appWindow(context, id, true); },
             onChanged: (listener) => sources.onGappsChanged(listener),
         };
     };

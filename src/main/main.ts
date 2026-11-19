@@ -36,6 +36,7 @@ import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard,
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
+import { tunnelDoor, tunnelLinkOf, windowOpsHandler } from './window-tunnel.js';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -1409,6 +1410,19 @@ const phpCgiBase = (): PhpCgiPorts => ({
 });
 const localFeatureInvalidations = new Set<() => void>();
 let featureEffectNow: ((connectionId: string, method: string, args: unknown[]) => Promise<unknown>) | null = null;
+/**
+ * WINDOW-LOCAL CLIENT OPERATIONS genie-host asks of this window (Tynn #898 step 2d-4b; window-tunnel.ts): Delete moves a
+ * file to the OS trash (Tynn #844), and an app's window opens here (Tynn #595). The path is checked against this
+ * machine's workspaces again, whoever asked.
+ */
+const windowOps = windowOpsHandler({
+    trash: (absolutePath) => shell.trashItem(absolutePath),
+    workspaces: () => registry?.snapshot().workspaces ?? [],
+    openApp: async (packageId, preview) => {
+        if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.');
+        await gappWindowsNow.open(packageId, preview ? { preview: true } : undefined);
+    },
+});
 /** The ForceTheQuestion window's controller (question-window.ts); set once the services are composed. */
 let questionWindow: QuestionWindow | null = null;
 /** Who else wants the feature snapshot on change: the remote host's event stream. */
@@ -1539,6 +1553,8 @@ async function boot(): Promise<void> {
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
         onFeatureEffect: (connectionId: string, method: string, args: unknown[]) => featureEffectNow ? featureEffectNow(connectionId, method, args) : Promise.reject(new Error('this caller’s window is still starting')),
+        // WHAT ONLY THIS WINDOW CAN DO FOR GENIE-HOST (Tynn #898 step 2d-4b): Electron's trash, an app's window.
+        onWindowOp: (op: string, args: unknown[]) => windowOps(op, args),
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
         // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
         phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
@@ -2589,10 +2605,23 @@ async function boot(): Promise<void> {
     }
     composedNow = composed;
     servicesComposed(composed);
-    // Local calls and event subscriptions use late-bound services. Until now the door answers "Genie is still starting".
-    remoteHub.add(localDoor);
-    // Browser/UI facts invalidate the owned service; business contributors subscribe once in genie-host.
-    const pushFeatures = () => { for (const listener of localFeatureInvalidations) listener(); };
+    /*
+     * THIS WINDOW IS SERVED BY GENIE-HOST (Tynn #898 step 2d-4b): each connection the door admits rides the engine link
+     * to genie-host's RemoteHost, admitted there as this machine's window. main serves none of it; the window's browser
+     * pane is said for the main window's connection, and again on every change.
+     */
+    const windowTunnel = tunnelDoor(localDoor, tunnelLinkOf(agentEngineLink.client), {
+        browser: (connectionId) => {
+            const contents = localDoor.contentsFor(connectionId);
+            return contents && contents.id === window?.webContents.id ? browserPane?.state() ?? null : null;
+        },
+    });
+    // Browser/UI facts this window owns change genie-host's features: its pane is said, and the features read again.
+    const pushFeatures = () => {
+        for (const listener of localFeatureInvalidations) listener();
+        windowTunnel.refreshBrowser();
+        if (agentEngineLink?.live === true) void agentEngineLink.client.call('engine.features', ['invalidate', []]);
+    };
     requestFeaturePush = pushFeatures;
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
     // window not in front asks for attention (taskbar flash / urgency) WITHOUT taking focus (q_8c07b142).

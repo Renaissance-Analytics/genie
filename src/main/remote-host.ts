@@ -97,7 +97,8 @@ export interface HostApi {
     /** Release transient view state for this admitted connection; never an invocation from the wire. */
     releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
-    readonly gapps?: () => GAppsApi | null;
+    /** The GApp book; an app's window opens in the caller's own window (`context`, Tynn #898 step 2d-4b). */
+    readonly gapps?: (context?: CallContext) => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
     /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
     readonly tynnWatch?: TynnWatchPort;
@@ -1059,7 +1060,7 @@ export class RemoteHost {
 
         if (isGappMethod(method)) {
             if (!connection.local || !this.#connections.has(connection.id)) return refuse('GApp actions need this machine\'s own local window.');
-            try { return ok(await dispatchGapps(() => this.#api.gapps?.() ?? null, method.slice('gapps.'.length), args)); }
+            try { return ok(await dispatchGapps(() => this.#api.gapps?.(this.#callContext(connection)) ?? null, method.slice('gapps.'.length), args)); }
             catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
         }
         if (isMarketplaceMethod(method)) {

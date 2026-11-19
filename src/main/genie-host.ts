@@ -147,7 +147,8 @@ import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
 import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
-import { hostLocalPorts } from './host-local-ports.js';
+import { APP_WINDOW, hostLocalPorts } from './host-local-ports.js';
+import { ProtocolTunnels } from './protocol-tunnels.js';
 import { hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
 import { hostOwnerOps } from './host-owner-ops.js';
 import { LocalStagingArea } from './local-staging-area.js';
@@ -423,6 +424,19 @@ async function main(): Promise<void> {
     let engineRef: SessionEngineServer | null = null;
     let hostFeatures: HostFeatures | null = null;
     const featureCallers = new FeatureCallers(() => hostFeatures);
+    /*
+     * THIS MACHINE'S WINDOWS ARE SERVED HERE (Tynn #898 step 2d-4b): each window's protocol connection, tunnelled over its
+     * process's engine link, joins the remote hub below as this machine's own window. A tunnelled connection's feature
+     * effects (a page to open, a sign-in, the browser pane) are asked of the window process that owns it.
+     */
+    const protocolTunnels = new ProtocolTunnels({
+        onBound: (connectionId, binding, browser) => {
+            featureCallers.bindConnection(connectionId, binding.owner, (id, method, args) => (engineRef ? engineRef.featureEffect(binding.owner, id, method, args) : Promise.reject(new Error('Genie’s window link is not ready'))));
+            featureCallers.connectionBrowser(connectionId, browser);
+        },
+        onUnbound: (connectionId) => { featureCallers.unbindConnection(connectionId); },
+        onBrowser: (connectionId, browser) => { featureCallers.connectionBrowser(connectionId, browser); hostFeatures?.invalidate(); },
+    });
     const featureChanges = new Set<() => void>();
     const featureChanged = () => { for (const listener of featureChanges) listener(); };
     const approvals = new ApprovalQueue({
@@ -983,6 +997,7 @@ async function main(): Promise<void> {
         },
     });
     const remoteHub = transportHub(remoteListen.transport);
+    remoteHub.add(protocolTunnels);
     // THIS MACHINE'S KEY IS HERE (P3.4), and the relay that signs with it (Tynn #410).
     const workstationService = new WorkstationService({
         store: workstationKeyStore(join(home, 'workstation.json'), keychain),
@@ -1184,6 +1199,7 @@ async function main(): Promise<void> {
     });
     const engine = new SessionEngineServer({
         features: featureCallers,
+        protocol: protocolTunnels,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
         providerAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
@@ -1586,6 +1602,9 @@ async function main(): Promise<void> {
     approvals.onChange(phoneTouch);
     takeOverHost.onChange(phoneTouch);
     const phoneFiles = new FilesHost({
+        // DELETE GOES TO THE OS TRASH (Tynn #844), never an erase: Electron's, so a window on this machine does it (step
+        // 2d-4b, a window-local client operation). This host has confined the path; the window checks it again.
+        trash: async (absolutePath) => { if (!engineRef) throw new Error('Genie is still starting; try again in a moment'); await engineRef.windowOp(null, 'trash', [absolutePath]); },
         gitStatus: gitFileStatus,
         gitShowHead,
         gitTree: gitTreeStatus,
@@ -1832,6 +1851,12 @@ async function main(): Promise<void> {
             marketplace: () => marketplaceHost ?? null,
             gapps: () => (gappBook ? gappsApi(gappBook, gappAsk, gappPreviews ?? undefined) : null),
             onGappsChanged: (listener) => gappBook?.onChange(listener) ?? (() => {}),
+            // AN APP'S WINDOW (step 2d-4b): opened by the window that asked, in its own process. Anyone else is told where.
+            appWindow: async (context, packageId, preview) => {
+                const binding = context ? protocolTunnels.bindingOf(context.connectionId) : null;
+                if (!binding || !engineRef) throw new Error(APP_WINDOW);
+                await engineRef.windowOp(binding.owner, preview ? 'gapps.preview' : 'gapps.open', [packageId]);
+            },
             say,
         }),
             // ITS WATCHES (step 2d-3b): the file panel and the live Tynn tab, under genie-host's own owner on its hubs.

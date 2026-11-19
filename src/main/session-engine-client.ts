@@ -183,6 +183,8 @@ export class SessionEngineClient {
     #stopAllLeft: ((left: number) => void) | null = null;
     /** The spawn host's frames by profile (the host split, P2.1), and who hears the link come and go. */
     readonly #spawnListeners = new Map<string, Set<(frame: SpawnFrame) => void>>();
+    /** genie-host's frames for this window's tunnelled protocol connections (Tynn #898 step 2d-4b). */
+    readonly #protocolListeners = new Set<(event: import('./protocol-tunnels.js').TunnelEvent) => void>();
     readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
     /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
     readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
@@ -383,6 +385,14 @@ export class SessionEngineClient {
             case 'engine.callback':
                 this.#onCallback(payload as EngineCallback);
                 return;
+            case 'protocol.frame': {
+                const e = payload as { tunnel?: unknown; kind?: unknown; text?: unknown; reason?: unknown } | null;
+                if (!e || typeof e.tunnel !== 'string') return;
+                const event = e.kind === 'frame' && typeof e.text === 'string' ? { tunnel: e.tunnel, kind: 'frame' as const, text: e.text }
+                    : e.kind === 'closed' ? { tunnel: e.tunnel, kind: 'closed' as const, reason: typeof e.reason === 'string' ? e.reason : 'genie-host closed this connection' } : null;
+                if (event) for (const l of [...this.#protocolListeners]) l(event);
+                return;
+            }
             case 'spawn.frame': {
                 const p = payload as { profile?: unknown; frame?: unknown };
                 const listeners = typeof p?.profile === 'string' ? this.#spawnListeners.get(p.profile) : undefined;
@@ -551,6 +561,12 @@ export class SessionEngineClient {
             if (method === 'client.featureEffect') {
                 if (!this.#options.onFeatureEffect) throw new Error('this window answers no feature effects');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.onFeatureEffect(String(args[0]), String(args[1]), Array.isArray(args[2]) ? args[2] : []) };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
+            if (method === 'client.windowOp') {
+                if (!this.#options.onWindowOp) throw new Error('this window does no window operations');
+                reply = { kind: 'result', id, ok: true, value: (await this.#options.onWindowOp(String(args[0]), Array.isArray(args[1]) ? args[1] : [])) ?? null };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -1033,9 +1049,23 @@ export class SessionEngineClient {
     }
 
     /** One op on a tunnel of this window's protocol connections to genie-host's RemoteHost; false while not linked. */
-    protocolSend(_op: import('./protocol-tunnels.js').TunnelOp, _tunnel: string, _payload: unknown): boolean { throw new Error('2d-4b: not built'); }
+    protocolSend(op: import('./protocol-tunnels.js').TunnelOp, tunnel: string, payload: unknown): boolean {
+        const t = this.#transport;
+        if (t === null || this.#welcome === null) return false;
+        // A notification (id 0), as a spawn frame is: in order on the one socket, no result per frame.
+        t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.protocol', args: [op, tunnel, payload] }));
+        return true;
+    }
 
-    onProtocolFrame(_listener: (event: import('./protocol-tunnels.js').TunnelEvent) => void): () => void { throw new Error('2d-4b: not built'); }
+    /** Whether the link is up now (connected, its dump in): a tunnel opens only then. */
+    get linked(): boolean {
+        return this.#transport !== null && this.#welcome !== null;
+    }
+
+    onProtocolFrame(listener: (event: import('./protocol-tunnels.js').TunnelEvent) => void): () => void {
+        this.#protocolListeners.add(listener);
+        return () => { this.#protocolListeners.delete(listener); };
+    }
 
     /** The frames of genie-host's spawn-host child of `profile`. */
     onSpawnFrame(profile: string, listener: (frame: SpawnFrame) => void): () => void {

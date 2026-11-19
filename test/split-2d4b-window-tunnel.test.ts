@@ -169,7 +169,8 @@ describe('the tunnel on the engine link (genie-host side)', () => {
         expect(seen.closed.sort()).toEqual([0, 1]);
         expect(seen.heard[1]).toEqual([]);
         const toT1 = l.events.filter((e) => e.tunnel === 't1');
-        expect(toT1.some((e) => e.kind === 'frame')).toBe(false);
+        // The oversized frame never crosses; the window is told why (a refused frame), then the end.
+        expect(toT1.filter((e) => e.kind === 'frame').map((e) => JSON.parse((e as { text: string }).text) as unknown)).toEqual([{ kind: 'refused', reason: expect.stringMatching(/1 MiB/) }]);
         expect(toT1.at(-1)).toMatchObject({ kind: 'closed' });
         expect((toT1.at(-1) as { reason: string }).reason).toMatch(/1 MiB/);
     });
@@ -346,12 +347,15 @@ describe('main forwards its door’s connections over the tunnel (main side)', (
         await settle();
         seen.connections[0]!.send(JSON.stringify({ kind: 'welcome', connectionId: 'rc_7', host: 'box', isOwner: true, workspaceId: null }));
         await settle();
+        // genie-host binds at the welcome it sends, before main has seen it; main says the pane as soon as it has.
         expect(asked).toContain('rc_7');
-        expect(bound).toEqual([['rc_7', pane]]);
+        expect(bound).toEqual([['rc_7', null]]);
+        const first = pane;
+        expect(changed).toEqual([['rc_7', first]]);
         pane = { url: 'https://b.example.test/', canGoBack: true, canGoForward: false };
         bridge.refreshBrowser();
         await settle();
-        expect(changed).toEqual([['rc_7', pane]]);
+        expect(changed).toEqual([['rc_7', first], ['rc_7', pane]]);
     });
 });
 

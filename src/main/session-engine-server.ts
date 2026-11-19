@@ -506,6 +506,8 @@ export class SessionEngineServer {
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
+            // Every protocol connection this window process tunnelled ends with its link (the page reconnects).
+            if (was) this.#options.protocol?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
         });
     }
@@ -546,6 +548,12 @@ export class SessionEngineServer {
         if (message.kind === 'call') {
             // THE HEARTBEAT (Tynn #386): heard here, before any dispatch — cheap, no reply, no flush.
             if (message.method === 'engine.heartbeat') { this.#options.heartbeat?.beat(conn.id, message.args[0]); return; }
+            // THE WINDOW'S PROTOCOL FRAMES (Tynn #898 step 2d-4b): handed on here, in arrival order, never behind a slow call.
+            if (message.method === 'engine.protocol') {
+                this.#protocol(conn, message.args);
+                if (message.id !== 0) conn.transport.send(JSON.stringify({ kind: 'result', id: message.id, ok: true, value: null }));
+                return;
+            }
             void this.#call(conn, message.id, message.method, message.args);
             return;
         }
@@ -1028,11 +1036,38 @@ export class SessionEngineServer {
     }
 
     /** A batch or a git result of the file-watch hub, to the window (connection) that owns the views it is for. */
-    /** A feature effect for a tunnelled connection, to the window process that owns it. */
-    featureEffect(_owner: string, _connectionId: string, _method: string, _args: unknown[]): Promise<unknown> { return Promise.reject(new Error('2d-4b: not built')); }
+    /** One op of a window's tunnelled protocol connection (protocol-tunnels.ts): a LOCAL window's link only. */
+    #protocol(conn: Connection, args: unknown[]): void {
+        const [op, tunnel, payload] = args;
+        const send = (event: import('./protocol-tunnels.js').TunnelEvent) => { if (this.#connections.has(conn)) this.#event(conn, 'protocol.frame', event); };
+        if (!this.#options.protocol || conn.helper || !conn.local || !conn.window) {
+            if (typeof tunnel === 'string' && op !== 'close') send({ tunnel, kind: 'closed', reason: 'genie-host tunnels protocol connections for this machine’s own windows only' });
+            return;
+        }
+        this.#options.protocol.receive(conn.id, op, tunnel, payload, send);
+    }
 
-    /** What only a window can do (the trash, an app's window): to `owner`'s window, or with null any local window. */
-    windowOp(_owner: string | null, _op: string, _args: unknown[]): Promise<unknown> { return Promise.reject(new Error('2d-4b: not built')); }
+    /** A LOCAL window's link by its id; null when it is gone or is not one. */
+    #localWindow(owner: string): Connection | null {
+        return [...this.#connections].find((c) => c.id === owner && c.authed && c.window && c.local) ?? null;
+    }
+
+    /** A feature effect for a tunnelled connection (a page to open, a sign-in), to the window process that owns it. */
+    featureEffect(owner: string, connectionId: string, method: string, args: unknown[]): Promise<unknown> {
+        const conn = this.#localWindow(owner);
+        if (!conn) return Promise.reject(new Error('the caller’s own window is no longer connected'));
+        return this.#reverseTo(conn, 'client.featureEffect', [connectionId, method, args]);
+    }
+
+    /**
+     * WHAT ONLY A WINDOW CAN DO (Tynn #898 step 2d-4b): the OS trash, an app's window. To `owner`'s window process (the
+     * caller's), or with `null` to the newest local one: every window on this machine moves a file to the same trash.
+     */
+    windowOp(owner: string | null, op: string, args: unknown[]): Promise<unknown> {
+        const conn = owner === null ? [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1) ?? null : this.#localWindow(owner);
+        if (!conn) return Promise.reject(new Error(owner === null ? 'no Genie window is open on this machine' : 'the caller’s own window is no longer connected'));
+        return this.#reverseTo(conn, 'client.windowOp', [op, args]);
+    }
 
     /** A socket to another machine said something: to the window that opened it, and no other. */
     deviceEvent(owner: string, event: DeviceLinkEvent): void {
