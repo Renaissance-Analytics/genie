@@ -128,7 +128,7 @@ describe('the gate', () => {
     });
 
     it('the live view\'s change reads stay the window\'s own (CONTROL)', async () => {
-        await expect(gate(hostAloneApi(ports())).invoke('workspaces.tynnBoardChanges', ['tynn', {}, null, []])).rejects.toThrow('open Genie on alphar');
+        await expect(gate(hostAloneApi(ports())).invoke('workspaces.tynnBoardChanges', ['tynn', {}, 'c1', []])).rejects.toThrow('open Genie on alphar');
     });
 });
 

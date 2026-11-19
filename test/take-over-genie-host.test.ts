@@ -324,7 +324,7 @@ describe('the Pilot\'s Take Over window with no window here', () => {
 
     it('when a Pilot\'s Take Over window closes, the remote host can end the TUI', () => {
         const ended = vi.fn();
-        const api = gate(hostAloneApi(ports(term().api)), {}, { takeOverEnded: ended });
+        const api = gate(hostAloneApi(ports(term().api)), { takeOverEnded: ended });
         api.takeOverEnded?.('term_1');
         expect(ended).toHaveBeenCalledWith('term_1');
     });

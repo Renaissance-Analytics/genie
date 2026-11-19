@@ -47,7 +47,7 @@ async function openHost(alone: ((method: string, args: unknown[]) => Promise<unk
         hostName: 'alphar',
         // What genie-host owns itself (here: the updater's state, P5b).
         own: { 'updates.state': async () => ({ phase: 'idle', version: '2.0.0-beta.61' }) },
-        alone: alone ? { invoke: (method, args) => alone(method, args), onEvent: () => () => {}, workspaceOfAgent: () => null } : null,
+        alone: () => (alone ? { invoke: (method, args) => alone(method, args), onEvent: () => () => {}, workspaceOfAgent: () => null } : null),
     });
     return RemoteAccessHost.open({ home, hostName: 'alphar', api, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } }, now });
 }

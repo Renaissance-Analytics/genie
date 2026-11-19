@@ -262,7 +262,7 @@ describe('the gate', () => {
 
     it('a family not moved yet still says to open a window (CONTROL: this is not an open door)', async () => {
         const api = gate(hostAloneApi(ports(engine())));
-        await expect(api.invoke('workspaces.tynnBoardChanges', ['tynn', {}, null, []])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('workspaces.tynnBoardChanges', ['tynn', {}, 'c1', []])).rejects.toThrow('open Genie on alphar');
     });
 });
 
