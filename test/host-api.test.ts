@@ -418,19 +418,18 @@ describe('the phone’s files, attachments and wanted agents', () => {
 
 /**
  * A PHONE THAT OPENS A CHAT GETS ITS HISTORY (Tynn #862; the owner, 2026-11-18: an agent's messages "didn't appear until I
- * sent a message"). The phone's `agent.watch` asks the window for the agent's detail, and that first read is what asks
- * the engine for the ledger (session-engine-client `ledgerFor`): the answer is `rowsPending`, no rows. Only AFTER the
- * answer does genie-host mark the phone as watching and tell the window, in its status, that it wants this agent
- * (Tynn #662). A ledger the engine already held lands in that gap, while the window still wants nothing of the agent:
+ * sent a message"). The phone's `agent.watch` reads the agent's detail, and that first read is what asks the engine for
+ * the ledger (session-engine-client `ledgerFor`): the answer is `rowsPending`, no rows. Only AFTER the answer does the
+ * host record the phone as watching. A ledger the engine already held lands in that gap, while nobody wants the agent:
  * it was not even built, and nothing sent it again until the next change — the person's own send.
  *
- * The cure: when the wants GAIN an agent, the window pushes that agent's detail as it is now. Whatever changed before
- * the want reached it arrives, and nothing is sent for an agent nobody asked for.
+ * The cure: when a watch is recorded, the host API pushes that agent's detail as it is now. Whatever changed before the
+ * watch arrives, and nothing is sent for an agent nobody asked for. Driven here exactly as genie-host's RemoteHost drives
+ * its host API (remote-host.ts `#listen`: `wantsAgent`, and `onAgentsWanted` on an agent's first watch); no window relays
+ * anything since Tynn #898 step 2d-4b2.
  */
 describe('a phone that opens a chat gets its history (Tynn #862)', () => {
-    const STATUS = { host: 'alphar', url: null, unavailable: null, locked: false, pin: null, devices: [], connections: [], pairRequests: [] };
-    async function rig() {
-        const { RemoteAccessReplica } = await import('../src/main/remote-access-replica.js');
+    function rig() {
         const f = fakes();
         const scheduled: Array<() => void> = [];
         f.deps.schedule = (_ms, fn) => { scheduled.push(fn); return () => {}; };
@@ -438,57 +437,51 @@ describe('a phone that opens a chat gets its history (Tynn #862)', () => {
         f.deps.detailFor = (id) => (id === 'agent_a' ? { agent: { id }, rows: ledger, rowsPending: ledger.length === 0 } : null) as never;
         const api = buildHostApi(f.deps);
         const sent: Array<{ channel: string; payload: unknown }> = [];
-        const replica = new RemoteAccessReplica('alphar', async (method, args) => { if (method === 'event') sent.push({ channel: String(args[0]), payload: args[1] }); return true; });
-        // Wired exactly as window main wires it (main.ts).
-        const off = replica.forwardEvents((listener, options) => api.onEvent(listener, options));
+        const watched = new Set<string>();
+        const agentsWanted = new Set<(agentIds: readonly string[]) => void>();
+        const off = api.onEvent((channel, payload) => { if (channel.startsWith('agent:')) sent.push({ channel, payload }); }, {
+            wantsAgent: (agentId) => watched.has(agentId),
+            onAgentsWanted: (listener) => { agentsWanted.add(listener); return () => { agentsWanted.delete(listener); }; },
+        });
         const run = () => { for (const fn of scheduled.splice(0)) fn(); };
         const changed = (id: string) => { for (const l of f.listeners.agent) l(id); run(); };
-        const wants = (agents: string[]) => { replica.deliver({ kind: 'status', status: { ...STATUS, wants: { remote: true, all: false, agents, local: false } } } as never); run(); };
-        return { sent, changed, wants, off, setLedger: (rows: unknown[]) => { ledger = rows; } };
+        // A phone's watch, as RemoteHost records it: only an agent's FIRST watch tells the host API.
+        const watch = (id: string) => { const first = !watched.has(id); watched.add(id); if (first) for (const l of [...agentsWanted]) l([id]); run(); };
+        const unwatch = (id: string) => { watched.delete(id); run(); };
+        return { sent, changed, watch, unwatch, off, setLedger: (rows: unknown[]) => { ledger = rows; } };
     }
 
-    it('the ledger that landed before the window heard the phone wants the agent is sent the moment it hears it', async () => {
-        const r = await rig();
-        r.wants([]);
-        // The phone's watch read the detail (pending); the ledger lands before genie-host's status names the agent.
+    it('the ledger that landed before the phone’s watch was recorded is sent the moment it is', () => {
+        const r = rig();
+        // The phone's watch read the detail (pending); the ledger lands before the watch is recorded.
         r.setLedger([{ id: 'r1' }, { id: 'r2' }]);
         r.changed('agent_a');
         expect(r.sent).toEqual([]);
-        // The status arrives: the agent's detail, as it is NOW, crosses — with its rows.
-        r.wants(['agent_a']);
+        // The watch is recorded: the agent's detail, as it is NOW, crosses — with its rows.
+        r.watch('agent_a');
         expect(r.sent).toEqual([{ channel: 'agent:agent_a', payload: { agent: { id: 'agent_a' }, rows: [{ id: 'r1' }, { id: 'r2' }], rowsPending: false } }]);
         r.off();
     });
 
-    it('only an agent the wants GAINED is pushed: a status that names it again, or names nothing new, sends nothing; one that drops and re-adds it sends it again', async () => {
-        const r = await rig();
+    it('only an agent’s first watch pushes it: a second watch of it sends nothing; one dropped and watched again is sent again', () => {
+        const r = rig();
         r.setLedger([{ id: 'r1' }]);
-        // genie-host's first status, before any phone watches.
-        r.wants([]);
-        r.wants(['agent_a']);
+        r.watch('agent_a');
         expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a']);
-        r.wants(['agent_a']);
+        r.watch('agent_a');
         expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a']);
-        r.wants([]);
-        r.wants(['agent_a']);
+        r.unwatch('agent_a');
+        r.watch('agent_a');
         expect(r.sent.map((s) => s.channel)).toEqual(['agent:agent_a', 'agent:agent_a']);
         r.off();
     });
 
-    it('a status that did not say what it wants (the window’s first, or an older host’s) forwarded everything: nothing was dropped, so its first wants push nothing extra', async () => {
-        const r = await rig();
-        r.setLedger([{ id: 'r1' }]);
-        r.wants(['agent_a']);
-        expect(r.sent).toEqual([]);
-        r.off();
-    });
-
-    it('an agent nobody wants is still never built or sent; once wanted, it is pushed as it is, and its later changes flow as before', async () => {
-        const r = await rig();
-        r.wants(['agent_b']);
+    it('an agent nobody wants is still never built or sent; once wanted, it is pushed as it is, and its later changes flow as before', () => {
+        const r = rig();
+        r.watch('agent_b');
         r.changed('agent_a');
         expect(r.sent.filter((s) => s.channel === 'agent:agent_a')).toEqual([]);
-        r.wants(['agent_b', 'agent_a']);
+        r.watch('agent_a');
         r.setLedger([{ id: 'r1' }]);
         r.changed('agent_a');
         expect(r.sent.filter((s) => s.channel === 'agent:agent_a')).toHaveLength(2);

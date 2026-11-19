@@ -174,7 +174,10 @@ describe('the window asks for the notes again when it opens', () => {
         expect(src('src/renderer/local-session.ts')).toContain('notes: () => read((bridge) => bridge.updates.notes!()),');
         expect(src('src/renderer/remote-bridge.ts')).toContain("notes: () => read<UpdateState | null>('updates.notes')");
         expect(src('src/main/host-api.ts')).toContain("case 'updates.notes':");
-        expect(src('src/main/main.ts')).toContain('notes: () => updates!.refreshNotes(),');
+        // genie-host's answers carry it to its own updater (Tynn #898 step 2d-4b2: main builds no host API).
+        expect(src('src/main/genie-host.ts')).toContain('updates: remoteUpdatesPort(updatesService),');
+        expect(src('src/main/updates-host.ts')).toContain("notes: () => service.call('notes', [], caller) as Promise<UpdateState | null>,");
+        expect(src('src/main/updates-host.ts')).toMatch(/case 'notes':\n\s*return this\.#host\.refreshNotes\(\);/);
     });
 
     it('opening the update window calls it', () => {

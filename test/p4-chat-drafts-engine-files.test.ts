@@ -13,6 +13,7 @@ import { AgentStoresService } from '../src/main/agent-stores-host.js';
 import { ApprovalQueue } from '../src/main/approval-queue.js';
 import { AttentionStore } from '../src/main/attention-store.js';
 import { ChatDraftStore } from '../src/main/chat-draft-store.js';
+import { hostLocalPorts } from '../src/main/host-local-ports.js';
 import { InboxStore } from '../src/main/inbox-store.js';
 import { KnowledgeStore } from '../src/main/knowledge-store.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
@@ -65,11 +66,21 @@ async function rig(options: { idleMs?: number; size?: number } = {}) {
     };
     return { home, drafts, stores, bytes, ref, empty, opened, closed, control, legacyRead, frames, connect, call, open };
 }
-async function mainPort(f: Awaited<ReturnType<typeof rig>>, engine: SessionEngineClient): Promise<LocalDraftsStore> {
-    const path: string = '../src/main/engine-draft-files-client.js'; const { engineDraftsPort } = await import(path);
-    // Execute main's actual adapter; no second copy of the attachment routing policy.
-    const main = readFileSync('src/main/main.ts', 'utf8'), expression = main.match(/chatDrafts:\s*([^\r\n]+),\r?\n\s*files:/)?.[1]; expect(expression).toBeTruthy();
-    return new Function('engineDraftsPort', 'drafts', 'agentEngineLink', `return (${expression});`)(engineDraftsPort, engine.stores().drafts, { client: engine }) as LocalDraftsStore;
+/*
+ * The window's draft calls are genie-host's answers since Tynn #898 step 2d-4b2: main builds no host API, and its
+ * engine-link draft adapter went with it. genie-host's actual port (host-local-ports.ts) over the same store is what a
+ * window's door reads through; the parts of its sources the drafts never touch are refused if reached.
+ */
+function hostPort(f: Awaited<ReturnType<typeof rig>>): LocalDraftsStore {
+    const unused = () => { throw new Error('not a draft source'); };
+    const port = hostLocalPorts({
+        workspaces: () => [], workspacePath: () => null, files: unused as never, plugins: { dump: unused as never },
+        sendFromPerson: unused as never, drafts: f.drafts, terminals: () => null, trackCwd: () => false, terminalEnv: () => ({}),
+        marketplace: () => null, gapps: () => null, onGappsChanged: () => () => {}, say: () => {},
+    }).chatDrafts;
+    // genie-host hands its own store to these ports (genie-host.ts), never a copy of the attachment routing policy.
+    expect(readFileSync('src/main/host-local-ports.ts', 'utf8')).toMatch(/readFile: \(ref\) => sources\.drafts\.openFile\(ref\),/);
+    return port as LocalDraftsStore;
 }
 
 describe('7E host-owned bounded draft attachment reads', () => {
@@ -118,35 +129,31 @@ describe('7E host-owned bounded draft attachment reads', () => {
         const f = await rig({ idleMs: 25 }), c = await f.connect(), info = (await f.open(c))!; expect(f.opened).toHaveLength(1);
         await vi.waitFor(() => expect(f.closed).toHaveLength(1)); expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, 0, 1])).toMatchObject({ ok: false });
     });
-    it('main uses the bounded engine source on the actual door and never decodes the legacy whole-file response', async () => {
-        const f = await rig({ size: 2 * 1024 * 1024 + 17 }), engine = await f.connect();
-        const legacy = vi.spyOn(engine.stores().drafts, 'readFile').mockRejectedValue(new Error('whole-file attachment reads are forbidden'));
-        const port = await mainPort(f, engine), door = await resourceDoor(cleanups, {}, { chatDrafts: port }), c = await door.client();
+    it('genie-host’s port uses the bounded store source on the actual door and never the legacy whole-file read', async () => {
+        const f = await rig({ size: 2 * 1024 * 1024 + 17 });
+        const port = hostPort(f), door = await resourceDoor(cleanups, {}, { chatDrafts: port }), c = await door.client();
         const restored = await c.bridge.chatDrafts!.readFile(f.ref); expect(restored?.length).toBe(f.bytes.length); expect(hash(restored!)).toBe(hash(f.bytes));
-        expect(legacy).not.toHaveBeenCalled(); expect(f.legacyRead).not.toHaveBeenCalled(); expect(f.opened).toHaveLength(1); expect(f.closed).toHaveLength(1);
-        expect(f.frames.every(text => Buffer.byteLength(text) <= 1024 * 1024)).toBe(true);
-        expect(f.frames.map(text => JSON.parse(text)).some(m => m.kind === 'call' && m.method === 'engine.drafts.fileRead')).toBe(true);
+        expect(f.legacyRead).not.toHaveBeenCalled(); expect(f.opened).toHaveLength(1); expect(f.closed).toHaveLength(1);
         expect(await c.bridge.chatDrafts!.readFile(randomUUID())).toBeNull();
     });
-    it('an already-open engine handle belongs to its response even when blob.open never arrives', async () => {
-        const f = await rig(), engine = await f.connect(), port = await mainPort(f, engine), door = await resourceDoor(cleanups, {}, { chatDrafts: port }), raw = await door.raw();
+    it('an already-open store source belongs to its response even when blob.open never arrives', async () => {
+        const f = await rig(), port = hostPort(f), door = await resourceDoor(cleanups, {}, { chatDrafts: port }), raw = await door.raw();
         const body = resultValue<{ draftsContent: { ref: string; blob: string } }>(await raw.call('chatDrafts.readFile', [f.ref])).draftsContent;
         expect(f.opened).toHaveLength(1); expect(f.closed).toHaveLength(0);
         expect(resultValue(await raw.call('content.release', [body.ref]))).toEqual({ released: true }); expect(f.closed).toHaveLength(1);
         expect(await raw.call('blob.open', ['draft-file', body.blob])).toMatchObject({ kind: 'result', ok: false });
     });
-    it('response expiry releases a never-opened attachment handle on the still-live engine connection', async () => {
-        let now = 1000; const f = await rig(), engine = await f.connect(), port = await mainPort(f, engine), door = await resourceDoor(cleanups, { now: () => now }, { chatDrafts: port }), raw = await door.raw();
+    it('response expiry releases a never-opened attachment source', async () => {
+        let now = 1000; const f = await rig(), port = hostPort(f), door = await resourceDoor(cleanups, { now: () => now }, { chatDrafts: port }), raw = await door.raw();
         const body = resultValue<{ draftsContent: { ref: string; blob: string } }>(await raw.call('chatDrafts.readFile', [f.ref])).draftsContent;
         expect(f.opened).toHaveLength(1); now += LOCAL_UPLOAD_TTL_MS + 1;
         expect(await raw.call('blob.open', ['draft-file', body.blob])).toMatchObject({ kind: 'result', ok: false }); await vi.waitFor(() => expect(f.closed).toHaveLength(1));
-        expect(await engine.call('engine.ping', [])).toMatchObject({ ok: true });
     });
-    it('a local window closing during fileOpen cannot strand the late host handle', async () => {
-        const f = await rig(), engine = await f.connect(), port = await mainPort(f, engine), door = await resourceDoor(cleanups, {}, { chatDrafts: port }), c = await door.client();
+    it('a local window closing during the store’s open cannot strand the late source', async () => {
+        const f = await rig(), port = hostPort(f), door = await resourceDoor(cleanups, {}, { chatDrafts: port }), c = await door.client();
         let unblock!: () => void, entered!: () => void; const wait = new Promise<void>(resolve => { unblock = resolve; }), started = new Promise<void>(resolve => { entered = resolve; });
         f.control.beforeOpen = async () => { entered(); await wait; };
         const reading = c.bridge.chatDrafts!.readFile(f.ref); await started; c.close(); await expect(reading).rejects.toThrow(/connection|closed/i); unblock();
-        await vi.waitFor(() => { expect(f.opened).toHaveLength(1); expect(f.closed).toHaveLength(1); }); expect(await engine.call('engine.ping', [])).toMatchObject({ ok: true });
+        await vi.waitFor(() => { expect(f.opened).toHaveLength(1); expect(f.closed).toHaveLength(1); });
     });
 });

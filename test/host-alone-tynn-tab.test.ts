@@ -138,8 +138,10 @@ describe('the gate', () => {
 describe('the wiring', () => {
     const src = (path: string) => readFileSync(path, 'utf8');
 
-    it('the window and genie-host answer through the same code', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) expect(src(file), file).toContain('workspaceTynnApi(');
+    it('genie-host answers every client, this machine\'s window too, through that code; main answers none itself', () => {
+        expect(src('src/main/host-alone-api.ts')).toContain('workspaceTynnApi(');
+        // main builds no host API (Tynn #898 step 2d-4b2): its window is served by genie-host's.
+        expect(src('src/main/main.ts')).not.toContain('workspaceTynnApi(');
     });
 
     it('genie-host gives it its own account and its own page reader, the one a window\'s page reads go through', () => {

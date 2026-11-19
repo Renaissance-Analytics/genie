@@ -124,9 +124,11 @@ describe('C4 Marketplace over the existing admitted local frame protocol', () =>
         await marketplace.search('from page'); expect(f.marketplace.search).toHaveBeenCalledWith('from page', undefined);
         expect(pageBridge(preload)).toBe(bridge);
     });
-    it('composes the late-bound engine facade without adding a dedicated IPC handler', () => {
+    it('genie-host composes its own Marketplace into the answers, and main adds no dedicated IPC handler', () => {
+        // The window's protocol is served by genie-host (Tynn #898 step 2d-4b2), from the Marketplace it owns.
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/marketplace:\s*\(\)\s*=>\s*marketplaceHost \?\? null,/);
+        expect(readFileSync('src/main/host-local-ports.ts', 'utf8')).toMatch(/marketplace:\s*sources\.marketplace,/);
         const source = readFileSync('src/main/main.ts', 'utf8');
-        expect(source).toMatch(/marketplace:\s*\(\)\s*=>\s*agentEngineLink\?\.client\.marketplace\(\)/);
         expect(source).not.toMatch(/ipcMain\.handle\(['"]genie:marketplace/);
         expect(readFileSync('src/main/preload.ts', 'utf8')).toContain('LOCAL_FRAME_CHANNELS');
     });

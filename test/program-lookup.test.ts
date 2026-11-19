@@ -165,7 +165,8 @@ describe("a person's terminal and everyone else's", () => {
     });
 
     it('wired: the tab, Take Over, the scratch terminal and a remote person are personal; an agent is not', () => {
-        expect(/localTerminals: createNativeTerminalPort\(\{/.test(readFileSync('src/main/main.ts', 'utf8'))).toBe(true);
+        // The tab's port is genie-host's (Tynn #898 step 2d-4b2: main builds no host API); it opens through the native port.
+        expect(/localTerminals: createNativeTerminalPort\(\{/.test(readFileSync('src/main/host-local-ports.ts', 'utf8'))).toBe(true);
         for (const file of ['src/main/local-terminal-native.ts', 'src/main/take-over-host.ts', 'src/main/scratch-terminal.ts', 'src/main/host-api.ts']) expect(/personal: true/.test(readFileSync(file, 'utf8')), file).toBe(true);
         expect(readFileSync('src/main/mcp-tools-more.ts', 'utf8')).not.toMatch(/personal/);
     });

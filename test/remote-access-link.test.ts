@@ -61,8 +61,6 @@ beforeEach(async () => {
     });
     const service = new RemoteAccessService(access, {
         switch: { apply: async () => {}, restart: async () => {}, stop: async () => {} },
-        newestWindow: () => server.newestLocalWindow(),
-        windowEvent: () => {},
         send: (owner, event) => server.remoteAccessEvent(owner, event),
     });
     server = new SessionEngineServer({ token: TOKEN, build: 't', remoteAccess: service });
@@ -151,7 +149,9 @@ describe('with genie-host linked, the window starts no listener and opens no dev
     it('main.ts builds no tailnet listener', () => {
         expect(main).not.toMatch(/remoteListener\(/);
     });
-    it('compose.ts opens the device file only without genie-host', () => {
-        expect(compose).toMatch(/input\.remoteAccess\s*\?\s*DeviceStore\.memory\(/);
+    // A client serves no remote connection (Tynn #898 step 2d-4b2): compose opens no device store at all, host-less or not.
+    it('compose.ts opens no device file, with genie-host or without', () => {
+        expect(compose).not.toMatch(/DeviceStore/);
+        expect(compose).toMatch(/remote: input\.remoteAccess,/);
     });
 });

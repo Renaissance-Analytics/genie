@@ -80,11 +80,14 @@ describe('the wiring', () => {
         expect(src('src/main/session-engine-client.ts')).toMatch(/cloneOffers\(\)/);
     });
 
-    it('genie-host attaches the watcher to the service and serves it with no window; the window asks it over the engine link', () => {
+    it('genie-host attaches the watcher to the service and serves it to every client from its own answers', () => {
         const host = src('src/main/genie-host.ts');
         expect(host).toContain('cloneOffersService.attach(');
         expect(host).toMatch(/cloneOffers: cloneOffersService/);
-        expect(src('src/main/main.ts')).toMatch(/client\.cloneOffers\(\)/);
+        // The window's workspaces.cloneOffers is genie-host's answer now (Tynn #898 step 2d-4b2), not main asking the link.
+        expect(host).toMatch(/cloneOffers: \{ cloneOffers: \(id\) => cloneOffersService\.call\('list', \[id\]\), applyOffer: \(id, offerId\) => cloneOffersService\.call\('apply', \[id, offerId\]\) \}/);
+        expect(src('src/main/host-alone-api.ts')).toMatch(/workspaceLifecycleApi\([^\n]*, ports\.cloneOffers\)/);
+        expect(src('src/main/main.ts')).not.toMatch(/client\.cloneOffers\(\)/);
     });
 
     it('the window’s bridge asks for them over the local session and the remote bridge', () => {

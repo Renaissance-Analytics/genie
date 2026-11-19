@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
-import { TYPING_EVENT, type RemoteMethod } from '../src/core/remote-protocol.js';
+import { TYPING_EVENT, type RemoteMethod, type CallContext } from '../src/core/remote-protocol.js';
 import { hostAloneApi, HOST_ALONE_METHODS, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
 import { hostRemoteApi } from '../src/main/remote-access-host.js';
 import type { HostApi } from '../src/main/remote-host.js';
@@ -59,18 +59,12 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
     } as unknown as HostAlonePorts;
 }
 
-/** A connected window, which can push events of its own (its typing relay). */
-function connectedWindow() {
-    const listeners = new Set<(channel: string, payload: unknown) => void>();
-    return {
-        onEvent: (listener: (channel: string, payload: unknown) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        push: (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); },
-    };
+/** genie-host's remote API over its own answers. No window relays events into it (Tynn #898 step 2d-4b2). */
+function gate(alone: HostApi | null): HostApi {
+    return hostRemoteApi({ hostName: 'alphar', own: {}, alone: () => alone });
 }
-
-function gate(alone: HostApi | null, window: ReturnType<typeof connectedWindow>): HostApi {
-    return hostRemoteApi({ hostName: 'alphar', own: {}, onEvent: window.onEvent, alone: () => alone });
-}
+/** This machine's window, as genie-host's RemoteHost admits it through its tunnel (Tynn #898 step 2d-4b). */
+const THIS_WINDOW: CallContext = { connectionId: 'rc_window', origin: 'local-window', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'alphar' };
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie-split-2d1-'));
@@ -82,7 +76,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-describe('with a window connected, genie-host still answers what it owns', () => {
+describe('genie-host answers what it owns, every client alike', () => {
     it.each([
         ['snapshot', []],
         ['agents.setMode', ['ATLAS', 'automated']],
@@ -94,22 +88,19 @@ describe('with a window connected, genie-host still answers what it owns', () =>
     ] as const)('%s is answered by genie-host', async (method, rawArgs) => {
         const alone = hostAloneApi(ports(engine()));
         const invoke = vi.spyOn(alone, 'invoke');
-        const window = connectedWindow();
         const args = rawArgs.map((a) => (a === 'ATLAS' ? atlas.id : a));
-        await gate(alone, window).invoke(method as RemoteMethod, [...args]);
+        await gate(alone).invoke(method as RemoteMethod, [...args]);
         expect(invoke).toHaveBeenCalledWith(method, args, undefined);
     });
 
     it('a write lands in genie-host\'s registry (agents.setMode)', async () => {
-        const window = connectedWindow();
-        await gate(hostAloneApi(ports(engine())), window).invoke('agents.setMode', [atlas.id, 'automated']);
+        await gate(hostAloneApi(ports(engine()))).invoke('agents.setMode', [atlas.id, 'automated']);
         expect(registry.find(atlas.id)?.mode).toBe('automated');
     });
 
     it('every method genie-host owns is routed to it (the whole set, not a sample)', async () => {
         const alone = { invoke: vi.fn(async () => 'host'), onEvent: () => () => {}, workspaceOfAgent: () => null } as unknown as HostApi;
-        const window = connectedWindow();
-        const api = gate(alone, window);
+        const api = gate(alone);
         for (const method of HOST_ALONE_METHODS) expect(await api.invoke(method, [])).toBe('host');
     });
 });
@@ -118,35 +109,32 @@ describe('no call goes to a window (step 2d-2b)', () => {
     it.each(['host.home', 'host.listDir', 'openAgent', 'resolvePrompt'] as const)('%s is genie-host\'s too', async (method) => {
         const alone = hostAloneApi(ports(engine()));
         const invoke = vi.spyOn(alone, 'invoke');
-        await gate(alone, connectedWindow()).invoke(method, []).catch(() => null);
+        await gate(alone).invoke(method, []).catch(() => null);
         expect(invoke).toHaveBeenCalledWith(method, [], undefined);
     });
 
     it('while genie-host\'s own answers are still being built at boot, a call is told to try again (CONTROL)', async () => {
-        await expect(gate(null, connectedWindow()).invoke('snapshot', [])).rejects.toThrow(/still starting; try again in a moment/);
+        await expect(gate(null).invoke('snapshot', [])).rejects.toThrow(/still starting; try again in a moment/);
     });
 });
 
 describe('events: genie-host\'s own, for every remote client', () => {
-    it('with a window connected genie-host\'s events reach the listener, and the window\'s copies of them do not', () => {
-        const window = connectedWindow();
+    it('genie-host\'s events reach the listener: exactly one snapshot per change, its registry\'s estate', () => {
         const alone = hostAloneApi(ports(engine()));
         const snapshots: unknown[] = [];
-        gate(alone, window).onEvent((channel, payload) => { if (channel === 'snapshot') snapshots.push(payload); });
+        gate(alone).onEvent((channel, payload) => { if (channel === 'snapshot') snapshots.push(payload); });
         registry.touch();
-        window.push('snapshot', { from: 'the window' });
-        // Exactly one, and it is genie-host's (its registry's estate), not the window's copy.
         expect(snapshots).toHaveLength(1);
-        expect(snapshots[0]).not.toEqual({ from: 'the window' });
         expect((snapshots[0] as { agents: Array<{ id: string }> }).agents.map((a) => a.id)).toContain(atlas.id);
     });
 
-    it('what someone types in this machine\'s window still reaches remote clients (typing has no store behind it)', () => {
-        const window = connectedWindow();
+    it('what someone types in this machine\'s window reaches remote clients: the window is genie-host\'s connection, so genie-host publishes it', async () => {
         const seen: Array<[string, unknown]> = [];
-        gate(hostAloneApi(ports(engine())), window).onEvent((channel, payload) => { seen.push([channel, payload]); });
-        window.push(TYPING_EVENT, { agentId: atlas.id, text: 'hi' });
-        expect(seen).toEqual([[TYPING_EVENT, { agentId: atlas.id, text: 'hi' }]]);
+        const api = gate(hostAloneApi(ports(engine())));
+        api.onEvent((channel, payload) => { if (channel === TYPING_EVENT) seen.push([channel, payload]); });
+        await api.invoke('agents.typing', [atlas.id, 'hi', 'window-client'], THIS_WINDOW);
+        // This machine's own window is named by nobody (null), as before.
+        expect(seen).toEqual([[TYPING_EVENT, { agentId: atlas.id, text: 'hi', source: 'window-client', label: null }]]);
     });
 
     it('genie-host builds the activity feed with a window connected (a remote client reads it)', () => {

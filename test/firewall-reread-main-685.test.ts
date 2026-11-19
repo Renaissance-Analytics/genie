@@ -90,7 +90,7 @@ describe('main: remote.readFirewall rereads through the debounce, and answers wi
     let services: ComposedServices;
     beforeEach(async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie2-firewall-reread-'));
-        services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, hostName: 'alphar', remoteTransport: { onConnection: () => () => {} } });
+        services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, remoteHost: { hostName: 'alphar', transport: { onConnection: () => () => {} } } });
     });
     afterEach(async () => { await services.shutdown(); await rm(dir, { recursive: true, force: true }); });
 

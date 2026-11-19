@@ -976,7 +976,6 @@ async function main(): Promise<void> {
      * closed. The window's relay host (until P5d.3) bridges each relay connection it admits into this same remote host: one
      * baton, one lock. What this host owns is answered here; the rest by the newest local window, or refused with what to do.
      */
-    const remoteWindowEvents = new Set<(channel: string, payload: unknown) => void>();
     const remoteListen = remoteListener({
         // Found at each start, never by PATH: a Tailscale installed while Genie runs is not on this process's PATH (Tynn #749).
         tailscale: () => tailscaleCommand(['status', '--json'], 15_000),
@@ -1082,7 +1081,6 @@ async function main(): Promise<void> {
                 // The account chips (Tynn #895): this host's book, for every client, window or not.
                 ...accountsOwnAnswers(() => accountsPortNow) },
             takeOverEnded: (terminalId) => takeOverService.ended(terminalId),
-            onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
             // Every remote method and event, window or not (host-alone-api.ts; Tynn #898: none is sent to a window).
             alone: () => phoneApi,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
@@ -1097,8 +1095,6 @@ async function main(): Promise<void> {
     const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => { remoteAccessService?.pushStatus(); void relayHostService.apply(); } });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
-        newestWindow: () => engineRef?.newestLocalWindow() ?? null,
-        windowEvent: (channel, payload) => { for (const l of [...remoteWindowEvents]) l(channel, payload); },
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
     });
     settings.onChange((key, _value, workspaceId) => { if (key === 'remote_access' && workspaceId === undefined) void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`)); });

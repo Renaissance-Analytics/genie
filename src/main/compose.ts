@@ -1,48 +1,34 @@
 import { describeMcpTool, type McpToolRow } from '../core/mcp-tool-summaries.js';
 import { featureWorkspaceFiles } from './feature-workspace-files.js';
 import { flowPillSignals } from '../core/flow-pill-signals.js';
-import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
-import { hostname } from 'node:os';
-import { dirname, join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { AskerState } from '../core/deck-sources.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
-import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
+import { type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
-import { runV1InboxImport } from './v1-inbox.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
 import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
-import { OS_WORKSPACE } from '../core/os-agent.js';
-import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { inboxNotices } from './inbox-notices.js';
 import type { NoticeMail } from '../core/stream-event.js';
-import { isAppSender } from '../core/app-inbox.js';
 import type { AppEnvSource } from './app-inbox-service.js';
 import { configSync, type SyncResult } from '../core/integrations.js';
-import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep, type SyncSource } from '../core/agent-files-health.js';
-import { writeAgentGitignore } from './agent-gitignore.js';
-import { writeAgentRouters } from './agent-routers.js';
-import { writeAgentSkills } from './agent-skills.js';
-import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
+import { AgentFilesHealth, type AgentFilesReport, type SyncSource } from '../core/agent-files-health.js';
 import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
 import { agentTynnPrep } from './agent-tynn-prep.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
 import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type HostVault, type MigrationSource } from './keychain-migration.js';
 import { holdMigration, portsOf } from './migration-holds.js';
-import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginsReplica, type PluginsApi } from './plugins-replica.js';
 import { hostCatalog } from './genie-catalog.js';
 import type { ElementDefinition } from '../core/catalog.js';
 import type { Verification } from './mcp-server.js';
-import { Baton, PairingPins } from '../core/remote.js';
-import { PairApprovals } from '../core/pair-confirm.js';
 import { assembleDeckItems } from './deck-assembly.js';
-import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import type { AgentSessionsPort } from './flow-runner.js';
 import type { FlowScheduler } from './flow-scheduler.js';
@@ -56,8 +42,6 @@ import { runtimeDir } from './paths.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
-import { DeviceStore } from './remote-devices.js';
-import { RemoteHost, type HostApi } from './remote-host.js';
 import type { PairingView, RemoteAccessReplica, RemoteAccessView } from './remote-access-replica.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -165,17 +149,12 @@ export interface ComposeInput extends HostingOptions {
      * are never put to the real OS.
      */
     readonly pidAlive?: (pid: number) => boolean;
-    /** This machine's name as remote devices see it; the OS hostname by default. */
-    readonly hostName?: string;
-    /** Where remote connections come from (fancy-ws on a socket); none by default — nothing listens. */
-    readonly remoteTransport?: ServerTransport;
-    /** What a remote connection may perform here; main.ts wires the real one. Refuses everything by default. */
-    readonly remoteApi?: HostApi;
     /**
      * Remote access is genie-host's (Tynn #409, P5d.1): the paired devices, the PIN, the pair prompts, the baton and the lock.
-     * This window's remote host then serves its own protocol door only, with no devices; Settings reads the host's.
+     * A client is a dumb terminal and serves no remote connection (Tynn #898 step 2d-4b2): this window's protocol door
+     * tunnels to genie-host's RemoteHost, and Settings reads and drives the host's remote access through this replica.
      */
-    readonly remoteAccess?: RemoteAccessReplica;
+    readonly remoteAccess: RemoteAccessReplica;
     /**
      * A site's or a kept process's OWN app credential (genie#1345, main/app-inbox-service.ts): `GENIE_INBOX_URL` and
      * `GENIE_INBOX_TOKEN`, or nothing. Compose lays it over THAT site's env only — never the service env — and gives none
@@ -262,7 +241,6 @@ export interface ComposeAlone {
     readonly startFlows: typeof startFlowsEngine;
     supervisor(): ProcessSupervisor;
     approvals(options: ConstructorParameters<typeof ApprovalQueue>[0]): ApprovalQueue;
-    openDevices(options: Parameters<typeof DeviceStore.open>[1]): Promise<DeviceStore>;
 }
 type OwnStores = Awaited<ReturnType<typeof openAgentStores>>;
 
@@ -383,9 +361,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const iso = () => new Date(now()).toISOString();
     stage?.begin('runtime-directory');
     await mkdir(runtimeDir(input.userData), { recursive: true });
-    stage?.end(); stage?.begin('local-staging');
-    // No process discovery, staging directories or permission helper on the ready path. First use still verifies all of them.
-    const createLocalUploads = async () => (await LocalStagingArea.open(input.userData)).createConnection(now);
     stage?.end();
 
     // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
@@ -461,32 +436,10 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     });
     const approvals: WindowAgentStores['approvals'] = input.agentStores?.approvals ?? ownApprovals!;
 
-    const hostName = input.hostName ?? hostname();
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
     // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
     const pluginsDir = join(input.userData, 'plugins');
     const plugins: PluginsApi = input.plugins ?? new PluginsReplica(async () => false);
-    stage?.begin('remote-devices');
-    // Linked to genie-host: no devices here (one writer of remote-devices.json); the emergency path keeps its own, as always.
-    const remoteDevices = input.remoteAccess
-        ? DeviceStore.memory({ now, random: () => randomBytes(24).toString('base64url') })
-        : await input.alone!.openDevices({ now, random: () => randomBytes(24).toString('base64url') });
-    stage?.end();
-    // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
-    const pairing = new PairApprovals({ host: hostName, now });
-    const remote = new RemoteHost({
-        createLocalUploads,
-        api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
-        hostName,
-        baton: new Baton(),
-        // The PIN from the CSPRNG (PairingPins' default), as Genie 1's crypto.randomInt — not Math.random (genie#1346).
-        pins: new PairingPins({ now }),
-        devices: remoteDevices,
-        confirm: pairing,
-        transport: input.remoteTransport ?? { onConnection: () => () => {} },
-        now,
-        ...(input.build ? { build: input.build } : {}),
-    });
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
     // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA.
     stage?.begin('hosting');
@@ -654,8 +607,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             return workspaceTrust.view(workspace.id)?.trusted !== true;
         },
         approvals,
-        remote: input.remoteAccess ?? remote,
-        pairing: input.remoteAccess?.pairing ?? pairing,
+        remote: input.remoteAccess,
+        pairing: input.remoteAccess.pairing,
         // Read at each use (P5a.2): a host that comes back on a new port reaches this window.
         get frontDoorPort() { return hosting.frontDoorPort; },
         browserTrust: () => hosting.browserTrust(),
@@ -764,7 +717,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
                 clearTimeout(quitWait);
                 // And the flows file's last write has landed (a held record, the run in flight kept as it goes).
                 await ownFlows?.flushed();
-                await remoteDevices.flushed();
                 await ownHosting?.settled();
                 await sweeping;
                 ownStores?.knowledge.close();

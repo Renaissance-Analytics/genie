@@ -6,6 +6,8 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { runtimeDir } from '../src/main/paths.js';
+import { LocalStagingArea } from '../src/main/local-staging-area.js';
+import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.js';
 import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
@@ -20,13 +22,21 @@ async function homeFixture() {
     const home = await mkdtemp(join(tmpdir(), 'genie-p4-staging-home-')), tracker = composeTracker();
     const clients: Array<() => void> = [];
     // Own captures and promise-aware composition cleanup, even when an assertion fails or composition is pending.
-    cleanups.push(async () => { for (const close of clients) close(); await tracker.shutdownAll(); await rm(home, { recursive: true, force: true }); });
+    let access: RemoteAccessHost | null = null;
+    cleanups.push(async () => { for (const close of clients) close(); await tracker.shutdownAll(); await access?.close(); await rm(home, { recursive: true, force: true }); });
     const root = join(runtimeDir(home), 'local-staging');
     let accept!: (connection: ServerConnection) => void;
     let scheduledSweep: (() => Promise<void>) | undefined;
-    const start = () => {
+    /*
+     * A LOCAL CONNECTION STAGES ITS UPLOADS WITH GENIE-HOST (Tynn #898 step 2d-4b2): compose serves no connection; the window's
+     * is admitted by genie-host's RemoteAccessHost, which stages under the same home as genie-host does (genie-host.ts). The
+     * composition still owns the staging area's startup sweep.
+     */
+    const start = async () => {
+        access ??= await RemoteAccessHost.open({ home, hostName: 'composition-box', api: hostRemoteApi({ hostName: 'composition-box', own: {} }),
+            transport: { onConnection: (listener: (connection: ServerConnection) => void) => { accept = listener; return () => {}; } },
+            createLocalUploads: async () => (await LocalStagingArea.open(home)).createConnection(Date.now) });
         const input = { userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
-            remoteTransport: { onConnection: (listener: (connection: ServerConnection) => void) => { accept = listener; return () => {}; } },
             scheduleStagingSweep: (work: () => Promise<void>) => { scheduledSweep = work; return () => { if (scheduledSweep === work) scheduledSweep = undefined; }; } };
         return tracker.compose(input);
     };

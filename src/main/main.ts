@@ -4,12 +4,9 @@ import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
 import { guestAskNotice, newGuestAsks } from '../core/pair-confirm.js';
-import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
-import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
+import { type TynnBoardPorts } from './tynn-board-client.js';
 import type { readTynnPage } from './tynn-page-client.js';
-import type { BoardScope } from '../core/tynn-board.js';
-import { readTynnIssueChanges } from './tynn-issues-client.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
@@ -20,13 +17,11 @@ import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
-import { transportHub } from '../core/remote-protocol.js';
 import { agentDetailFor } from './agent-detail.js';
-import { shareLinksOver } from './tynn-share-links.js';
 import { browserConnectionFor } from '../core/browser-connection.js';
 import { drivablePages } from './page-navigation-electron.js';
 import { isGenHost } from './relay-site.js';
-import { connectableWorkstations, setWorkstationRole, type RelayHostStatus } from './tynn-network.js';
+import { type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
@@ -38,26 +33,24 @@ import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js'
 import { localProtocolDoor } from './local-protocol-door.js';
 import { tunnelDoor, tunnelLinkOf, windowOpsHandler } from './window-tunnel.js';
 import { guardWindowLinks } from './external-links.js';
-import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
-import { RELEASE_NOTES } from './release-notes.js';
+import { WHATS_NEW_ROUTE, genieDocsUrl } from '../core/whats-new.js';
 import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TakeOverReplica } from './take-over-replica.js';
 import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
-import { availableParallelism, homedir, hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
+import { type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
-import { AGENT_PUSH_INTERVAL_MS, wireInboxChatUpdates } from './agent-push.js';
+import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile } from 'node:fs/promises';
-import { agentOpsApi, agentOpsPorts } from './agent-ops-api.js';
+import { agentOpsPorts } from './agent-ops-api.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
 import { restartAgent, retryPausedAgents, SettingApplier } from './agent-ops-host.js';
-import type { WatchedReposView } from '../core/issue-watch.js';
 import { isAcpProvider } from '../core/engine.js';
 import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
 import { mailAction } from '../core/agent-actions.js';
@@ -72,10 +65,9 @@ import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, 
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { settleStaleLegacyPairing, tynnPairingSource, TynnAccount } from './tynn-account.js';
-import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
+import { TYNN_HOST } from '../core/tynn.js';
 import { githubSealedSources, GithubAccount } from './github-account.js';
 import type { GithubAccountReplica } from './github-account-replica.js';
-import type { RepoListing } from '../core/github.js';
 import { readGenie1Identity, workstationSealedSources } from './workstation-identity.js';
 import { type WorkstationPort } from './workstation-service.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
@@ -96,18 +88,12 @@ import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '..
 import { wordTynnRefusal } from './drone-refusal.js';
 import { appInboxCardState, restartAppSource } from './host-owner-ops.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
-import { buildHostApi } from './host-api.js';
 import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
-import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
-import { nodeWorkspaceFs } from './workspace-fs.js';
-import { nodeEnvelopePorts } from './envelope-fs.js';
-import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
-import { parseEnvelopePlan } from '../core/envelope-plan.js';
-import { mkdir, readdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
+import { registeredEnvFile, startRefusal } from './workspace-ops-host.js';
+import { mkdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { moveAgentFrontmatter, nodeAgentConfigFs } from './agent-config-host.js';
-import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
@@ -122,7 +108,6 @@ import { Session as InspectorSession } from 'node:inspector';
 import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
-import { providerBinary } from './session-host.js';
 import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { loginRoute, loginTerminalOf } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
@@ -132,20 +117,16 @@ import { HostRestart, HostWait } from './host-wait-window.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { DESIGN_LOGIN } from '../core/design-login.js';
-import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
+import { ActivityFeeds } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
-import { engineDraftsPort } from './engine-draft-files-client.js';
 import { composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
-import { featureReplica } from './feature-replica.js';
 import { featureWindow } from './feature-window.js';
-import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
 import { RemoteQuestions } from './remote-questions.js';
 import { readQuestionVisuals } from './question-visuals.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
-import { thisMachineWorkstationIds } from './this-machine.js';
 import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { readV1Inbox } from './v1-inbox.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
@@ -162,26 +143,15 @@ import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, t
 import { panelRestart } from '../core/panel-restart.js';
 import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { runCliRepair } from './cli-repair.js';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
-import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
-import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
-import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
-import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
-import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
-import { defaultPathEntries } from '../core/toolchain-defaults.js';
-import { goVersionsRoot, installGoVersion, listGoVersions, managedGo, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
-import { installPythonVersion, listPythonVersions, managedPython, pythonVersionsRoot, removePythonVersion, type PythonVersionsPorts } from './python-versions.js';
-import { dotnetVersionsRoot, installDotnetVersion, listDotnetVersions, managedDotnet, removeDotnetVersion, type DotnetVersionsPorts } from './dotnet-versions.js';
-import { installRustVersion, listRustVersions, managedRust, removeRustVersion, rustVersionsRoot, type RustVersionsPorts } from './rust-versions.js';
-import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, rubyVersionsRoot, type RubyVersionsPorts } from './ruby-versions.js';
-import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
-import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
+import { execFileRunner, execFileText } from './toolchain-runner.js';
+import { latestIndex, type CommandRunner } from './toolchain-prober.js';
+import { type Platform } from '../core/toolchain.js';
+import { ensurePhpCaBundle, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths } from './toolchain-ops.js';
+import { nodeLinkFs, restoreDefaultsEnv } from './toolchain-defaults.js';
 import { runElevatedBatch, type PrivilegedStep } from './elevate.js';
-import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
-import type { FeaturePorts } from './feature-ipc.js';
+import { nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { osPidAlive } from './process-supervisor.js';
 import { BrowserPane } from './browser-pane.js';
@@ -191,7 +161,6 @@ import { BrowserPagesReplica } from './browser-pages-replica.js';
 import type { BrowserPage } from './browser-service.js';
 import { rerouteGenieBrowserSession, watchWorkspaceStores, workspaceBrowserSession } from './genie-browser-electron.js';
 import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
-import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
@@ -211,18 +180,11 @@ import { FilesTreeKeeper } from './files-tree-keeper.js';
 import { fileExporter } from './file-export.js';
 import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
-import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf } from './repo-ops-host.js';
-import { workspaceSettingsOps } from './workspace-reads-api.js';
-import { workspaceTynnApi } from './workspace-tynn-api.js';
-import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
+import { workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteAccess } from './remote-access.js';
-import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
-import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
-import { uploadSender } from './uploads.js';
-import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
-import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
+import { gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { withActionSignal } from './mcp-signal.js';
 import type { Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
@@ -239,26 +201,23 @@ import type { AttentionStore } from './attention-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
-import type { GAppBookApi, GAppsApi } from '../core/gapps.js';
 import { gappWindowsElectron } from './gapp-windows-electron.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { TERMINAL_NEEDS_YOU } from '../core/terminal-surface.js';
 import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
-import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
-import { REMOTE_PORT } from '../core/tailscale.js';
+import { type PanelsHostDeps } from './official-panels-host.js';
 import type { AppInboxReplica } from './app-inbox-host.js';
 import { type AppSourceKind } from '../core/app-inbox.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
-import { nodeSaveGit, WORKSPACE_SAVE_UNAVAILABLE, workspaceSaveOps, type WorkspaceSaveOps } from './workspace-save-host.js';
+import { nodeSaveGit, workspaceSaveOps, type WorkspaceSaveOps } from './workspace-save-host.js';
 import { elementSourcesFor } from './workspace-save-sources.js';
 import { installContextMenu, type MenuWebContents } from './context-menu.js';
 import { nestGoverned } from '../core/rail-view.js';
 import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
-import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
 
 /**
  * THE MAIN PROCESS.
@@ -1233,8 +1192,6 @@ let keyring: LinuxKeyring | KeyringReplica | null = null;
 let registerWorkstationNow: (() => Promise<void>) | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
-/** Every Tynn workstation id this machine holds (this-machine.ts); replaced once the identity store is open. */
-let thisMachineIds: () => Promise<ReadonlySet<string>> = () => Promise.resolve(new Set(tynnWorkstationNow?.registered ? [tynnWorkstationNow.workstationId] : []));
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
@@ -1343,24 +1300,6 @@ const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); retur
 let browserPane: BrowserPane | null = null;
 /** Installed apps' windows (Tynn #595): this process opens them, on sessions the host mints. */
 let gappWindowsNow: ReturnType<typeof gappWindowsElectron> | null = null;
-/** Who to tell when the host's GApp book changes (Tynn #596): this window's pages, through whichever link is up. */
-const gappsChangedListeners = new Set<() => void>();
-let offGappsChanged: (() => void) | null = null;
-function followGappsChanged(client: { onGappsChanged(listener: () => void): () => void }): void {
-    const tell = () => { for (const listener of [...gappsChangedListeners]) listener(); };
-    offGappsChanged?.();
-    offGappsChanged = client.onGappsChanged(tell);
-    tell(); // A new link may have missed changes.
-}
-function withGappWindows(client: { gapps(): GAppBookApi } | undefined): GAppsApi | null {
-    if (!client) return null;
-    return {
-        ...client.gapps(),
-        open: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id); },
-        preview: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id, { preview: true }); },
-        onChanged: (listener) => { gappsChangedListeners.add(listener); return () => { gappsChangedListeners.delete(listener); }; },
-    };
-}
 /**
  * THE GENIE BROWSER IS ITS OWN PROCESS (the host split, P2b), asked through the host, which starts it. This window builds no
  * browser window, for this machine's sites or another workstation's (Tynn #585). The site panels are webviews here by design.
@@ -1410,7 +1349,6 @@ const phpCgiBase = (): PhpCgiPorts => ({
     ...phpVersionsBase(),
     toolchainPhp: { path: process.env['PATH'] ?? '', genieRoots: [join(app.getPath('userData'), 'toolchain'), toolchainDataDir()], cacheDir: join(toolchainDataDir(), 'php-opcache') },
 });
-const localFeatureInvalidations = new Set<() => void>();
 let featureEffectNow: ((connectionId: string, method: string, args: unknown[]) => Promise<unknown>) | null = null;
 /**
  * WINDOW-LOCAL CLIENT OPERATIONS genie-host asks of this window (Tynn #898 step 2d-4b; window-tunnel.ts): Delete moves a
@@ -1646,7 +1584,6 @@ async function boot(): Promise<void> {
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
-                followGappsChanged(client);
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
@@ -2271,10 +2208,9 @@ async function boot(): Promise<void> {
     /*
      * REMOTE ACCESS IS GENIE-HOST'S (Tynn #409, host split P5d.1): with genie-host linked, IT listens on the tailnet, pairs,
      * and holds the baton and the lock; this window starts no listener, opens no device store, and drives it through the
-     * replica. Its own remote host then serves its protocol door only.
+     * replica. It serves no protocol of its own: its door tunnels to genie-host's RemoteHost (Tynn #898 step 2d-4b).
      */
     const linkedRemote = agentEngineLink.client.remoteAccess();
-    const remoteHub = transportHub({ onConnection: () => () => {} });
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
@@ -2381,9 +2317,6 @@ async function boot(): Promise<void> {
         // an upgrade serves https://<name>.gen trusted with no prompt (main/gen-ca.ts). Genie 1's userData, and its mirror.
         v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],
         frontDoorPort: 0,
-        hostName: hostname(),
-        // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
-        remoteTransport: remoteHub,
         mcpEndpoint: () => mcpEndpointNow(),
         hostConfigSync: () => agentEngineLink?.client ?? null,
         // The account is opened after compose; private credentials are requested only when an agent starts.
@@ -2429,182 +2362,12 @@ async function boot(): Promise<void> {
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
         askerLive: askerLiveFrom({ known: () => askerLivenessKnown, engine: () => host, takeOvers: () => takeOvers }),
-        /*
-         * The common API for remote connections and migrated local families (§6.8, P4).
-         * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
-         */
+        // Remote access is genie-host’s (Tynn #409); this window drives it through the replica and serves no protocol itself.
         remoteAccess: linkedRemote,
-        remoteApi: (remoteApiNow = buildHostApi({
-            marketplace: () => agentEngineLink?.client.marketplace() ?? null,
-            gapps: () => withGappWindows(agentEngineLink?.client),
-            gappsChanged: { subscribe: (listener) => { gappsChangedListeners.add(listener); return () => { gappsChangedListeners.delete(listener); }; } },
-            // Following the Tynn tab, by subscription (P4 family 12, Tynn #561).
-            tynnWatch: tynnWatchPort,
-            localTerminals: createNativeTerminalPort({
-                terminals: () => terminals,
-                workspaces: () => registry?.snapshot().workspaces ?? [],
-                trackCwd: () => (services?.settings.snapshot() ?? {}).track_cwd,
-                environment: id => terminalEnvFor(services, id, mcpEnv()),
-                freshSnapshot: async id => {
-                    if (!terminals) return null;
-                    if (terminals.freshSnapshot) return terminals.freshSnapshot(id);
-                    const value = terminals.attach(id), position = terminals.streamSnapshot?.(id);
-                    return value ? { ...value, epoch: position?.epoch ?? null, endOffset: position?.endOffset ?? null } : null;
-                },
-                listen: (data, exit) => {
-                    const offData = terminals?.onData((id, text, position) => data({ id, data: text, ...(position ? { epoch: position.epoch, offset: position.offset } : {}) })) ?? (() => {});
-                    const offExit = terminals?.onExit((id, code, position) => exit({ id, exitCode: code, ...(position ?? {}) })) ?? (() => {});
-                    return () => { offData(); offExit(); };
-                },
-                openError: (path, error) => console.error(`[terminal] open failed in ${path}: ${error instanceof Error ? error.message : String(error)}`),
-            }),
-            // Take over from another machine (Tynn #529 part A): the TUI here, its window there; that window closing ends it.
-            takeOver: {
-                start: (agentId) => takeOverHere(agentId, { window: false }),
-                ended: (terminalId) => { takeOvers?.windowClosed(terminalId); },
-            },
-            filesWatch: {
-                exists: id => { const w = registry?.workspace(id); return !!w && w.asleep !== true; },
-                watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace && workspace.asleep !== true ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },
-                unwatch: viewId => { filesWatch?.unwatch(viewId); },
-                subscribe: listener => { filesEventListeners.add(listener); return () => { filesEventListeners.delete(listener); }; },
-            },
-            localOwner: {
-                appInbox: {
-                    state: (id) => appInboxState(id), workspaceExists: (id) => !!registry?.workspace(id),
-                    createKey: (id, name) => appInboxKeys.createScriptKey(id, name), scriptKeys: (id) => appInboxKeys.scriptKeys(id),
-                    revokeKey: (id) => appInboxKeys.revokeScriptKey(id), rotate: (kind, id) => appInboxKeys.rotate(kind, id),
-                    revokeSource: (source) => appInboxKeys.revokeSource(source), allowSource: (kind, id) => appInboxKeys.allowSource(kind, id),
-                    restartSource: (workspaceId, kind, id) => restartSource(workspaceId, kind, id),
-                },
-                deviceLink: {
-                    hosts: async () => (await deviceLinkNow()?.hosts()) ?? [],
-                    forget: async (url) => (await deviceLinkNow()?.forget(url)) ?? false,
-                    adopt: async (url, token) => (await deviceLinkNow()?.adopt(url, token)) ?? false,
-                },
-                tynnNetwork: {
-                    hasAccount: () => tynnAccount !== null, signedIn: () => tynnAccount?.status().signedIn === true, role: () => workstationRoleNow,
-                    workstations: async () => {
-                        const account = tynnAccount!;
-                        // Every identity this machine holds, not only this launch's registration (this-machine.ts).
-                        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
-                    },
-                    // Tynn decides a role change with a fresh authenticator code (genie#1278 W6).
-                    setRole: (id, role, code) => {
-                        const account = tynnAccount!;
-                        return setWorkstationRole((path, init) => account.request(path, init), id, role, code);
-                    },
-                    rereadRole: () => { void readWorkstationRoleNow?.(); },
-                    // Keep immediate revalidation of a revoked link's live guest session (audit M-c).
-                    shares: shareLinksOver({ request: shareRequest, workstation: ownWorkstation, endSessions: async () => { await agentEngineLink?.client.relayHost().revalidate(); } }),
-                },
-            },
-            // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
-            activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry?.listAgents() ?? [], workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
-            headroom: headroomFeed,
-            retryPausedAccount: (provider) => { retryPausedAccount?.(provider); },
-            // The account chips (Tynn #895): genie-host's book, asked over the engine link until this window's protocol
-            // connection ends at genie-host itself (client/host split step 2d).
-            accounts: {
-                list: async () => (await agentEngineLink?.client.accounts()) ?? null,
-                act: async (action) => (await agentEngineLink?.client.accountsAct(action)) ?? { ok: false, reason: 'Genie’s host is not connected yet; try again in a moment.' },
-                dismissOffer: async (id) => (await agentEngineLink?.client.dismissSwitchOffer(id)) ?? false,
-            },
-            snapshot: () => registry!.snapshot(),
-            subscribeSnapshot: (cb) => registry!.subscribe(cb),
-            subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
-            // Arrival and read receipts refresh both participants' watched chats over the same protocol source.
-            subscribeAgentChat: (cb) => wireInboxChatUpdates(composed.inbox, cb),
-            find: (id) => registry?.find(id as AgentId) ?? null,
-            detailFor: (id) => detailFor(id as AgentId),
-            cwdFor,
-            // A remote window's message starts the agent as the composer's does (q_04ce323c).
-            startForWork: (record) => startOnDemand(record),
-            startForYourMessage: (record) => startForYours(record),
-            // ANY FILE IN A MESSAGE (Tynn #829): one that is not an image or text, saved into the agent's workspace on this
-            // host. Trust is read now; not composed yet = not known = untrusted, refused.
-            saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(registry?.workspace(record.workspaceId), composedNow?.untrustedNow(record) ?? true), files, now: new Date() }),
-            host: {
-                start: (record, cwd) => host!.start(record, cwd),
-                stop: (id) => agentsUp().stop(id),
-                cancel: (id, intent) => agentsUp().cancel(id, 'you', intent),
-                resumeLimit: (provider, accountId) => agentsUp().resumeLimit(provider, accountId),
-                prompt: (id, text, by) => agentsUp().prompt(id, text, by),
-                // The composer's own attach path, for this window and a phone's photo (genie#1346).
-                promptWith: (id, text, attachments, by) => agentsUp().promptWith(id, text, attachments, by),
-                resolvePrompt: (id, promptId, action) => agentsUp().resolvePrompt(id, promptId, action),
-                answerApproval: (id, optionId, note) => agentsUp().answerApproval(id, optionId, note ?? ''),
-                subscribe: (cb) => host!.subscribe(cb),
-            },
-            // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
-            localFiles: { files: () => filesHost, editor: editorBytesDeps, repo: (op, id, rel, a, b) => repoCall(panelsHost(), op, id, rel, a, b) },
-            artboard: { read: id => artboardReadFiles(panelsHost(), id), review: (id, post, verdict, comment) => artboardReview(panelsHost(), id, post, verdict, comment) },
-            chatDrafts: engineDraftsPort(drafts, (method, args) => agentEngineLink?.client.call(method, args) ?? Promise.resolve({ ok: false, reason: 'The draft host is not connected.' })),
-            files: {
-                children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,
-                open: (workspaceId, path) => filesHost?.open(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
-                readBytes: (workspaceId, path) => filesHost?.readBytes(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
-                upload: (workspaceId, dir, name, bytes) => filesHost?.upload(workspaceId, dir, name, bytes) ?? Promise.resolve({ ok: false as const, reason: 'no files host' }),
-            },
-            registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
-            rosterChanged: () => registry?.touch(),
-            terminals: {
-                open: (options) => terminals!.open(options),
-                write: (id, data) => terminals!.write(id, data),
-                resize: (id, cols, rows) => terminals!.resize(id, cols, rows),
-                close: (id) => terminals!.close(id),
-                list: () => terminals!.list(),
-                attach: (id) => terminals!.attach(id),
-                onData: (cb) => terminals!.onData(cb),
-                onExit: (cb) => terminals!.onExit(cb),
-            },
-            // A remote device's upload (§6.8, genie#1354): its bytes go to the inbox as bytes — never a path on this host.
-            uploads: uploadSender({ resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
-            serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
-            workspaceOps: {
-                ...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage),
-                ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry?.touch(), (id, color) => setWorkspaceColor(id, color), {
-                    savePreview: (id) => (workspaceSaver ?? WORKSPACE_SAVE_UNAVAILABLE).savePreview(id),
-                    save: (id, choices) => (workspaceSaver ?? WORKSPACE_SAVE_UNAVAILABLE).save(id, choices),
-                }, {
-                    // The watcher lives in genie-host: the window asks it over the engine link (Tynn #756).
-                    cloneOffers: (id) => (agentEngineLink?.live === true ? agentEngineLink.client.cloneOffers().list(String(id)) : Promise.resolve(NO_OFFERS)),
-                    applyOffer: (id, offerId) => (agentEngineLink?.live === true ? agentEngineLink.client.cloneOffers().apply(String(id), String(offerId)) : Promise.resolve(NO_OFFERS)),
-                }),
-                // The live tab's reads (P4 family 12): what changed since a cursor, never the whole board or queue.
-                tynnBoardChanges: (id, scope, cursor, ids) => readTynnBoardChanges(tynnBoardPorts(), id, (scope ?? {}) as BoardScope, cursor, ids),
-                tynnIssueChanges: (id, filters, cursor, ids) => readTynnIssueChanges(tynnBoardPorts(), id, filters ?? {}, cursor, ids),
-                ...workspaceSettingsOps(() => services!.settings),
-                onSettingsChanged: (listener) => services!.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
-            },
-            agentOps: agentOpsApi(agentOps, () => registry?.touch(), () => host),
-            features: featureReplica(() => agentEngineLink!.client, context => {
-                const contents = localDoor.contentsFor(context.connectionId);
-                return contents && contents.id === window?.webContents.id ? browserPane?.state() ?? null : null;
-            }, listener => { localFeatureInvalidations.add(listener); return () => { localFeatureInvalidations.delete(listener); }; }),
-            updates: updates
-                ? {
-                      state: () => updates!.state(),
-                      check: () => updates!.check(),
-                      download: () => updates!.download(),
-                      forceDrain: () => updates!.forceDrain?.() ?? false,
-                      install: () => {
-                          const pending = updates!.install();
-                          return pending ? pending.then((done) => { console.log(`[updater] ${done.report}`); return { report: done.report }; }) : null;
-                      },
-                      notes: () => updates!.refreshNotes(),
-                      onChange: (cb) => updates!.onChange(cb),
-                  }
-                : null,
-        })),
     });
     services = composed;
-    // Genie-host's remote connections follow this window's events (the snapshot, features…) while it is the newest window.
-    if (remoteApiNow) {
-        const api = remoteApiNow;
-        linkedRemote.forwardEvents((listener, options) => api.onEvent(listener, options));
-        void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
-    }
+    // Settings → Remote access reads genie-host's status through the replica, from the first draw.
+    void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
     composedNow = composed;
     servicesComposed(composed);
     /*
@@ -2626,7 +2389,6 @@ async function boot(): Promise<void> {
     windowTunnelNow = windowTunnel;
     // Browser/UI facts this window owns change genie-host's features: its pane is said, and the features read again.
     const pushFeatures = () => {
-        for (const listener of localFeatureInvalidations) listener();
         windowTunnel.refreshWindow();
         if (agentEngineLink?.live === true) void agentEngineLink.client.call('engine.features', ['invalidate', []]);
     };
@@ -2724,9 +2486,6 @@ async function boot(): Promise<void> {
     // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
     // duplicate, on the next registration — once.
     const genie1Identity = async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), identityCipher);
-    // THIS MACHINE, ALL OF IT (this-machine.ts): this launch's registration, the identity Genie 2 stored for this Tynn,
-    // and the one Genie 1 registered from the userData Genie 2 shares — "Your workstations" never lists any of them.
-    thisMachineIds = () => machineIdentity.identity(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
     // THIS MACHINE'S STABLE KEY (genie#1278 W2): the OS machine id, never sent raw (machine-key.ts).
     const machineKey = (): Promise<string | null> => readMachineId({
         platform: process.platform,
@@ -3456,8 +3215,6 @@ function recordShutdownNow(): Promise<unknown> {
     });
 }
 
-/** This window's host API (§6.8, P4), for what genie-host asks it to do for a remote connection (Tynn #409). */
-let remoteApiNow: ReturnType<typeof buildHostApi> | null = null;
 let remoteAccessNow: ReturnType<typeof remoteAccess> | null = null;
 /** Tailscale on this machine as last read (Tynn #821): at boot and after every Connect or Install. */
 

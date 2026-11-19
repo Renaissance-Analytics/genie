@@ -74,9 +74,10 @@ describe('the wiring', () => {
         expect(src('src/main/agent-detail.ts')).toMatch(/manageTabs: record\.manageTabs === true/);
     });
 
-    it('a workspace setting changed in main reaches the windows (the tabs an agent made show at once)', () => {
+    it('a workspace setting changed on genie-host reaches the windows (the tabs an agent made show at once)', () => {
         const main = src('src/main/main.ts');
-        expect(main).toMatch(/onSettingsChanged: \(listener\) => services!\.settings\.onChange\(\(_key, _value, id\) => \{ if \(id\) listener\(id\); \}\)/);
+        // genie-host's answers hear its settings store (Tynn #898 step 2d-4b2: main builds no host API of its own).
+        expect(src('src/main/host-alone-api.ts')).toMatch(/onSettingsChanged: \(listener\) => ports\.settings\.onChange\(\(_key, _value, id\) => \{ if \(id\) listener\(id\); \}\)/);
         expect(src('src/main/host-api.ts')).toContain("deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id))");
         const preload = src('src/main/preload.ts');
         expect(preload).not.toContain('genie:workspace-settings-changed');

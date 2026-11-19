@@ -219,11 +219,12 @@ describe('the wiring', () => {
         expect(host).toMatch(/headroom: headroomFeed/);
     });
 
-    it('the window uses the same board and the same workspace filter', () => {
+    it('the window uses the same board, and every client’s lanes come through genie-host’s workspace filter', () => {
         const main = src('src/main/main.ts');
         expect(main).toContain('new HeadroomFeed(');
         expect(main).not.toContain('new HeadroomBoard(');
-        expect(main).toContain('activityOfWorkspace(');
+        // The window's protocol is served by genie-host (Tynn #898 step 2d-4b2): main filters no lanes of its own.
+        expect(main).not.toContain('activityOfWorkspace(');
         expect(src('src/main/host-alone-api.ts')).toContain('activityOfWorkspace(');
     });
 });

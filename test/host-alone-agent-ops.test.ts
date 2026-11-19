@@ -270,11 +270,12 @@ describe('the wiring', () => {
         expect(host).toMatch(/new Registry\(new HostRegistryStore\(\{ call: \(store, method, args\) => stores\.call\(store, method, args\)/);
     });
 
-    it('the window and genie-host answer through one adapter over one set of ports', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) {
-            expect(src(file)).toContain('agentOpsApi(');
-            expect(src(file)).toContain('agentOpsPorts(');
-        }
+    it('genie-host answers every client through the one adapter; the window keeps the same ports for its own restarts', () => {
+        expect(src('src/main/host-alone-api.ts')).toContain('agentOpsApi(');
+        expect(src('src/main/host-alone-api.ts')).toContain('agentOpsPorts(');
+        // main builds no host API (Tynn #898 step 2d-4b2): it answers no agent operation, and restarts through the ports.
+        expect(src('src/main/main.ts')).not.toContain('agentOpsApi(');
+        expect(src('src/main/main.ts')).toContain('agentOpsPorts(');
         expect(src('src/main/host-alone-api.ts')).not.toContain("windowOnly<HostApiDeps['agentOps']>");
     });
 
