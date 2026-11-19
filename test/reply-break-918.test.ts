@@ -105,7 +105,55 @@ describe('two replies are two rows (Tynn #918)', () => {
         }
     });
 
+    // A reply that ends in a code block or a list (the coordinator's review of #2088): the next reply is still its own.
+
+    it('a reply ending in a closed code block, a held row, then a new reply: two bubbles', () => {
+        const s = open();
+        s.send(delta('Run this:\n```bash\nnpm test\n'));
+        s.send(delta('```'));
+        s.emit(notice('task ended'));
+        s.send(delta('That runs the suite.'));
+        expect(s.bubbles()).toEqual(['Run this:\n```bash\nnpm test\n```', 'That runs the suite.']);
+    });
+
+    it('a reply ending in a list item, a held row, then a new reply: two bubbles, whatever ends the item', () => {
+        for (const item of ['- the Windows relaunch, in **#916**;', '- the local test, filed as a story.', '- the Windows git timeouts']) {
+            const s = open();
+            s.send(delta(`Tracked:\n${item}`));
+            s.send(subagentCall('toolu_create', 'mcp__tynn__create'));
+            s.emit(notice('task ended'));
+            s.send(delta('All three are in beta.65.'));
+            expect(s.bubbles()).toEqual([`Tracked:\n${item}`, 'All three are in beta.65.']);
+        }
+    });
+
     // CONTROLS: the cuts genie#1456 joins still join.
+
+    it('CONTROL: a cut mid-word inside a list item stays one reply (genie#1456)', () => {
+        for (const [a, b] of [['- the last C', 'I job.'], ['- call get', 'All() next'], ['- the Windows rel', 'aunch']] as const) {
+            const s = open();
+            s.send(delta(`Tracked:\n${a}`));
+            s.send(subagentCall('toolu_read', 'Read'));
+            s.send(delta(b));
+            expect(s.bubbles()).toEqual([`Tracked:\n${a}${b}`]);
+        }
+    });
+
+    it('CONTROL: inside an open code block nothing splits, sentence-like or not', () => {
+        const s = open();
+        s.send(delta('```ts\nconst done = check.'));
+        s.emit(notice('task progress'));
+        s.send(delta('All();\n```'));
+        expect(s.bubbles()).toEqual(['```ts\nconst done = check.All();\n```']);
+    });
+
+    it('CONTROL: a closed code block that goes on with its newline stays one reply', () => {
+        const s = open();
+        s.send(delta('```\nnpm test\n```'));
+        s.emit(notice('task progress'));
+        s.send(delta('\nThen push.'));
+        expect(s.bubbles()).toEqual(['```\nnpm test\n```\nThen push.']);
+    });
 
     it('CONTROL: a sentence that goes on after the rows (its space kept) stays one reply', () => {
         const s = open();
