@@ -153,6 +153,9 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('accounts.switch', 'refuse', ['claude']),
         // The tray's Log in by provider (Tynn #896, 2b-2b): the host owner's too.
         row('logins.provider', 'refuse', ['claude']),
+        // The crash report (Tynn #897, 2c-2): the host owner's.
+        row('crashReport.draft', 'refuse'),
+        row('crashReport.send', 'refuse', ['the report', 'my notes']),
     ],
     terminals: [
         row('terminals.open', 'allow', ['tynn', {}], [['fancy', {}]]),

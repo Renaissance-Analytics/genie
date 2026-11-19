@@ -1852,7 +1852,8 @@ async function main(): Promise<void> {
             tynnHost: TYNN_HOST,
             identity: async () => workstationService.identity(TYNN_HOST),
             authHeader: () => workstationService.authHeader(TYNN_HOST),
-            fetch: (url, init) => fetch(url, init),
+            // This machine's network (its roots and proxies), as the relay's calls to Tynn go.
+            fetch: (url, init) => relayFetch(url, init),
         }),
         // ANY FILE IN A MESSAGE (Tynn #829), with no window connected: saved into the agent's workspace on this host.
         saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(hostRegistry.workspace(record.workspaceId), hostUntrustedNow(record)), files, now: new Date() }),

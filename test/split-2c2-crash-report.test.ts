@@ -68,7 +68,7 @@ describe('crashReport.draft and crashReport.send are the host’s, for every cli
             const c = crashDeps();
             let drafted = 0;
             const inner = buildHostApi({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, crashReports: { ...c.crashReports, draft: () => { drafted += 1; return c.crashReports.draft(); } } } as unknown as HostApiDeps);
-            const api: HostApi = { invoke: (m, a, ctx) => inner.invoke(m, a, ctx), onEvent: () => () => {}, workspaceOfAgent: () => 'ws_a' } as unknown as HostApi;
+            const api: HostApi = { invoke: (m: RemoteMethod, a: unknown[], ctx?: CallContext) => inner.invoke(m, a, ctx), onEvent: () => () => {}, workspaceOfAgent: () => 'ws_a' } as unknown as HostApi;
             let accept: (c: ReturnType<typeof inMemoryPair>['server']) => void = () => {};
             new RemoteHost({ api, hostName: 'alphar', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing,
                 transport: { onConnection: (l) => { accept = l; return () => {}; } } });
@@ -105,7 +105,7 @@ describe('genie-host builds the report from its own pieces; every bridge asks it
 
     it('the wire bridge asks crashReport.draft / crashReport.send, so another machine’s owner has it too', () => {
         const remote = code(src('src/renderer/remote-bridge.ts'));
-        expect(remote).toMatch(/crashReport: \{\s*draft: \(\) => answer<\{ text: string \}>\('crashReport\.draft'\)/);
+        expect(remote).toMatch(/crashReport: \{\s*draft: async \(\) => \{ const r = await answer<\{ text: string \}>\('crashReport\.draft'\)/);
         expect(remote).toMatch(/send: \(text, notes\) => answer<CrashReportAnswer>\('crashReport\.send', text, notes\)/);
         expect(code(src('src/renderer/bridge.ts'))).toMatch(/crashReport: local\.crashReport/);
     });

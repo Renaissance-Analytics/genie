@@ -504,7 +504,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         switchAccount: (provider, choose) => answer<SignInResult>('accounts.switch', provider, choose ?? null),
         // The banner's crash report (Tynn #897, 2c-2): genie-host's, for its owner, from any machine.
         crashReport: {
-            draft: () => answer<{ text: string }>('crashReport.draft'),
+            draft: async () => { const r = await answer<{ text: string }>('crashReport.draft'); return 'text' in r ? r : { text: '' }; },
             send: (text, notes) => answer<CrashReportAnswer>('crashReport.send', text, notes),
         },
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
