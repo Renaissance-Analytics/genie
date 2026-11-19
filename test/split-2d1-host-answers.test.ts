@@ -138,11 +138,14 @@ describe('events: genie-host\'s own, for every remote client', () => {
     it('with a window connected genie-host\'s events reach the listener, and the window\'s copies of them do not', () => {
         const window = connectedWindow();
         const alone = hostAloneApi(ports(engine()));
-        const seen: string[] = [];
-        gate(alone, window).onEvent((channel) => { seen.push(channel); });
+        const snapshots: unknown[] = [];
+        gate(alone, window).onEvent((channel, payload) => { if (channel === 'snapshot') snapshots.push(payload); });
         registry.touch();
         window.push('snapshot', { from: 'the window' });
-        expect(seen.filter((c) => c === 'snapshot')).toHaveLength(1);
+        // Exactly one, and it is genie-host's (its registry's estate), not the window's copy.
+        expect(snapshots).toHaveLength(1);
+        expect(snapshots[0]).not.toEqual({ from: 'the window' });
+        expect((snapshots[0] as { agents: Array<{ id: string }> }).agents.map((a) => a.id)).toContain(atlas.id);
     });
 
     it('what someone types in this machine\'s window still reaches remote clients (typing has no store behind it)', () => {
@@ -155,7 +158,8 @@ describe('events: genie-host\'s own, for every remote client', () => {
 
     it('genie-host builds the activity feed with a window connected (a remote client reads it)', () => {
         const e = engine(), clock = timers();
-        const api = hostAloneApi(ports(e, { schedule: clock.schedule }));
+        // Told a window is connected, as genie-host used to be: it builds the feed anyway (an older build built none).
+        const api = hostAloneApi(ports(e, { schedule: clock.schedule, windowConnected: () => true }));
         api.onEvent(() => {}, { wantsAgent: () => false });
         e.emit(atlas.id);
         clock.run();
