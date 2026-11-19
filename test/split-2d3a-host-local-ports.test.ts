@@ -78,6 +78,7 @@ function sources(over: Partial<HostLocalSources> = {}) {
     const marketplace = { search: async () => ({ packages: [], nextCursor: null }), prepare: async () => ({}), install: async () => ({ id: 'p', version: '1' }), discard: async () => {} };
     const s: HostLocalSources = {
         workspaces: () => [{ id: 'tynn', path: tynnPath }],
+        workspacePath: (id) => (id === 'tynn' ? tynnPath : null),
         files: () => ({ open: async (w: string, p: string) => { calls.push(['open', w, p]); return { ok: true, path: p, text: 'x', sha: 's' }; } }) as never,
         plugins: {
             dump: () => ({
@@ -155,7 +156,9 @@ describe('genie-host answers the local families itself', () => {
     });
 
     it('CONTROL, moves at 2d-3b: the owner operations are not genie-host\'s yet', async () => {
-        await expect(hostRemoteApi({ hostName: 'alphar', own: {}, alone: hostAloneApi(ports()) }).invoke('appInbox.state', ['tynn'])).rejects.toThrow('open Genie on alphar');
+        // genie-host always has its share links, so its owner operations exist: only these are not its yet.
+        const alone = hostAloneApi(ports({ shares: { list: async () => ({ ok: true, links: [] }), mint: async () => ({ ok: false, reason: 'x' }), revoke: async () => ({ ok: true }) } }));
+        await expect(hostRemoteApi({ hostName: 'alphar', own: {}, alone }).invoke('appInbox.state', ['tynn'])).rejects.toThrow('open Genie on alphar');
     });
 });
 
