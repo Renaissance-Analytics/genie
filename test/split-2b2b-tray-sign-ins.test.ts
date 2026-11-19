@@ -16,6 +16,7 @@ import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { tunnelDoor, tunnelLinkOf } from '../src/main/window-tunnel.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /*
  * CLIENT/HOST SPLIT STEP 2b-2b, THE TRAY'S LOG IN (Tynn #898, story #896, task #1427). The coordinator's design
@@ -89,7 +90,7 @@ async function hostAndTray(signIns: Record<string, unknown>) {
         host: { subscribe: none }, terminals: { onData: none, onExit: none, list: () => [] },
         features: {}, updates: null, workspaceOps: {}, agentOps: {}, signIns,
     } as unknown as HostApiDeps);
-    const access = await RemoteAccessHost.open({ home, hostName: 'box', api: hostRemoteApi({ hostName: 'box', own: {}, alone, workspaceOfAgent: () => null }), transport: hub, now: () => 1_000_000 });
+    const access = await RemoteAccessHost.open({ home, hostName: 'box', api: hostRemoteApi({ hostName: 'box', own: {}, alone, workspaceOfAgent: () => null }), transport: hub, now: () => 1_000_000, confirm: allowEveryPairing });
     cleanups.push(async () => { await access.close(); await rm(home, { recursive: true, force: true }); });
     const server = new SessionEngineServer({ token: TOKEN, build: 't', protocol: tunnels });
     const [hostSide, windowSide] = memoryPair();
