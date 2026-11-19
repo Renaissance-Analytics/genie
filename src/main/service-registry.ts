@@ -8,7 +8,7 @@ import { chooseEngines, containerNameOf, CUSTOM_KINDS, dataVolumeOf, engineKindO
 import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
 import { workspaceDnsName, workspaceSqlIdentifier } from '../core/v1-services.js';
 import { runtimeDir } from './paths.js';
-import type { ServiceDriver } from './service-driver.js';
+import type { ContainerState, ServiceDriver } from './service-driver.js';
 import { makePrivate, PRIVATE_FILE, readJson, writeJsonAtomic } from './store.js';
 
 /**
@@ -700,7 +700,7 @@ export class ServiceRegistry {
         return this.choices(workspaceId).find((c) => c.kind === kind) ?? { kind, chosen: null, candidates: [] };
     }
 
-    status(id: string): Promise<{ state: 'running'; since: string } | { state: 'exited' } | { state: 'absent' }> {
+    status(id: string): Promise<ContainerState> {
         return this.#driver.status(this.#nameOf(id));
     }
 

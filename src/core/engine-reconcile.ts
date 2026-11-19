@@ -23,14 +23,18 @@ import type { ServiceInstance } from './services.js';
  */
 
 export type DockerAvailability = { ok: true; version: string } | { ok: false; reason: string };
-export type ContainerState = 'running' | 'exited' | 'absent';
+/**
+ * A container's state as Docker said it, or `{ unknown }`: Genie could not ask (Tynn #922: the spawn host lost mid-call,
+ * a timeout, the daemon refusing), with the words. Never read as absent: nothing is started, removed or advised on it.
+ */
+export type ContainerState = 'running' | 'exited' | 'absent' | { readonly unknown: string };
 /** What the Services tab shows for an instance: Docker's state, or that Docker itself is not there to ask. */
-export type EngineStatus = ContainerState | 'docker-not-running';
+export type EngineStatus = 'running' | 'exited' | 'absent' | 'unknown' | 'docker-not-running';
 
 export interface EngineStatusView {
     readonly instance: ServiceInstance;
     readonly status: EngineStatus;
-    /** Present only when Docker is not running: Docker's own reason (daemon down vs. not installed). */
+    /** Docker's own reason when it is not running (daemon down vs. not installed), or why the state is unknown (Tynn #922). */
     readonly note?: string;
 }
 
@@ -101,7 +105,10 @@ export async function engineStatuses(ports: EnginePorts): Promise<EngineStatusVi
     if (instances.length === 0) return [];
     const docker = await ports.available();
     if (!docker.ok) return instances.map((instance): EngineStatusView => ({ instance, status: 'docker-not-running', note: docker.reason }));
-    return Promise.all(instances.map(async (instance): Promise<EngineStatusView> => ({ instance, status: await ports.state(instance.id) })));
+    return Promise.all(instances.map(async (instance): Promise<EngineStatusView> => {
+        const state = await ports.state(instance.id);
+        return typeof state === 'object' ? { instance, status: 'unknown', note: state.unknown } : { instance, status: state };
+    }));
 }
 
 /** Running per Docker AND answering on its port, polled until the bound. */
@@ -124,6 +131,8 @@ export async function reconcileEngines(ports: ReconcilePorts, bound: ReadinessBo
         instances.map(async (i): Promise<EngineOutcome> => {
             if (stopped.has(i.id)) return { id: i.id, outcome: 'person-stopped' };
             const state = await ports.state(i.id);
+            // Genie could not ask Docker (Tynn #922): nothing is started, and the engine is not called gone.
+            if (typeof state === 'object') return { id: i.id, outcome: 'failed', reason: `${label(i)}: its state could not be read (${state.unknown}); nothing was changed` };
             if (state !== 'running' && ports.asleepOnly?.(i) === true) return { id: i.id, outcome: 'asleep' };
             if (state !== 'running' && unusedAdopted(i)) return { id: i.id, outcome: 'unused', reason: `${label(i)}: taken over from Genie 1, but no workspace uses it; left stopped` };
             if (state === 'running') {
