@@ -1,3 +1,4 @@
+import { sliceStateOf, type SliceState } from './slice-state.js';
 import { type BoardLiveSignal, BOARD_API, BOARD_CLAIMS, BOARD_LIVE, initialsOf, LIVE_QUIET_MS, parseClaims, type BoardClaim, type BoardClaims, type BoardOp, type BoardRefusal, type TynnBoardHost } from './tynn-board.js';
 import { parseFeatures, type FeaturesView } from './tynn-features.js';
 import { issuesQueryPath, normalizeIssueFilters, parseIssueQueue, type IssueQueueView } from './tynn-issues.js';
@@ -25,7 +26,8 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
     { id: 'issues', icon: 'sparkles', label: 'Issues' },
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
-    { id: 'vip', icon: 'flame', label: 'VIP' },
+    // Tynn PM-3 (#929): a VIP is a hotfix version now. The page keeps its id until G-1 removes it (spec §11).
+    { id: 'vip', icon: 'flame', label: 'Hotfix' },
     { id: 'releases', icon: 'rocket', label: 'Releases' },
     { id: 'features', icon: 'layout-grid', label: 'Features' },
 ];
@@ -134,6 +136,8 @@ export interface WipStory {
     readonly number: string | null;
     readonly title: string;
     readonly status: string;
+    /** The story's Slice state (Tynn #933): Tynn's `state`, or its legacy status mapped (sliceStateOf). */
+    readonly state: SliceState | null;
     readonly description: string | null;
     readonly taskCount: number;
     readonly tasksDone: number;
@@ -200,6 +204,7 @@ function wipStory(row: Row): WipStory | null {
         number: n === null ? null : `#${n}`,
         title: str(row.title) ?? '',
         status,
+        state: sliceStateOf(row),
         description: str(row.description),
         taskCount: total,
         tasksDone: done,

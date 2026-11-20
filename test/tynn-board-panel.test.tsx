@@ -37,7 +37,7 @@ describe('the tab', () => {
 describe('the board', () => {
     it('draws tynn.ai\'s columns and cards; titles are text, never markup', () => {
         const html = renderToStaticMarkup(<TynnBoardPanel state={{ state: 'ready', view: STORIES }} onScope={noop} onAction={noop} />);
-        for (const label of ['Backlog', 'Blocked', 'In progress', 'QA', 'Done']) expect(html).toContain(label);
+        for (const label of ['Proposed', 'Blocked', 'Running', 'Awaiting review', 'Accepted']) expect(html).toContain(label);
         expect(html).toContain('Ship &lt;the&gt; board');
         expect(html).toContain('#7');
         expect(html).toMatch(/data-tynn-card="s1"/);
@@ -45,7 +45,7 @@ describe('the board', () => {
 
     it('offers the card\'s next step as an icon named for what it does, and says an empty column is empty', () => {
         const html = renderToStaticMarkup(<TynnBoardPanel state={{ state: 'ready', view: STORIES }} onScope={noop} onAction={noop} />);
-        expect(html).toMatch(/data-tynn-step="story.start"[^>]*aria-label="Start"|aria-label="Start"[^>]*data-tynn-step="story.start"/);
+        expect(html).toMatch(/data-tynn-step="story.start"[^>]*aria-label="Run"|aria-label="Run"[^>]*data-tynn-step="story.start"/);
         expect(html).toContain('No stories');
     });
 
