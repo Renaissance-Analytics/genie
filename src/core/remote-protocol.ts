@@ -194,6 +194,14 @@ export const REMOTE_METHODS = [
     'questions.files',
     'questions.file',
     'questions.visuals',
+    // A remote window's transport to ANOTHER machine (Tynn #941, 2f-2): genie-host's device link, owned by the calling
+    // connection; its frames, closes and steps come back as LOCAL_EVENTS.device to that connection alone, a frame in
+    // pieces (core/device-frames.ts). openBrowser: this machine's browser on the caller's relay channel's workstation.
+    'deviceLink.open',
+    'deviceLink.openRelay',
+    'deviceLink.send',
+    'deviceLink.close',
+    'deviceLink.openBrowser',
     ...LOCAL_FILES_METHODS,
     ...LOCAL_DRAFT_METHODS,
     ...LOCAL_ARTBOARD_METHODS,
@@ -215,7 +223,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
  * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -231,7 +239,11 @@ export interface CompanionEvent { readonly revoked: string }
 /** `viewOnly` (Tynn #732): the person at the host set this window's person to watch only; absent = full control. */
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null; readonly viewOnly?: true }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot', typing: 'local-typing' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot', typing: 'local-typing',
+    // A window's channels to another machine (Tynn #941, 2f-2): sent to the owning connection alone (RemoteHost eventTo).
+    device: 'local-device',
+    // The host's Deck, to a connection that said deck.watch (main's question window and tray, Tynn #941), when it changes.
+    deck: 'local-deck' } as const;
 
 /** What another window on an agent is typing (Tynn #730), to a remote connection; this machine's windows hear LOCAL_EVENTS.typing. */
 export const TYPING_EVENT = 'agent-typing';
@@ -395,6 +407,11 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'questions.files': 'read',
     'questions.file': 'read',
     'questions.visuals': 'read',
+    'deviceLink.open': 'local',
+    'deviceLink.openRelay': 'local',
+    'deviceLink.send': 'local',
+    'deviceLink.close': 'local',
+    'deviceLink.openBrowser': 'local',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,

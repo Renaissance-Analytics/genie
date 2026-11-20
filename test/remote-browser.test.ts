@@ -167,21 +167,22 @@ describe('the Electron half, from source', () => {
         expect(count(win, /guardSession\(ses,/g)).toBe(3);
     });
 
-    it('main decides by the window that asked: the sender’s remote URL and its relay channels, never an argument', () => {
+    it('main decides by the window that asked: only this machine’s own windows open this machine’s browser, never by an argument', () => {
         const handler = /ipcMain\.handle\('genie:browser-window-open'[\s\S]*?\n {4}\}\);/.exec(main)?.[0] ?? '';
-        expect(handler).toMatch(/browserConnectionFor\(\{/);
+        expect(handler).toMatch(/browserConnectionFor\(\{ remoteUrl, relays: \[\] \}\)/);
         expect(handler).toMatch(/webContents === event\.sender/);
-        expect(handler).toMatch(/c\.sender === event\.sender/);
-        expect(handler).toMatch(/link\.browserVia\(/);
+        expect(handler).not.toMatch(/browserVia/);
     });
 
-    it('a relay channel records which workstation it reaches', () => {
-        expect(main).toMatch(/linkedRelays\.set\(opened\.channel, \{ sender, workstationId \}\)/);
+    it('a relay window’s browser is genie-host’s to open, on the channel the CALLER owns (Tynn #941, 2f-2)', () => {
+        const service = readFileSync('src/main/device-link-service.ts', 'utf8');
+        expect(service).toMatch(/if \(!r \|\| r\.owner !== owner \|\| r\.closed\) return \{ ok: false/);
+        expect(readFileSync('src/main/device-link-protocol.ts', 'utf8')).toMatch(/key: `relay:\$\{via\.workstationId\}`/);
     });
 
     it('the preload carries the host’s site names; the relay window’s bridge is given the browser (the direct one is not)', () => {
         expect(preload).toMatch(/ipcRenderer\.invoke\('genie:browser-window-open', address, hosts\)/);
         expect(count(app, /connectRemote\([^\n]*browse/g)).toBe(1);
-        expect(app).toMatch(/connectRemote\(transport, \{ kind: 'relay'[^\n]*browse/);
+        expect(app).toMatch(/connectRemote\(transport, \{ kind: 'relay'[^\n]*browse: \(address: string \| undefined, hosts: readonly string\[\]\) => net\.openBrowser!/);
     });
 });

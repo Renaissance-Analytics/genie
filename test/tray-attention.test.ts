@@ -58,8 +58,11 @@ describe('main wires it (comments stripped, so a sentence cannot stand in for th
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8')
         .split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-    it('the Deck count comes from needsYouCount over the snapshot the registry pushes, and refreshes the tray', () => {
-        expect(main).toMatch(/registry\.subscribe\(\(snapshot\) => \{[\s\S]{0,400}needsYouCount\(snapshot\.deckItems \?\? \[\]\)[\s\S]{0,200}refreshTray\(\)/);
+    it('the Deck count comes from needsYouCount over this window’s error notices and the host’s Deck, and refreshes the tray', () => {
+        // genie-host's Deck (deck.watch, Tynn #941 2f-2), recounted as it changes and as this window's own notices do.
+        expect(main).toMatch(/const waiting = needsYouCount\(\[\.\.\.mainErrors\.deckItems\(\), \.\.\.hostDeckNow\]\);\s*if \(waiting !== trayWaiting\) \{ trayWaiting = waiting; refreshTray\(\); \}/);
+        expect(main).toMatch(/registry\.subscribe\(\(\) => \{ refreshTrayWaiting\(\); \}\)/);
+        expect(main).toMatch(/hostDeckNow = items;\s*questionWindow\?\.changed\(\);\s*refreshTrayWaiting\(\);/);
     });
 
     it('the tray image follows it: the dot while anything waits, the plain mark otherwise', () => {

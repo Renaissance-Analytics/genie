@@ -3,7 +3,6 @@ import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
-import { DeviceLinkReplica } from './device-link-replica.js';
 import { hostname } from 'node:os';
 import { RemoteAccessReplica } from './remote-access-replica.js';
 import { RelayHostReplica } from './relay-host-replica.js';
@@ -13,7 +12,6 @@ import type { RelayHostView } from './relay-host-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
-import type { DeviceLinkEvent } from './device-link-service.js';
 import { KeyringReplica } from './keyring-replica.js';
 import type { KeyringDump } from './keyring-service.js';
 import { GithubAccountReplica } from './github-account-replica.js';
@@ -210,7 +208,6 @@ export class SessionEngineClient {
     #github: GithubAccountReplica | null = null;
     #keyring: KeyringReplica | null = null;
     #workstation: WorkstationReplica | null = null;
-    #deviceLink: DeviceLinkReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
     #relayHost: RelayHostReplica | null = null;
     #takeOvers: TakeOverReplica | null = null;
@@ -304,7 +301,6 @@ export class SessionEngineClient {
                 // Trust first (genie#1519): from here the window believes no verdict until the next dump.
                 this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
-                this.#deviceLink?.lost('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: this.#options.label ?? WINDOW_LINK_LABEL }));
@@ -482,9 +478,6 @@ export class SessionEngineClient {
                 return;
             case 'remoteAccess.event':
                 this.remoteAccess().deliver(payload as RemoteAccessEvent);
-                return;
-            case 'device.event':
-                this.deviceLink().deliver(payload as DeviceLinkEvent);
                 return;
             case 'files.event':
                 for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
@@ -785,16 +778,6 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#relayHost;
-    }
-
-    /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
-    deviceLink(): DeviceLinkReplica {
-        this.#deviceLink ??= new DeviceLinkReplica(async (method, args) => {
-            const reply = await this.call('engine.deviceLink', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#deviceLink;
     }
 
     /** This machine as a workstation: genie-host holds the key and signs (P3.4). */

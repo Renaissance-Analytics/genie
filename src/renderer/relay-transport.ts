@@ -2,8 +2,9 @@ import type { ClientTransport } from '../core/remote-protocol.js';
 import type { ShareLink } from '../main/tynn-share-links.js';
 
 /**
- * A TYNN WORKSTATION'S CONNECTION, SEEN FROM THE WINDOW (Tynn #837). Main dials the relay with the Tynn grant and the
- * proof key — neither ever reaches the renderer — and gives the window a CHANNEL; Genie's protocol crosses IPC on it.
+ * A TYNN WORKSTATION'S CONNECTION, SEEN FROM THE WINDOW (Tynn #837). genie-host dials the relay with the Tynn grant and the
+ * proof key — neither ever reaches the renderer — and gives the window a CHANNEL; Genie's protocol to that workstation
+ * crosses the window's own protocol session on it (Tynn #941, 2f-2: renderer/device-channels.ts).
  */
 
 /** What Tynn answered a role change (main/tynn-network.ts setWorkstationRole). */
@@ -37,6 +38,11 @@ export interface TynnNetworkBridge {
     open(workstationId: string): Promise<{ ok: true; channel: string } | { ok: false; reason: string; stage?: 'tynn' | 'relay'; offline?: boolean }>;
     /** Main says when Tynn gave the way in and it is reaching the machine. */
     onOpenStep?(listener: (workstationId: string, step: 'relay') => void): () => void;
+    /**
+     * This machine's Genie browser on the workstation a relay channel reaches (Tynn #941, 2f-2): genie-host opens it with that
+     * workstation's door, for the channel this window owns. `view`: the window's title and place, where the browser opens.
+     */
+    openBrowser?(channel: string, address: string | null, hosts: readonly string[], view: import('./device-channels.js').BrowserView): Promise<{ ok: true } | { ok: false; error: string }>;
     /** Change a workstation's role with an authenticator code (genie#1278 W6); Tynn enforces it. */
     setRole?(workstationId: string, role: 'pilot' | 'drone', code: string): Promise<RoleChange>;
     /** A pasted share link (genie#1278 C1): main classifies it and acts (core/connect-link.ts). */
@@ -58,7 +64,8 @@ export interface RelayClientTransport extends ClientTransport {
     closedBecause(): string | null;
 }
 
-export function ipcRelayTransport(net: TynnNetworkBridge, channel: string): RelayClientTransport {
+/** A channel to another machine as a ClientTransport: frames on THIS channel only, its close once, with the host's reason. */
+export function channelTransport(net: TynnNetworkBridge, channel: string): RelayClientTransport {
     const messages = new Set<(text: string) => void>();
     const closes = new Set<() => void>();
     let closed = false;

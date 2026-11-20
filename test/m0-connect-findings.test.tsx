@@ -70,23 +70,22 @@ describe('1. the list is read again whenever it is opened', () => {
 });
 
 describe('2. Open never brings forward another account’s window, or a dropped one', () => {
-    const base = { exists: true, relay: true, live: true, openedBy: 'tynn.ai#62', account: 'tynn.ai#62' };
+    // Whether a relay window's link is up is the window's own to know since 2f-2 (Tynn #941): main brings it up and asks it to
+    // reconnect, and a window still connected does nothing with the ask (split-2f2-relay-frames.test.ts pins that guard).
+    const base = { exists: true, relay: true, openedBy: 'tynn.ai#62', account: 'tynn.ai#62' };
 
     it('no window: open one', () => {
         expect(remoteWindowAction({ ...base, exists: false })).toBe('open');
     });
-    it('the same account, connected: bring it forward', () => {
-        expect(remoteWindowAction(base)).toBe('focus');
-    });
-    it('the same account, connection dropped: reconnect it, under this account', () => {
-        expect(remoteWindowAction({ ...base, live: false })).toBe('reconnect');
+    it('the same account: bring it forward and ask it to reconnect, under this account (connected, it stays as it is)', () => {
+        expect(remoteWindowAction(base)).toBe('reconnect');
     });
     it('opened under another account (or signed out since): replace it with a fresh connection', () => {
         expect(remoteWindowAction({ ...base, account: 'tynn.ai#63' })).toBe('replace');
         expect(remoteWindowAction({ ...base, account: null })).toBe('replace');
     });
     it('a tailnet window (not a Tynn grant) is not bound to the Tynn account', () => {
-        expect(remoteWindowAction({ ...base, relay: false, live: false, account: 'tynn.ai#63' })).toBe('focus');
+        expect(remoteWindowAction({ ...base, relay: false, account: 'tynn.ai#63' })).toBe('focus');
     });
 
     it('an account change closes exactly the relay windows opened under another account', () => {
@@ -160,7 +159,10 @@ describe('3. a refusal on a drone says it is a drone — the role read again fro
         const ops = strip(readFileSync(new URL('../src/main/host-owner-ops.ts', import.meta.url), 'utf8'));
         expect(ops).toMatch(/const rereadRole = async \(\): Promise<WorkstationRole \| null> => \{ await tynn\.readRole\(\); return tynn\.role\(\); \};/);
         const list = /workstations: async \(\) => \{([^]*?)\n {12}\},/.exec(ops)?.[1] ?? '';
-        const open = /ipcMain\.handle\('genie:relay-open'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
+        // The grant is genie-host's device protocol's since 2f-2 (Tynn #941): Tynn's refusal worded from a role read again.
+        const host = strip(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8'));
+        const open = /wordTynnRefusal: \(refusal\) => ([^\n]*)/.exec(host)?.[1] ?? '';
+        expect(main).not.toContain("'genie:relay-open'");
         for (const handler of [list, open]) {
             expect(handler).toContain('wordTynnRefusal(');
             expect(handler).toContain('rereadRole');

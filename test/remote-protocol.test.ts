@@ -125,7 +125,9 @@ describe('the capability table', () => {
         // 182 with `questions.files` / `questions.file` / `questions.visuals` (reads: a question's named files and ArtBoard
         // visuals, from the host's own Deck) and `files.openExternal` / `files.reveal` (writes, workspace-scoped, the owner's:
         // opened on the host's own screen for a client on another machine) (Tynn #912, 2f-1).
-        expect(REMOTE_METHODS.length).toBe(182);
+        // 187 with `deviceLink.open` / `openRelay` / `send` / `close` / `openBrowser` (local): a window's transport to another
+        // machine, owned by its own connection (Tynn #941, 2f-2).
+        expect(REMOTE_METHODS.length).toBe(187);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

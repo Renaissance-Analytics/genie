@@ -94,7 +94,7 @@ export const RELAY_MEMBER_ELEMENT: ElementDefinition = {
     packageId: BUILTIN_PACKAGE_ID,
     source: 'builtin',
     docs: { name: 'Connect to a workstation', description: 'This machine connects to another of the person\'s Tynn workstations over the Tynn relay, and its window drives that workstation; the Tynn grant and the proof key stay in Genie\'s host.' },
-    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.deviceLink'], events: ['device.event'] } },
+    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['deviceLink.open', 'deviceLink.openRelay', 'deviceLink.send', 'deviceLink.close', 'deviceLink.openBrowser'], events: ['local-device'] } },
     permissions: { capabilities: [], network: [] },
     payload: { start: 'deviceLink.openRelay', stop: 'deviceLink.close', health: 'deviceLink.relayHealth', settingsSection: 'workstation' },
 };

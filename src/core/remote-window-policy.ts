@@ -20,8 +20,6 @@ export interface RemoteWindowFacts {
     readonly exists: boolean;
     /** It is a Tynn relay window (`relay:<id>`), whose connection stands on a Tynn grant. */
     readonly relay: boolean;
-    /** Its relay connection is open right now. */
-    readonly live: boolean;
     /** The Tynn account it was opened under (`accountKeyOf`), null = signed out then. */
     readonly openedBy: string | null;
     /** The Tynn account this Genie is signed in to now. */
@@ -34,7 +32,9 @@ export function remoteWindowAction(f: RemoteWindowFacts): RemoteWindowAction {
     if (!f.exists) return 'open';
     if (!f.relay) return 'focus';
     if (f.account === null || f.openedBy !== f.account) return 'replace';
-    return f.live ? 'focus' : 'reconnect';
+    // Brought up, and asked to reconnect: whether its link is up is the window's own to know (its channel is its own
+    // session's, Tynn #941 2f-2), and a window still connected does nothing with the ask.
+    return 'reconnect';
 }
 
 /** The relay windows an account change leaves behind: every one opened under an account that is no longer this one. */

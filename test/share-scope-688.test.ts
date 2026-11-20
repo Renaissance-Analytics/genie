@@ -365,7 +365,8 @@ describe('local methods are refused to every relay principal, the owner included
 });
 
 describe('connection controls for a workspace principal', () => {
-    const LOCAL_CONTROLS = CONTROL_METHODS.filter((m) => m.startsWith('blob.') || m.startsWith('localUpload.') || m.startsWith('page.') || m.startsWith('files.') || m.startsWith('tynn.') || m.startsWith('activity.') || m === 'content.release');
+    // deck.watch (Tynn #941, 2f-2): the host's Deck for this machine's own Genie (its question window and tray) only.
+    const LOCAL_CONTROLS = CONTROL_METHODS.filter((m) => m.startsWith('blob.') || m.startsWith('localUpload.') || m.startsWith('page.') || m.startsWith('files.') || m.startsWith('tynn.') || m.startsWith('activity.') || m === 'content.release' || m === 'deck.watch');
 
     it('every control is classified: local ones are refused to all relay principals', async () => {
         // `host.version` (anyone admitted) and `host.update` (the owner only), Tynn #894: protocol-versioning-894.test.ts.

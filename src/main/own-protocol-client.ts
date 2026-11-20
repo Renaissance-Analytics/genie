@@ -1,5 +1,6 @@
 import { remoteOffer } from '../core/protocol-version.js';
-import { inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
+import type { DeckItem } from '../core/deck.js';
+import { LOCAL_EVENTS, inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
 
 /**
  * MAIN'S OWN PROTOCOL CLIENT (client/host split step 2b-2b, Tynn #898, story #896). What main itself asks of the host
@@ -19,6 +20,12 @@ export interface OwnProtocolClient {
     /** Tunnelled by main over its engine link; never a listener. */
     readonly door: ServerTransport;
     call(method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer>;
+    /**
+     * THE HOST'S DECK, KEPT (Tynn #941, 2f-2): one connection held open on the door, which says `deck.watch` and hears
+     * `local-deck` when the Deck changes, and nothing else of the estate. It is opened again whenever it drops (genie-host
+     * restarting, the link going), until the returned stop. What this window's question window and tray read.
+     */
+    watchDeck(onItems: (items: readonly DeckItem[]) => void): () => void;
 }
 
 /**
@@ -40,6 +47,15 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
     const listeners = new Set<(connection: ServerConnection) => void>();
     const door: ServerTransport = {
         onConnection: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    /** The hello every connection of this client says: this machine's own Genie, with this build's offer. */
+    const hello = (client: { send(text: string): void }): void => {
+        const offer = remoteOffer('client');
+        client.send(JSON.stringify({
+            kind: 'hello', auth: { kind: 'local' }, label: OWN_CLIENT_LABEL,
+            ...(offer.track ? { track: offer.track } : {}), ...(offer.build ? { build: offer.build } : {}),
+            schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities,
+        }));
     };
     const call = (method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer> => {
         if (listeners.size === 0) return Promise.resolve({ ok: false, reason: NOT_READY });
@@ -71,13 +87,54 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
             });
             const server: ServerConnection = { ...pair.server, remoteAddress: 'genie-tray', preAuth: PRE_AUTH };
             for (const listener of [...listeners]) listener(server);
-            const offer = remoteOffer('client');
-            client.send(JSON.stringify({
-                kind: 'hello', auth: { kind: 'local' }, label: OWN_CLIENT_LABEL,
-                ...(offer.track ? { track: offer.track } : {}), ...(offer.build ? { build: offer.build } : {}),
-                schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities,
-            }));
+            hello(client);
         });
     };
-    return { door, call };
+    const watchDeck = (onItems: (items: readonly DeckItem[]) => void): (() => void) => {
+        let stopped = false;
+        let current: ReturnType<typeof inMemoryPair>['client'] | null = null;
+        let attempt = 0;
+        const items = (value: unknown): readonly DeckItem[] => (Array.isArray(value) ? (value as DeckItem[]) : []);
+        const again = () => {
+            if (stopped) return;
+            const delay = DECK_RETRY_MS[Math.min(attempt, DECK_RETRY_MS.length - 1)]!;
+            attempt += 1;
+            setTimeout(open, delay).unref?.();
+        };
+        const open = (): void => {
+            if (stopped) return;
+            if (listeners.size === 0) { again(); return; }
+            const pair = inMemoryPair();
+            const client = pair.client;
+            current = client;
+            client.onClose(() => { if (current === client) current = null; again(); });
+            client.onMessage((text) => {
+                const parsed = parseMessage(text);
+                if (!parsed.ok || stopped) return;
+                const message = parsed.message;
+                if (message.kind === 'refused') { client.close(); return; }
+                if (message.kind === 'welcome') {
+                    if (message.compatible === false) { client.close(); return; }
+                    client.send(JSON.stringify({ kind: 'call', id: 1, method: 'deck.watch', args: [] }));
+                    return;
+                }
+                if (message.kind === 'result' && message.id === 1) {
+                    if (!message.ok) { client.close(); return; }
+                    attempt = 0;
+                    onItems(items(message.value));
+                    return;
+                }
+                if (message.kind === 'event' && message.channel === LOCAL_EVENTS.deck) onItems(items((message.payload as { items?: unknown } | null)?.items));
+            });
+            const server: ServerConnection = { ...pair.server, remoteAddress: 'genie-tray', preAuth: PRE_AUTH };
+            for (const listener of [...listeners]) listener(server);
+            hello(client);
+        };
+        open();
+        return () => { stopped = true; current?.close(); current = null; };
+    };
+    return { door, call, watchDeck };
 }
+
+/** How long the Deck's connection waits before it is opened again; the last repeats. */
+const DECK_RETRY_MS = [500, 1_000, 2_000, 5_000] as const;

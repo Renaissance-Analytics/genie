@@ -66,7 +66,37 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         if (next.phase === 'ready') wasReady = true;
         for (const listener of listeners) listener();
     };
+    /*
+     * THIS WINDOW'S CHANNELS TO ANOTHER MACHINE (Tynn #941, 2f-2), across its session's reconnects: heard from whichever
+     * connection is live. genie-host closes a connection's channels when it goes, and nothing can say so on a connection
+     * that went: a dropped session says it here (`lost`), once for each channel still open.
+     */
+    const devices = (() => {
+        const messages = new Set<(channel: string, text: string) => void>();
+        const closes = new Set<(channel: string, reason: string | null) => void>();
+        const steps = new Set<(workstationId: string, step: 'relay') => void>();
+        const open = new Set<string>();
+        const closed = (channel: string, reason: string | null) => { if (!open.delete(channel)) return; for (const l of [...closes]) l(channel, reason); };
+        subscribe(() => {
+            const net = client!.localOwner!.tynnNetwork;
+            const offs = [
+                net.onMessage((channel, text) => { for (const l of [...messages]) l(channel, text); }),
+                net.onClosed((channel, reason) => closed(channel, reason)),
+                net.onOpenStep!((workstationId, step) => { for (const l of [...steps]) l(workstationId, step); }),
+            ];
+            return () => { for (const off of offs) off(); };
+        });
+        const listen = <L>(set: Set<L>) => (listener: L) => { set.add(listener); return () => { set.delete(listener); }; };
+        return {
+            onMessage: listen(messages), onClosed: listen(closes), onOpenStep: listen(steps),
+            opened: <T extends { ok: boolean; channel?: string }>(result: T): T => { if (result.ok && typeof result.channel === 'string') open.add(result.channel); return result; },
+            forget: (channel: string) => { open.delete(channel); },
+            lost: (reason: string) => { for (const channel of [...open]) closed(channel, reason); },
+        };
+    })();
+    const refusedOpen = (error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) });
     const release = () => {
+        devices.lost('Genie’s connection to its host closed');
         offSettings(); offSettings = () => {};
         offState(); offState = () => {};
         for (const entry of subscriptions) { entry.off(); entry.off = () => {}; }
@@ -255,11 +285,19 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
                 source: (id, op, kind, source) => ownerRead(b => b.appInbox.source(id, op, kind, source)),
             },
             deviceLink: {
+                open: (url) => ownerRead(b => b.deviceLink.open(url)).then(devices.opened, refusedOpen),
                 hosts: () => ownerRead(b => b.deviceLink.hosts()),
                 forget: (url) => ownerRead(b => b.deviceLink.forget(url)),
                 adopt: (url, token) => ownerRead(b => b.deviceLink.adopt(url, token)),
             },
             tynnNetwork: {
+                // A channel to another machine (Tynn #941, 2f-2), on this session; its frames, closes and steps are heard here.
+                open: (workstationId) => ownerRead(b => b.tynnNetwork.open(workstationId)).then(devices.opened, refusedOpen),
+                send: (channel, text) => { void ownerRead(async b => { b.tynnNetwork.send(channel, text); }).catch(() => {}); },
+                close: (channel) => { devices.forget(channel); void ownerRead(async b => { b.tynnNetwork.close(channel); }).catch(() => {}); },
+                onMessage: devices.onMessage, onClosed: devices.onClosed, onOpenStep: devices.onOpenStep,
+                openBrowser: (channel, address, hosts, view) => ownerRead(b => b.tynnNetwork.openBrowser!(channel, address, hosts, view))
+                    .catch((error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) })),
                 workstations: () => ownerRead(b => b.tynnNetwork.workstations()),
                 setRole: (id, role, code) => ownerRead(b => b.tynnNetwork.setRole!(id, role, code)),
                 shares: {

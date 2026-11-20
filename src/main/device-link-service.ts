@@ -168,12 +168,12 @@ export class DeviceLinkService {
     }
 
     /** The browser's door to a relay channel's workstation: its port and that host's CA, as now (Tynn #552). */
-    async browserVia(owner: string, id: string): Promise<{ ok: true; port: number; ca: string | null } | { ok: false; reason: string }> {
+    async browserVia(owner: string, id: string): Promise<{ ok: true; workstationId: string; port: number; ca: string | null } | { ok: false; reason: string }> {
         const r = this.#relays.get(id);
         if (!r || r.owner !== owner || r.closed) return { ok: false, reason: 'This window is not connected to its workstation right now. Reconnect, then open the browser again.' };
         if (!this.#options.browsers) return { ok: false, reason: 'this Genie opens no browser doors' };
         r.via = await this.#options.browsers.connect(r.workstationId, r.transport);
-        return { ok: true, port: r.via.port(), ca: r.via.ca() };
+        return { ok: true, workstationId: r.workstationId, port: r.via.port(), ca: r.via.ca() };
     }
 
     open(owner: string, url: string): Promise<DeviceLinkOpened> {

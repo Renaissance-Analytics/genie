@@ -34,8 +34,9 @@ export interface AppInboxBridge {
 /** The migrated owner operations; outgoing channel and window capabilities remain native until P5. */
 export interface LocalOwnerBridge {
     appInbox: AppInboxBridge;
-    deviceLink: Pick<DeviceLinkBridge, 'hosts' | 'forget' | 'adopt'>;
-    tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares'>;
+    /** Since 2f-2 (Tynn #941) the whole device link is the window's session's: a channel to another machine is genie-host's. */
+    deviceLink: DeviceLinkBridge;
+    tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares' | 'open' | 'onOpenStep' | 'send' | 'close' | 'onMessage' | 'onClosed' | 'openBrowser'>;
 }
 import type { LiveSession } from '../core/roster.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
@@ -732,7 +733,6 @@ export type SignInResult = { ok: true; terminalId?: string; route?: string; tick
 export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
-    deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
 };
@@ -803,7 +803,8 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         marketplace: local.marketplace,
         gapps: local.gapps,
         appInbox: local.owner.appInbox,
-        deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
+        // A channel to another machine is the window's session's (Tynn #941, 2f-2); a pasted link (openLink) stays native.
+        deviceLink: local.owner.deviceLink,
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
         ...local.agentCommands,

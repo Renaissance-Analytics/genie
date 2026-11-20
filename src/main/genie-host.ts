@@ -140,7 +140,9 @@ import { relayFetchOver } from './host-relay-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
-import { transportHub, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, transportHub, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { deviceLinkProtocol } from './device-link-protocol.js';
+import { wordTynnRefusal } from './drone-refusal.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
@@ -1229,7 +1231,8 @@ async function main(): Promise<void> {
     const deviceLinkService = new DeviceLinkService({
         tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),
         socket: (url) => deviceSocket(url),
-        send: (owner, event) => engine.deviceEvent(owner, event),
+        // To the window connection that owns the channel alone, a frame in pieces (Tynn #941, 2f-2; device-link-protocol.ts).
+        send: (owner, event) => { for (const payload of deviceProtocol.events(event)) remoteAccessHost.remote.eventTo(owner, LOCAL_EVENTS.device, payload); },
         log: say,
         /*
          * A PILOT'S CONNECTION TO ANOTHER TYNN WORKSTATION (Tynn #552, host split P5d.4; audit M-e): the grant is minted
@@ -1251,6 +1254,19 @@ async function main(): Promise<void> {
             open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
         },
         browsers: new RemoteBrowsers(siteDoor),
+    });
+    /*
+     * A REMOTE WINDOW'S TRANSPORT TO ANOTHER MACHINE, ON THE ONE PROTOCOL (Tynn #941, 2f-2): the window asks over its own
+     * connection, which owns what it opens. A dial is refused for a drone from the role read here; Tynn's refusal of a grant
+     * is worded from a role read again; the relay browser is this machine's, opened here on the caller's own channel.
+     */
+    const rereadRoleForGrant = async () => { await relayHostService.readRole().catch(() => {}); return relayHostService.role(); };
+    const deviceProtocol = deviceLinkProtocol({
+        link: deviceLinkService,
+        role: { role: () => relayHostService.role(), said: () => relayHostService.said(), why: () => relayHostService.unknownWhy(), reread: async () => { await relayHostService.readRole().catch(() => {}); } },
+        wordTynnRefusal: (refusal) => wordTynnRefusal(refusal, rereadRoleForGrant),
+        openBrowser: (args) => browserService.call('open', args, 'genie-host'),
+        remoteVia: (key, port, ca) => { void browserService.call('remoteVia', [key, port, ca], 'genie-host').catch((error: unknown) => { say(`browser: the door to ${key} could not be updated: ${error instanceof Error ? error.message : String(error)}`); }); },
     });
     const engine = new SessionEngineServer({
         features: featureCallers,
@@ -1305,8 +1321,6 @@ async function main(): Promise<void> {
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
         // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
         configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
-        // Other machines: the host dials them, and holds the tokens that open them (P3.4 cut e).
-        deviceLink: deviceLinkService,
         workstation: workstationService,
         relayHost: relayHostService,
         takeOver: takeOverService,
@@ -1851,6 +1865,8 @@ async function main(): Promise<void> {
         // OPEN WITH / SHOW IN FILE MANAGER for a client on another machine (Tynn #912, 2f-1): confined here, then done on this
         // machine's screen by a Genie window here (the window op, like the trash). This machine's own window does it itself.
         hostShell: hostShellFor({ absolute: (ws, path) => phoneFiles.absolute(ws, path), windowOp: (op, args) => (engineRef ? engineRef.windowOp(null, op, args) : Promise.reject(new Error('Genie is still starting; try again in a moment'))), hostName: () => hostname() }),
+        // A remote window's transport to another machine, owned by its connection (Tynn #941, 2f-2).
+        deviceLinkProtocol: deviceProtocol,
         providerPrograms: hostProviderPrograms({
             file: () => providerChoiceFile(),
             refresh: (provider) => { void providerHealth.refresh(provider); },
