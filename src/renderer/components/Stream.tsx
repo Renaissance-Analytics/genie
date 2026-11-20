@@ -9,6 +9,8 @@ import {
     type TimedEvent,
 } from '../../core/stream-view.js';
 import type { ToolOutputReply } from '../../core/tool-row-bound.js';
+import type { SilentCall as SilentCallInfo } from '../../core/hung-call.js';
+import { SilentCall } from './SilentCall.js';
 import { StreamRow, type StreamMarkup } from './StreamRow.js';
 
 /**
@@ -68,8 +70,11 @@ export interface StreamProps {
     markup?: StreamMarkup | undefined;
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386). Keep it stable. */
     loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
-    /** RED STUB (Tynn #950). */
-    silentCall?: { call: import('../../core/hung-call.js').SilentCall; onStop?: (() => void) | undefined } | null | undefined;
+    /**
+     * A call that has gone silent (Tynn #950): shown right under that call's own row, with `Stop this call` when the
+     * window can act (`onStop`). `null`/absent = none. A call whose row is not on screen (a lane filter) shows nowhere.
+     */
+    silentCall?: { call: SilentCallInfo; onStop?: (() => void) | undefined } | null | undefined;
 }
 
 /**
@@ -83,7 +88,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, onPlan = false, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, onPlan = false, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput, silentCall = null }: StreamProps) {
     countRender('Stream');
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
@@ -144,9 +149,15 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                         : { agentName };
             return rowCache.current!.row(row, context);
         });
-        return { rows: mapped, behind: start };
+        return { rows: mapped, behind: start, toolRows: visible };
     }, [rows, lanes, diffs, agentName, onPlan, at, following, extra]);
     const prepared = view.rows;
+    // THE SILENT CALL'S OWN ENTRY (Tynn #950): the shown row that is that call (its updates are folded into one row).
+    const silentId = silentCall?.call.toolCallId ?? null;
+    const silentRowId = useMemo(
+        () => (silentId === null ? null : view.toolRows.find((r) => r.event.kind === 'tool' && r.event.toolCallId === silentId)?.id ?? null),
+        [view, silentId],
+    );
 
     // The live thought: the LAST row of the whole stream (not of the filtered view) while the turn runs.
     const last = rows.at(-1);
@@ -225,9 +236,16 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onFollowChange={setFollowing}
                 onUnseenChange={setUnseen}
                 scrollToId={at}
-                renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} loadFull={loadToolOutput} />
-                )}
+                renderRow={(row) => {
+                    const line = <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} loadFull={loadToolOutput} />;
+                    if (row.id !== silentRowId || !silentCall) return line;
+                    return (
+                        <div data-silent-row={row.id}>
+                            {line}
+                            <SilentCall call={silentCall.call} onStop={silentCall.onStop} />
+                        </div>
+                    );
+                }}
             />
 
             {/* THE PARKED DIVIDER: amber, at the end, as long as the request waits — state, not a row, so no filter hides it. */}

@@ -193,8 +193,29 @@ export class StalledTurnBook {
     }
 }
 
-/** RED STUB (Tynn #950): replaced by the implementation. */
-export const SILENT_CALL_MS = 0;
-export interface SilentCall { readonly toolCallId: string; readonly label: string; readonly silentMs: number }
-export function silentCall(_call: RunningCall | null | undefined, _lastEventAt: number | null | undefined, _now: number): SilentCall | null { return null; }
-export function silentCallWords(_silent: SilentCall): string { return ''; }
+/**
+ * A CALL THAT HAS GONE SILENT (Tynn #950): the agent view shows it IN THE STREAM, at the call's own entry, never in the
+ * header (the owner on beta.65: "I don't need to see the workstream in the freaking header"). Silent = nothing from the
+ * provider since the later of the call's start and its last event, for SILENT_CALL_MS. #855's no-output timeout (15 min,
+ * `tool_call_timeout_minutes`) still ends it; this only says, well before that, that it is quiet.
+ */
+export const SILENT_CALL_MS = 2 * MIN;
+
+export interface SilentCall {
+    readonly toolCallId: string;
+    /** Its name, as the call reports it (`Bash`): never its command, which is on its own row already. */
+    readonly label: string;
+    readonly silentMs: number;
+}
+
+export function silentCall(call: RunningCall | null | undefined, lastEventAt: number | null | undefined, now: number): SilentCall | null {
+    if (!call) return null;
+    const from = typeof lastEventAt === 'number' ? Math.max(call.since, lastEventAt) : call.since;
+    const silentMs = now - from;
+    return silentMs >= SILENT_CALL_MS ? { toolCallId: call.toolCallId, label: call.label, silentMs } : null;
+}
+
+/** `No output for 3 min`. */
+export function silentCallWords(silent: SilentCall): string {
+    return `No output for ${minutesWords(silent.silentMs)}`;
+}
