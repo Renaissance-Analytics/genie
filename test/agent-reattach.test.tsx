@@ -149,7 +149,8 @@ describe('the workspace’s agent roster (Genie 1’s Registered / On disk only)
         } as WorkspaceOpsProps;
         const render = (o: WorkspaceOpsProps) => renderToStaticMarkup(<Workspace view="settings" workspace={{ id: 'acme', name: 'acme', path: '/w/acme' }} terminals={NO_TERMINALS} ops={o} />);
         const cards = [...render(ops).matchAll(/data-ws-card="([a-z-]+)"/g)].map((m) => m[1]);
-        expect(cards).toEqual(['general', 'agents']);
+        // Hibernate moved to Settings from the bar (Tynn #945), after the roster.
+        expect(cards).toEqual(['general', 'agents', 'hibernate']);
         expect(render(ops)).toMatch(/data-ws-card="agents"[\s\S]*?data-action="reattach-agent"/);
         // CONTROL: the same page without the roster has no card.
         const { agentRoster: _gone, ...without } = ops;
