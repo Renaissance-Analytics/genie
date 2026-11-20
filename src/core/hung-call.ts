@@ -192,3 +192,9 @@ export class StalledTurnBook {
         for (const l of this.#listeners) l();
     }
 }
+
+/** RED STUB (Tynn #950): replaced by the implementation. */
+export const SILENT_CALL_MS = 0;
+export interface SilentCall { readonly toolCallId: string; readonly label: string; readonly silentMs: number }
+export function silentCall(_call: RunningCall | null | undefined, _lastEventAt: number | null | undefined, _now: number): SilentCall | null { return null; }
+export function silentCallWords(_silent: SilentCall): string { return ''; }

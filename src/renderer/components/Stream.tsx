@@ -68,6 +68,8 @@ export interface StreamProps {
     markup?: StreamMarkup | undefined;
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386). Keep it stable. */
     loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /** RED STUB (Tynn #950). */
+    silentCall?: { call: import('../../core/hung-call.js').SilentCall; onStop?: (() => void) | undefined } | null | undefined;
 }
 
 /**
