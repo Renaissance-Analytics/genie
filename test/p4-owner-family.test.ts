@@ -129,7 +129,7 @@ describe('family5 owner methods and real recorded bridge calls', () => {
         // Since 2f-2 (Tynn #941) a channel to another machine is this window's session's, never the preload's: only the
         // pasted link (connect-link, window:os-shell) stays native.
         expect(b.deviceLink!.open).not.toBe(open);
-        for (const key of ['open', 'send', 'close', 'onMessage', 'onClosed', 'onOpenStep'] as const) expect(b.tynnNetwork![key]).not.toBe(preload.tynnNetwork![key]);
+        for (const key of ['open', 'send', 'close', 'onMessage', 'onClosed', 'onOpenStep'] as const) expect(b.tynnNetwork![key]).not.toBe((preload.tynnNetwork as unknown as Record<string, unknown>)[key]);
         expect(b.tynnNetwork!.openLink).toBe(openLink);
     });
     it.each(rows)('pageBridge $method rejects a missing local door instead of using preload', async row => {

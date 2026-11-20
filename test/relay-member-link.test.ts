@@ -110,7 +110,7 @@ describe('the relay member, in genie-host', () => {
     it('the browser\'s door to that workstation\'s sites is genie-host\'s: its port, and its CA once a site answered, said to the window', async () => {
         const r = rig();
         const { channel } = await r.service.call('window-1', 'openRelay', ['ws_alpha']) as { channel: string };
-        expect(await r.service.call('window-1', 'browserVia', [channel])).toEqual({ ok: true, port: 47001, ca: null });
+        expect(await r.service.call('window-1', 'browserVia', [channel])).toEqual({ ok: true, workstationId: 'ws_alpha', port: 47001, ca: null });
         expect(await r.service.call('window-2', 'browserVia', [channel])).toMatchObject({ ok: false });
     });
 

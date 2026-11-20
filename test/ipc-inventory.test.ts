@@ -102,9 +102,9 @@ describe('P4 IPC inventory', () => {
         // opener kept only this machine's own browser (window:feature-effect).
     };
     const moveRows = (rows: readonly (readonly [string, string])[]) => rows.filter(([, d]) => d.startsWith('move:')).map(([c, d]) => [c, d.slice('move:'.length)] as const);
-    const ratchet = (rows: readonly (readonly [string, string])[], registeredNow: readonly string[]) => ({
-        joined: moveRows(rows).filter(([c, step]) => STILL_TO_MOVE[c] !== step).map(([c]) => c).sort(),
-        relabelled: Object.keys(STILL_TO_MOVE).filter((c) => registeredNow.includes(c) && !moveRows(rows).some(([m]) => m === c)).sort(),
+    const ratchet = (rows: readonly (readonly [string, string])[], registeredNow: readonly string[], frozen: Readonly<Record<string, string>> = STILL_TO_MOVE) => ({
+        joined: moveRows(rows).filter(([c, step]) => frozen[c] !== step).map(([c]) => c).sort(),
+        relabelled: Object.keys(frozen).filter((c) => registeredNow.includes(c) && !moveRows(rows).some(([m]) => m === c)).sort(),
     });
 
     it('THE RATCHET: every still-to-move row is on the frozen list under its step, and every frozen channel still registered is still to move', () => {
@@ -114,7 +114,8 @@ describe('P4 IPC inventory', () => {
     it('CONTROL: the ratchet notices a new still-to-move row and a frozen one re-labelled a window capability', () => {
         expect(ratchet([['genie:new-host-thing', 'move:2b']], []).joined).toEqual(['genie:new-host-thing']);
         expect(ratchet([['genie:relay-open', 'move:2c']], []).joined).toEqual(['genie:relay-open']);
-        expect(ratchet([['genie:relay-open', 'window:pop-out']], ['genie:relay-open']).relabelled).toEqual(['genie:relay-open']);
+        // The frozen list is empty now that 2f is done: the re-label check is shown on one like it was.
+        expect(ratchet([['genie:relay-open', 'window:pop-out']], ['genie:relay-open'], { 'genie:relay-open': '2f' }).relabelled).toEqual(['genie:relay-open']);
         // A frozen channel whose handler is gone needs no row (the stale check removes it): the list shrinks.
         expect(ratchet([], [])).toEqual({ joined: [], relabelled: [] });
     });

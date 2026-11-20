@@ -354,8 +354,9 @@ describe('the question window and the tray read genie-host’s Deck (takeOvers g
         const main = code(src('src/main/main.ts'));
         expect(main).toMatch(/ownProtocol\.watchDeck\(\(items\) => \{/);
         expect(main).toMatch(/items: \(\) => \[\.\.\.hostDeckNow, \.\.\.remoteQuestions\.items\(\)\]/);
-        expect(main).toMatch(/needsYouCount\(hostDeckNow\)/);
-        expect(main).not.toContain('composed.deckItems()');
+        expect(main).toMatch(/needsYouCount\(\[\.\.\.mainErrors\.deckItems\(\), \.\.\.hostDeckNow\]\)/);
+        // main's own composed Deck still feeds its own registry (2g, Tynn #913); the question window and the tray do not read it.
+        expect(main).not.toMatch(/items: \(\) => \[\.\.\.composed\.deckItems\(\)|composed\.attention\.onChange\(\(\) => questionWindow/);
     });
 
     it('main’s own client keeps the Deck connection open, says deck.watch on it, hears local-deck, and opens it again when it drops', () => {

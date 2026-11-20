@@ -3,12 +3,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
+import { LOCAL_EVENTS, inMemoryPair, type CallContext, type RemoteMethod } from '../src/core/remote-protocol.js';
+import { deviceLinkProtocol } from '../src/main/device-link-protocol.js';
 import { DeviceLinkService, type DeviceLinkEvent, type DeviceSocket } from '../src/main/device-link-service.js';
 import { deviceTokenStore } from '../src/main/device-tokens.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
+import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
+import { DeviceStore } from '../src/main/remote-devices.js';
+import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
+import { connectRemote } from '../src/renderer/remote-bridge.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 import { fakeKeychain } from './helpers/tynn-storage.js';
 
 /**
@@ -399,80 +403,70 @@ describe('what a window can ask for over the link', () => {
         expect(k.held.size).toBe(0);
     });
 
-    it('over the real link: open, say hello, hear the welcome without the token, and the window line never carries it', async () => {
+    /*
+     * OVER THE ONE PROTOCOL (Tynn #941, 2f-2): the window's wire bridge, on its own connection to genie-host's RemoteHost, reaches
+     * the device link through the host API and the device protocol, as every remote window does; the engine link carries none.
+     */
+    async function overTheProtocol(k: Lockable) {
+        const sockets: FakeSocket[] = [];
+        let remote: RemoteHost | null = null;
+        let protocol: ReturnType<typeof deviceLinkProtocol> | null = null;
+        const service = new DeviceLinkService({
+            tokens: deviceTokenStore(file, k),
+            socket: () => { const s = new FakeSocket(); sockets.push(s); setImmediate(() => s.opens()); return s; },
+            send: (owner, event) => { for (const payload of protocol!.events(event)) remote?.eventTo(owner, LOCAL_EVENTS.device, payload); },
+            log: () => {},
+        });
+        protocol = deviceLinkProtocol({ link: service, role: { role: () => 'pilot', said: () => 'pilot', why: () => null, reread: async () => {} },
+            wordTynnRefusal: async (refusal) => refusal, openBrowser: async () => null, remoteVia: () => {} });
+        const inner = buildHostApi({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, deviceLinkProtocol: protocol } as unknown as HostApiDeps);
+        const api = { invoke: (m: RemoteMethod, a: unknown[], c?: CallContext) => inner.invoke(m, a, c), releaseCaller: (c: CallContext) => inner.releaseCaller?.(c), onEvent: () => () => {}, workspaceOfAgent: () => null } as unknown as HostApi;
+        const devices = await DeviceStore.open(dir, { now: Date.now, random: () => 'tok' });
+        let accept: (c: ReturnType<typeof inMemoryPair>['server']) => void = () => {};
+        remote = new RemoteHost({ api, hostName: 'alphar', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing,
+            transport: { onConnection: (l) => { accept = l; return () => {}; } } });
+        const pair = inMemoryPair();
+        const wire: string[] = [];
+        pair.client.onMessage((text) => wire.push(text));
+        const transport = { ...pair.client, send: (text: string) => { wire.push(text); pair.client.send(text); } };
+        accept({ ...pair.server, preAuth: { kind: 'local', label: 'a remote window', isOwner: true, workspaceId: null, readonly: false, window: 'remote' } });
+        const client = connectRemote(transport, { kind: 'local' }, 'a remote window');
+        expect(await client.ready).toMatchObject({ ok: true });
+        return { sockets, client, owner: client.localOwner!, wire, transport, done: () => devices.flushed() };
+    }
+
+    it('over the one protocol: open, say hello, hear the welcome without the token, and the window’s connection never carries it', async () => {
         const k = keychain();
-        const sockets: FakeSocket[] = [];
-        const tokens = deviceTokenStore(file, k);
-        let server: SessionEngineServer | null = null;
-        const service = new DeviceLinkService({
-            tokens,
-            socket: () => { const s = new FakeSocket(); sockets.push(s); setImmediate(() => s.opens()); return s; },
-            send: (owner, event) => server?.deviceEvent(owner, event),
-            log: () => {},
-        });
-        const TOKEN = 'a'.repeat(64);
-        server = new SessionEngineServer({ token: TOKEN, build: 'test', deviceLink: service });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const seen: string[] = [];
-        windowSide.onMessage((line: string) => seen.push(line));
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, TOKEN);
-        const replica = client.deviceLink();
-        const heard: { channel: string; text: string }[] = [];
-        replica.onFrame((channel, text) => heard.push({ channel, text }));
-        const opened = await replica.open(URL_A);
-        if (!opened.ok) throw new Error(opened.reason);
-        replica.send(opened.channel, hello({ kind: 'pin', code: '123456' }));
-        await settle();
-        sockets[0]!.says({ kind: 'welcome', connectionId: 'c1', host: 'studio', isOwner: true, workspaceId: null, token: SECRET });
-        await settle();
-        expect(heard).toHaveLength(1);
-        expect(JSON.parse(heard[0]!.text).kind).toBe('welcome');
-        expect(k.held.get(ENTRY_A)).toBe(SECRET);
-        expect(seen.join('\n')).not.toContain(SECRET);
-        expect(await replica.hosts()).toEqual([URL_A]);
+        const r = await overTheProtocol(k);
+        try {
+            const heard: { channel: string; text: string }[] = [];
+            r.owner.tynnNetwork.onMessage((channel, text) => heard.push({ channel, text }));
+            const opened = await r.owner.deviceLink.open(URL_A);
+            if (!opened.ok) throw new Error(opened.reason);
+            r.owner.tynnNetwork.send(opened.channel, hello({ kind: 'pin', code: '123456' }));
+            await settle();
+            r.sockets[0]!.says({ kind: 'welcome', connectionId: 'c1', host: 'studio', isOwner: true, workspaceId: null, token: SECRET });
+            await settle();
+            await settle();
+            expect(heard).toHaveLength(1);
+            expect(JSON.parse(heard[0]!.text).kind).toBe('welcome');
+            expect(k.held.get(ENTRY_A)).toBe(SECRET);
+            expect(r.wire.join('\n')).not.toContain(SECRET);
+        } finally { await r.done(); }
     });
 
-    it('a window dropping off the link closes its sockets at the host, and the channel it held says closed when the host goes', async () => {
-        const sockets: FakeSocket[] = [];
-        let server: SessionEngineServer | null = null;
-        const service = new DeviceLinkService({
-            tokens: deviceTokenStore(file, keychain()),
-            socket: () => { const s = new FakeSocket(); sockets.push(s); setImmediate(() => s.opens()); return s; },
-            send: (owner, event) => server?.deviceEvent(owner, event),
-            log: () => {},
-        });
-        const TOKEN = 'a'.repeat(64);
-        server = new SessionEngineServer({ token: TOKEN, build: 'test', deviceLink: service });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, TOKEN);
-        const replica = client.deviceLink();
-        const closed: { channel: string; reason: string | null }[] = [];
-        replica.onClosed((channel, reason) => closed.push({ channel, reason }));
-        const opened = await replica.open(URL_A);
-        if (!opened.ok) throw new Error(opened.reason);
-        expect(sockets[0]!.closed).toBe(0);
-        windowSide.close();
-        await settle();
-        expect(sockets[0]!.closed, 'the host let go of the socket').toBe(1);
-        expect(closed).toEqual([{ channel: opened.channel, reason: 'the host closed the connection' }]);
-    });
-
-    it('the host going away closes the channels the window holds, with its words', async () => {
-        const replica = new SessionEngineClient().deviceLink();
-        const closed: { channel: string; reason: string | null }[] = [];
-        replica.onClosed((channel, reason) => closed.push({ channel, reason }));
-        replica.lost('the host closed the connection');
-        expect(closed).toEqual([]);
-        expect((await replica.open(URL_A)).ok).toBe(false);
-        expect(await replica.hosts()).toEqual([]);
-        expect(await replica.adopt(URL_A, SECRET)).toBe(false);
+    it('a window’s connection going closes its sockets at the host, and the channel it held says closed', async () => {
+        const r = await overTheProtocol(keychain());
+        try {
+            const closed: { channel: string; reason: string | null }[] = [];
+            r.owner.tynnNetwork.onClosed((channel, reason) => closed.push({ channel, reason }));
+            const opened = await r.owner.deviceLink.open(URL_A);
+            if (!opened.ok) throw new Error(opened.reason);
+            expect(r.sockets[0]!.closed).toBe(0);
+            r.transport.close();
+            await settle();
+            expect(r.sockets[0]!.closed, 'the host let go of the socket').toBe(1);
+            expect(closed).toEqual([{ channel: opened.channel, reason: 'Genie’s connection to its host closed' }]);
+        } finally { await r.done(); }
     });
 });

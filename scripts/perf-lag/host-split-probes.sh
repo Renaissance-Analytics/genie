@@ -659,9 +659,9 @@ probe "no-method-returns-a-device-token" src/main/device-link-service.ts \
     "            default: throw new Error(\`The device link has no \${method}.\`);" "            default: return this.#options.tokens.tokenFor(String(args[0] ?? ''));" \
     test/device-link.test.ts "no method returns a token"
 
-probe "a-dropped-window-lets-its-sockets-go" src/main/session-engine-server.ts \
-    "            if (was) this.#options.deviceLink?.dropOwner(conn.id);" "" \
-    test/device-link.test.ts "a window dropping off the link closes its sockets"
+probe "a-dropped-window-lets-its-sockets-go" src/main/host-api.ts \
+    "        releaseCaller: context => { deps.features.releaseCaller?.(context); deps.deviceLinkProtocol?.dropOwner(context.connectionId); }," "        releaseCaller: context => { deps.features.releaseCaller?.(context); }," \
+    test/device-link.test.ts "connection going closes its sockets at the host"
 
 probe "a-device-token-must-read-back" src/main/device-tokens.ts \
     "            if (back.kind !== 'value' || back.value !== token) return { ok: false, reason: back.kind === 'unavailable' ? back.reason : 'the keychain did not read back what was written' };" "" \
