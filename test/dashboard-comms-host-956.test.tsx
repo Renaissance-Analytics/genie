@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -154,8 +155,9 @@ describe('genie-host’s Dashboard rows, through withComms', () => {
 
 describe('genie-host wires it (the source of this machine’s Dashboard since Tynn #898 2d-4b)', () => {
     it('its registry’s probe adds the comms from its own inbox', () => {
-        const src = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8')
-            .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+        // A path, not new URL(import.meta.url): under happy-dom that URL is not file: (the first run threw there).
+        const src = readFileSync(join(__dirname, '..', 'src/main/genie-host.ts'), 'utf8')
+            .split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
         expect(src).toMatch(/phoneRegistry\.setProbe\(withComms\(\(id\) => host\.probe\(id\), \(id\) => own\.inbox\.involving\(id, 2000\)\)\)/);
         expect(src).not.toMatch(/phoneRegistry\.setProbe\(\(id\) => host\.probe\(id\)\)/);
     });
