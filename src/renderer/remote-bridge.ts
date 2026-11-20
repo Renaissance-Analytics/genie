@@ -27,6 +27,8 @@ import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
 import { localArtboardClient } from './local-artboard-client.js';
+import type { DisplayPost } from '../core/artboard.js';
+import type { QuestionMedia } from '../core/question-media.js';
 import type { SavePreview, SaveResult } from '../core/workspace-save.js';
 import { readTypingEvent } from '../core/typing-mirror.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
@@ -512,6 +514,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         chooseProviderProgram: (provider, path) => answer<{ ok: true } | { ok: false; reason: string }>('providers.chooseProgram', provider, path),
         // The throwaway shell (Tynn #897, 2c-4): the host's; this window opens its companion window with the ticket.
         scratchTerminal: (workspaceId) => answer<{ ok: true; terminalId: string; route?: string; ticket?: string } | { ok: false; reason: string }>('terminals.scratch', workspaceId),
+        // A question's named files and its visuals (Tynn #912, 2f-1): the host's own question, read from its workspace.
+        questions: {
+            files: async (id, paths) => { const r = await call('questions.files', id, paths); return r.ok && Array.isArray(r.value) ? r.value.filter((p): p is string => typeof p === 'string') : null; },
+            file: (id, path) => answer<{ ok: true; path: string; text: string } | { ok: true; path: string; media: QuestionMedia } | { ok: false; reason: string }>('questions.file', id, path),
+            visuals: (id) => answer<{ ok: true; posts: DisplayPost[] } | { ok: false; reason: string }>('questions.visuals', id),
+        },
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.
@@ -613,6 +621,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             children: (workspaceId, dir) => read('files.children', workspaceId, dir),
             open: (workspaceId, path) => answer('files.open', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
             readMedia: (workspaceId, path) => answer('files.readMedia', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
+            // Open with / Show in file manager: on the HOST's own screen, done there by its Genie window (Tynn #912, 2f-1).
+            openExternal: (workspaceId, path) => answer<{ ok: true } | { ok: false; reason: string }>('files.openExternal', workspaceId, path),
+            reveal: (workspaceId, path) => answer<{ ok: true } | { ok: false; reason: string }>('files.reveal', workspaceId, path),
             upload: (workspaceId, dir, name, bytes, onProgress) => oneAtATime(async () => {
                 const staged = await stage(name, bytes, onProgress);
                 if (!staged.ok) return staged;

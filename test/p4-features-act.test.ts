@@ -180,10 +180,11 @@ describe('the IPC path is gone', () => {
         expect(owner).toContain('if (required && !ui) throw new Error(OWN_WINDOW);');
         expect(read('main/genie-host.ts')).toContain('presentation: context => { const ui = featureCallers.presentation(context); return ui ? { ...ui,');
         const callers = read('main/feature-callers.ts');
-        // A forwarded caller (engine.features), or since Tynn #898 step 2d-4b a tunnelled window's connection: either way
-        // only a local window's, and its effect goes to the window process that owns it.
-        expect(callers).toContain('const forwarded = this.#callers.get(context.connectionId);');
-        expect(callers).toContain("if (!binding || (forwarded ? forwarded.context.origin : context.origin) !== 'local-window') return null;");
+        // A tunnelled window's connection (Tynn #898 step 2d-4b), the only caller left since engine.featureQuestion went
+        // (Tynn #912, 2f-1): only a local window's, and its effect goes to the window process that owns it.
+        expect(callers).toContain('const binding = this.#tunnelled.get(context.connectionId);');
+        expect(callers).toContain("if (!binding || context.origin !== 'local-window') return null;");
+        expect(callers).not.toContain('#callers');
         expect(callers).toContain('await binding.effect(effectId, method, args)');
         expect(owner).toMatch(/picked\(paths: readonly unknown\[\], context: CallContext\): void \{\s*this\.#check\(context\);\s*if \(context\.origin === 'local-window'\) this\.#caller\(context\.connectionId\)\.picks\.record\(paths\);\s*\}/);
     });

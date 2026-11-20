@@ -6,46 +6,32 @@ import { extractFileRefs, type AskFileRef } from '../core/ask-file-refs.js';
 import type { DeckItem } from '../core/deck.js';
 import type { DisplayPost } from '../core/artboard.js';
 import { visualRefsOf } from '../core/question-visuals.js';
-import { activeQuestion, dropDraft, mergeDrafts, putDraft, type QuestionDraft, type QuestionDrafts } from '../core/question-drafts.js';
+import { activeQuestion, dropDraft, mergeDrafts, putDraft, type QuestionDrafts } from '../core/question-drafts.js';
 import { QuestionApp } from './components/QuestionApp.js';
+import { questionBridge, type QuestionBridge, type QuestionView } from './question-bridge.js';
+import { localTransport } from './local-transport.js';
+import { connectRemote } from './remote-bridge.js';
 import { registerAppIcons } from './icons.js';
 import './styles.css';
 
 /**
- * The ForceTheQuestion window's renderer: QuestionApp over the question preload's `genieQuestion`. Pushed, never polled:
- * main sends the queue to show; the window asks once on load in case it opened before the first push arrived.
+ * The ForceTheQuestion window's renderer: QuestionApp over its bridge (question-bridge.ts) — the question preload's
+ * `genieQuestion` for the window's own calls, and genie-host over the window's own frame port for answers, Dismiss, files
+ * and visuals (Tynn #912, 2f-1). Pushed, never polled: main sends the queue to show; the window asks once on load in case
+ * it opened before the first push arrived.
  *
  * A push is frequent — every question asked or answered anywhere, by any agent — and it must never cost the person what
  * they are typing (the owner, 2026-10-15). So the drafts live HERE, keyed by question id (core/question-drafts.ts), not in
  * the form: a push merges into them (the window's own copy wins), the question the person picked stays picked while it
  * is asked, and every change is also handed to main, which keeps it if this window closes.
  */
-type View = { item: DeckItem; waiting: number; queue?: readonly DeckItem[]; parked?: readonly string[]; drafts?: QuestionDrafts };
+type View = QuestionView;
 type Outcome = { ok: true } | { ok: false; reason: string };
-interface QuestionBridge {
-    current(): Promise<View | null>;
-    answer(selections: string[][], notes: string[], id?: string): Promise<Outcome>;
-    later(): Promise<void>;
-    dismiss(notes: string[], id?: string): Promise<Outcome>;
-    select?(id: string): Promise<void>;
-    draft?(id: string, draft: QuestionDraft): Promise<void>;
-    onShow(listener: (view: View) => void): () => void;
-    /** Genie 1's file drawer: which named files are in the question's workspace (`null` = unknown), one file, and the window widening. */
-    files?(id: string, paths: string[]): Promise<string[] | null>;
-    file?(id: string, path: string): Promise<{ ok: true; path: string; text: string } | { ok: true; path: string; media: QuestionMedia } | { ok: false; reason: string }>;
-    openInFiles?(id: string, path: string): Promise<boolean>;
-    drawer?(open: boolean): Promise<void>;
-    /** The shown question's visuals (Tynn #835): its ArtBoard posts, from its workspace or the machine that asked. */
-    visuals?(id: string): Promise<{ ok: true; posts: DisplayPost[] } | { ok: false; reason: string }>;
-}
 type Drawer = { path: string; text?: string; media?: QuestionMedia; line?: number | null; error?: string };
 
 /** The paths the question names, in its own words (core/ask-file-refs.ts). */
 const namedPaths = (item: DeckItem): string[] =>
     extractFileRefs((item.answer.kind === 'form' ? item.answer.questions ?? [] : []).map((q) => q.question).join('\n\n')).map((ref) => ref.path);
-declare global {
-    interface Window { genieQuestion?: QuestionBridge }
-}
 
 const idsOf = (v: View): string[] => (v.queue && v.queue.length > 0 ? v.queue : [v.item]).map((q) => q.id);
 
@@ -165,5 +151,7 @@ registerAppIcons();
 initTheme();
 const host = document.getElementById('root');
 if (!host) throw new Error('#root is missing from question.html');
-const bridge = window.genieQuestion;
+const bridge = window.genieQuestion && window.genieLocalProtocol
+    ? questionBridge(window.genieQuestion, () => connectRemote(localTransport(window.genieLocalProtocol!), { kind: 'local' }, 'the question window'))
+    : null;
 createRoot(host).render(bridge ? <Question bridge={bridge} /> : <p style={{ padding: 16 }}>The question window’s bridge is missing.</p>);

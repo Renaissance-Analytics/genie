@@ -33,7 +33,7 @@ export const WINDOW_CAPABILITIES = [
 ] as const;
 export type WindowCapability = (typeof WINDOW_CAPABILITIES)[number];
 
-/** The steps of Tynn #898 that still move something onto the one protocol: 2b #896, 2c #897, 2f #912, 2g #913. */
+/** The steps of Tynn #898 that still move something onto the one protocol: 2b #896, 2c #897, 2f (#912, then #941), 2g #913. */
 export const MOVE_STEPS = ['2b', '2c', '2f', '2g'] as const;
 export type MoveStep = (typeof MOVE_STEPS)[number];
 
@@ -79,7 +79,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-reveal', 'window:os-shell'],
     // The picker is the window's; its copy step moves to the host in P5.
     ['genie:files-export', 'window:file-dialog'],
-    // 2f (#912): its relay mode opens through the host's device link (link.browserVia).
+    // 2f-2 (#941): its relay mode opens through the host's device link (link.browserVia).
     ['genie:browser-window-open', 'move:2f'],
     ['genie:files-popout', 'window:pop-out'],
     ['genie:terminals-popout', 'window:pop-out'],
@@ -90,7 +90,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // A pasted share link (Tynn #896, 2b-4): genie-host decides what it is (tynnNetwork.classifyLink); the window opens it,
     // in the person's browser or a workstation's window.
     ['genie:connect-link', 'window:os-shell'],
-    // 2f (#912): the host's device link, a second frame path beside the protocol door's.
+    // 2f-2 (#941): the host's device link, a second frame path beside the protocol door's.
     ['genie:relay-open', 'move:2f'],
     ['genie:relay-send', 'move:2f'],
     ['genie:relay-close', 'move:2f'],
@@ -100,22 +100,23 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:features-browser-bounds', 'window:feature-effect'],
 
     ['host-wait:current', 'window:host-wait'],
-    // 2f (#912): restarts genie-host and opens its log.
-    ['host-wait:act', 'move:2f'],
+    // Re-labelled from move:2f by the coordinator (2026-11-19, Tynn #912): shown only while genie-host does not answer; a
+    // dead host cannot serve its own restart; the restart moves to the launcher in split step 6, never to the host. Its
+    // handler exists only while the engine link is down (main.ts; split-2f-question-window.test.ts guards it).
+    ['host-wait:act', 'window:host-wait'],
 
+    // THE QUESTION WINDOW keeps only its window (Tynn #912, 2f-1): what to show, Later, the queue pick, the draft, Open in
+    // Files and the drawer's width. Its answers and Dismiss (features.act) and its files and visuals (questions.*) go to
+    // genie-host over its own frame port, like any window's.
     ['question:current', 'window:pop-out'],
-    // 2f (#912): an answer or a dismissal goes to the host as engine.featureQuestion, off the one protocol.
-    ['question:answer', 'move:2f'],
     ['question:later', 'window:pop-out'],
-    ['question:dismiss', 'move:2f'],
     ['question:select', 'window:pop-out'],
     ['question:draft', 'window:pop-out'],
-    // 2f (#912): a question's workspace files and ArtBoard posts, read from the disk in the window.
-    ['question:files', 'move:2f'],
-    ['question:file', 'move:2f'],
+    // ANOTHER MACHINE'S question in this window (Tynn #726): answered, dismissed or its visuals read through the window that
+    // drives that machine, which holds THAT host's protocol connection (main/remote-questions.ts), never this host.
+    ['question:remote', 'window:pop-out'],
     ['question:open-in-files', 'window:pop-out'],
     ['question:drawer', 'window:chrome'],
-    ['question:visuals', 'move:2f'],
 
     ['site-panel:prepare', 'window:site-panel'],
     ['site-panel:pop-out', 'window:site-panel'],
@@ -151,15 +152,14 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['browserCall', 'window:feature-effect'],
     ['onBrowserEvent', 'window:feature-effect'],
     ['gappSessions', 'window:gapp-window'],
-    // 2f (#912): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
+    // 2f-2 (#941): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
     // 2026-11-19). Take Over itself is the protocol's since 2b-1 (#896).
     ['takeOvers', 'move:2f'],
     // 2g (#913), re-labelled from 2c by the coordinator (2026-11-19, 2c-5): the crash report (2c-2) and the scratch terminal
     // (2c-4) are the protocol's. main's terminals replica is still read by its own MCP tool server (genieToolDeps) and,
     // synchronously, by the tray count, the Restart/Shut-down list, the quit plan and quit's closeAll: they move with it.
     ['terminals', 'move:2g'],
-    // 2f (#912): the question window's answers, and the device link's frames.
-    ['call:engine.featureQuestion', 'move:2f'],
+    // 2f-2 (#941): the device link's frames. The question window's answers left in 2f-1 (#912).
     ['deviceLink', 'move:2f'],
     // 2g (#913): what the window still composes (composeWindowServices) or reads over genie-host's replicas.
     ['appInbox', 'move:2g'],

@@ -404,7 +404,7 @@ describe('feature effects reach the window that owns the tunnelled connection', 
 
     it('a bound connection’s effects go to its window process, by the connection genie-host admitted', async () => {
         const calls: Array<[string, string, unknown[]]> = [];
-        const callers = new FeatureCallers(() => null);
+        const callers = new FeatureCallers();
         callers.bindConnection('rc_1', 'owner_a', async (id, method, args) => { calls.push([id, method, args]); return { value: null, browser: pane }; });
         callers.connectionBrowser('rc_1', pane);
         const ui = callers.presentation(LOCAL_CONTEXT);
@@ -415,7 +415,7 @@ describe('feature effects reach the window that owns the tunnelled connection', 
     });
 
     it('CONTROL: another origin, an unknown connection, an unbound one or a dropped owner presents nothing', () => {
-        const callers = new FeatureCallers(() => null);
+        const callers = new FeatureCallers();
         callers.bindConnection('rc_1', 'owner_a', async () => ({ value: null, browser: null }));
         expect(callers.presentation({ ...LOCAL_CONTEXT, origin: 'remote-window' })).toBeNull();
         expect(callers.presentation({ ...LOCAL_CONTEXT, connectionId: 'rc_other' })).toBeNull();
@@ -435,6 +435,8 @@ describe('window-local operations, done in the window’s process', () => {
         workspaces: () => [{ path: ws }],
         openApp: async (id, preview) => { log.push(`open ${id} ${preview}`); },
         openTerminalWindow: async (route) => { log.push(`terminal ${route}`); return 'closed' as const; },
+        openPath: async (path) => { log.push(`open-path ${path}`); return ''; },
+        reveal: (path) => { log.push(`reveal ${path}`); },
     });
 
     it('the OS trash, for a file inside a registered workspace', async () => {

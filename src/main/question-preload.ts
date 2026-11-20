@@ -1,30 +1,42 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 /**
- * THE FORCETHEQUESTION WINDOW'S PRELOAD. It exposes `genieQuestion` — the question to show (on load, and pushed when it
- * changes), an answer (the chosen labels and one note per question), Later, and Dismiss (with the notes the person wrote) — and nothing else of Genie.
- * An answer and a Dismiss name the question they are for (the window holds a queue; any of it is answerable, in any
- * order); `select` picks one from the queue; `draft` hands main what is written so far, so a closed window loses nothing.
+ * THE FORCETHEQUESTION WINDOW'S PRELOAD. It exposes `genieQuestion` — the window's own calls: the question to show (on
+ * load, and pushed when it changes), Later, a pick from the queue (`select`), the draft written so far (`draft`, so a
+ * closed window loses nothing), Open in Files and the drawer's width — and `remote`, for ANOTHER machine's question, which
+ * goes back through the window driving that machine (Tynn #726). And `genieLocalProtocol`, the one frame port: this
+ * machine's answer, Dismiss, files and visuals go to genie-host over it, like any Genie window's (Tynn #912, 2f-1;
+ * renderer/question-bridge.ts). Nothing else of Genie.
  */
-// An id only when there is one: the channel's arguments stay exactly what they were for a call that names none.
-const withId = (args: unknown[], id: string | undefined): unknown[] => (id === undefined ? args : [...args, id]);
 contextBridge.exposeInMainWorld('genieQuestion', {
     current: () => ipcRenderer.invoke('question:current'),
-    answer: (selections: string[][], notes: string[], id?: string) => ipcRenderer.invoke('question:answer', ...withId([selections, notes], id)),
     later: () => ipcRenderer.invoke('question:later'),
-    dismiss: (notes: string[], id?: string) => ipcRenderer.invoke('question:dismiss', ...withId([notes], id)),
     select: (id: string) => ipcRenderer.invoke('question:select', id),
     draft: (id: string, draft: { selections: string[][]; notes: string[]; revision?: number }) => ipcRenderer.invoke('question:draft', id, draft),
-    // Genie 1's file drawer: which named files are there, one file's text, and the window widening for it.
-    files: (id: string, paths: string[]) => ipcRenderer.invoke('question:files', id, paths),
-    file: (id: string, path: string) => ipcRenderer.invoke('question:file', id, path),
+    // Another machine's question: { kind: 'answer' | 'dismiss' | 'visuals', id, selections?, notes? } (main/remote-questions.ts).
+    remote: (request: unknown) => ipcRenderer.invoke('question:remote', request),
     openInFiles: (id: string, path: string) => ipcRenderer.invoke('question:open-in-files', id, path),
     drawer: (open: boolean) => ipcRenderer.invoke('question:drawer', open),
-    visuals: (id: string) => ipcRenderer.invoke('question:visuals', id),
     onShow: (listener: (view: unknown) => void) => {
         const handler = (_e: unknown, view: unknown) => listener(view);
         ipcRenderer.on('question:show', handler);
         return () => { ipcRenderer.removeListener('question:show', handler); };
+    },
+});
+
+// THE ONE FRAME PORT (core/local-frame.ts LOCAL_FRAME_CHANNELS, written out: a module two sandboxed preloads share becomes a
+// chunk neither can require; split-2f-question-window.test.ts holds these equal to the constant). Admission is main's.
+contextBridge.exposeInMainWorld('genieLocalProtocol', {
+    send: (action: string, connection: string, text: string) => {
+        if (typeof action !== 'string' || typeof connection !== 'string' || typeof text !== 'string') throw new TypeError('the local protocol port accepts strings only');
+        ipcRenderer.send('genie:local-frame', action, connection, text);
+    },
+    onFrame: (listener: (action: 'frame' | 'closed', connection: string, text: string) => void) => {
+        const onFrame = (_event: unknown, action: unknown, connection: unknown, text: unknown): void => {
+            if ((action === 'frame' || action === 'closed') && typeof connection === 'string' && typeof text === 'string') listener(action, connection, text);
+        };
+        ipcRenderer.on('genie:local-frame-back', onFrame);
+        return () => { ipcRenderer.removeListener('genie:local-frame-back', onFrame); };
     },
 });
 

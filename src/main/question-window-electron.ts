@@ -4,7 +4,8 @@ import { loadWindowPage } from './window-pages.js';
 import type { QuestionView, QuestionWindow, QuestionWindowPort } from './question-window.js';
 import { genieWindowIcon } from './app-identity.js';
 import { askWindowBounds } from '../core/question-drawer.js';
-import { existingFiles, questionFileInside, readQuestionFile } from './question-files.js';
+import { questionFileInside } from './question-files.js';
+import { actOnRemoteQuestion } from './remote-questions.js';
 import { onceShowable } from '../core/window-activation.js';
 import type { DeckItem } from '../core/deck.js';
 
@@ -19,30 +20,42 @@ import type { DeckItem } from '../core/deck.js';
 const WIDTH = 560;
 const HEIGHT = 520;
 
-export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null; workspacePath?: (workspaceId: string) => string | null; openInFiles?: (workspaceId: string, path: string) => void; visuals?: (item: DeckItem) => Promise<{ posts: readonly unknown[] }> }): (onClosed: () => void) => QuestionWindowPort {
-    // The page's calls, registered once: what to show (asked on load), an answer, Later, Dismiss — an answer and a
-    // Dismiss name the question they are for (any question in the window's queue, in any order) — a pick from the
-    // queue, and the draft being written (kept in main, so a closed window loses nothing).
+export function electronQuestionWindow(input: {
+    here: string; preload: string; controller: () => QuestionWindow | null; workspacePath?: (workspaceId: string) => string | null; openInFiles?: (workspaceId: string, path: string) => void;
+    /** Is this (shown) id another machine's question (RemoteQuestions)? Only those cross to main (Tynn #912, 2f-1). */
+    owns?: (id: string) => boolean;
+    /** Another machine's question's visuals, through the window driving that machine (Tynn #835). */
+    visuals?: (item: DeckItem) => Promise<{ posts: readonly unknown[] }>;
+    /** Admit the window's page to main's IPC door, so it reaches genie-host over its own frame port (Tynn #912, 2f-1). */
+    admit?: (contents: Electron.WebContents) => void;
+}): (onClosed: () => void) => QuestionWindowPort {
+    // The page's calls, registered once: what to show (asked on load), Later, a pick from the queue, and the draft being
+    // written (kept in main, so a closed window loses nothing). THIS machine's answer and Dismiss, and its question's files
+    // and visuals, are the page's own calls to genie-host over the one protocol (renderer/question-bridge.ts; Tynn #912).
     let last: QuestionView | null = null;
     const idOf = (raw: unknown): string | undefined => (typeof raw === 'string' && raw.length > 0 ? raw : undefined);
-    const notesOf = (raw: unknown): string[] => (Array.isArray(raw) ? raw.map((n) => (typeof n === 'string' ? n : '')) : []);
+    /** A question this window holds, by id: never one the page names that it was not shown. */
+    const held = (id: string | undefined): DeckItem | null => {
+        const queue = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
+        return queue.find((q) => q.id === id) ?? null;
+    };
     ipcMain.handle('question:current', () => last);
-    ipcMain.handle('question:answer', (_e, selections: unknown, notes: unknown, rawId: unknown) => {
-        const ctl = input.controller();
-        if (!ctl) return { ok: false, reason: 'Genie is not ready' };
-        const sel = Array.isArray(selections) ? selections.map((s) => (Array.isArray(s) ? s.map(String) : [])) : [];
-        // One note per question; anything that is not a string is no note.
-        const per = notesOf(notes);
-        const id = idOf(rawId);
-        return id === undefined ? ctl.answer(sel, per) : ctl.answer(sel, per, id);
-    });
     ipcMain.handle('question:later', () => { input.controller()?.later(); });
-    // Dismiss carries the person's notes, one per question, like an answer; anything that is not a string is no note.
-    ipcMain.handle('question:dismiss', (_e, notes: unknown, rawId: unknown) => {
+    // ANOTHER MACHINE'S QUESTION (Tynn #726): its answer, its Dismiss (each with the person's notes) and its visuals go back
+    // through the window driving that machine (remote-questions.ts). This machine's are refused here: they are the protocol's.
+    ipcMain.handle('question:remote', (_e, raw: unknown) => {
         const ctl = input.controller();
         if (!ctl) return { ok: false, reason: 'Genie is not ready' };
-        const id = idOf(rawId);
-        return id === undefined ? ctl.dismiss(notesOf(notes)) : ctl.dismiss(notesOf(notes), id);
+        return actOnRemoteQuestion(raw, {
+            owns: (id) => input.owns?.(id) === true,
+            answer: (selections, notes, id) => ctl.answer(selections, notes, id),
+            dismiss: (notes, id) => ctl.dismiss(notes, id),
+            visuals: async (id) => {
+                const item = held(id);
+                if (!item || !input.visuals) throw new Error('Genie does not know this question');
+                return input.visuals(item);
+            },
+        });
     });
     ipcMain.handle('question:select', (_e, rawId: unknown) => { const id = idOf(rawId); if (id !== undefined) input.controller()?.select(id); });
     ipcMain.handle('question:draft', (_e, rawId: unknown, raw: unknown) => {
@@ -53,49 +66,17 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         const revision = typeof d.revision === 'number' && Number.isFinite(d.revision) ? d.revision : 0;
         input.controller()?.draft(id, { selections, notes: notesOf(d.notes), revision });
     });
-    // GENIE 1'S FILE DRAWER (the owner, 2026-10-19). The files a question names are read from ITS workspace only — the
-    // question is looked up in what this window holds, never taken from the page — and only inside it (question-files.ts).
-    const rootOf = (rawId: unknown): string | null => {
-        const id = idOf(rawId);
-        const held = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
-        const item = held.find((q) => q.id === id);
-        return item?.workspaceId ? input.workspacePath?.(item.workspaceId) ?? null : null;
-    };
-    ipcMain.handle('question:files', async (_e, rawId: unknown, paths: unknown) => {
-        const root = rootOf(rawId);
-        if (root === null || !Array.isArray(paths)) return null;
-        return [...(await existingFiles(root, paths.filter((x): x is string => typeof x === 'string').slice(0, 16)))];
-    });
-    ipcMain.handle('question:file', async (_e, rawId: unknown, path: unknown) => {
-        const root = rootOf(rawId);
-        if (root === null) return { ok: false, reason: 'Genie does not know this question’s workspace' };
-        return typeof path === 'string' ? readQuestionFile(root, path) : { ok: false, reason: 'no such file' };
-    });
-    // A file the drawer cannot draw (a PDF, a binary) opens in Genie's Files panel: the question is looked up here and the
-    // path confined to its workspace again, so the page cannot name a file the drawer would have refused.
+    // A file the drawer cannot draw (a PDF, a binary) opens in Genie's Files panel, in THIS machine's main window: the
+    // question is looked up in what this window holds and the path confined to its workspace, so the page cannot name a file
+    // the drawer would have refused.
     ipcMain.handle('question:open-in-files', (_e, rawId: unknown, path: unknown) => {
-        const id = idOf(rawId);
-        const held = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
-        const item = held.find((q) => q.id === id);
-        const root = rootOf(rawId);
+        const item = held(idOf(rawId));
+        const root = item?.workspaceId ? input.workspacePath?.(item.workspaceId) ?? null : null;
         const inside = !item?.workspaceId || root === null || typeof path !== 'string' ? null : questionFileInside(root, path);
         if (!item?.workspaceId || root === null || inside === null) return false;
         // The Files panel takes a workspace-relative path, forward slashes.
         input.openInFiles?.(item.workspaceId, relative(root, inside).replace(/\\/g, '/'));
         return true;
-    });
-    // A QUESTION'S VISUALS (Tynn #835): the question is looked up in what this window holds — never taken from the page — and
-    // its ArtBoard posts read from ITS workspace, or, for another machine's question, through the window driving it.
-    ipcMain.handle('question:visuals', async (_e, rawId: unknown) => {
-        const id = idOf(rawId);
-        const held = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
-        const item = held.find((q) => q.id === id);
-        if (!item || !input.visuals) return { ok: false, reason: 'Genie does not know this question' };
-        try {
-            return { ok: true, posts: (await input.visuals(item)).posts };
-        } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-        }
     });
     // The window WIDENS for the drawer and back (Genie 1's askWindowBounds): the width it had before is what it returns to.
     let current: BrowserWindow | null = null;
@@ -138,6 +119,8 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         // A link in the question never navigates this window: it opens in the machine's browser.
         win.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url).catch(() => {}); return { action: 'deny' }; });
         win.webContents.on('will-navigate', (event, url) => { event.preventDefault(); void shell.openExternal(url).catch(() => {}); });
+        // Its page reaches genie-host over the one protocol, on main's door like every Genie window (Tynn #912, 2f-1).
+        input.admit?.(win.webContents);
         onceShowable(win, process.platform, () => win.showInactive());
         current = win;
         win.on('closed', () => { if (current === win) { current = null; baseWidth = null; } onClosed(); });

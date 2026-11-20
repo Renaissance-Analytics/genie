@@ -76,7 +76,7 @@ describe('genie-host opens the asking window\'s terminal window and ends the TUI
 
 describe('the window process opens a Take Over window when genie-host asks', () => {
     const handler = (log: string[], answer: 'closed' | 'raised' = 'closed') => windowOpsHandler({
-        trash: async () => {}, workspaces: () => [], openApp: async () => {},
+        trash: async () => {}, workspaces: () => [], openApp: async () => {}, openPath: async () => '', reveal: () => {},
         openTerminalWindow: async (route) => { log.push(route); return answer; },
     });
 

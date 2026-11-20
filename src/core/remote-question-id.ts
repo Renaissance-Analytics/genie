@@ -6,5 +6,5 @@
 export const REMOTE_QUESTION_PREFIX = 'remote:';
 
 export function isRemoteQuestionId(id: string): boolean {
-    throw new Error(`2f-1: not built yet (${id})`);
+    return id.startsWith(REMOTE_QUESTION_PREFIX);
 }
