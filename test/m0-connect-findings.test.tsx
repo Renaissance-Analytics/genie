@@ -107,7 +107,8 @@ describe('2. Open never brings forward another account’s window, or a dropped 
         const open = /function openRemoteWindow\([^]*?\n\}/.exec(main)?.[0] ?? '';
         expect(open).toContain('remoteWindowAction(');
         expect(open).toContain("'genie:remote-reconnect'");
-        expect(main).toContain('tynnAccount.onChange(() => { closeRelayWindowsOfOtherAccounts(); });');
+        // Heard from genie-host's summary since 2g-3a (Tynn #954): the account it is signed in to changed.
+        expect(main).toMatch(/if \(summary\.tynnAccountKey !== hostSummaryNow\.tynnAccountKey\) \{ hostSummaryNow = summary; closeRelayWindowsOfOtherAccounts\(\); \}/);
         const close = /function closeRelayWindowsOfOtherAccounts\(\)[^]*?\n\}/.exec(main)?.[0] ?? '';
         expect(close).toContain('windowsLeftByAccountChange(');
         expect(close).toContain('.destroy()');

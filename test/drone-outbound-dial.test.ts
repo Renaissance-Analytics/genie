@@ -41,10 +41,11 @@ describe('main enforces it, not the window', () => {
         const at = main.indexOf("ipcMain.handle('genie:remote-open-window'");
         expect(at).toBeGreaterThan(-1);
         const handler = main.slice(at);
-        expect(handler.slice(0, handler.indexOf('\n'))).toContain('outboundDialRefusal(workstationRoleNow');
+        // The role is genie-host's, in the summary main keeps (Tynn #954, 2g-3a).
+        expect(handler.slice(0, handler.indexOf('\n'))).toContain('outboundDialRefusal(hostSummaryNow.workstationRole');
     });
 
     it('the app windows’ session cancels a WebSocket main refuses', () => {
-        expect(main).toMatch(/session\.defaultSession\.webRequest\.onBeforeRequest\([^\n]*outboundDialRefusal\(workstationRoleNow, details\.url\)/);
+        expect(main).toMatch(/session\.defaultSession\.webRequest\.onBeforeRequest\([^\n]*outboundDialRefusal\(hostSummaryNow\.workstationRole, details\.url\)/);
     });
 });

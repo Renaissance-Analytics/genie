@@ -177,7 +177,7 @@ describe('genie-host as its own process', () => {
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'teller' });
         const caller = { agentId: agent.id, agentName: agent.name, workspaceId: 'ws', workspacePath: workspace };
         const first = await window();
-        await first.client.call('engine.records', [[agent]]);
+        // genie-host reads its own registry for records (Tynn #954, 2g-3): the window pushes none.
         // A Take Over terminal's agent: the window says whose terminal it is; it calls Genie's tools over HTTP by its id.
         expect(await first.client.pushWindowView({ workspaceNames: { ws: 'ws' }, userActive: true, callers: { 'term-teller': caller } })).toBe(true);
         const status = await first.client.mcpStatus();

@@ -135,8 +135,6 @@ export interface EngineClientOptions {
     readonly comms?: (agentId: AgentId, since: number) => Comms | null;
     /** A stop the host could not verify (the lifecycle's `refused`): main records it on the Deck. */
     readonly onStopUnverified?: (agentId: AgentId, reason: string) => void;
-    /** Every agent record, pushed to the host on connect and on `recordsChanged()` (genie#1188 reads them per call). */
-    readonly records?: () => readonly AgentRecord[];
     /** The link closed (the host exited or was lost): main reconnects. */
     readonly onDisconnected?: (reason: string) => void;
     /** How long an agent's ledger stays watched after the window last read it. Default 60 s. */
@@ -359,7 +357,6 @@ export class SessionEngineClient {
             this.refusals.delete(id as AgentId);
             this.#emit(id as AgentId);
         }
-        void this.call('engine.records', [this.#options.records?.() ?? []]);
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
         for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
         for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
@@ -1060,10 +1057,6 @@ export class SessionEngineClient {
     }
 
     /** Push every record again (main calls it when one changed). */
-    recordsChanged(): void {
-        void this.call('engine.records', [this.#options.records?.() ?? []]);
-    }
-
     /** The agents whose ledger the window has not read for `ledgerIdleMs`: unwatched, their replica dropped. */
     sweepLedgers(): void {
         const now = (this.#options.now ?? Date.now)();
