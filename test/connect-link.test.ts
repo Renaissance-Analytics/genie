@@ -77,14 +77,11 @@ describe('acting on it', () => {
         expect(d.openExternal).not.toHaveBeenCalled();
     });
 
-    it('a drone opens nothing — Tynn refuses its connect-grant — and says why', async () => {
+    it('a drone opens a share link like any machine: Tynn decides the grant, not a local gate (Tynn #963)', async () => {
         const d = deps();
-        for (const link of ['https://tynn.ai/invites/accept/tok', 'genie://workstation/open?id=ws_1']) {
-            const out = await dispatchConnectLink(link, TYNN, 'drone', d);
-            expect(out.ok).toBe(false);
-            expect(out.note).toContain('drone');
-        }
-        expect(d.openExternal).not.toHaveBeenCalled();
-        expect(d.openWorkstation).not.toHaveBeenCalled();
+        expect((await dispatchConnectLink('https://tynn.ai/invites/accept/tok', TYNN, 'drone', d)).ok).toBe(true);
+        expect((await dispatchConnectLink('genie://workstation/open?id=ws_1', TYNN, 'drone', d)).ok).toBe(true);
+        expect(d.openExternal).toHaveBeenCalledWith('https://tynn.ai/invites/accept/tok');
+        expect(d.openWorkstation).toHaveBeenCalledWith('ws_1', null);
     });
 });

@@ -18,12 +18,12 @@ export const OPEN_SHARE_LINK_ACTION = { id: 'open-share-link', label: 'Open a sh
 export const CONNECT_WORKSTATIONS_ACTION = { id: 'connect-workstations', label: 'Connect to my workstations' } as const;
 
 /**
- * What the Command Window offers, for the role Tynn gave this machine. A drone is offered neither: Tynn refuses a drone's
- * list and every connect-grant (genie#1278 S1, `RefuseDroneCaller`), including the one a share link leads to, so it
- * offers nothing it would only be refused. Signed out (no role) offers both; each then says to sign in.
+ * What the Command Window offers, for the role Tynn gave this machine. A drone is offered "Open a share link…" (Tynn
+ * #963): a share link is how a drone opens another host, and Tynn decides its grant. Its own workstations list stays a
+ * pilot's. Signed out (no role) offers both; each then says to sign in.
  */
 export function connectPaletteActions(role: WorkstationRole | null): ReadonlyArray<{ readonly id: string; readonly label: string }> {
-    return mayBrowse(role) ? [OPEN_SHARE_LINK_ACTION, CONNECT_WORKSTATIONS_ACTION] : [];
+    return mayBrowse(role) ? [OPEN_SHARE_LINK_ACTION, CONNECT_WORKSTATIONS_ACTION] : [OPEN_SHARE_LINK_ACTION];
 }
 
 /**

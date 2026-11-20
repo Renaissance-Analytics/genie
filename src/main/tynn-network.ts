@@ -202,6 +202,8 @@ export type RelayHostStatus =
     | { readonly state: 'off' }
     | { readonly state: 'connecting' }
     | { readonly state: 'reachable'; readonly relay: string }
+    /** The link was up and was lost at `since` (epoch ms), for `reason`; it is being redialled (Tynn #940). */
+    | { readonly state: 'reconnecting'; readonly since: number; readonly reason: string }
     | { readonly state: 'unavailable'; readonly reason: string };
 
 export interface RelayHostHandle {
@@ -279,8 +281,12 @@ export function startRelayHost(input: {
             onState: (state, detail) => {
                 if (stopped) return;
                 if (state === 'open') set({ state: 'reachable', relay });
+                // A link that was up and is lost is RECONNECTING since it was lost (Tynn #940), through every redial and
+                // refusal until it is up again; one that never came up is unavailable, in the words it was refused in.
+                else if (state === 'closed' && detail && status.state === 'reachable') set({ state: 'reconnecting', since: Date.now(), reason: detail });
+                else if (state === 'closed' && detail && status.state === 'reconnecting') { if (status.reason !== detail) set({ ...status, reason: detail }); }
                 else if (state === 'closed' && detail) set({ state: 'unavailable', reason: detail });
-                else if (state === 'connecting' && status.state !== 'unavailable') set({ state: 'connecting' });
+                else if (state === 'connecting' && status.state !== 'unavailable' && status.state !== 'reconnecting') set({ state: 'connecting' });
             },
             ...(input.log ? { log: input.log } : {}),
         });

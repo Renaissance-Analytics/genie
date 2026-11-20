@@ -4,19 +4,27 @@ import type { RelaySocket } from '../src/main/relay-wire.js';
  * THE TYNN RELAY, IN MEMORY — genie-cloud's `src/relay-server/server.ts` + `router.ts` + `registry.ts`, rule for rule:
  * host-hello → host-welcome (the hello judged by `verifyHost`, the Tynn enrollment verifier's job); member-hello →
  * no-host error, or member-welcome + a control `open {grant}` to the host; member frames stamped with the relay's own
- * sid; a host control close/error delivered then the session dropped; a member leaving → a control close to the host.
+ * sid; a host control close/error delivered then the session dropped; a member leaving → a control close to the host;
+ * and its HEARTBEAT (Tynn #940): every registered host is pinged every 30 s, which a `ws` socket surfaces as `'ping'`.
  */
 export interface FakeSocket extends RelaySocket {
     readonly url: string;
     deliver(text: string): void;
     drop(): void;
+    on(event: 'ping', listener: () => void): unknown;
+    /** The relay's protocol ping, as `ws` surfaces it to the host: a `'ping'` event, never a message. */
+    ping(): void;
 }
+
+/** genie-cloud's host heartbeat interval (`relay-server/server.ts` `heartbeatMs`). */
+const HEARTBEAT_MS = 30_000;
 
 export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string | null) {
     const log: string[] = [];
     const hosts = new Map<string, FakeSocket>();
     const sessions = new Map<string, { workstationId: string; member: FakeSocket }>();
     const helloOf = new Map<FakeSocket, string | null>();
+    const beats = new Map<FakeSocket, ReturnType<typeof setInterval>>();
     let nextSid = 0;
 
     const dropSession = (sid: string) => {
@@ -35,6 +43,9 @@ export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string
                 if (!id) { log.push('host refused'); socket.deliver(JSON.stringify({ type: 'error', code: 'enroll', reason: 'denied' })); socket.drop(); return; }
                 helloOf.set(socket, id);
                 hosts.set(id, socket);
+                const beat = setInterval(() => { if (hosts.get(id) === socket) socket.ping(); else clearInterval(beat); }, HEARTBEAT_MS);
+                beat.unref?.();
+                beats.set(socket, beat);
                 log.push(`host ${id} registered`);
                 socket.deliver(JSON.stringify({ type: 'host-welcome', workstationId: id }));
                 return;
@@ -62,6 +73,9 @@ export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string
     };
 
     const onClosed = (socket: FakeSocket) => {
+        const beat = beats.get(socket);
+        if (beat) clearInterval(beat);
+        beats.delete(socket);
         const path = new URL(socket.url).pathname;
         if (path === '/ws/host') {
             const id = helloOf.get(socket);
@@ -80,6 +94,7 @@ export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string
 
     const socket = (url: string): FakeSocket => {
         let closed = false;
+        const pings = new Set<() => void>();
         const s: FakeSocket = {
             url,
             readyState: 0,
@@ -89,6 +104,8 @@ export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string
             onerror: null,
             send: (data) => { if (!closed) queueMicrotask(() => onMessage(s, data)); },
             close: () => { s.drop(); },
+            on: (event, listener) => { if (event === 'ping') pings.add(listener); return s; },
+            ping: () => { if (!closed) for (const l of pings) l(); },
             // As a real socket: what arrived before the close is delivered before it (the close is queued after).
             deliver: (text) => { if (!closed) queueMicrotask(() => s.onmessage?.({ data: text })); },
             drop: () => {

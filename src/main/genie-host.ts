@@ -78,7 +78,7 @@ import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { terminalWorkspaceOf, workspaceFolders } from './host-share-scope.js';
 import { TakeOverHost } from './take-over-host.js';
-import { WorkspaceColors } from './workspace-color-host.js';
+import { followWorkspaceColors, WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { CloneOffersService } from './clone-offers-service.js';
 import { nodeSaveGit, workspaceSaveOps } from './workspace-save-host.js';
@@ -156,7 +156,6 @@ import { accountsOwnAnswers, type AccountsPort } from './accounts-protocol.js';
 import { uploadSender } from './uploads.js';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { RelayHostService } from './relay-host-service.js';
-import { connectOutRefusal, mayBrowse } from '../core/workstation-role.js';
 import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
 import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
@@ -166,6 +165,7 @@ import { ProtocolTunnels } from './protocol-tunnels.js';
 import { hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
 import { hostOwnerOps } from './host-owner-ops.js';
 import { LocalStagingArea } from './local-staging-area.js';
+import { withComms } from './dashboard-comms.js';
 import { Registry } from './registry.js';
 import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -1271,12 +1271,8 @@ async function main(): Promise<void> {
          * here; the window gets a channel. The browser's door to that workstation's sites is here too.
          */
         relay: {
+            // No local role gate (Tynn #963): Tynn decides the grant, and a refusal is worded from the role read again.
             signedIn: () => tynnAccountNow?.status().signedIn === true,
-            // Not known to be a drone: ask Tynn first (beta.61.1); only its own "drone" is refused as one.
-            refusal: async () => {
-                if (!mayBrowse(relayHostService.role()) && relayHostService.said() === null) await relayHostService.readRole().catch(() => {});
-                return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said(), why: relayHostService.unknownWhy() });
-            },
             keypair: () => PopKeypair.generate(),
             mint: (workstationId, jwk) => (tynnAccountNow
                 ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
@@ -1676,13 +1672,20 @@ async function main(): Promise<void> {
     const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
-    phoneRegistry.setProbe((id) => host.probe(id));
+    // The Dashboard's comms (Tynn #956): this machine's window has been served from this registry since Tynn #898 2d-4b, and
+    // the SessionHost's probe carries none, so the rows take them from the host's own inbox (main/dashboard-comms.ts).
+    phoneRegistry.setProbe(withComms((id) => host.probe(id), (id) => own.inbox.involving(id, 2000)));
     phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
     phoneRegistry.setSafeMode(() => safeMode.view());
     phoneRegistry.setHangNotice(() => crashState.view().notice);
     phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
-    const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
+    const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), writesAssigned: false, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
     phoneRegistry.setWorkspaceColorer((path) => workspaceColors.colorOf(path));
+    // THE DASHBOARD'S WORKSPACE COLOURS (Tynn #956): this machine's Dashboard is this registry's since Tynn #898 2d-4b, and no
+    // pass ever ran here: every swatch blank, every comms arc the fallback violet. The window's pass, without writing the
+    // colours it assigns (writesAssigned: false): the window writes those, and the same rail order assigns the same ones.
+    // A person's choice (workspaces.setColor, `set`) is still written here.
+    followWorkspaceColors(phoneRegistry, workspaceColors);
     const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
     const featureDeckItems = () => assembleDeckItems({
         workspaces: hostRegistry.listWorkspaces(),
@@ -2022,6 +2025,8 @@ async function main(): Promise<void> {
         shares: shareLinksOver({
             request: (path, init) => (tynnAccountNow ? tynnAccountNow.request(path, init) : Promise.reject(new Error('this Genie has no Tynn account'))),
             workstation: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
+            // Tynn's 404 is worded from the role read again (Tynn #963): a drone is told it is one, never "sign in".
+            rereadRole: () => rereadRoleForGrant(),
             // A revoked link's live guest session is dropped now, not at the next re-check (audit M-c).
             endSessions: async () => { await relayHostService.call('revalidate', []); },
         }),

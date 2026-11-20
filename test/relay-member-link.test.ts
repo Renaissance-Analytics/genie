@@ -100,11 +100,10 @@ describe('the relay member, in genie-host', () => {
         expect(await rig().service.call('w', 'openRelay', [''])).toMatchObject({ ok: false });
     });
 
-    it('a drone never connects out, refused here from the role genie-host read from Tynn (Tynn #410): no grant minted (control: a pilot opens)', async () => {
-        const drone = rig({ refusal: () => 'this workstation is a drone: it does not connect out' });
-        expect(await drone.service.call('w', 'openRelay', ['ws_alpha'])).toEqual({ ok: false, reason: 'this workstation is a drone: it does not connect out' });
-        expect(drone.minted).toEqual([]);
-        expect(await rig({ refusal: () => null }).service.call('w', 'openRelay', ['ws_alpha'])).toMatchObject({ ok: true });
+    it('no local role gate on a relay dial: Tynn decides the grant (Tynn #963; a share link is how a drone opens a host)', async () => {
+        const asDrone = rig({ refusal: () => 'this workstation is a drone: it does not connect out' } as unknown as Partial<RelayMemberPorts>);
+        expect(await asDrone.service.call('w', 'openRelay', ['ws_alpha'])).toMatchObject({ ok: true });
+        expect(asDrone.minted.map((m) => m.workstationId)).toEqual(['ws_alpha']);
     });
 
     it('the browser\'s door to that workstation\'s sites is genie-host\'s: its port, and its CA once a site answered, said to the window', async () => {
