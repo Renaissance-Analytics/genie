@@ -9,6 +9,9 @@ import { accountsView, type AccountsSnapshot } from '../src/core/accounts-view.j
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
 import { TitleBar } from '../src/renderer/components/TitleBar.js';
+import { EMPTY_SNAPSHOT } from '../src/renderer/bridge.js';
+import { EMPTY_FEATURES } from '../src/renderer/features.js';
+import { Shell } from '../src/renderer/Shell.js';
 
 /**
  * THE ACCOUNT PILLS LIVE IN GENIE'S TITLE BAR (Tynn #949; the owner, 2026-11-20: "the account pills are supposed to be in the
@@ -114,5 +117,27 @@ describe('the Dashboard header has no account pills', () => {
         const dashboard = shell.slice(shell.indexOf('<Dashboard'), shell.indexOf('/>', shell.indexOf('<Dashboard')));
         expect(dashboard).not.toMatch(/rateLimits=/);
         expect(source('src/renderer/components/Dashboard.tsx')).not.toMatch(/<RateLimitPills\b/);
+    });
+});
+
+describe('on every view (the Shell, rendered)', () => {
+    const shell = (route: string) => renderToStaticMarkup(
+        <Shell route={route} snapshot={{ ...EMPTY_SNAPSHOT, workspaces: [{ id: 'w', path: '/w/w' }], deckItems: [] }} features={EMPTY_FEATURES}
+            servable={['dashboard', 'agent', 'settings', 'knowledge']} agentDetail={null} agentResolved selectedRowId={null} chatThread={null} pinned={null}
+            onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}}
+            onSend={() => {}} onCloseChat={() => {}} answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}}
+            rateLimits={LIMITS} now={NOW} />,
+    );
+    it('Settings, Knowledge and the Dashboard each draw the pills once, in the title bar', () => {
+        for (const route of ['genie://settings', 'genie://knowledge', 'genie://dashboard']) {
+            const html = shell(route);
+            expect(html.split('data-title-account-pills=""'), route).toHaveLength(2);
+            expect(html.split('data-rate-limit="gemini"'), route).toHaveLength(2);
+            expect(html.indexOf('data-title-account-pills'), route).toBeGreaterThan(html.indexOf('data-title-bar'));
+        }
+        // POSITIVE CONTROL: the Dashboard really rendered (its header's Chat button), and the pill is not in it.
+        const dash = shell('genie://dashboard');
+        expect(dash).toContain('data-action="chat-genie"');
+        expect(dash.indexOf('data-rate-limit="gemini"')).toBeLessThan(dash.indexOf('data-action="chat-genie"'));
     });
 });
