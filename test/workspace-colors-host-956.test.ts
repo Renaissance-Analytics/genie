@@ -14,7 +14,7 @@ import { followWorkspaceColors, WorkspaceColors, type WorkspaceColorFs } from '.
  * writes those, before its agent-config move, so two processes never write one project.json at once. A person's choice
  * (`set`, workspaces.setColor, which genie-host answers with no window open) is still written by genie-host.
  */
-type Snap = { workspaces?: readonly { id: string; path: string; color?: string | null; governedBy?: string | null }[] | null };
+type Snap = { workspaces?: readonly { id: string; path: string; color?: string | null; governedBy?: string | null }[] | null | undefined };
 
 function fakeRegistry(workspaces: Snap['workspaces']) {
     const listeners = new Set<(s: Snap) => void>();
