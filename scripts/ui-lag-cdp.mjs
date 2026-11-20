@@ -318,10 +318,10 @@ try {
     await hostCdp.evaluate(`(${installHostGauge.toString()})((${createGapGauge.toString()}))`);
     const pageGauge = await page.evaluate(`(${installPageGauge.toString()})((${createGapGauge.toString()}))`);
     const focusField = () => page.evaluate(`document.querySelector('[data-ui-lag-typing]').focus(); true`);
-    const filesOpen = () => page.evaluate(`document.querySelector('[data-action="toggle-files"]')?.getAttribute('data-panel-open') === 'true'`);
+    const filesOpen = () => page.evaluate(`document.querySelector('[data-workspace-tab="files"]')?.getAttribute('aria-selected') === 'true'`);
     const toggleFiles = async (want) => {
         if ((await filesOpen()) === want) return;
-        await page.evaluate(`document.querySelector('[data-action="toggle-files"]').click(); true`);
+        await page.evaluate(`document.querySelector('[data-workspace-tab="${want ? 'files' : 'home'}"]').click(); true`);
         await until(`the Files panel ${want ? 'open' : 'closed'}`, async () => (await filesOpen()) === want, 15000);
     };
 

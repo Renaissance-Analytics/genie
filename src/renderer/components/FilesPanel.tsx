@@ -1,4 +1,4 @@
-import { Button, ContextMenu, Icon, MultiSwitch, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
+import { Button, ContextMenu, Dropdown, Icon, MultiSwitch, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
 import { useRef, useState, type ReactNode } from 'react';
 import { fileMenuItems, type FileMenuAction, type FileMenuTarget } from '../../core/file-menu.js';
 import { CodeEditor, FileViewer, resolveFileKind } from '@particle-academy/fancy-code';
@@ -229,6 +229,18 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
+/**
+ * THE FILES VIEW MENU'S ITEMS (Tynn #945): Pin when the panel can be pinned, Pop out when this window can pop one (a remote
+ * window cannot pop a window on the host), and Close, always.
+ */
+export function filesViewMenu(p: { readonly onPin?: (() => void) | undefined; readonly onPopOut?: (() => void) | undefined; readonly pinned?: boolean | undefined }): { readonly action: 'pin-files' | 'pop-out-files' | 'close-files'; readonly label: string; readonly hint: string }[] {
+    return [
+        ...(p.onPin ? [{ action: 'pin-files' as const, label: p.pinned ? 'Unpin' : 'Pin', hint: p.pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel' }] : []),
+        ...(p.onPopOut ? [{ action: 'pop-out-files' as const, label: 'Pop out', hint: 'Pop the panel into its own window' }] : []),
+        { action: 'close-files' as const, label: 'Close', hint: 'Close the panel (⌘B)' },
+    ];
+}
+
 export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions, active: activeProp, pluginTabs = [], prefs, onPrefs, baseline, theme, unsaved = [], git = {}, copied }: FilesPanelProps) {
     const rows = { unsaved: new Set(unsaved), git };
     // The open file filling the window (core/preview-full.ts; the owner, beta.65). Esc or the crumb's button restores it.
@@ -290,15 +302,22 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                 {popped ? (
                     <Button size="xs" type="button" data-action="bring-back-files" className={button} title="Dock the panel back into the main window" onClick={onClose}>Dock it back</Button>
                 ) : (
-                    <>
-                        {onPin ? (
-                            <Button size="xs" type="button" data-action="pin-files" data-pin={pinned ? 'on' : 'off'} className={button} title={pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel'} onClick={onPin}>
-                                {pinned ? 'Pinned' : 'Pin'}
+                    // ONE VIEW MENU, NOT THREE WORDS (Tynn #945; the owner, 2026-11-20, on "Pop out" and "Close" in the header):
+                    // Pin, Pop out and Close are its items. The trigger carries the pin lamp, so the dock's state still shows.
+                    <Dropdown placement="bottom-end">
+                        <Dropdown.Trigger>
+                            <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="files-view-menu" {...(onPin ? { 'data-pin': pinned ? 'on' : 'off' } : {})} aria-label="View" title="View: pin, pop out or close the panel" className={button}>
+                                <Icon name="ellipsis" size="xs" />
                             </Button>
-                        ) : null}
-                        {onPopOut ? <Button size="xs" type="button" data-action="pop-out-files" className={button} title="Pop the panel into its own window" onClick={onPopOut}>Pop out</Button> : null}
-                        <Button size="xs" type="button" data-action="close-files" className={button} title="Close the panel (⌘B)" onClick={onClose}>Close</Button>
-                    </>
+                        </Dropdown.Trigger>
+                        <Dropdown.Items>
+                            {filesViewMenu({ onPin, onPopOut, pinned }).map((item) => (
+                                <Dropdown.Item key={item.action} onClick={() => { if (item.action === 'pin-files') onPin?.(); else if (item.action === 'pop-out-files') onPopOut?.(); else onClose(); }}>
+                                    <span data-action={item.action} title={item.hint} className="whitespace-nowrap">{item.label}</span>
+                                </Dropdown.Item>
+                            ))}
+                        </Dropdown.Items>
+                    </Dropdown>
                 )}
             </header>
             <div className="flex min-h-0 flex-1">
