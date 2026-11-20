@@ -250,6 +250,8 @@ import { supervisorFailureWords } from '../core/supervisor-failure.js';
 import { providerChoiceFile, setProviderChoiceFile } from './provider-choice.js';
 import { hostProviderPrograms } from './host-provider-programs.js';
 import { ScratchTerminals, scratchTerminalFor } from './scratch-terminal.js';
+import { hostQuestionReads } from './host-question-reads.js';
+import { hostShellFor } from './host-shell.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
@@ -432,7 +434,7 @@ async function main(): Promise<void> {
     own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
     let engineRef: SessionEngineServer | null = null;
     let hostFeatures: HostFeatures | null = null;
-    const featureCallers = new FeatureCallers(() => hostFeatures);
+    const featureCallers = new FeatureCallers();
     /*
      * THIS MACHINE'S WINDOWS ARE SERVED HERE (Tynn #898 step 2d-4b): each window's protocol connection, tunnelled over its
      * process's engine link, joins the remote hub below as this machine's own window. A tunnelled connection's feature
@@ -1868,6 +1870,12 @@ async function main(): Promise<void> {
         // windows, written to this host's own choice file (the one its agents start from); the provider is read again.
         // The throwaway shell (Tynn #897, 2c-4): a workspace's with its shell environment, or Genie's own in the home folder.
         scratchTerminals: { open: (workspaceId, context) => scratchTerminalFor({ scratch: hostScratchTerminals, home: userHome(), workspace: (id) => hostRegistry.workspace(id) ?? null, envFor: shellEnv }, workspaceId, context) },
+        // THE QUESTION WINDOW'S DRAWER AND GALLERY (Tynn #912, 2f-1): a question's named files and ArtBoard visuals, looked up
+        // in this host's own Deck and read from the question's workspace, for every client.
+        questions: hostQuestionReads({ deck: featureDeckItems, workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null }),
+        // OPEN WITH / SHOW IN FILE MANAGER for a client on another machine (Tynn #912, 2f-1): confined here, then done on this
+        // machine's screen by a Genie window here (the window op, like the trash). This machine's own window does it itself.
+        hostShell: hostShellFor({ absolute: (ws, path) => phoneFiles.absolute(ws, path), windowOp: (op, args) => (engineRef ? engineRef.windowOp(null, op, args) : Promise.reject(new Error('Genie is still starting; try again in a moment'))), hostName: () => hostname() }),
         providerPrograms: hostProviderPrograms({
             file: () => providerChoiceFile(),
             refresh: (provider) => { void providerHealth.refresh(provider); },

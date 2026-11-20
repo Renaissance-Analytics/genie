@@ -431,9 +431,11 @@ describe('the local door retains a 1 MiB UTF-8 protocol frame cap in both direct
 
 describe('the preload and main wiring', () => {
     const read = (name: string) => readFileSync(new URL(`../src/main/${name}`, import.meta.url), 'utf8');
-    it('only the main preload exposes the string frame port', () => {
-        expect(read('preload.ts')).toContain("contextBridge.exposeInMainWorld('genieLocalProtocol'");
-        for (const name of ['doctor-preload.ts', 'question-preload.ts', 'browser-preload.ts']) expect(read(name)).not.toContain('genieLocalProtocol');
+    it('the main preload and the question window’s expose the string frame port; doctor’s and the browser’s do not', () => {
+        // The question window reaches genie-host over it since 2f-1 (Tynn #912), admitted by main like every Genie window.
+        for (const name of ['preload.ts', 'question-preload.ts']) expect(read(name)).toContain("contextBridge.exposeInMainWorld('genieLocalProtocol'");
+        for (const name of ['doctor-preload.ts', 'browser-preload.ts']) expect(read(name)).not.toContain('genieLocalProtocol');
+        expect(read('question-window-electron.ts')).toContain('input.admit?.(win.webContents);');
     });
     it.each(['createWindow', 'openTakeOverWindow', 'openFilesWindow', 'openFlowEditorWindow'])('%s admits its window before loading the renderer', (name) => {
         const body = read('main.ts').match(new RegExp(`function ${name}\\b[\\s\\S]*?void loadWindowPage\\(win\\.webContents`))?.[0];

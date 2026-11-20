@@ -1,49 +1,29 @@
 import type { CallContext } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
-import type { FeatureAction } from '../renderer/features.js';
-import type { HostFeaturePresentation, HostFeatures } from './features-host.js';
+import type { HostFeaturePresentation } from './features-host.js';
 
 export type FeatureEffect = (connectionId: string, method: string, args: unknown[]) => Promise<unknown>;
 export type FeatureBrowser = { url: string | null; canGoBack: boolean; canGoForward: boolean };
 const NO_WINDOW = 'this feature action needs its caller’s own admitted local window; open Genie there and try again';
 
-/** Engine connections own their forwarded callers and their effects; no window is selected by recency. */
+/**
+ * THIS MACHINE'S WINDOWS' FEATURE EFFECTS: each window connection tunnelled to genie-host's RemoteHost is bound to the window
+ * process that owns it; no window is selected by recency. Every client reaches the features themselves over the one
+ * protocol, where RemoteHost admits it: the engine server's engine.features (step 2e-2, Tynn #914) and the question
+ * window's engine.featureQuestion (step 2f-1, Tynn #912) are retired.
+ */
 export class FeatureCallers {
-    readonly #callers = new Map<string, { owner: string; context: CallContext; effect: FeatureEffect; browser: FeatureBrowser | null }>();
     /**
      * THIS MACHINE'S WINDOWS, TUNNELLED TO GENIE-HOST'S REMOTEHOST (Tynn #898 step 2d-4b): by the connection id RemoteHost
      * admitted, the window process that owns it, how to ask it for an effect, and its browser pane as it last said.
      */
     readonly #tunnelled = new Map<string, { owner: string; effect: FeatureEffect; browser: FeatureBrowser | null }>();
-    constructor(readonly service: () => HostFeatures | null) {}
-
-    /**
-     * The question window's answer (engine.featureQuestion, until step 2f moves it, Tynn #912). The engine server's
-     * engine.features route that also came here is retired (step 2e-2, Tynn #914): every client reaches the features over
-     * the one protocol, where RemoteHost admits it.
-     */
-    async call(owner: string, method: string, args: unknown[], raw: unknown, effect: FeatureEffect, browser: FeatureBrowser | null): Promise<unknown> {
-        const context = admittedContext(raw);
-        const key = JSON.stringify([owner, context.connectionId]);
-        const scoped = { ...context, connectionId: key };
-        const service = this.service();
-        if (!service) throw new Error('Genie’s feature services are still starting; try again in a moment');
-        if (!this.#callers.has(key) && this.#callers.size >= 256) throw new Error('too many feature callers are connected; close an unused window and try again');
-        const previous = this.#callers.get(key);
-        if (previous) { previous.browser = browser; previous.effect = effect; }
-        else this.#callers.set(key, { owner, context: scoped, effect, browser });
-        if (method !== 'act') throw new Error('unknown feature operation');
-        return service.act(args[0] as FeatureAction, scoped);
-    }
 
     presentation(context: CallContext): HostFeaturePresentation | null {
-        const forwarded = this.#callers.get(context.connectionId);
-        // A forwarded caller (the question window's engine.featureQuestion) is keyed [owner, its connection]; a tunnelled one by RemoteHost's own id.
-        const tunnelled = forwarded ? undefined : this.#tunnelled.get(context.connectionId);
-        const binding = forwarded ?? tunnelled;
-        if (!binding || (forwarded ? forwarded.context.origin : context.origin) !== 'local-window') return null;
-        const effectId = forwarded ? (JSON.parse(context.connectionId) as [string, string])[1] : context.connectionId;
-        const current = () => (forwarded ? this.#callers.get(context.connectionId) : this.#tunnelled.get(context.connectionId));
+        const binding = this.#tunnelled.get(context.connectionId);
+        if (!binding || context.origin !== 'local-window') return null;
+        const effectId = context.connectionId;
+        const current = () => this.#tunnelled.get(context.connectionId);
         const call = async <T>(method: string, args: unknown[] = []): Promise<T> => {
             if (current() !== binding) throw new Error(NO_WINDOW);
             const answer = await binding.effect(effectId, method, args) as { value?: unknown; browser?: FeatureBrowser | null };
@@ -82,16 +62,6 @@ export class FeatureCallers {
 
     dropOwner(owner: string): void {
         for (const [key, value] of this.#tunnelled) if (value.owner === owner) this.#tunnelled.delete(key);
-        for (const [key, value] of this.#callers) if (value.owner === owner) { this.service()?.releaseCaller(value.context); this.#callers.delete(key); }
     }
 }
 
-function admittedContext(raw: unknown): CallContext {
-    if (!raw || typeof raw !== 'object') throw new Error('features need an admitted caller');
-    const v = raw as CallContext;
-    if (typeof v.connectionId !== 'string' || !v.connectionId || v.connectionId.length > 256 || typeof v.label !== 'string'
-        || !['local-window', 'remote-window', 'device', 'relay'].includes(v.origin)
-        || !['desktop', 'mobile'].includes(v.profile) || typeof v.isOwner !== 'boolean' || typeof v.readonly !== 'boolean'
-        || (v.workspaceId !== null && typeof v.workspaceId !== 'string')) throw new Error('features need an admitted caller');
-    return { connectionId: v.connectionId, label: v.label, origin: v.origin, profile: v.profile, isOwner: v.isOwner, workspaceId: v.workspaceId, readonly: v.readonly };
-}

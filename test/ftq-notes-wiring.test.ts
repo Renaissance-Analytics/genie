@@ -33,30 +33,32 @@ vi.mock('electron', () => ({
     shell: {},
 }));
 
-describe('the question window’s IPC carries one note per question', () => {
+describe('another machine’s question: its IPC carries one note per question', () => {
+    // This machine's answers go to genie-host over the window's frame port since 2f-1 (Tynn #912): renderer/question-bridge.ts,
+    // pinned with its notes in split-2f-question-window.test.ts. Another machine's still crosses to main, notes and all.
     it('the preload sends the notes on the channel main handles, and main hands them to the window’s controller', async () => {
         const { electronQuestionWindow } = await import('../src/main/question-window-electron.js');
         await import('../src/main/question-preload.js');
         const answered: unknown[][] = [];
         const ctl = { answer: async (...args: unknown[]) => { answered.push(args); return { ok: true }; } } as unknown as QuestionWindow;
-        electronQuestionWindow({ here: '/genie/main', preload: '/genie/main/question-preload.cjs', controller: () => ctl });
+        electronQuestionWindow({ here: '/genie/main', preload: '/genie/main/question-preload.cjs', controller: () => ctl, owns: () => true });
 
         // The page's call, through the preload.
         const api = ipc.exposed.get('genieQuestion')!;
-        await api.answer!([['A'], []], ['', 'neither — use C']);
-        expect(ipc.invoked).toEqual([['question:answer', [['A'], []], ['', 'neither — use C']]]);
+        await api.remote!({ kind: 'answer', id: 'remote:1:q', selections: [['A'], []], notes: ['', 'neither — use C'] });
+        expect(ipc.invoked).toEqual([['question:remote', { kind: 'answer', id: 'remote:1:q', selections: [['A'], []], notes: ['', 'neither — use C'] }]]);
 
         // Every channel the preload invokes is one main registered — a mismatch would make Answer silently do nothing.
         await api.current!();
         await api.later!();
         const channels = ipc.invoked.map((call) => call[0]);
-        expect(channels).toEqual(['question:answer', 'question:current', 'question:later']);
+        expect(channels).toEqual(['question:remote', 'question:current', 'question:later']);
         for (const channel of channels) expect(ipc.handlers.has(channel as string)).toBe(true);
 
         // Main's handler, given what the preload sent: the notes reach the controller, in order; a non-string is no note.
-        await ipc.handlers.get('question:answer')!({}, [['A'], []], ['', 'neither — use C']);
-        await ipc.handlers.get('question:answer')!({}, [['A']], [42]);
-        expect(answered).toEqual([[[['A'], []], ['', 'neither — use C']], [[['A']], ['']]]);
+        await ipc.handlers.get('question:remote')!({}, { kind: 'answer', id: 'remote:1:q', selections: [['A'], []], notes: ['', 'neither — use C'] });
+        await ipc.handlers.get('question:remote')!({}, { kind: 'answer', id: 'remote:1:q', selections: [['A']], notes: [42] });
+        expect(answered).toEqual([[[['A'], []], ['', 'neither — use C'], 'remote:1:q'], [[['A']], [''], 'remote:1:q']]);
     });
 });
 
@@ -64,13 +66,13 @@ describe('main and the renderers pass notes, never drop them', () => {
     const strip = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     it('main.ts: the window’s answer becomes deck.answerForm WITH the notes (and no overall note — the form has none)', () => {
         const main = strip('../src/main/main.ts');
-        // Another machine's question (Tynn #726) is answered on that machine, with the same notes; this machine's as before.
-        expect(main.match(/answer:\s*async\s*\(item,\s*selections,\s*notes\)\s*=>\s*\{\s*if\s*\(remoteQuestions\.owns\(item\.id\)\)\s*return remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.answerForm',\s*selections,\s*notes\s*\}\);\s*await questionAction\(\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
-        // Encoded for the wire like any client's answer (Tynn #861): the id, the picks, the notes.
-        expect(main).toContain("const reply = await client.call('engine.featureQuestion', [deckActionForWire(action)]);");
-        const server = strip('../src/main/session-engine-server.ts');
-        expect(server).toContain("if (!conn.local || !conn.window || !this.#options.features) throw new Error('questions need this machine’s own window');");
-        expect(server).toContain("return this.#options.features.call(conn.id, 'act', [action], { connectionId: 'question-window', origin: 'local-window',");
+        // Another machine's question (Tynn #726) is answered on that machine, with the same notes. This machine's is the page's
+        // features.act over the one protocol (Tynn #912, 2f-1): main answers none, and no engine route is left for it.
+        expect(main.match(/answer:\s*\(item,\s*selections,\s*notes\)\s*=>\s*remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.answerForm',\s*selections,\s*notes\s*\}\)/g) ?? []).toHaveLength(1);
+        expect(main).not.toContain('engine.featureQuestion');
+        expect(strip('../src/main/session-engine-server.ts')).not.toContain('engine.featureQuestion');
+        // The page's answer: the Deck's own action, with the notes and no overall note (question-bridge.ts).
+        expect(strip('../src/renderer/question-bridge.ts')).toMatch(/kind: 'deck\.answerForm', item: deckItemRef\(item\), selections, notes, note: ''/);
     });
     it('App.tsx: the Deck’s form, and the phone’s (Tynn #652), become deck.answerForm WITH the notes — one call, in renderer/deck-answer.ts', () => {
         const app = strip('../src/renderer/App.tsx');

@@ -633,6 +633,17 @@ export interface GenieBridge {
         review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin' | 'delete' | 'clear-decided' | 'clear-all' | 'clear-everything' | 'restore', comment: string): Promise<{ ok: true; delivered: boolean; cleared?: number; trashId?: string | null } | { ok: false; error: string }>;
     } | undefined;
 
+    /**
+     * A QUESTION'S NAMED FILES AND ITS ARTBOARD VISUALS (the question window's drawer and gallery; Tynn #912, 2f-1), read by
+     * the host from its own Deck and the question's workspace: which named files are there (`null` = not known), one of
+     * them, and its visuals. Every client's wire bridge has it.
+     */
+    questions?: {
+        files(id: string, paths: string[]): Promise<string[] | null>;
+        file(id: string, path: string): Promise<{ ok: true; path: string; text: string } | { ok: true; path: string; media: import('../core/question-media.js').QuestionMedia } | { ok: false; reason: string }>;
+        visuals(id: string): Promise<{ ok: true; posts: import('../core/artboard.js').DisplayPost[] } | { ok: false; reason: string }>;
+    };
+
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */
     uploads?: {
         sendFile(to: string, text: string, name: string, base64: string): Promise<{ ok: true; messageId: string } | { ok: false; reason: string }>;

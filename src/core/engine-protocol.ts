@@ -141,7 +141,6 @@ export const ENGINE_METHODS = [
     'engine.updater',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
-    'engine.featureQuestion',
     'client.featureEffect',
     'engine.processes',
     'engine.cloneOffers',

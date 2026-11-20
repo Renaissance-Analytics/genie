@@ -105,7 +105,7 @@ Object.assign(ROWS, {
     'appInbox.state': ['work'], 'appInbox.createKey': ['work', 'fixture'], 'appInbox.revokeKey': ['work', 'key_fixture'],
     'appInbox.source': ['work', 'allow', 'site', 'site_fixture'],
     'deviceLink.hosts': [], 'deviceLink.forget': ['wss://example.test/genie'], 'deviceLink.adopt': ['wss://example.test/genie', 'synthetic-token'],
-    'tynnNetwork.workstations': [], 'tynnNetwork.classifyLink': ['https://tynn.example/invites/accept/tok_fixture'], 'crashReport.draft': [], 'crashReport.send': ['the report', 'my notes'], 'providers.chooseProgram': ['claude', 'C:\\fixture\\claude.exe'], 'terminals.scratch': ['work'], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
+    'tynnNetwork.workstations': [], 'tynnNetwork.classifyLink': ['https://tynn.example/invites/accept/tok_fixture'], 'crashReport.draft': [], 'crashReport.send': ['the report', 'my notes'], 'providers.chooseProgram': ['claude', 'C:\\fixture\\claude.exe'], 'terminals.scratch': ['work'], 'questions.files': ['q_1', ['a.md']], 'questions.file': ['q_1', 'a.md'], 'questions.visuals': ['q_1'], 'files.openExternal': ['work', 'a.txt'], 'files.reveal': ['work', 'a.txt'], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
     'tynnNetwork.shares.list': [null], 'tynnNetwork.shares.mint': [{ workspaceId: null, capability: 'readonly', expiresInDays: 7 }], 'tynnNetwork.shares.revoke': ['share_fixture'],
 });
 type ResultFrame = Extract<WireMessage, { kind: 'result' }>;

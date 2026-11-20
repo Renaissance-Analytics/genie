@@ -118,6 +118,13 @@ export function tunnelLinkOf(client: {
 /** What only a window can do for genie-host: move a file to the OS trash, open an app's window, a terminal's window. */
 export interface WindowOpsDeps {
     readonly trash: (absolutePath: string) => Promise<void>;
+    /**
+     * Open a file with this machine's own app for it, for a client on ANOTHER machine (Tynn #912, 2f-1; host-shell.ts):
+     * Electron's shell.openPath, whose answer is '' when it opened and the OS's own words when it did not.
+     */
+    readonly openPath: (absolutePath: string) => Promise<string>;
+    /** Show it in this machine's file manager, for a client on another machine (Tynn #912, 2f-1). */
+    readonly reveal: (absolutePath: string) => void;
     readonly workspaces: () => readonly { readonly path: string }[];
     readonly openApp: (packageId: string, preview: boolean) => Promise<void>;
     /**
@@ -138,17 +145,32 @@ function terminalWindowRoute(route: unknown): string | null {
  * checks again, so nothing outside this machine's registered workspaces is ever moved, whoever asks.
  */
 export function windowOpsHandler(deps: WindowOpsDeps): (op: string, args: unknown[]) => Promise<unknown> {
+    /** The full path, when it lies inside one of this machine's registered workspaces (`root`: the workspace itself counts). */
+    const confined = (path: unknown, root: boolean): string | null => {
+        if (typeof path !== 'string' || !isAbsolute(path)) return null;
+        const full = resolve(path);
+        const inside = deps.workspaces().some((w) => {
+            const rel = relative(resolve(w.path), full);
+            return (root || rel !== '') && !rel.startsWith('..') && !isAbsolute(rel);
+        });
+        return inside ? full : null;
+    };
     return async (op, args) => {
         if (op === 'trash') {
             const path = args[0];
             if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('the trash takes a file’s full path');
-            const full = resolve(path);
-            const inside = deps.workspaces().some((w) => {
-                const rel = relative(resolve(w.path), full);
-                return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
-            });
-            if (!inside) throw new Error('Genie moves to the trash only a file inside one of this machine’s workspaces');
+            const full = confined(path, false);
+            if (full === null) throw new Error('Genie moves to the trash only a file inside one of this machine’s workspaces');
             await deps.trash(full);
+            return true;
+        }
+        // Open with / Show in file manager on THIS machine's screen, asked by genie-host for a client on another machine
+        // (Tynn #912, 2f-1). genie-host confined the path to the workspace; it is checked here again, whoever asked.
+        if (op === 'shell.open' || op === 'shell.reveal') {
+            const full = confined(args[0], true);
+            if (full === null) throw new Error('Genie opens only a file inside one of this machine’s workspaces');
+            if (op === 'shell.open') return deps.openPath(full);
+            deps.reveal(full);
             return true;
         }
         if (op === 'gapps.open' || op === 'gapps.preview') {

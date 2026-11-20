@@ -122,7 +122,10 @@ describe('the capability table', () => {
         // 175 with `providers.chooseProgram` (a write, the owner's): a provider's .exe, picked on the host's disk (Tynn #897, 2c-3).
         // 176 with `terminals.scratch` (a write, workspace-scoped; the home one the owner's): the throwaway shell (Tynn #897, 2c-4).
         // 177 with `stopToolCall` (a write, agent-scoped): Stop this call, one hung tool call ends (Tynn #855).
-        expect(REMOTE_METHODS.length).toBe(177);
+        // 182 with `questions.files` / `questions.file` / `questions.visuals` (reads: a question's named files and ArtBoard
+        // visuals, from the host's own Deck) and `files.openExternal` / `files.reveal` (writes, workspace-scoped, the owner's:
+        // opened on the host's own screen for a client on another machine) (Tynn #912, 2f-1).
+        expect(REMOTE_METHODS.length).toBe(182);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

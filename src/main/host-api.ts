@@ -157,6 +157,10 @@ export interface HostApiDeps {
     providerPrograms?: import('./host-provider-programs.js').HostProviderPrograms;
     /** The throwaway shell (Tynn #897, 2c-4), opened by genie-host in the caller's window (scratch-terminal.ts). Absent = said in words. */
     scratchTerminals?: { open(workspaceId: string | null, context?: CallContext): import('./scratch-terminal.js').ScratchAnswer };
+    /** A question's files and visuals, read from this host's own Deck (host-question-reads.ts; Tynn #912, 2f-1). Absent = none. */
+    questions?: import('./host-question-reads.js').HostQuestionReads;
+    /** A file opened, or shown, on this host's own screen for a client on another machine (host-shell.ts; Tynn #912, 2f-1). */
+    hostShell?: import('./host-shell.js').HostShell;
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -738,6 +742,25 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (typeof args[0] !== 'string' || !isAcpProvider(args[0])) return { ok: false, reason: 'No provider named.' };
                 if (typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'No program chosen.' };
                 return deps.providerPrograms.choose(args[0], args[1]);
+            // A question's named files, one of them, and its ArtBoard visuals (Tynn #912, 2f-1): the host's own question, from
+            // its own Deck; who may see which question is host-question-reads.ts's, by the caller's context.
+            case 'questions.files':
+                if (!deps.questions || typeof args[0] !== 'string' || !Array.isArray(args[1])) return null;
+                return deps.questions.files(args[0], args[1].filter((p): p is string => typeof p === 'string'), context);
+            case 'questions.file':
+                if (!deps.questions) return { ok: false, reason: 'this host cannot read a question’s files' };
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'no such file' };
+                return deps.questions.file(args[0], args[1], context);
+            case 'questions.visuals':
+                if (!deps.questions) return { ok: false, reason: 'this host cannot read a question’s visuals' };
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'Genie does not know this question' };
+                return deps.questions.visuals(args[0], context);
+            // Open with / Show in file manager on this host's own screen (Tynn #841; #912 2f-1). Who may is RemoteHost's (the owner's).
+            case 'files.openExternal':
+            case 'files.reveal':
+                if (!deps.hostShell) return { ok: false, reason: 'this host cannot open files on its screen' };
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'that file is not in this workspace' };
+                return method === 'files.openExternal' ? deps.hostShell.open(args[0], args[1]) : deps.hostShell.reveal(args[0], args[1]);
             // The throwaway shell (Tynn #378, #761; #897 2c-4): the workspace's, or Genie's own for null. Who may is RemoteHost's.
             case 'terminals.scratch':
                 if (!deps.scratchTerminals) return { ok: false, reason: 'this host cannot open a scratch terminal' };

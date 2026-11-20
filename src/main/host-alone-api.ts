@@ -99,6 +99,8 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
     'providers.chooseProgram',
     // The throwaway shell (Tynn #897, 2c-4): opened on genie-host's terminal host, in the caller's window.
     'terminals.scratch',
+    // A question's files and visuals, from genie-host's own Deck; a file opened on its own screen (Tynn #912, 2f-1).
+    'questions.files', 'questions.file', 'questions.visuals', 'files.openExternal', 'files.reveal',
 ]);
 
 /** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
@@ -133,6 +135,10 @@ export interface HostAlonePorts {
     readonly providerPrograms?: HostApiDeps['providerPrograms'];
     /** The throwaway shell (Tynn #897, 2c-4). Absent = this host cannot open one. */
     readonly scratchTerminals?: HostApiDeps['scratchTerminals'];
+    /** A question's files and visuals (Tynn #912, 2f-1). Absent = this host cannot read them. */
+    readonly questions?: HostApiDeps['questions'];
+    /** A file opened on this host's own screen (Tynn #912, 2f-1). Absent = it cannot. */
+    readonly hostShell?: HostApiDeps['hostShell'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -278,6 +284,8 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.crashReports ? { crashReports: ports.crashReports } : {}),
         ...(ports.providerPrograms ? { providerPrograms: ports.providerPrograms } : {}),
         ...(ports.scratchTerminals ? { scratchTerminals: ports.scratchTerminals } : {}),
+        ...(ports.questions ? { questions: ports.questions } : {}),
+        ...(ports.hostShell ? { hostShell: ports.hostShell } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

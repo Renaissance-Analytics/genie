@@ -97,10 +97,11 @@ describe('P4 IPC inventory', () => {
      * it, and a row on it cannot be re-labelled a window capability while its handler is still registered.
      */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2f (#912): the question window's answers and reads, the device/relay frame path, the relay browser open, host-wait's act.
-        'question:answer': '2f', 'question:dismiss': '2f', 'question:files': '2f', 'question:file': '2f', 'question:visuals': '2f',
+        // 2f-1 (#912) moved the question window's answers and reads; host-wait:act was re-labelled window:host-wait by the
+        // coordinator (2026-11-19): shown only while genie-host does not answer, a dead host cannot serve its own restart.
+        // 2f-2 (#941): the device/relay frame path and the relay browser open.
         'genie:device-open': '2f', 'genie:relay-open': '2f', 'genie:relay-send': '2f', 'genie:relay-close': '2f',
-        'genie:browser-window-open': '2f', 'host-wait:act': '2f',
+        'genie:browser-window-open': '2f',
     };
     const moveRows = (rows: readonly (readonly [string, string])[]) => rows.filter(([, d]) => d.startsWith('move:')).map(([c, d]) => [c, d.slice('move:'.length)] as const);
     const ratchet = (rows: readonly (readonly [string, string])[], registeredNow: readonly string[]) => ({
@@ -114,8 +115,8 @@ describe('P4 IPC inventory', () => {
 
     it('CONTROL: the ratchet notices a new still-to-move row and a frozen one re-labelled a window capability', () => {
         expect(ratchet([['genie:new-host-thing', 'move:2b']], []).joined).toEqual(['genie:new-host-thing']);
-        expect(ratchet([['question:answer', 'move:2c']], []).joined).toEqual(['question:answer']);
-        expect(ratchet([['question:answer', 'window:pop-out']], ['question:answer']).relabelled).toEqual(['question:answer']);
+        expect(ratchet([['genie:relay-open', 'move:2c']], []).joined).toEqual(['genie:relay-open']);
+        expect(ratchet([['genie:relay-open', 'window:pop-out']], ['genie:relay-open']).relabelled).toEqual(['genie:relay-open']);
         // A frozen channel whose handler is gone needs no row (the stale check removes it): the list shrinks.
         expect(ratchet([], [])).toEqual({ joined: [], relabelled: [] });
     });

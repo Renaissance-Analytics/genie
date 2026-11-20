@@ -112,7 +112,6 @@ import { composeWindowServices, type ComposeInput, type WindowServices } from '.
 import { featureWindow } from './feature-window.js';
 import { QuestionWindow } from './question-window.js';
 import { RemoteQuestions } from './remote-questions.js';
-import { readQuestionVisuals } from './question-visuals.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
 import { readV1Catalog, readV1Knowledge } from './v1-import.js';
@@ -122,7 +121,6 @@ import { v1Leftovers } from '../core/v1-reap.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers, type TrayItem } from './tray.js';
 import { needsYouCount } from '../core/deck.js';
-import { deckActionForWire } from '../core/deck-answer-wire.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
@@ -150,7 +148,6 @@ import type { BrowserPage } from './browser-service.js';
 import { rerouteGenieBrowserSession, watchWorkspaceStores, workspaceBrowserSession } from './genie-browser-electron.js';
 import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
-import type { FeatureAction } from '../renderer/features.js';
 import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
 import { channelFrom } from '../core/update-channel.js';
 import { genieRoot, installDir, osaHomeDir, runtimeDir } from './paths.js';
@@ -1265,6 +1262,9 @@ let featureEffectNow: ((connectionId: string, method: string, args: unknown[]) =
  */
 const windowOps = windowOpsHandler({
     trash: (absolutePath) => shell.trashItem(absolutePath),
+    // Open with / Show in file manager on THIS machine's screen, for a client on another machine (Tynn #912, 2f-1).
+    openPath: (absolutePath) => shell.openPath(absolutePath),
+    reveal: (absolutePath) => { shell.showItemInFolder(absolutePath); },
     workspaces: () => registry?.snapshot().workspaces ?? [],
     openApp: async (packageId, preview) => {
         if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.');
@@ -2535,23 +2535,18 @@ async function boot(): Promise<void> {
     questionWindow = new QuestionWindow({
         items: () => [...composed.deckItems(), ...remoteQuestions.items()],
         open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null,
-            // A question's visuals (Tynn #835): another machine's through the window driving it; this machine's from its workspace's board.
-            visuals: async (item) => {
-                if (remoteQuestions.owns(item.id)) return remoteQuestions.visuals(item);
-                const root = item.workspaceId ? registry?.workspace(item.workspaceId)?.path ?? null : null;
-                if (root === null) throw new Error('Genie does not know this question’s workspace');
-                return readQuestionVisuals(root, item.answer.kind === 'form' ? item.answer.questions ?? [] : []);
-            }, openInFiles: (workspaceId, path) => { revealMainWindow('question: Open in Files'); showToPerson({ activation: 'user-gesture', route: `genie://workspace/${encodeURIComponent(workspaceId)}?files=${encodeURIComponent(path)}`, reason: 'question: Open in Files' }); } }),
-        answer: async (item, selections, notes) => {
-            if (remoteQuestions.owns(item.id)) return remoteQuestions.act(item, { kind: 'deck.answerForm', selections, notes });
-            await questionAction({ kind: 'deck.answerForm', item, selections, notes, note: '' });
-        },
-        // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told, with the
-        // notes the person wrote in the form.
-        dismiss: async (item, notes) => {
-            if (remoteQuestions.owns(item.id)) return remoteQuestions.act(item, { kind: 'deck.dismiss', notes });
-            await questionAction({ kind: 'deck.dismiss', item, notes });
-        },
+            // Its page reaches genie-host over the one protocol, on this door like every Genie window (Tynn #912, 2f-1): this
+            // machine's answers and Dismiss (features.act), and its question's files and visuals (questions.*).
+            admit: (contents) => { localDoor.admit(contents); },
+            // Only ANOTHER machine's question crosses to main (Tynn #726): through the window driving that machine.
+            owns: (id) => remoteQuestions.owns(id),
+            // Its visuals (Tynn #835): read from that machine's board, through the window driving it.
+            visuals: (item) => remoteQuestions.visuals(item),
+            openInFiles: (workspaceId, path) => { revealMainWindow('question: Open in Files'); showToPerson({ activation: 'user-gesture', route: `genie://workspace/${encodeURIComponent(workspaceId)}?files=${encodeURIComponent(path)}`, reason: 'question: Open in Files' }); } }),
+        // ANOTHER MACHINE'S question, answered or dismissed on that machine, with the person's notes (Tynn #726). This
+        // machine's are the page's own features.act over the one protocol (Tynn #912, 2f-1): main answers none of them.
+        answer: (item, selections, notes) => remoteQuestions.act(item, { kind: 'deck.answerForm', selections, notes }),
+        dismiss: (item, notes) => remoteQuestions.act(item, { kind: 'deck.dismiss', notes }),
         // Do Not Disturb (Settings → General) is the ONE thing that keeps the window shut (the owner, 2026-10-15: "If DnD
         // is not turned on then FTQ always opens for every agent"). Read at every change; the agent is still told the DND
         // reply at once (attention-store.ts), and the question waits in Pending Questions.
@@ -2569,18 +2564,6 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
-    /*
-     * AN ACTION, FROM WHOEVER THE HOST ADMITTED (genie#1354, host-picks.ts; Tynn #560). Only this machine's own window names
-     * a host path. A window's action also moves the window's own state and its browser pane; another device's never did.
-     */
-    async function questionAction(action: FeatureAction): Promise<void> {
-        const client = agentEngineLink?.client;
-        if (!client) throw new Error('Genie’s host is not connected');
-        // The question window's answer the same as any client's: the id, the answer, the notes (Tynn #861).
-        const reply = await client.call('engine.featureQuestion', [deckActionForWire(action)]);
-        if (!reply.ok) throw new Error(reply.reason);
-    }
-
     // The tray follows the same registry snapshots the protocol sends to windows.
     registry.subscribe((snapshot) => {
         // The tray follows the Deck: the badge's own count (core/deck.ts needsYouCount), redrawn only when it changes.

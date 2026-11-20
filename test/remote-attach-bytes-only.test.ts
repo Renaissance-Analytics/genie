@@ -161,9 +161,9 @@ describe('window delegation and host pick wiring', () => {
         const owner = readFileSync('src/main/features-host.ts', 'utf8');
         expect(owner).toContain('featureOriginOf(context, caller.picks)');
         const callers = readFileSync('src/main/feature-callers.ts', 'utf8');
-        expect(callers).toContain('const context = admittedContext(raw);');
-        expect(callers).toContain('const key = JSON.stringify([owner, context.connectionId]);');
-        expect(callers).toContain('const scoped = { ...context, connectionId: key };');
+        // The forwarded caller (the question window's engine.featureQuestion) is gone (Tynn #912, 2f-1): every caller's
+        // context is RemoteHost's own admitted one, never one a caller sent.
+        expect(callers).not.toContain('admittedContext');
         // A pick reaches the host through host-api's features.picked (above); the engine.features route that also carried one is
         // retired (Tynn #898 step 2e-2).
         expect(callers).not.toContain("'picked'");

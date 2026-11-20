@@ -339,10 +339,11 @@ describe('the question window draws them', () => {
         expect(html).not.toContain('data-option-visual');
     });
 
-    it('the window asks main for them (its own workspace, or the driving window for a remote question)', () => {
-        expect(readFileSync('src/main/question-preload.ts', 'utf8')).toMatch(/visuals: \(id: string\) => ipcRenderer\.invoke\('question:visuals', id\)/);
-        const electron = readFileSync('src/main/question-window-electron.ts', 'utf8');
-        expect(electron).toMatch(/ipcMain\.handle\('question:visuals'/);
+    it('the window asks genie-host for them (questions.visuals), or the driving window for a remote question (Tynn #912, 2f-1)', () => {
+        const page = readFileSync('src/renderer/question-bridge.ts', 'utf8');
+        expect(page).toMatch(/\.questions\.visuals\(id\)/);
+        expect(page).toMatch(/preload\.remote\(\{ kind: 'visuals', id \}\)/);
+        expect(readFileSync('src/main/question-window-electron.ts', 'utf8')).not.toMatch(/ipcMain\.handle\('question:visuals'/);
         expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/remoteQuestions\.visuals\(/);
     });
 });
