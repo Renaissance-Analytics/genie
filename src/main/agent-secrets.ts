@@ -1,5 +1,4 @@
 import type { AgentSecrets } from './tynn-agent-identities.js';
-import type { Comparison, HostVault } from './keychain-migration.js';
 import type { KeychainRead, KeychainResult } from './keychain.js';
 import type { SessionEngineClient } from './session-engine-client.js';
 
@@ -23,18 +22,6 @@ export function linkedAgentSecrets(client: Link): AgentSecrets {
         set: async (name, value) => {
             const reply = await client.call('engine.secretStore', [name, value]);
             return reply.ok ? (reply.value as KeychainResult) : { ok: false, reason: reply.reason };
-        },
-    };
-}
-
-/** The migration's half of the same link: the host reads back and answers in one word. */
-export function linkedVault(client: Link): HostVault {
-    const secrets = linkedAgentSecrets(client);
-    return {
-        store: (name, value) => secrets.set(name, value),
-        compare: async (name, value) => {
-            const reply = await client.call('engine.secretCompare', [name, value]);
-            return reply.ok ? (reply.value as Comparison) : 'unavailable';
         },
     };
 }

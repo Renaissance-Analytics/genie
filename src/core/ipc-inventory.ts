@@ -155,15 +155,13 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // A window's channels to another machine are its own session's (Tynn #941, 2f-2): main holds no device link.
     // 2g (#913): what the window still composes (composeWindowServices) or reads over genie-host's replicas.
     // appInbox, tynnPage and workstation left in 2g-1 (#952): main held them and nothing read them.
+    // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
+    // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy, legacy-unsealer.ts).
     ['catalog', 'move:2g'],
     ['flows', 'move:2g'],
-    ['github', 'move:2g'],
     ['hosting', 'move:2g'],
-    ['keyring', 'move:2g'],
     ['plugins', 'move:2g'],
-    ['relayHost', 'move:2g'],
     ['remoteAccess', 'move:2g'],
     ['stores', 'move:2g'],
     ['supervisor', 'move:2g'],
-    ['tynn', 'move:2g'],
 ];

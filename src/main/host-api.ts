@@ -28,6 +28,7 @@ import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { invokeLocalFiles, type LocalFilesDeps } from './local-files-api.js';
+import { OWN_CLIENT_LABEL } from './own-protocol-client.js';
 import type { FilesWatchPort } from './local-files-watches.js';
 import { isLocalDraftMethod } from '../core/local-drafts.js';
 import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
@@ -165,6 +166,10 @@ export interface HostApiDeps {
     hostSummary?: { now(): import('../core/host-summary.js').HostSummary; subscribe(listener: (summary: import('../core/host-summary.js').HostSummary) => void): () => void };
     /** A window's transport to another machine, owned by its connection (device-link-protocol.ts; Tynn #941, 2f-2). */
     deviceLinkProtocol?: Pick<import('./device-link-protocol.js').DeviceLinkProtocol, 'call' | 'dropOwner'>;
+    /** What an older Genie sealed, adopted into this host's keychain (host-legacy-adopt.ts; Tynn #959, 2g-3b). Absent = refused. */
+    legacySecrets?: { adopt(request: unknown): Promise<unknown> };
+    /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
+    tynnRecheck?: () => Promise<void>;
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -768,6 +773,17 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'deviceLink.openBrowser':
                 if (!deps.deviceLinkProtocol || !context) return { ok: false, reason: 'this Genie connects to no other machines' };
                 return deps.deviceLinkProtocol.call(context.connectionId, method.slice('deviceLink.'.length), args);
+            // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b; host-legacy-adopt.ts). `local` keeps every other machine out (RemoteHost's);
+            // of this machine's connections only main's own client hands secrets over, never a page in a window.
+            case 'keychain.adoptLegacy':
+                if (!deps.legacySecrets) return { ok: false, reason: 'this host keeps nothing an older Genie sealed' };
+                if (context.label !== OWN_CLIENT_LABEL) return { ok: false, reason: 'what an older Genie sealed is handed over by Genie itself, never by a window' };
+                return deps.legacySecrets.adopt(args[0]);
+            // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
+            case 'tynn.recheck':
+                if (!deps.tynnRecheck) return { ok: false, reason: 'this host has no Tynn account to ask' };
+                await deps.tynnRecheck();
+                return null;
             // Open with / Show in file manager on this host's own screen (Tynn #841; #912 2f-1). Who may is RemoteHost's (the owner's).
             case 'files.openExternal':
             case 'files.reveal':

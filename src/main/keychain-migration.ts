@@ -5,13 +5,16 @@ import { writeJsonAtomic } from './store.js';
 
 /**
  * THE ONE-TIME MOVE INTO THE KEYCHAIN (the host split, P3.4 cut b; plan §13). The one place a bug loses a person's sign-ins.
- * `safeStorage` exists only in Electron, so the window decrypts each secret and hands it over; the HOST writes it and reads it
- * back; only a byte-for-byte match lets the window delete its copy. There is no path back (decision 5), and no fallback: no
- * keychain means nothing moves, and the old copy stays where it is (decision 3).
+ * `safeStorage` exists only in Electron, so the window unseals each secret and hands it over; GENIE-HOST writes it to its
+ * own keychain and reads it back (Tynn #959, 2g-3b: keychain.adoptLegacy, host-legacy-adopt.ts); only a byte-for-byte match
+ * lets the window delete its copy. There is no path back (decision 5), and no fallback: no keychain means nothing moves, and
+ * the old copy stays where it is (decision 3).
  *
- * THE ORDER IS THE SAFETY:
- *   read the old copy -> write -> read back -> book says `verified` -> delete the old copy -> book says `done`
- * A crash anywhere leaves a working copy, because nothing is deleted before `verified` is durably recorded.
+ * THE ORDER IS THE SAFETY, and it spans two processes:
+ *   [window] read the old copy -> [host] write -> read back -> book says `verified` -> [window] delete the old copy -> [host] book says `done`
+ * `verifySecrets` is the host's first half, `removeOldCopies` the window's delete, `finishSecrets` the host's second half.
+ * A crash anywhere leaves a working copy, because nothing is deleted before `verified` is durably recorded, and `done` is
+ * written only once the window says its copy is gone.
  *
  * WHAT THE BOOK DECIDES, for the launch after a crash:
  *  - no entry: nobody is using the keychain's copy yet, so the OLD COPY IS THE TRUTH. It is written again, over anything
@@ -19,13 +22,12 @@ import { writeJsonAtomic } from './store.js';
  *  - `verified`: the keychain's copy is the one in use and may have been renewed since, so the old copy is never written
  *    back. All that is left is the delete, and only while the keychain still holds an entry. With no source naming it and its
  *    file readable, the seal is known to be gone: only the word `done` is left.
- *  - `done`: never run again. The old copy is not even read.
+ *  - `done`: never run again. The old copy is not even consulted.
  *
  * A BOOK THAT DOES NOT PARSE is kept beside itself and rebuilt, so it cannot leave anyone signed out. The rebuilt book says so for good, because its missing rows say nothing: a value already in the keychain is
  * never overwritten by a seal, and one that differs stays where it is. A book that cannot be read now, or that a newer Genie wrote, stops this launch's move: it may yet say what it says.
  *
- * Each secret answers for itself, in words with no value in them. Each kind of secret switches on with its reader, and no
- * sooner: the agents' keys in compose.ts, the rest with theirs.
+ * Each secret answers for itself, in words with no value in them.
  */
 
 export type OldRead = { readonly kind: 'value'; readonly value: string } | { readonly kind: 'none' } | { readonly kind: 'unreadable' };
@@ -38,6 +40,12 @@ export interface MigrationSource {
     readonly name: SecretName;
     readonly old: OldCopy;
     /** The rows this one speaks for besides its own: a file that cannot be read says nothing about which seals are in it (`unreadableFile`). */
+    readonly covers?: string;
+}
+/** What the host's half needs of a source: its name, what reads it, and what it covers. It never deletes. */
+export interface VerifySource {
+    readonly name: SecretName;
+    readonly old: Pick<OldCopy, 'read'>;
     readonly covers?: string;
 }
 
@@ -53,7 +61,7 @@ export function unreadableFile(file: string, covers: string): MigrationSource {
     };
 }
 export type Comparison = 'same' | 'different' | 'missing' | 'unavailable';
-/** The host's half, over the authenticated link. `compare` answers same-or-not: the secret does not come back across the link. */
+/** The host's half, over its own keychain. `compare` answers same-or-not: the secret does not come back. */
 export interface HostVault {
     store(name: SecretName, value: string): Promise<KeychainResult>;
     compare(name: SecretName, value: string): Promise<Comparison>;
@@ -70,6 +78,8 @@ export type MigrationStatus =
     | 'moved'
     | 'nothing'
     | 'already'
+    /** The host's first half only: in the keychain, read back and booked; the old copy may be deleted now. */
+    | 'verified'
     | 'keychain-unavailable'
     | 'read-back-differs'
     | 'keychain-differs'
@@ -77,6 +87,8 @@ export type MigrationStatus =
     | 'old-copy-unreadable'
     | 'confirmed-entry-missing'
     | 'old-copy-left'
+    /** The host's second half only: a removal was reported for a row the book has not confirmed, so `done` was not written. */
+    | 'not-confirmed'
     | 'book-failed';
 export interface MigrationOutcome {
     readonly name: SecretName;
@@ -85,21 +97,16 @@ export interface MigrationOutcome {
 
 /** What each failure of a port means here. A port that throws is that secret failing, never the whole run. */
 const ask = <T>(work: () => Promise<T>, failed: T): Promise<T> => work().catch(() => failed);
+const booked = (book: MigrationBook, name: SecretName, state: MigrationState): Promise<boolean> => book.write(name, state).then(() => true, () => false);
 
-async function finish(source: MigrationSource, book: MigrationBook): Promise<MigrationStatus> {
-    const removed = await source.old.remove().then(() => true, () => false);
-    if (!removed) return 'old-copy-left';
-    return (await book.write(source.name, 'done').then(() => true, () => false)) ? 'moved' : 'book-failed';
-}
-
-async function moveOne(source: MigrationSource, vault: HostVault, book: MigrationBook, state: MigrationState | undefined, rebuilt: boolean): Promise<MigrationStatus> {
+async function verifyOne(source: VerifySource, vault: HostVault, book: MigrationBook, state: MigrationState | undefined, rebuilt: boolean): Promise<MigrationStatus> {
     const { name, old } = source;
     if (state === 'done') return 'already';
 
     const read = await ask<OldRead>(() => old.read(), { kind: 'unreadable' });
     if (read.kind === 'unreadable' || (read.kind === 'value' && read.value.length === 0)) return 'old-copy-unreadable';
     if (read.kind === 'none') {
-        return (await book.write(name, 'done').then(() => true, () => false)) ? (state === 'verified' ? 'moved' : 'nothing') : 'book-failed';
+        return (await booked(book, name, 'done')) ? (state === 'verified' ? 'moved' : 'nothing') : 'book-failed';
     }
 
     if (state === 'verified') {
@@ -107,7 +114,7 @@ async function moveOne(source: MigrationSource, vault: HostVault, book: Migratio
         const now = await ask<Comparison>(() => vault.compare(name, read.value), 'unavailable');
         if (now === 'unavailable') return 'keychain-unavailable';
         if (now === 'missing') return 'confirmed-entry-missing';
-        return finish(source, book);
+        return 'verified';
     }
 
     if (rebuilt) {
@@ -115,7 +122,7 @@ async function moveOne(source: MigrationSource, vault: HostVault, book: Migratio
         const now = await ask<Comparison>(() => vault.compare(name, read.value), 'unavailable');
         if (now === 'unavailable') return 'keychain-unavailable';
         if (now === 'different') return 'keychain-differs';
-        if (now === 'same') return (await book.write(name, 'verified').then(() => true, () => false)) ? finish(source, book) : 'book-failed';
+        if (now === 'same') return (await booked(book, name, 'verified')) ? 'verified' : 'book-failed';
     }
 
     // Before the store is asked, so this says what is wrong: a refusal there reads as a keychain that did not answer. Kept where it is, and said on every launch.
@@ -125,16 +132,25 @@ async function moveOne(source: MigrationSource, vault: HostVault, book: Migratio
     const back = await ask<Comparison>(() => vault.compare(name, read.value), 'unavailable');
     if (back === 'unavailable') return 'keychain-unavailable';
     if (back !== 'same') return 'read-back-differs';
-    // Durably recorded BEFORE the delete: what remembers this has been confirmed.
-    if (!(await book.write(name, 'verified').then(() => true, () => false))) return 'book-failed';
-    return finish(source, book);
+    // Durably recorded BEFORE the window is told it may delete: what remembers this has been confirmed.
+    return (await booked(book, name, 'verified')) ? 'verified' : 'book-failed';
 }
 
-/** One migration at a time per book, so two callers in one process cannot both write. A new launch has a new book. */
+/** One half at a time per book, so two callers in one process cannot both write. A new launch has a new book. */
 const running = new WeakMap<MigrationBook, Promise<unknown>>();
+function serial<T>(book: MigrationBook, run: () => Promise<T>): Promise<T> {
+    const work = (running.get(book) ?? Promise.resolve()).then(run, run);
+    running.set(book, work);
+    return work;
+}
 
-export function migrateSecrets(sources: readonly MigrationSource[], vault: HostVault, book: MigrationBook): Promise<MigrationOutcome[]> {
-    const run = async (): Promise<MigrationOutcome[]> => {
+/**
+ * THE HOST'S FIRST HALF: each source written, read back and booked `verified`, or why not. `verified` in the answer is the
+ * one status that lets the window delete that old copy; nothing here deletes anything, and nothing here writes `done` for a
+ * secret whose old copy may still be there.
+ */
+export function verifySecrets(sources: readonly VerifySource[], vault: HostVault, book: MigrationBook): Promise<MigrationOutcome[]> {
+    return serial(book, async (): Promise<MigrationOutcome[]> => {
         let states: Record<string, MigrationState>;
         try {
             states = await book.read();
@@ -145,7 +161,7 @@ export function migrateSecrets(sources: readonly MigrationSource[], vault: HostV
         const outcomes: MigrationOutcome[] = [];
         for (const source of sources) {
             const state = Object.hasOwn(states, source.name) ? states[source.name] : undefined;
-            outcomes.push({ name: source.name, status: await moveOne(source, vault, book, state, book.rebuilt?.() === true) });
+            outcomes.push({ name: source.name, status: await verifyOne(source, vault, book, state, book.rebuilt?.() === true) });
         }
         // Each source is found by its seal, so a crash just past the delete leaves nothing to name its row. `verified` already means the keychain's copy is the one in use, and the seal is known to be gone.
         const named = new Set<string>(sources.map(({ name }) => name));
@@ -153,13 +169,50 @@ export function migrateSecrets(sources: readonly MigrationSource[], vault: HostV
         for (const [name, state] of Object.entries(states)) {
             if (state !== 'verified' || named.has(name) || covered(name)) continue;
             const secret = name as SecretName;
-            outcomes.push({ name: secret, status: (await book.write(secret, 'done').then(() => true, () => false)) ? 'moved' : 'book-failed' });
+            outcomes.push({ name: secret, status: (await booked(book, secret, 'done')) ? 'moved' : 'book-failed' });
         }
         return outcomes;
-    };
-    const work = (running.get(book) ?? Promise.resolve()).then(run, run);
-    running.set(book, work);
-    return work;
+    });
+}
+
+/**
+ * THE WINDOW'S DELETE: only the old copies the host answered `verified` for, by exact name. One that will not go stays
+ * `old-copy-left` (the next launch deletes it, and never writes it again); `removed` is what the host is told.
+ */
+export async function removeOldCopies(sources: readonly MigrationSource[], outcomes: readonly MigrationOutcome[]): Promise<{ removed: SecretName[]; outcomes: MigrationOutcome[] }> {
+    const removed: SecretName[] = [];
+    const after: MigrationOutcome[] = [];
+    for (const outcome of outcomes) {
+        const source = outcome.status === 'verified' ? sources.find((s) => s.name === outcome.name) : undefined;
+        if (!source) { after.push(outcome); continue; }
+        const gone = await source.old.remove().then(() => true, () => false);
+        if (gone) removed.push(source.name);
+        after.push(gone ? outcome : { name: outcome.name, status: 'old-copy-left' });
+    }
+    return { removed, outcomes: after };
+}
+
+/**
+ * THE HOST'S SECOND HALF: the window removed these old copies, so each row the book confirmed says `done`. A name the book
+ * has not confirmed is not finished (it may still have a seal nobody has moved); one already done is left alone.
+ */
+export function finishSecrets(names: readonly SecretName[], book: MigrationBook): Promise<MigrationOutcome[]> {
+    return serial(book, async (): Promise<MigrationOutcome[]> => {
+        let states: Record<string, MigrationState>;
+        try {
+            states = await book.read();
+        } catch {
+            return names.map((name) => ({ name, status: 'book-failed' as const }));
+        }
+        const outcomes: MigrationOutcome[] = [];
+        for (const name of names) {
+            const state = Object.hasOwn(states, name) ? states[name] : undefined;
+            if (state === 'done') { outcomes.push({ name, status: 'already' }); continue; }
+            if (state !== 'verified') { outcomes.push({ name, status: 'not-confirmed' }); continue; }
+            outcomes.push({ name, status: (await booked(book, name, 'done')) ? 'moved' : 'book-failed' });
+        }
+        return outcomes;
+    });
 }
 
 export interface SourceGroup {
@@ -180,7 +233,7 @@ export async function gatherSources(groups: readonly SourceGroup[]): Promise<Mig
     return sources;
 }
 
-const NOT_STUCK: ReadonlySet<MigrationStatus> = new Set<MigrationStatus>(['moved', 'nothing', 'already']);
+const NOT_STUCK: ReadonlySet<MigrationStatus> = new Set<MigrationStatus>(['moved', 'nothing', 'already', 'verified']);
 
 /** What stayed where it was, in words with no value in them. The move can be tried many times in one launch; each name and reason is said once in it. */
 export function stuckLines(outcomes: readonly MigrationOutcome[], said: Set<string>): string[] {
@@ -259,23 +312,4 @@ export function fileMigrationBook(file: string, options: { log?: (line: string) 
             return work;
         },
     };
-}
-
-/** What the host's half needs of a source (Tynn #959, 2g-3b). */
-export interface VerifySource {
-    readonly name: SecretName;
-    readonly old: Pick<OldCopy, 'read'>;
-    readonly covers?: string;
-}
-/** The host's first half (Tynn #959, 2g-3b). */
-export function verifySecrets(_sources: readonly VerifySource[], _vault: HostVault, _book: MigrationBook): Promise<MigrationOutcome[]> {
-    throw new Error('2g-3b: not built yet');
-}
-/** The window's delete (Tynn #959, 2g-3b). */
-export async function removeOldCopies(_sources: readonly MigrationSource[], _outcomes: readonly MigrationOutcome[]): Promise<{ removed: SecretName[]; outcomes: MigrationOutcome[] }> {
-    throw new Error('2g-3b: not built yet');
-}
-/** The host's second half (Tynn #959, 2g-3b). */
-export function finishSecrets(_names: readonly SecretName[], _book: MigrationBook): Promise<MigrationOutcome[]> {
-    throw new Error('2g-3b: not built yet');
 }

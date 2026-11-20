@@ -133,7 +133,9 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
-import { openHostKeychain } from './host-keychain.js';
+import { openHostKeychain, type HostKeychain } from './host-keychain.js';
+import { hostLegacyAdopt } from './host-legacy-adopt.js';
+import { fileMigrationBook, hostVault } from './keychain-migration.js';
 import { podApproval, startProofOfDone } from './proof-of-done-host.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
@@ -699,6 +701,9 @@ async function main(): Promise<void> {
         });
     });
     void githubOpening.then((account) => account.refresh(), (error: unknown) => say(`the GitHub account could not open: ${error instanceof Error ? error.message : String(error)}`));
+    /** This host's GitHub account once open: whether GitHub blocks features, for the summary and the Deck's strip (Tynn #959). */
+    let githubAccountNow: GithubAccount | null = null;
+    void githubOpening.then((account) => { githubAccountNow = account; }, () => {});
     let hostTynn: TynnAccount | null = null;
     void tynnOpening.then((account) => { hostTynn = account; }, (error: unknown) => say(`the Tynn account could not open: ${error instanceof Error ? error.message : String(error)}`));
     /*
@@ -1106,8 +1111,10 @@ async function main(): Promise<void> {
      * role and its Tynn account (Tynn #954, 2g-3a), which main's dial refusals and its relay windows read. Read after the
      * replicas above took each change (their listeners come first).
      */
+    /** This host's keychain once open: whether it can keep secrets, for the summary (Tynn #959, 2g-3b). */
+    let keychainNow: HostKeychain | null = null;
     const hostSummary = hostSummaryFeed({
-        read: () => hostSummaryOf(terminalHost.list(), hostFlows.list(), hostBook.kept(), { workstationRole: relayHostService.role(), tynnAccountKey: tynnAccountNow ? accountKeyOf(tynnAccountNow.status()) : null }),
+        read: () => hostSummaryOf(terminalHost.list(), hostFlows.list(), hostBook.kept(), { workstationRole: relayHostService.role(), tynnAccountKey: tynnAccountNow ? accountKeyOf(tynnAccountNow.status()) : null, keychainReady: keychainNow?.state() === 'ready', githubBlocked: (githubAccountNow?.view().signal ?? null) !== null }),
         onChange: (listener) => {
             summaryPokes.add(listener);
             const offs = [terminalHost.onChange(listener), flowsService.onEvent(() => listener()), processesService.onEvent(() => listener()), () => { summaryPokes.delete(listener); }];
@@ -1115,6 +1122,10 @@ async function main(): Promise<void> {
         },
     });
     void tynnOpening.then((account) => { account.onChange(pokeSummary); pokeSummary(); }, () => {});
+    // WHETHER THE KEYCHAIN CAN KEEP SECRETS, AND GITHUB'S BLOCK (Tynn #959, 2g-3b): main's one-time unsealer runs again when the
+    // keychain turns ready (legacy-unsealer.ts), and its Deck strip reads GitHub's block from here.
+    void keychainOpening.then((opened) => { keychainNow = opened; opened.keychain.onAnswerChange(pokeSummary); opened.keyring?.onChange(pokeSummary); pokeSummary(); }, () => {});
+    void githubOpening.then((account) => { account.onChange(pokeSummary); pokeSummary(); }, () => {});
     void tynnOpening.then((account) => {
         account.onChange(() => { void relayHostService.register(); });
         void relayHostService.register();
@@ -1685,12 +1696,12 @@ async function main(): Promise<void> {
         asker: askerLiveFrom({ known: () => true, engine: () => host, takeOvers: () => takeOverHost }),
     });
     phoneRegistry.setDeckSource(featureDeckItems);
-    // What this host can measure itself: mail agents have not collected, the OS agent working. Flows in flight and GitHub's
-    // block are the window's to say (Tynn #551 notes it); with no window they read none.
+    // What this host can measure itself: mail agents have not collected, the OS agent working, and GitHub blocking (its own
+    // GitHub account, Tynn #959). Flows in flight are the window's to say (Tynn #551 notes it); with no window they read none.
     phoneRegistry.setSignals(() => ({
         flowsRunning: 0,
         uncollectedMail: hostRegistry.listAgents().reduce((n, a) => n + own.inbox.unread(a.id).length, 0),
-        githubBlocked: false,
+        githubBlocked: (githubAccountNow?.view().signal ?? null) !== null,
         osAgentWorking: (() => { const os = hostRegistry.listAgents().find(isOsAgent); return os ? host.probe(os.id)?.turnState === 'working' : false; })(),
     }));
     // Its snapshot follows the stores and the sessions, coalesced as the window's is, and only while no window is
@@ -1869,6 +1880,23 @@ async function main(): Promise<void> {
         const endpoint = mcp?.endpoint() ?? null;
         return { ...engine.serviceEnvFor(workspaceId), ...playwrightHost.envFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
     };
+    /*
+     * THE ONE-TIME MOVE, ON THIS HOST'S SIDE (Tynn #959, 2g-3b; host-legacy-adopt.ts): the same book an older Genie's window
+     * wrote, this host's keychain. Something moved, or Genie 1's record came: this host reads its accounts again, registers
+     * the workstation with that record, and brings its agents back to Tynn, by itself.
+     */
+    const legacyAdopt = hostLegacyAdopt({
+        vault: hostVault(keychain),
+        book: fileMigrationBook(join(home, 'keychain-migration.json'), { log: (line) => { say(line); lifecycleLog(line); } }),
+        log: (line) => { say(line); lifecycleLog(line); },
+        moved: ({ secretsMoved, genie1Identity }) => {
+            if (secretsMoved) void githubOpening.then((account) => account.reload()).catch(() => {});
+            void tynnOpening.then((account) => (secretsMoved ? account.reload() : undefined)).catch(() => {}).finally(() => {
+                void relayHostService.register(genie1Identity).catch(() => {});
+                if (secretsMoved) void tynnRecovery?.recover({ secretsMoved: true });
+            });
+        },
+    });
     phoneApi = hostAloneApi({
         hostName: hostname(),
         features: hostFeatures,
@@ -1891,6 +1919,10 @@ async function main(): Promise<void> {
         deviceLinkProtocol: deviceProtocol,
         // What this host runs, for this machine's tray and quit (Tynn #953, 2g-2).
         hostSummary,
+        // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
+        legacySecrets: legacyAdopt,
+        // Ask Tynn again whether this host is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
+        tynnRecheck: async () => { const account = await tynnOpening.catch(() => null); if (account && !account.status().signedIn) await account.recheck(); },
         providerPrograms: hostProviderPrograms({
             file: () => providerChoiceFile(),
             refresh: (provider) => { void providerHealth.refresh(provider); },

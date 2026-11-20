@@ -202,6 +202,11 @@ export const REMOTE_METHODS = [
     'deviceLink.send',
     'deviceLink.close',
     'deviceLink.openBrowser',
+    // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): main's one-time unsealer hands each old copy to genie-host, which keeps
+    // it in its own keychain (`phase: 'adopt'`), and is told which old copies main then deleted (`phase: 'removed'`).
+    'keychain.adoptLegacy',
+    // genie-host asks Tynn again whether it is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
+    'tynn.recheck',
     ...LOCAL_FILES_METHODS,
     ...LOCAL_DRAFT_METHODS,
     ...LOCAL_ARTBOARD_METHODS,
@@ -414,6 +419,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.send': 'local',
     'deviceLink.close': 'local',
     'deviceLink.openBrowser': 'local',
+    'keychain.adoptLegacy': 'local',
+    'tynn.recheck': 'local',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,

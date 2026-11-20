@@ -6,7 +6,6 @@ import type { KeyringService } from './keyring-service.js';
 import type { WorkstationService } from './workstation-service.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
-import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -81,14 +80,9 @@ function timingLabel(method: EngineMethod, args: readonly unknown[]): string {
 }
 
 /**
- * What a window may ask the keychain for: an agent's key. The accounts' tokens only go the other way, in the one-time move: a
- * window can hand one over and have it compared, and it cannot read it back.
+ * What a window may ask the keychain for: an agent's key, by name. The accounts' tokens never cross this link: what an older
+ * Genie sealed reaches genie-host on the protocol's keychain.adoptLegacy (Tynn #959, 2g-3b; host-legacy-adopt.ts).
  */
-function movableName(name: string): `tynn/agent/${string}` | 'tynn/pairing' | 'github/access' | 'github/refresh' | `workstation/${string}` {
-    if (name === 'tynn/pairing' || name === 'github/access' || name === 'github/refresh') return name;
-    return name.startsWith('workstation/') ? name as `workstation/${string}` : agentKeyName(name);
-}
-/** An agent's key, by name. */
 function agentKeyName(name: string): `tynn/agent/${string}` {
     if (!/^tynn\/agent\/[0-9A-HJKMNP-TV-Z]{26}$/i.test(name)) throw new Error('A window can ask only for an agent\'s key.');
     return name as `tynn/agent/${string}`;
@@ -913,9 +907,7 @@ export class SessionEngineServer {
             case 'engine.secretRead':
                 return this.#keychain().get(agentKeyName(str(0)));
             case 'engine.secretStore':
-                return this.#keychain().set(movableName(str(0)), str(1));
-            case 'engine.secretCompare':
-                return hostVault(this.#keychain()).compare(movableName(str(0)), str(1));
+                return this.#keychain().set(agentKeyName(str(0)), str(1));
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
         }
