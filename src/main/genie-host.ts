@@ -78,7 +78,7 @@ import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { terminalWorkspaceOf, workspaceFolders } from './host-share-scope.js';
 import { TakeOverHost } from './take-over-host.js';
-import { WorkspaceColors } from './workspace-color-host.js';
+import { followWorkspaceColors, WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { CloneOffersService } from './clone-offers-service.js';
 import { nodeSaveGit, workspaceSaveOps } from './workspace-save-host.js';
@@ -164,6 +164,7 @@ import { ProtocolTunnels } from './protocol-tunnels.js';
 import { hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
 import { hostOwnerOps } from './host-owner-ops.js';
 import { LocalStagingArea } from './local-staging-area.js';
+import { withComms } from './dashboard-comms.js';
 import { Registry } from './registry.js';
 import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -1665,13 +1666,20 @@ async function main(): Promise<void> {
     const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
-    phoneRegistry.setProbe((id) => host.probe(id));
+    // The Dashboard's comms (Tynn #956): this machine's window has been served from this registry since Tynn #898 2d-4b, and
+    // the SessionHost's probe carries none, so the rows take them from the host's own inbox (main/dashboard-comms.ts).
+    phoneRegistry.setProbe(withComms((id) => host.probe(id), (id) => own.inbox.involving(id, 2000)));
     phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
     phoneRegistry.setSafeMode(() => safeMode.view());
     phoneRegistry.setHangNotice(() => crashState.view().notice);
     phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
-    const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
+    const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), writesAssigned: false, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
     phoneRegistry.setWorkspaceColorer((path) => workspaceColors.colorOf(path));
+    // THE DASHBOARD'S WORKSPACE COLOURS (Tynn #956): this machine's Dashboard is this registry's since Tynn #898 2d-4b, and no
+    // pass ever ran here: every swatch blank, every comms arc the fallback violet. The window's pass, without writing the
+    // colours it assigns (writesAssigned: false): the window writes those, and the same rail order assigns the same ones.
+    // A person's choice (workspaces.setColor, `set`) is still written here.
+    followWorkspaceColors(phoneRegistry, workspaceColors);
     const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
     const featureDeckItems = () => assembleDeckItems({
         workspaces: hostRegistry.listWorkspaces(),
