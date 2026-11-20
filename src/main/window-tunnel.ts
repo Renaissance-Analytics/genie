@@ -38,9 +38,15 @@ interface Carried {
     connectionId: string | null;
 }
 
+/**
+ * Tunnel ids, counted once for this process across every door (Tynn #941, 2f-2). genie-host keys a window process's tunnels
+ * by id, and an id seen again replaces the connection that held it; main tunnels two doors over its one link (its window's
+ * and its own client's), so a count per door gave both a `w1`, and the Deck connection main holds open closed the page's.
+ */
+let nextTunnel = 0;
+
 export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: TunnelDoorOptions = {}): { refreshWindow(): void; dispose(): void } {
-    let next = 0;
-    const newId = options.newId ?? (() => `w${(++next).toString(36)}`);
+    const newId = options.newId ?? (() => `w${(++nextTunnel).toString(36)}`);
     const carried = new Map<string, Carried>();
     const sayBrowser = (tunnel: string, c: Carried) => {
         if (options.browser && c.connectionId !== null) link.send('browser', tunnel, options.browser(c.connectionId));

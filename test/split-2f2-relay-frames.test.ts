@@ -19,6 +19,7 @@ import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
 import { deviceChannels } from '../src/renderer/device-channels.js';
+import { tunnelDoor, type TunnelLink } from '../src/main/window-tunnel.js';
 
 /*
  * CLIENT/HOST SPLIT STEP 2f-2 (Tynn #898, story #941; split out of #912). A client is a dumb terminal: a remote window's
@@ -438,5 +439,38 @@ describe('over the wire: RemoteHost serves the Deck connection and the device ev
             expect(far.frames.find((m) => m.kind === 'result' && m.id === 6)).toMatchObject({ ok: false });
             expect(asked.filter((m) => m === 'deviceLink.open')).toHaveLength(1);
         } finally { await h.done(); }
+    });
+});
+
+describe('two doors over one engine link never share a tunnel id (the window’s door and main’s own client)', () => {
+    /*
+     * main tunnels two doors over its one engine link: the window's IPC door and its own protocol client's (the tray's calls,
+     * and since 2f-2 the Deck connection it holds open). genie-host keys a tunnel by its id per window process, and an id seen
+     * again REPLACES the connection holding it. Each door counted its own ids from w1, so main's Deck connection took the
+     * page's w1 and closed it before its welcome (the 2f-2 gate, 1120-044406-e7cf63: every app row).
+     */
+    function fakeLink() {
+        const opened: string[] = [];
+        const link: TunnelLink = { live: () => true, send: (op, tunnel) => { if (op === 'open') opened.push(tunnel); return true; }, onFrame: () => () => {}, onDown: () => () => {} };
+        return { link, opened };
+    }
+    function fakeDoor() {
+        let accept: (c: ReturnType<typeof inMemoryPair>['server']) => void = () => {};
+        const door: ServerTransport = { onConnection: (l) => { accept = l; return () => {}; } };
+        return { door, connect: () => accept({ ...inMemoryPair().server, preAuth: { kind: 'local', label: 'w', isOwner: true, workspaceId: null, readonly: false, window: 'main' } }) };
+    }
+
+    it('connections on either door get ids no other door gave', () => {
+        const f = fakeLink();
+        const windowDoor = fakeDoor();
+        const ownDoor = fakeDoor();
+        tunnelDoor(windowDoor.door, f.link);
+        tunnelDoor(ownDoor.door, f.link);
+        windowDoor.connect();
+        ownDoor.connect();
+        windowDoor.connect();
+        ownDoor.connect();
+        expect(f.opened).toHaveLength(4);
+        expect(new Set(f.opened).size).toBe(4);
     });
 });
