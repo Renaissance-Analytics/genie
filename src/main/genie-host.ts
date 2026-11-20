@@ -31,6 +31,7 @@ import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir, userHome } from './paths.js';
 import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { storageFeaturePort } from './storage-feature-port.js';
+import type { InUseFolder } from '../core/workspace-storage.js';
 import { threadAttachmentFiles } from '../core/thread-store.js';
 import { AccountsHost } from './accounts-host.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
@@ -1733,8 +1734,16 @@ async function main(): Promise<void> {
         }
         return out;
     };
+    // WHAT IS WORKING WHERE (Tynn #946): a worktree a terminal, a running process or a running agent is in is never offered.
+    const storageInUse = (): InUseFolder[] => [
+        ...terminalHost.list().flatMap(t => (t.cwd ? [{ path: t.cwd, by: `a terminal (${basename(t.shell)})` }] : [])),
+        ...processSupervisor.list().filter(p => p.state === 'running' || p.state === 'restarting')
+            .flatMap(p => { const cwd = processSupervisor.cwd(p.id); return cwd ? [{ path: cwd, by: `the process ${p.name}` }] : []; }),
+        ...hostRegistry.listAgents().filter(a => host.probe(a.id)?.running === true)
+            .flatMap(a => { const w = hostRegistry.workspace(a.workspaceId); return w ? [{ path: w.path, by: `the agent ${a.name}` }] : []; }),
+    ];
     const storagePort: NonNullable<MachineFeaturePorts['storage']> = storageFeaturePort({
-        storage: new WorkspaceStorage(), root: storageRoot, chatFiles: chatFilesOf, changed: () => featureChanged(), log: say,
+        storage: new WorkspaceStorage(), root: storageRoot, chatFiles: chatFilesOf, inUse: storageInUse, changed: () => featureChanged(), log: say,
     });
     const featureEffects: MachineFeaturePorts = {
         storage: storagePort,

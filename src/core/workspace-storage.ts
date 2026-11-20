@@ -61,6 +61,57 @@ export interface StorageItem {
     readonly external?: boolean;
     /** The newest file's modification time in it, ms; null when it holds no file. */
     readonly newest?: number | null;
+    /** A worktree's repository, workspace-relative (`.` for the workspace itself) (Tynn #946). */
+    readonly repo?: string;
+    /** A worktree's branch; `null` when detached (then `head` says where). */
+    readonly branch?: string | null;
+    readonly head?: string | null;
+}
+
+/** A folder something live is working in (a terminal, a process, an agent), and who, in words (Tynn #946). */
+export interface InUseFolder {
+    readonly path: string;
+    readonly by: string;
+}
+
+const BUILD_CACHES = ['.vite', '.turbo', '.parcel-cache', '.pytest_cache'];
+const TEST_RESULTS = ['test-results', 'playwright-report', '.nyc_output'];
+
+/** What an item IS, in words, for its row (Tynn #946: a worktree in repos/ read as a repository). */
+export function itemKind(item: StorageItem): string {
+    switch (item.category) {
+        case 'repos': return 'Repository';
+        case 'worktrees': {
+            const of = item.repo ? `Worktree of ${item.repo}` : 'Worktree';
+            if (item.branch) return `${of}, on ${item.branch}`;
+            return item.head ? `${of}, detached at ${item.head.slice(0, 7)}` : of;
+        }
+        case 'ci-artifacts': {
+            const name = item.rel.split('/').at(-1) ?? '';
+            if (name === 'coverage') return 'Coverage';
+            if (TEST_RESULTS.includes(name)) return 'Test results';
+            if (BUILD_CACHES.includes(name)) return 'Build cache';
+            if (name === 'ci-out' || name === 'smoke-out') return 'CI output';
+            return 'Test queue result';
+        }
+        case 'chat-files': return 'Shared in chat';
+        case 'dirty': return 'Dropped in .ai/_dirty';
+        default: return 'In .trash';
+    }
+}
+
+/** The Clean up confirmation's groups, in this order (Tynn #946). */
+export const CLEANUP_GROUPS: readonly string[] = ['Worktrees', 'Coverage', 'Test results', 'CI output', 'Build caches', 'Test queue results'];
+export function cleanupGroup(item: StorageItem): string {
+    if (item.category === 'worktrees') return 'Worktrees';
+    const kind = itemKind(item);
+    return kind === 'Build cache' ? 'Build caches' : kind === 'Test queue result' ? 'Test queue results' : kind;
+}
+
+/** Each item once, by id: the list a window draws never shows one thing twice. */
+export function uniqueItems(items: readonly StorageItem[]): StorageItem[] {
+    const seen = new Set<string>();
+    return items.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
 }
 
 /**

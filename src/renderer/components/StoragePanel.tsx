@@ -1,7 +1,7 @@
 import { Button, Icon } from '@particle-academy/react-fancy';
 import { useEffect, useRef, useState } from 'react';
 import {
-    CATEGORY_LABEL, STORAGE_CATEGORIES, WORKTREE_STATE_LABEL, approvalFor, formatBytes, originLabel, suggestedCleanup,
+    CATEGORY_LABEL, CLEANUP_GROUPS, STORAGE_CATEGORIES, WORKTREE_STATE_LABEL, approvalFor, cleanupGroup, formatBytes, itemKind, originLabel, suggestedCleanup, uniqueItems,
     type StorageCategory, type StorageView,
 } from '../../core/workspace-storage.js';
 import type { ActOutcome, FeatureAction } from '../features.js';
@@ -36,8 +36,12 @@ export function StoragePanel({ workspaceId, view, onAction: send }: { workspaceI
 
     const report = view?.report ?? null;
     // The one-click clean-up preselects only what is safe (core/workspace-storage.ts suggestedCleanup); the host checks again.
-    const suggestedIds = report ? suggestedCleanup(report.items, report.measuredAt) : [];
-    const suggested = report ? report.items.filter((i) => suggestedIds.includes(i.id)) : [];
+    // Each item once, however often it was sent (Tynn #946: repos/genie2-vm was listed twice).
+    const listed = report ? uniqueItems(report.items) : [];
+    const suggestedIds = report ? suggestedCleanup(listed, report.measuredAt) : [];
+    const suggested = listed.filter((i) => suggestedIds.includes(i.id));
+    // The confirmation, grouped by kind with each group's size (Tynn #946).
+    const groups = CLEANUP_GROUPS.map((g) => ({ name: g, list: suggested.filter((i) => cleanupGroup(i) === g) })).filter((g) => g.list.length > 0);
     const suggestedBytes = suggested.reduce((n, i) => n + i.bytes, 0);
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     return (
@@ -89,9 +93,14 @@ export function StoragePanel({ workspaceId, view, onAction: send }: { workspaceI
                     {cleaning && suggested.length > 0 ? (
                         <div data-storage-confirm-cleanup="" role="alertdialog" aria-label="Clean up" className="flex flex-col gap-2 rounded-lg border border-[var(--border-1)] p-3 text-sm">
                             <p className="font-medium">{`Move ${suggested.length} ${suggested.length === 1 ? 'item' : 'items'} (${formatBytes(suggestedBytes)}) to .trash? Nothing is deleted until you empty the trash.`}</p>
-                            <ul className="list-disc pl-5 font-mono text-xs">
-                                {suggested.map((i) => <li key={i.id}>{`${i.label} · ${formatBytes(i.bytes)}`}</li>)}
-                            </ul>
+                            {groups.map((g) => (
+                                <div key={g.name} data-cleanup-group={g.name} className="flex flex-col gap-1">
+                                    <h4 className="text-xs font-semibold text-[var(--fg-2)]">{`${g.name} · ${g.list.length} · ${formatBytes(g.list.reduce((n, i) => n + i.bytes, 0))}`}</h4>
+                                    <ul className="list-disc pl-5 text-xs">
+                                        {g.list.map((i) => <li key={i.id}><span className="font-mono">{`${i.label} · ${formatBytes(i.bytes)}`}</span>{` · ${itemKind(i)}`}</li>)}
+                                    </ul>
+                                </div>
+                            ))}
                             <div className="flex gap-2">
                                 <Button size="xs" type="button" icon="archive" data-action="storage-cleanup-confirm" disabled={busy} className={`${button} justify-start`} onClick={() => { setCleaning(false); onAction({ kind: 'storage.cleanUp', workspaceId, itemIds: suggested.map((i) => i.id) }); }}>Move to .trash</Button>
                                 <Button size="xs" type="button" icon="x" data-action="storage-cleanup-cancel" className={`${button} justify-start`} onClick={() => setCleaning(false)}>Cancel</Button>
@@ -99,14 +108,15 @@ export function StoragePanel({ workspaceId, view, onAction: send }: { workspaceI
                         </div>
                     ) : null}
                     {STORAGE_CATEGORIES.filter((c) => c !== 'trash').map((c) => {
-                        const list = report.items.filter((i) => i.category === c);
+                        const list = listed.filter((i) => i.category === c);
                         if (list.length === 0) return null;
                         return (
                             <div key={c} data-storage-category={c} className="flex flex-col gap-1">
-                                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase text-[var(--fg-3)]"><Icon name={ICON[c]} size="xs" />{CATEGORY_LABEL[c]}</h3>
+                                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase text-[var(--fg-3)]"><Icon name={ICON[c]} size="xs" />{CATEGORY_LABEL[c]}<span className="font-mono normal-case">{` · ${list.length} · ${formatBytes(list.reduce((n, i) => n + i.bytes, 0))}`}</span></h3>
                                 {list.map((i) => (
                                     <div key={i.id} data-storage-item={i.id} className="flex flex-wrap items-center gap-3 text-sm">
                                         <span className="min-w-0 truncate font-mono text-xs">{i.label}</span>
+                                        <span data-storage-kind="" className="text-xs text-[var(--fg-2)]">{itemKind(i)}</span>
                                         <span className="font-mono text-xs text-[var(--fg-3)]">{`${formatBytes(i.bytes)}${i.truncated ? '+' : ''}`}</span>
                                         {i.state ? <span data-worktree-state={i.state} className="text-xs text-[var(--fg-2)]">{WORKTREE_STATE_LABEL[i.state]}{i.external ? ' · outside this workspace' : ''}</span> : null}
                                         {i.reclaimable ? (

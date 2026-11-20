@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { resolveProgram } from '../core/program-lookup.js';
 import {
     ARTIFACT_WALK_SKIP, DIRTY_REL, STORAGE_CATEGORIES, approvalMatches, isArtifactPath, originLabel, suggestedCleanup, mergedIntoLine, parseWorktreeList, worktreeRefusal, worktreeState, WORKTREE_STATE_LABEL,
-    type StorageCategory, type StorageItem, type StorageReport, type TrashApproval, type TrashEntry, type TrashOrigin, type WorktreeState,
+    type InUseFolder, type StorageCategory, type StorageItem, type StorageReport, type TrashApproval, type TrashEntry, type TrashOrigin, type WorktreeState,
 } from '../core/workspace-storage.js';
 import { sizeOf as defaultSizeOf, type DirSize } from './dir-size.js';
 import { gitExecFile } from './git-exec.js';
@@ -167,6 +167,28 @@ function samePath(a: string, b: string): boolean {
     return norm(a) === norm(b);
 }
 
+/** `child` is `parent` or inside it. */
+function isUnder(child: string, parent: string): boolean {
+    const rel = relative(resolve(parent), resolve(child));
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/** A folder whose `.git` is a file naming `…/worktrees/<name>`: a linked worktree (a submodule's names `…/modules/…`). */
+async function isLinkedWorktree(dir: string): Promise<boolean> {
+    try {
+        const s = await lstat(join(dir, '.git'));
+        if (!s.isFile()) return false;
+        const m = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(join(dir, '.git'), 'utf8'));
+        return m !== null && /[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(m[1]!);
+    } catch { return false; }
+}
+
+/** What a measure, a Move or a clean-up is told about the host now: chat files, and the folders something is working in. */
+export interface StorageInput {
+    readonly chatFiles: readonly ChatFile[];
+    readonly inUse?: readonly InUseFolder[];
+}
+
 /** At most `n` at once, in order. */
 async function pooled<T, R>(list: readonly T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
     const out: R[] = new Array(list.length);
@@ -202,26 +224,35 @@ export class WorkspaceStorage {
         } catch { /* no repos/ */ }
         for (const n of names) {
             const abs = join(rootReal, 'repos', n);
-            if (await exists(join(abs, '.git'))) out.push({ abs, rel: `repos/${n}` });
+            // A linked worktree that sits in repos/ (the owner's repos/genie2-vm, Tynn #946) is not a repository: it is
+            // listed once, as a worktree of the repository git says it belongs to. A submodule's .git file is kept.
+            if (await exists(join(abs, '.git')) && !(await isLinkedWorktree(abs))) out.push({ abs, rel: `repos/${n}` });
         }
         return out;
     }
 
     /**
      * Every worktree git lists for the workspace's repositories, inside the workspace or not (never a main checkout, never one
-     * in .trash, never one that is itself a link), each with its state: dirty, unpushed, clean and merged, clean and unmerged.
+     * in .trash, never one that is itself a link), each with its state: dirty, unpushed, clean and merged, clean and unmerged,
+     * and whether something is working in it now.
      */
-    async #worktrees(rootReal: string): Promise<WorktreeFound[]> {
+    async #worktrees(rootReal: string, inUse: readonly InUseFolder[] = []): Promise<WorktreeFound[]> {
         const out: WorktreeFound[] = [];
-        for (const w of await this.#listWorktrees(rootReal)) out.push(await this.#checkWorktree(w));
+        for (const w of await this.#listWorktrees(rootReal)) out.push(await this.#checkWorktree(w, inUse));
         return out;
     }
 
-    /** What git lists, one `git worktree list` per repository: no worktree's own git is asked yet (cheap, Tynn #947). */
+    /**
+     * What git lists, one `git worktree list` per repository: no worktree's own git is asked yet (cheap, Tynn #947). Each
+     * worktree ONCE, by its real path (Tynn #946), however many repositories' lists name it.
+     */
     async #listWorktrees(rootReal: string): Promise<WorktreeListed[]> {
         const out: WorktreeListed[] = [];
+        const seen = new Set<string>();
         const trashReal = join(rootReal, '.trash');
-        for (const repo of await this.#repos(rootReal)) {
+        const repos = await this.#repos(rootReal);
+        const repoReal = new Set(repos.map((r) => r.abs));
+        for (const repo of repos) {
             const listed = await git(repo.abs, ['worktree', 'list', '--porcelain']);
             if (!listed.ok) continue;
             const list = parseWorktreeList(listed.out);
@@ -229,7 +260,10 @@ export class WorkspaceStorage {
                 if (w.bare) continue;
                 let real: string;
                 try { if ((await lstat(w.path)).isSymbolicLink()) continue; real = await realpath(w.path); } catch { continue; }
-                if (real === rootReal || inside(trashReal, real) !== null || real === trashReal) continue;
+                if (real === rootReal || repoReal.has(real) || inside(trashReal, real) !== null || real === trashReal) continue;
+                const key = process.platform === 'win32' ? real.toLowerCase() : real;
+                if (seen.has(key)) continue;
+                seen.add(key);
                 const inRoot = inside(rootReal, real);
                 const rel = inRoot ?? toSlash(real);
                 out.push({ id: `worktrees:${rel}`, rel, abs: real, repoAbs: repo.abs, repoRel: repo.rel, branch: w.branch, head: w.head, external: inRoot === null, locked: w.locked, listed: w.path });
@@ -238,22 +272,28 @@ export class WorkspaceStorage {
         return out.sort((a, b) => a.rel.localeCompare(b.rel));
     }
 
-    /** One worktree's state, read now from its own git: dirty, unpushed, merged. */
-    async #checkWorktree(w: WorktreeListed): Promise<WorktreeFound> {
+    /** One worktree's state, read now from its own git: in use, dirty, unpushed, merged. */
+    async #checkWorktree(w: WorktreeListed, inUse: readonly InUseFolder[] = []): Promise<WorktreeFound> {
+        // IN USE (Tynn #946): a terminal, a process or an agent working in it, or git itself (its index.lock): never offered.
+        const user = inUse.find((u) => isUnder(u.path, w.abs) || samePath(u.path, w.listed) || isUnder(u.path, w.listed));
+        const lock = await git(w.abs, ['rev-parse', '--git-path', 'index.lock']);
+        const gitBusy = lock.ok && lock.out.trim() !== '' && await exists(resolve(w.abs, lock.out.trim()));
         const status = await git(w.abs, ['status', '--porcelain']);
         const ahead = await git(w.abs, ['rev-list', '--count', 'HEAD', '--not', '--remotes']);
         const unpushed = ahead.ok && /^\d+\s*$/.test(ahead.out) ? Number(ahead.out.trim()) : null;
         const contains = await git(w.abs, ['for-each-ref', '--contains', 'HEAD', '--format=%(refname)', 'refs/remotes']);
         const dirty = !status.ok || status.out.trim() !== '';
         const merged = contains.ok && mergedIntoLine(contains.out.split(/\r?\n/).filter((l) => l !== ''));
-        const refusal = !status.ok ? `Genie could not read its status: ${status.error}` : worktreeRefusal({ locked: w.locked, dirty, unpushed });
+        const refusal = user ? `In use: ${user.by} is working in it.`
+            : gitBusy ? 'In use: git is working in it right now.'
+            : !status.ok ? `Genie could not read its status: ${status.error}` : worktreeRefusal({ locked: w.locked, dirty, unpushed });
         return { ...w, state: worktreeState({ locked: w.locked, dirty, unpushed, merged }), refusal };
     }
 
     /** One worktree of the workspace by its id, checked now; `null` when git does not list it. */
-    async #worktree(rootReal: string, itemId: string): Promise<WorktreeFound | null> {
+    async #worktree(rootReal: string, itemId: string, inUse: readonly InUseFolder[] = []): Promise<WorktreeFound | null> {
         const w = (await this.#listWorktrees(rootReal)).find((x) => x.id === itemId);
-        return w ? this.#checkWorktree(w) : null;
+        return w ? this.#checkWorktree(w, inUse) : null;
     }
 
     /** A CI/test artifact folder of the workspace by its relative path, as a fresh look finds it; `null` when it is not one. */
@@ -342,9 +382,9 @@ export class WorkspaceStorage {
     }
 
     /** The workspace's disk, by category, with what may be reclaimed and why not. */
-    async measure(root: string, input: { chatFiles: readonly ChatFile[] }): Promise<StorageReport> {
+    async measure(root: string, input: StorageInput): Promise<StorageReport> {
         const rootReal = await realpath(root);
-        const [repos, worktrees, artifacts, dirty, trash] = await Promise.all([this.#repos(rootReal), this.#worktrees(rootReal), this.#artifacts(rootReal), this.#dirtyEntries(rootReal), this.listTrash(rootReal)]);
+        const [repos, worktrees, artifacts, dirty, trash] = await Promise.all([this.#repos(rootReal), this.#worktrees(rootReal, input.inUse), this.#artifacts(rootReal), this.#dirtyEntries(rootReal), this.listTrash(rootReal)]);
         let truncated = false;
         const sized = async (abs: string) => { const s = await this.#sizeOf(abs); if (s.truncated) truncated = true; return s; };
         const items: StorageItem[] = [];
@@ -355,7 +395,7 @@ export class WorkspaceStorage {
         items.push(...repoItems);
         items.push(...await pooled(worktrees, WALKS_AT_ONCE, async (w) => {
             const s = await sized(w.abs);
-            return { id: w.id, category: 'worktrees' as const, label: w.branch ? `${w.rel} (${w.branch})` : w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external };
+            return { id: w.id, category: 'worktrees' as const, label: w.branch ? `${w.rel} (${w.branch})` : w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external, repo: w.repoRel, branch: w.branch, head: w.head };
         }));
         items.push(...await pooled(artifacts, WALKS_AT_ONCE, async (rel) => {
             const s = await sized(join(rootReal, ...rel.split('/')));
@@ -378,7 +418,7 @@ export class WorkspaceStorage {
     }
 
     /** Move one item to the workspace's .trash, re-validated now; its origin recorded beside it. */
-    async moveToTrash(root: string, itemId: string, input: { chatFiles: readonly ChatFile[] }): Promise<StorageResult<{ trashId: string; label: string }>> {
+    async moveToTrash(root: string, itemId: string, input: StorageInput): Promise<StorageResult<{ trashId: string; label: string }>> {
         const rootReal = await realpath(root);
         const colon = itemId.indexOf(':');
         const category = colon > 0 ? itemId.slice(0, colon) : '';
@@ -392,7 +432,7 @@ export class WorkspaceStorage {
             plan = { origin: { kind: 'path', category: 'ci-artifacts', rel: rest }, label: rest, run: (payload) => renameRetrying(abs, payload) };
         } else if (category === 'worktrees') {
             // Only this one worktree's git is asked (Tynn #947: re-checking every worktree for every item made 641 items take hours).
-            const w = await this.#worktree(rootReal, itemId);
+            const w = await this.#worktree(rootReal, itemId, input.inUse);
             if (!w) return { ok: false, reason: 'That is not a worktree Genie may move: only one registered with a repository of this workspace, other than its main checkout.' };
             if (w.refusal) return { ok: false, reason: w.refusal };
             plan = {
@@ -452,14 +492,14 @@ export class WorkspaceStorage {
      * workspace: a full measure per click, then a check of every worktree for every item, made the owner's 641 items take
      * hours. `onProgress` is told after each item.
      */
-    async cleanUp(root: string, itemIds: readonly string[], input: { chatFiles: readonly ChatFile[] }, onProgress?: (e: StorageProgressEvent) => void): Promise<CleanUpResult> {
+    async cleanUp(root: string, itemIds: readonly string[], input: StorageInput, onProgress?: (e: StorageProgressEvent) => void): Promise<CleanUpResult> {
         const rootReal = await realpath(root);
         const ids = [...new Set(itemIds)];
         const out: CleanUpResult = { moved: [], skipped: [], failed: [], problems: [], bytes: 0 };
         let bytes = 0;
         // One at a time: two moves in one repository would race for git's lock.
         for (const [n, id] of ids.entries()) {
-            const fresh = await this.#suggestedNow(rootReal, id);
+            const fresh = await this.#suggestedNow(rootReal, id, input.inUse ?? []);
             if (!fresh.ok) {
                 out.skipped.push(id);
                 out.problems.push({ id, label: fresh.label, reason: fresh.reason });
@@ -473,17 +513,17 @@ export class WorkspaceStorage {
     }
 
     /** Whether one item is suggested for the one-click clean-up now, read fresh; the reason in words when not. */
-    async #suggestedNow(rootReal: string, id: string): Promise<{ ok: true; label: string; bytes: number } | { ok: false; label: string; reason: string }> {
+    async #suggestedNow(rootReal: string, id: string, inUse: readonly InUseFolder[]): Promise<{ ok: true; label: string; bytes: number } | { ok: false; label: string; reason: string }> {
         const colon = id.indexOf(':');
         const category = colon > 0 ? id.slice(0, colon) : '';
         const rest = colon > 0 ? id.slice(colon + 1) : id;
         const now = this.#now();
         let item: StorageItem;
         if (category === 'worktrees') {
-            const w = await this.#worktree(rootReal, id);
+            const w = await this.#worktree(rootReal, id, inUse);
             if (!w) return { ok: false, label: rest, reason: 'Git no longer lists it as a worktree of this workspace.' };
             const s = await this.#sizeOf(w.abs);
-            item = { id, category: 'worktrees', label: w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external };
+            item = { id, category: 'worktrees', label: w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external, repo: w.repoRel, branch: w.branch, head: w.head };
         } else if (category === 'ci-artifacts') {
             const abs = await this.#artifactAt(rootReal, rest);
             if (abs === null) return { ok: false, label: rest, reason: 'It is no longer a CI or test result folder in this workspace.' };

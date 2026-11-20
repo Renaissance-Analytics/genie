@@ -1,4 +1,4 @@
-import { formatBytes, type StorageFailure, type StorageProgress, type StorageView, type TrashApproval } from '../core/workspace-storage.js';
+import { formatBytes, type InUseFolder, type StorageFailure, type StorageProgress, type StorageView, type TrashApproval } from '../core/workspace-storage.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import type { ChatFile, StorageProblem, StorageProgressEvent, WorkspaceStorage } from './workspace-storage-host.js';
 
@@ -20,6 +20,8 @@ export interface StorageFeatureDeps {
     /** The workspace's folder on this machine; throws, in words, when it is not open here. */
     readonly root: (workspaceId: string) => string;
     readonly chatFiles: (workspaceId: string) => Promise<ChatFile[]>;
+    /** The folders something live is working in now: a terminal, a process, an agent (Tynn #946). */
+    readonly inUse?: () => readonly InUseFolder[];
     /** The feature snapshot changed: push it. */
     readonly changed: () => void;
     /** One line in genie-host.log. */
@@ -51,7 +53,7 @@ export function storageFeaturePort(deps: StorageFeatureDeps): StorageFeaturePort
     const remeasure = async (id: string): Promise<void> => {
         set(id, { measuring: true });
         try {
-            const report = await deps.storage.measure(deps.root(id), { chatFiles: await deps.chatFiles(id) });
+            const report = await deps.storage.measure(deps.root(id), { chatFiles: await deps.chatFiles(id), inUse: deps.inUse?.() ?? [] });
             set(id, { measuring: false, report, error: null });
         } catch (error) {
             set(id, { measuring: false, error: `Genie could not measure this workspace: ${words(error)}` });
@@ -106,7 +108,7 @@ export function storageFeaturePort(deps: StorageFeatureDeps): StorageFeaturePort
         trash: async (id, itemId) => {
             start(id, 'Move to .trash', 'move', 1, async (root, onProgress) => {
                 say(id, `moving ${itemId} to .trash`);
-                const r = await deps.storage.moveToTrash(root, itemId, { chatFiles: await deps.chatFiles(id) });
+                const r = await deps.storage.moveToTrash(root, itemId, { chatFiles: await deps.chatFiles(id), inUse: deps.inUse?.() ?? [] });
                 onProgress({ done: 1, total: 1, bytes: 0, current: r.ok ? r.label : itemId });
                 return r.ok ? { outcome: `Moved ${r.label} to .trash.`, failures: [] } : { outcome: `Not moved to .trash: ${r.reason}`, failures: [{ label: itemId, reason: r.reason }] };
             });
@@ -115,7 +117,7 @@ export function storageFeaturePort(deps: StorageFeatureDeps): StorageFeaturePort
             const total = new Set(itemIds).size;
             start(id, 'Clean up', 'move', total, async (root, onProgress) => {
                 say(id, `moving ${items(total)} to .trash`);
-                const r = await deps.storage.cleanUp(root, itemIds, { chatFiles: await deps.chatFiles(id) }, onProgress);
+                const r = await deps.storage.cleanUp(root, itemIds, { chatFiles: await deps.chatFiles(id), inUse: deps.inUse?.() ?? [] }, onProgress);
                 const left = r.skipped.length + r.failed.length;
                 const tail = left === 0 ? '.' : `; ${left} ${left === 1 ? 'was' : 'were'} not moved.`;
                 return { outcome: `Moved ${r.moved.length} of ${items(total)} (${formatBytes(r.bytes)}) to .trash${tail}`, failures: asFailures(r.problems) };
