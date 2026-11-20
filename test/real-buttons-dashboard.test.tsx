@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
-import type { Headroom } from '../src/core/headroom.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
 import { ImportedAgentsView } from '../src/renderer/components/ImportedAgents.js';
 import { importedAgents } from '../src/core/agent-adoption.js';
@@ -26,10 +25,6 @@ function row(over: Partial<AgentRow> = {}): AgentRow {
         ...over,
     };
 }
-const h = (leftPct: number): Headroom => {
-    const resetsAtMs = Date.UTC(2026, 9, 26, 14, 0, 0);
-    return { plan: null, window: '5h', leftPct, resetsAtMs, over: false, windows: [{ window: '5h', usedPct: 100 - leftPct, leftPct, resetsAtMs, over: false }] };
-};
 const noop = () => {};
 const notFancy = (html: string) => buttonTags(html).filter((t) => !/\sdata-react-fancy-button=""/.test(t));
 
@@ -40,7 +35,8 @@ describe('the Dashboard draws only react-fancy Buttons', () => {
         expect(notFancy(html)).toEqual([]);
     });
 
-    it('the board: Sleeping/Stopped filters, Chat, rate limit, workspace, repo repair, Add agent, fix and tray doors', () => {
+    // The rate-limit pill is in Genie's title bar now (Tynn #949): its Button is pinned in account-pills-title-bar-949.
+    it('the board: Sleeping/Stopped filters, Chat, workspace, repo repair, Add agent, fix and tray doors', () => {
         const html = renderToStaticMarkup(
             <Dashboard
                 rows={[row(), row({ id: 'bad', name: 'bad', state: 'broken', reason: 'Provider sign-in expired', fixes: ['Sign in to kimi'] })]}
@@ -51,15 +47,14 @@ describe('the Dashboard draws only react-fancy Buttons', () => {
                 onChat={noop}
                 faults={{ tynn: { text: 'repo site not found in tynn.agi', repo: 'site' } }}
                 onLocateRepo={noop}
-                rateLimits={{ claude: h(62) }}
                 trayId="kai"
             />,
         );
         // POSITIVE CONTROL: each kind of button this state offers is in the markup.
-        for (const attr of ['data-dashboard-filter="sleeping"', 'data-dashboard-filter="stopped"', 'data-action="chat-genie"', 'data-rate-limit="claude"', 'data-open-workspace="tynn"', 'data-action="locate-repo"', 'data-add-agent="moic"', 'data-fix="Sign in to kimi"', 'data-door="agent"']) {
+        for (const attr of ['data-dashboard-filter="sleeping"', 'data-dashboard-filter="stopped"', 'data-action="chat-genie"', 'data-open-workspace="tynn"', 'data-action="locate-repo"', 'data-add-agent="moic"', 'data-fix="Sign in to kimi"', 'data-door="agent"']) {
             expect(html, attr).toContain(attr);
         }
-        expect(buttonTags(html).length).toBeGreaterThanOrEqual(9);
+        expect(buttonTags(html).length).toBeGreaterThanOrEqual(8);
         expect(notFancy(html)).toEqual([]);
     });
 
