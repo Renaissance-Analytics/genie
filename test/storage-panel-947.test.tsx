@@ -79,7 +79,7 @@ describe('the Storage tab while the host works, and after', () => {
     it('a refusal of the action itself is drawn, not left in the console', async () => {
         answer = { ok: false, reason: 'Genie is still moving items to .trash in this workspace (3 of 641); wait for it to finish.' };
         draw(view());
-        await act(async () => { q('[data-action="storage-trash"]')!.click(); await Promise.resolve(); });
+        await act(async () => { q('[data-action="storage-trash"]')!.click(); await new Promise((r) => setTimeout(r, 0)); });
         expect(actions).toEqual([{ kind: 'storage.trash', workspaceId: 'ws1', itemId: 'worktrees:wt/a' }]);
         expect(q('[data-storage-refusal]')!.textContent).toMatch(/still moving items/);
     });

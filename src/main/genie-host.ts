@@ -30,7 +30,7 @@ import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir, userHome } from './paths.js';
 import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
-import { formatBytes, type StorageView } from '../core/workspace-storage.js';
+import { storageFeaturePort } from './storage-feature-port.js';
 import { threadAttachmentFiles } from '../core/thread-store.js';
 import { AccountsHost } from './accounts-host.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
@@ -1719,12 +1719,8 @@ async function main(): Promise<void> {
     });
     // A WORKSPACE'S STORAGE (Tynn #697): measured off this thread (main/dir-size.ts), pushed when done; every Move, Restore
     // and Empty re-validated by the host module and followed by a fresh measure, so the tab shows what is on disk now.
-    const storageHost = new WorkspaceStorage();
-    const storageViews = new Map<string, StorageView>();
-    const setStorage = (id: string, patch: Partial<StorageView>): void => {
-        storageViews.set(id, { measuring: false, report: null, error: null, outcome: null, ...storageViews.get(id), ...patch });
-        featureChanged();
-    };
+    // A Move or Empty runs on its own with its progress in the view, ends with a result naming each failure, and every
+    // step is a line in this log (Tynn #947: main/storage-feature-port.ts).
     const storageRoot = (id: string): string => {
         const w = hostRegistry.workspace(id);
         if (!w || w.asleep === true) throw new Error('That workspace is not open on this machine.');
@@ -1737,39 +1733,9 @@ async function main(): Promise<void> {
         }
         return out;
     };
-    const remeasure = async (id: string): Promise<void> => {
-        setStorage(id, { measuring: true });
-        try {
-            const report = await storageHost.measure(storageRoot(id), { chatFiles: await chatFilesOf(id) });
-            setStorage(id, { measuring: false, report, error: null });
-        } catch (error) {
-            setStorage(id, { measuring: false, error: `Genie could not measure this workspace: ${error instanceof Error ? error.message : String(error)}` });
-        }
-    };
-    const storagePort: NonNullable<MachineFeaturePorts['storage']> = {
-        views: () => Object.fromEntries(storageViews),
-        measure: (id) => { if (storageViews.get(id)?.measuring !== true) void remeasure(id); },
-        trash: async (id, itemId) => {
-            const r = await storageHost.moveToTrash(storageRoot(id), itemId, { chatFiles: await chatFilesOf(id) });
-            setStorage(id, { outcome: r.ok ? `Moved ${r.label} to .trash.` : r.reason });
-            void remeasure(id);
-        },
-        cleanUp: async (id, itemIds) => {
-            const r = await storageHost.cleanUp(storageRoot(id), itemIds, { chatFiles: await chatFilesOf(id) });
-            setStorage(id, { outcome: `Moved ${r.moved.length} ${r.moved.length === 1 ? 'item' : 'items'} to .trash${r.skipped.length + r.failed.length > 0 ? `; left ${r.skipped.length + r.failed.length} that were no longer safe to move` : ''}.` });
-            void remeasure(id);
-        },
-        restore: async (id, trashId) => {
-            const r = await storageHost.restore(storageRoot(id), trashId);
-            setStorage(id, { outcome: r.ok ? `Put ${r.label} back.` : r.reason });
-            void remeasure(id);
-        },
-        empty: async (id, approval) => {
-            const r = await storageHost.emptyTrash(storageRoot(id), approval);
-            setStorage(id, { outcome: r.ok ? `Deleted ${r.deleted} ${r.deleted === 1 ? 'item' : 'items'} (${formatBytes(r.bytes)}) from .trash for good.` : r.reason });
-            void remeasure(id);
-        },
-    };
+    const storagePort: NonNullable<MachineFeaturePorts['storage']> = storageFeaturePort({
+        storage: new WorkspaceStorage(), root: storageRoot, chatFiles: chatFilesOf, changed: () => featureChanged(), log: say,
+    });
     const featureEffects: MachineFeaturePorts = {
         storage: storagePort,
         tynnAccount: {

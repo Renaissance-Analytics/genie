@@ -116,7 +116,11 @@ export function suggestedCleanup(items: readonly StorageItem[], now: number): st
 export type TrashOrigin =
     | { readonly kind: 'path'; readonly category: StorageCategory; readonly rel: string }
     /** `rel` is workspace-relative, or absolute for a worktree outside the workspace (`external`); `head` is its commit, to find it again. */
-    | { readonly kind: 'worktree'; readonly repoRel: string; readonly rel: string; readonly branch: string | null; readonly head?: string | null; readonly external?: boolean }
+    /**
+     * `pruned` (Tynn #947): the folder was moved and git told to forget it, so no pointer is left into .trash; Restore
+     * registers it again. Without it, an entry from before: moved and locked by git, still registered.
+     */
+    | { readonly kind: 'worktree'; readonly repoRel: string; readonly rel: string; readonly branch: string | null; readonly head?: string | null; readonly external?: boolean; readonly pruned?: boolean }
     | { readonly kind: 'chat-file'; readonly agentId: string; readonly attachmentId: string; readonly path: string }
     /** Items cleared off the workspace's ArtBoard (genie#847): their index records and files; restore puts them back on the board. */
     | { readonly kind: 'artboard'; readonly ids: readonly string[]; readonly label: string }
@@ -149,6 +153,25 @@ export interface StorageView {
     readonly error: string | null;
     /** What the last Move, Restore or Empty did, in words. */
     readonly outcome: string | null;
+    /** The Move or Empty the host is doing now (Tynn #947): how far it is; absent or null when nothing runs. */
+    readonly progress?: StorageProgress | null;
+    /** Each item the last Move or Empty did not move or delete, with the reason in words (Tynn #947). */
+    readonly failures?: readonly StorageFailure[];
+}
+
+export interface StorageProgress {
+    readonly action: 'move' | 'empty';
+    readonly done: number;
+    readonly total: number;
+    /** Bytes moved or deleted so far. */
+    readonly bytes: number;
+    /** The item being worked on now, by its label. */
+    readonly current: string | null;
+}
+
+export interface StorageFailure {
+    readonly label: string;
+    readonly reason: string;
 }
 
 /** The person's approval to empty the trash: exactly these entries, this many bytes. */

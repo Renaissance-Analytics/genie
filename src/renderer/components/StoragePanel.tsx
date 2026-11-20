@@ -4,7 +4,7 @@ import {
     CATEGORY_LABEL, STORAGE_CATEGORIES, WORKTREE_STATE_LABEL, approvalFor, formatBytes, originLabel, suggestedCleanup,
     type StorageCategory, type StorageView,
 } from '../../core/workspace-storage.js';
-import type { FeatureAction } from '../features.js';
+import type { ActOutcome, FeatureAction } from '../features.js';
 
 /**
  * THE WORKSPACE'S STORAGE TAB (Tynn #697): how much disk the workspace takes, by category; Move to .trash on what may be
@@ -13,9 +13,19 @@ import type { FeatureAction } from '../features.js';
  */
 const ICON: Readonly<Record<StorageCategory, string>> = { repos: 'git-branch', worktrees: 'folder', 'ci-artifacts': 'package', 'chat-files': 'image', dirty: 'inbox', trash: 'trash-2' };
 
-export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: string; view: StorageView | null; onAction: (action: FeatureAction) => void }) {
+export function StoragePanel({ workspaceId, view, onAction: send }: { workspaceId: string; view: StorageView | null; onAction: (action: FeatureAction) => void | Promise<ActOutcome | void> }) {
     const [confirming, setConfirming] = useState(false);
     const [cleaning, setCleaning] = useState(false);
+    // The host's refusal of an action itself (another Move still running, a workspace not open): drawn here, never only in
+    // the console (Tynn #947).
+    const [refusal, setRefusal] = useState<string | null>(null);
+    const onAction = (action: FeatureAction): void => {
+        setRefusal(null);
+        void Promise.resolve(send(action)).then((answer) => { if (answer && !answer.ok) setRefusal(answer.reason); }, (error: unknown) => setRefusal(error instanceof Error ? error.message : String(error)));
+    };
+    const progress = view?.progress ?? null;
+    const busy = progress !== null;
+    const failures = view?.failures ?? [];
     // Never measured here yet: ask once, when the tab opens.
     const asked = useRef(false);
     useEffect(() => {
@@ -38,8 +48,26 @@ export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: str
                 {report ? <span className="text-xs text-[var(--fg-3)]">{`Measured ${new Date(report.measuredAt).toLocaleString()}${report.truncated ? ' (some folders were too large to finish: at least these sizes)' : ''}`}</span> : null}
                 <Button size="xs" type="button" icon="refresh-cw" data-action="storage-measure" className={`${button} justify-start`} disabled={view?.measuring === true} onClick={() => onAction({ kind: 'storage.measure', workspaceId })}>Measure again</Button>
             </div>
-            {view?.error ? <p data-storage-error="" className="text-sm text-[var(--danger)]">{view.error}</p> : null}
-            {view?.outcome ? <p data-storage-outcome="" className="text-sm text-[var(--fg-2)]">{view.outcome}</p> : null}
+            {/* What the host is doing and what it did, kept in view above a list that can be hundreds of rows (Tynn #947). */}
+            {view?.error || refusal || progress || view?.outcome || failures.length > 0 ? (
+                <div data-storage-status="" aria-live="polite" className="sticky top-0 z-10 flex flex-col gap-1.5 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
+                    {view?.error ? <p data-storage-error="" className="text-sm text-[var(--danger)]">{view.error}</p> : null}
+                    {refusal ? <p data-storage-refusal="" role="alert" className="text-sm text-[var(--danger)]">{refusal}</p> : null}
+                    {progress ? (
+                        <div data-storage-progress="" className="flex flex-col gap-1 text-sm">
+                            <span>{`${progress.action === 'move' ? 'Moving to .trash' : 'Emptying .trash'}: ${progress.done} of ${progress.total} (${formatBytes(progress.bytes)})`}</span>
+                            <progress className="h-1.5 w-full" max={Math.max(progress.total, 1)} value={progress.done} aria-label={progress.action === 'move' ? 'Moving to .trash' : 'Emptying .trash'} />
+                            {progress.current ? <span className="truncate font-mono text-xs text-[var(--fg-3)]">{progress.current}</span> : null}
+                        </div>
+                    ) : null}
+                    {view?.outcome ? <p data-storage-outcome="" className="text-sm text-[var(--fg-2)]">{view.outcome}</p> : null}
+                    {failures.length > 0 ? (
+                        <ul data-storage-failures="" className="max-h-40 list-disc overflow-auto pl-5 text-xs">
+                            {failures.map((f, n) => <li key={`${f.label}-${n}`} data-storage-failure=""><span className="font-mono">{f.label}</span>{`: ${f.reason}`}</li>)}
+                        </ul>
+                    ) : null}
+                </div>
+            ) : null}
             {!report ? (view?.measuring || !view ? <p className="text-sm text-[var(--fg-3)]">Measuring this workspace…</p> : null) : (
                 <>
                     <div className="flex flex-wrap gap-2">
@@ -56,7 +84,7 @@ export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: str
                         </div>
                     </div>
                     {suggested.length > 0 && !cleaning ? (
-                        <div><Button size="xs" type="button" icon="sparkles" data-action="storage-cleanup" className={`${button} justify-start`} onClick={() => setCleaning(true)}>{`Clean up merged worktrees and old test results (${suggested.length}, ${formatBytes(suggestedBytes)})`}</Button></div>
+                        <div><Button size="xs" type="button" icon="sparkles" data-action="storage-cleanup" disabled={busy} className={`${button} justify-start`} onClick={() => setCleaning(true)}>{`Clean up merged worktrees and old test results (${suggested.length}, ${formatBytes(suggestedBytes)})`}</Button></div>
                     ) : null}
                     {cleaning && suggested.length > 0 ? (
                         <div data-storage-confirm-cleanup="" role="alertdialog" aria-label="Clean up" className="flex flex-col gap-2 rounded-lg border border-[var(--border-1)] p-3 text-sm">
@@ -65,7 +93,7 @@ export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: str
                                 {suggested.map((i) => <li key={i.id}>{`${i.label} · ${formatBytes(i.bytes)}`}</li>)}
                             </ul>
                             <div className="flex gap-2">
-                                <Button size="xs" type="button" icon="archive" data-action="storage-cleanup-confirm" className={`${button} justify-start`} onClick={() => { setCleaning(false); onAction({ kind: 'storage.cleanUp', workspaceId, itemIds: suggested.map((i) => i.id) }); }}>Move to .trash</Button>
+                                <Button size="xs" type="button" icon="archive" data-action="storage-cleanup-confirm" disabled={busy} className={`${button} justify-start`} onClick={() => { setCleaning(false); onAction({ kind: 'storage.cleanUp', workspaceId, itemIds: suggested.map((i) => i.id) }); }}>Move to .trash</Button>
                                 <Button size="xs" type="button" icon="x" data-action="storage-cleanup-cancel" className={`${button} justify-start`} onClick={() => setCleaning(false)}>Cancel</Button>
                             </div>
                         </div>
@@ -82,7 +110,7 @@ export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: str
                                         <span className="font-mono text-xs text-[var(--fg-3)]">{`${formatBytes(i.bytes)}${i.truncated ? '+' : ''}`}</span>
                                         {i.state ? <span data-worktree-state={i.state} className="text-xs text-[var(--fg-2)]">{WORKTREE_STATE_LABEL[i.state]}{i.external ? ' · outside this workspace' : ''}</span> : null}
                                         {i.reclaimable ? (
-                                            <Button size="xs" type="button" icon="archive" data-action="storage-trash" data-item={i.id} className={`${button} justify-start`} onClick={() => onAction({ kind: 'storage.trash', workspaceId, itemId: i.id })}>Move to .trash</Button>
+                                            <Button size="xs" type="button" icon="archive" data-action="storage-trash" disabled={busy} data-item={i.id} className={`${button} justify-start`} onClick={() => onAction({ kind: 'storage.trash', workspaceId, itemId: i.id })}>Move to .trash</Button>
                                         ) : i.refusal ? <span className="text-xs text-[var(--warning)]">{i.refusal}</span> : null}
                                     </div>
                                 ))}
@@ -97,12 +125,12 @@ export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: str
                                 <span className="min-w-0 truncate font-mono text-xs">{originLabel(t.origin)}</span>
                                 <span className="font-mono text-xs text-[var(--fg-3)]">{formatBytes(t.bytes)}</span>
                                 {t.origin.kind !== 'unknown' ? (
-                                    <Button size="xs" type="button" icon="rotate-ccw" data-action="storage-restore" data-item={t.id} className={`${button} justify-start`} onClick={() => onAction({ kind: 'storage.restore', workspaceId, trashId: t.id })}>Restore</Button>
+                                    <Button size="xs" type="button" icon="rotate-ccw" data-action="storage-restore" disabled={busy} data-item={t.id} className={`${button} justify-start`} onClick={() => onAction({ kind: 'storage.restore', workspaceId, trashId: t.id })}>Restore</Button>
                                 ) : null}
                             </div>
                         ))}
                         {report.trash.length > 0 && !confirming ? (
-                            <div><Button size="xs" type="button" icon="trash-2" data-action="storage-empty-trash" className={`${button} justify-start`} onClick={() => setConfirming(true)}>Empty trash</Button></div>
+                            <div><Button size="xs" type="button" icon="trash-2" data-action="storage-empty-trash" disabled={busy} className={`${button} justify-start`} onClick={() => setConfirming(true)}>Empty trash</Button></div>
                         ) : null}
                         {confirming && report.trash.length > 0 ? (
                             <div data-storage-confirm-empty="" role="alertdialog" aria-label="Empty trash" className="flex flex-col gap-2 rounded-lg border border-[var(--danger)] p-3 text-sm">
@@ -111,7 +139,7 @@ export function StoragePanel({ workspaceId, view, onAction }: { workspaceId: str
                                     {report.trash.map((t) => <li key={t.id}>{`${originLabel(t.origin)} · ${formatBytes(t.bytes)}`}</li>)}
                                 </ul>
                                 <div className="flex gap-2">
-                                    <Button size="xs" type="button" icon="trash-2" data-action="storage-empty-confirm" className={`${button} justify-start border-[var(--danger)] text-[var(--danger)]`} onClick={() => { setConfirming(false); onAction({ kind: 'storage.emptyTrash', workspaceId, approval: approvalFor(report.trash) }); }}>Delete for good</Button>
+                                    <Button size="xs" type="button" icon="trash-2" data-action="storage-empty-confirm" disabled={busy} className={`${button} justify-start border-[var(--danger)] text-[var(--danger)]`} onClick={() => { setConfirming(false); onAction({ kind: 'storage.emptyTrash', workspaceId, approval: approvalFor(report.trash) }); }}>Delete for good</Button>
                                     <Button size="xs" type="button" icon="x" data-action="storage-empty-cancel" className={`${button} justify-start`} onClick={() => setConfirming(false)}>Cancel</Button>
                                 </div>
                             </div>
