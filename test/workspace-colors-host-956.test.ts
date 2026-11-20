@@ -87,7 +87,9 @@ describe('writesAssigned: false (genie-host)', () => {
         followWorkspaceColors(reg, main);
         reg.emit();
         await settle();
-        expect(mainWrites).toEqual(['/w/a/project.json', '/w/b/project.json']);
+        // Each project.json, and before it the backup MIGRATIONS.md asks for when an unstamped legacy file is first stamped.
+        expect(mainWrites.filter((p) => p.endsWith('/project.json'))).toEqual(['/w/a/project.json', '/w/b/project.json']);
+        expect(mainWrites).toHaveLength(4);
         expect([host.colorOf('/w/a'), host.colorOf('/w/b')]).toEqual([main.colorOf('/w/a'), main.colorOf('/w/b')]);
     });
 
