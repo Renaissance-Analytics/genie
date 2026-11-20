@@ -1503,6 +1503,8 @@ async function main(): Promise<void> {
         activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         userData: home,
         ...engineHostOptions,
+        // An agent's record, read per call (genie#1188), from this host's own registry: no window pushes records (Tynn #954).
+        currentRecord: (id) => hostRegistry.find(id as AgentId) ?? null,
         // The window still plays the sound; the host decides whether the agent is nudged (it no longer asks a window to).
         onAction: (agentId, kind) => { engineHostOptions.onAction(agentId, kind); if (kind === 'replied') planKeepalive?.turnEnded(agentId, 'replied'); },
         onTurnEnd: (agentId, cause) => { planKeepalive?.turnEnded(agentId, cause); },

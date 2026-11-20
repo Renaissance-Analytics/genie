@@ -1436,7 +1436,6 @@ async function boot(): Promise<void> {
                 onWaiting: (elapsedMs) => hostWait.progress(elapsedMs),
                 restart: hostRestart,
             },
-            records: () => registry?.listAgents() ?? [],
             onError: (kind, error) => mainErrors.record(kind, error),
             agentName: (id) => registry?.find(id)?.name ?? id,
             log: lifecycleLog,
@@ -1497,12 +1496,7 @@ async function boot(): Promise<void> {
     // workstation chip can honestly make from in here. A real health model belongs with
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
-    // The agent host reads each agent's record per call (genie#1188): every record now, and each change as it lands.
-    {
-        const client = agentEngineLink.client;
-        client.recordsChanged();
-        registry.subscribeAgentRecords(() => client.recordsChanged());
-    }
+    // The agent host reads each agent's record per call (genie#1188) from its own registry (Tynn #954): nothing is pushed.
     /*
      * EVERY CHAT'S UNSENT DRAFT (genie#1261, main/chat-draft-store.ts), kept here so it survives a restart and a reload —
      * Genie 1 kept its part-typed answers in main the same way (v0.7.0-beta.342 main/ask/force-question.ts:1118, 1181-1217).

@@ -161,7 +161,6 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['hosting', 'move:2g'],
     ['keyring', 'move:2g'],
     ['plugins', 'move:2g'],
-    ['recordsChanged', 'move:2g'],
     ['relayHost', 'move:2g'],
     ['remoteAccess', 'move:2g'],
     ['stores', 'move:2g'],

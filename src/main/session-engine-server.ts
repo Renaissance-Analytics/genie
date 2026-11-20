@@ -96,7 +96,7 @@ function agentKeyName(name: string): `tynn/agent/${string}` {
 
 /** What the session host is built with, from this server: its owner's half of the options. */
 export type { HostAgentKeys };
-export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
+export type EngineHostOptions = Required<Pick<HostOptions, 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
     /** This machine's windows' protocol connections, tunnelled to genie-host's RemoteHost (protocol-tunnels.ts). */
@@ -285,7 +285,6 @@ export class SessionEngineServer {
     #host: SessionHost | null = null;
     readonly #marketplaceReviews = new WeakMap<Connection, MarketplaceSession>();
     readonly #gappSessionOwners = new WeakMap<Connection, GAppSessionOwner>();
-    readonly #records = new Map<string, AgentRecord>();
     readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
     /** The updater helper's links (P5b), apart from the windows': nothing a window is sent or counted for reaches them. */
@@ -367,7 +366,6 @@ export class SessionEngineServer {
     /** The session host's options that this server answers. Built BEFORE the host (it is handed to its constructor). */
     hostOptions(): EngineHostOptions {
         return {
-            currentRecord: (id) => this.#records.get(id) ?? null,
             // Handed over with each start (the window's engines know the workspace's variables); read inside `start`.
             serviceEnvFor: (workspaceId) => this.#env.get(workspaceId) ?? {},
             // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's own Tynn server, which the
@@ -433,11 +431,6 @@ export class SessionEngineServer {
     /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
     localWindowConnected(): boolean {
         return [...this.#connections].some((c) => c.authed && c.window && c.local);
-    }
-
-    /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
-    records(): AgentRecord[] {
-        return [...this.#records.values()];
     }
 
     get clients(): number {
@@ -685,7 +678,6 @@ export class SessionEngineServer {
             case 'engine.start': {
                 const record = args[0] as AgentRecord;
                 if (!record || typeof record.id !== 'string') throw new Error('engine.start needs a record');
-                this.#records.set(record.id, record);
                 const env = args[2];
                 this.#env.set(record.workspaceId, env && typeof env === 'object' ? (env as Record<string, string>) : {});
                 const windowEnv = args[3];
@@ -777,12 +769,6 @@ export class SessionEngineServer {
                 conn.watched.delete(id());
                 const held = conn.held.get(id());
                 if (held) held.ledger = null;
-                return true;
-            }
-            case 'engine.records': {
-                const records = Array.isArray(args[0]) ? (args[0] as AgentRecord[]) : [];
-                this.#records.clear();
-                for (const r of records) if (r && typeof r.id === 'string') this.#records.set(r.id, r);
                 return true;
             }
             case 'engine.windowEnv': {

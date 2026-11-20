@@ -81,7 +81,6 @@ export const ENGINE_METHODS = [
     'engine.watchLedger',
     'engine.unwatchLedger',
     // The records the host reads per call (a Claude agent's tool setting, genie#1188), pushed by the window.
-    'engine.records',
     // Liveness, and the graceful end (sessions stopped and verified, writes drained, then the process exits).
     'engine.ping',
     'engine.shutdown',
