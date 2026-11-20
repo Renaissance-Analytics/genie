@@ -112,6 +112,7 @@ import { fts5Refusal } from './fts5-check.js';
 import { restrictHostPipe } from './host-pipe-acl.js';
 import { onTheClock } from '../core/tray-only.js';
 import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
+import { accountKeyOf } from '../core/remote-window-policy.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
 import { FlowStore } from './flow-store.js';
@@ -673,18 +674,9 @@ async function main(): Promise<void> {
     // The book as the host's own `processes` tool reads and drives it: the service's list, its actions in place.
     const hostBook = new ProcessBookReplica((method, args) => processesService.call(method, args));
     processesService.onEvent((dump) => hostBook.rebase(dump));
-    /*
-     * WHAT THIS HOST RUNS, AS THIS MACHINE'S TRAY AND QUIT READ IT (Tynn #953, 2g-2): its live terminals, armed flows and
-     * scheduled tasks, said to main's own client (summary.watch) when any of them changes. Read after the replicas above
-     * took each change (their listeners come first).
-     */
-    const hostSummary = hostSummaryFeed({
-        read: () => hostSummaryOf(terminalHost.list(), hostFlows.list(), hostBook.kept()),
-        onChange: (listener) => {
-            const offs = [terminalHost.onChange(listener), flowsService.onEvent(() => listener()), processesService.onEvent(() => listener())];
-            return () => { for (const off of offs) off(); };
-        },
-    });
+    /** What tells the host summary (below) to read again: the relay host's role, and the Tynn account (Tynn #954, 2g-3a). */
+    const summaryPokes = new Set<() => void>();
+    const pokeSummary = (): void => { for (const l of [...summaryPokes]) l(); };
     const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
     const tynnOpening = proxyMemory.then((memory) => TynnAccount.open(hostTynnPorts({
         file: join(home, 'credentials', 'tynn.json'),
@@ -1106,8 +1098,23 @@ async function main(): Promise<void> {
             log: (message) => say(`tynn relay: ${message}`),
             ...(hostingStack ? { site: { dial: (name: string) => dialFrontDoor(hostingStack.frontDoorPort, name), ca: () => hostingStack.browserTrust().caPem } } : {}),
         }),
-        onChange: () => { engineRef?.relayHostEvent(relayHostService.status()); featureChanged(); },
+        onChange: () => { engineRef?.relayHostEvent(relayHostService.status()); featureChanged(); pokeSummary(); },
     });
+    /*
+     * WHAT THIS HOST RUNS, AS THIS MACHINE'S TRAY AND QUIT READ IT (Tynn #953, 2g-2): its live terminals, armed flows and
+     * scheduled tasks, said to main's own client (summary.watch) when any of them changes; and this machine's Pilot/Drone
+     * role and its Tynn account (Tynn #954, 2g-3a), which main's dial refusals and its relay windows read. Read after the
+     * replicas above took each change (their listeners come first).
+     */
+    const hostSummary = hostSummaryFeed({
+        read: () => hostSummaryOf(terminalHost.list(), hostFlows.list(), hostBook.kept(), { workstationRole: relayHostService.role(), tynnAccountKey: tynnAccountNow ? accountKeyOf(tynnAccountNow.status()) : null }),
+        onChange: (listener) => {
+            summaryPokes.add(listener);
+            const offs = [terminalHost.onChange(listener), flowsService.onEvent(() => listener()), processesService.onEvent(() => listener()), () => { summaryPokes.delete(listener); }];
+            return () => { for (const off of offs) off(); };
+        },
+    });
+    void tynnOpening.then((account) => { account.onChange(pokeSummary); pokeSummary(); }, () => {});
     void tynnOpening.then((account) => {
         account.onChange(() => { void relayHostService.register(); });
         void relayHostService.register();

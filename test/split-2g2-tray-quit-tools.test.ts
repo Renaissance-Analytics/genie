@@ -164,7 +164,7 @@ describe('main reads the summary; no terminals or process-book replica, no host-
     const main = code(src('src/main/main.ts'));
 
     it('the tray’s count, its Restart/Shut-down list and the quit plan read the summary', () => {
-        expect(main).toMatch(/ownProtocol\.watchSummary\(\(summary\) => \{ hostSummaryNow = summary; refreshTray\(\); \}\)/);
+        expect(main).toMatch(/ownProtocol\.watchSummary\(\(summary\) => \{[\s\S]{0,240}?hostSummaryNow = summary;\s*refreshTray\(\);\s*\}\)/);
         expect(main).toMatch(/terminals: hostSummaryNow\.terminals\.length/);
         expect(main).toMatch(/const terminalsOpen = hostSummaryNow\.terminals\.map\(/);
         expect(main).toMatch(/liveTerminals: hostSummaryNow\.terminals\.length/);

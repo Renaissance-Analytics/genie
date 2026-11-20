@@ -65,9 +65,9 @@ import { reportProxyAnswers } from './proxy-report.js';
 import type { SessionEngineClient } from './session-engine-client.js';
 import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { gatherSources } from './keychain-migration.js';
-import { outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
+import { outboundDialRefusal } from '../core/workstation-role.js';
 import { actOnConnectLink, connectLinkDecisionOf } from '../core/connect-link.js';
-import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
+import { remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { mkdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { moveAgentFrontmatter, nodeAgentConfigFs } from './agent-config-host.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
@@ -968,7 +968,8 @@ const isRemoteWindow = (sender: Electron.WebContents): boolean => [...remoteWind
 
 /** The Tynn account each relay window was opened under (accountKeyOf). */
 const remoteWindowAccount = new Map<BrowserWindow, string | null>();
-const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
+/** The Tynn account genie-host is signed in to, as its summary says (Tynn #954, 2g-3a); `null` = signed out. */
+const tynnAccountKeyNow = (): string | null => hostSummaryNow.tynnAccountKey;
 function openRemoteWindow(url: string, name?: string | null): void {
     // The machine's NAME rides with the window (Genie 1's openWorkstationById: "The display name drives the host window
     // title"): its connecting screen says it, never the raw `relay:<id>`.
@@ -1051,14 +1052,10 @@ let githubAccount: GithubAccount | GithubAccountReplica | null = null;
 let keyring: LinuxKeyring | KeyringReplica | null = null;
 /** Late-bound: a move of this machine's key that finishes lets it register with what it has. */
 let registerWorkstationNow: (() => Promise<void>) | null = null;
-/** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
-/** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
-// A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
-let workstationRoleNow: WorkstationRole | null = 'drone';
+/** What Tynn says this machine is (genie#1278 W5) is genie-host's, in its summary (hostSummaryNow, Tynn #954): a drone until said. */
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
 const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
 let pendingGenieUrl: string | null = genieUrlIn(process.argv);
-let afterTynnUrl: (() => void) | null = null;
 
 function registerGenieProtocol(): void {
     // The entry path must be absolute for a dev launch (`electron .`), or the OS resolves it against its own cwd.
@@ -1078,7 +1075,6 @@ function openGenieUrl(url: string): void {
     revealMainWindow('genie:// sign-in link');
     void tynnAccount.signIn(url).then((r) => {
         if (!r.ok) console.warn(`[tynn] ${r.reason}`);
-        afterTynnUrl?.();
     });
 }
 
@@ -1699,7 +1695,7 @@ async function boot(): Promise<void> {
     // TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): this machine's window on that host's terminal; a drone opens none.
     ipcMain.handle('genie:remote-takeover-open', (_event, url: unknown, terminalId: unknown, ticket: unknown, name: unknown, route: unknown) => {
         if (typeof url !== 'string' || typeof terminalId !== 'string' || typeof ticket !== 'string' || ticket === '') return { ok: false, reason: 'not a Take Over window' };
-        const refused = outboundDialRefusal(workstationRoleNow, url);
+        const refused = outboundDialRefusal(hostSummaryNow.workstationRole, url);
         if (refused) return { ok: false, reason: refused };
         // A sign-in's window shows its steps (Tynn #896): its login route, when it is that same terminal's.
         openRemoteTakeOverWindow(url, terminalId, ticket, typeof name === 'string' ? name : null, typeof route === 'string' && loginTerminalOf(route) === terminalId ? route : null);
@@ -1711,7 +1707,7 @@ async function boot(): Promise<void> {
         takeOverTickets.delete(event.sender.id);
         return ticket;
     });
-    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; const refused = outboundDialRefusal(workstationRoleNow, url); if (refused) return { ok: false, reason: refused }; openRemoteWindow(url, typeof name === 'string' ? name : null); });
+    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; const refused = outboundDialRefusal(hostSummaryNow.workstationRole, url); if (refused) return { ok: false, reason: refused }; openRemoteWindow(url, typeof name === 'string' ? name : null); });
     /*
      * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
      * app window opens (they share the default session; the Genie browser has its own) is cancelled while this machine
@@ -1719,7 +1715,7 @@ async function boot(): Promise<void> {
      * dials: genie-host does, and refuses a drone first (device-link-protocol.ts); this stays as defence in depth for anything
      * else a window opens.
      */
-    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(hostSummaryNow.workstationRole, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
     // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): genie-host decides what it is, against the Tynn it is
@@ -1916,7 +1912,13 @@ async function boot(): Promise<void> {
     // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
     tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client));
     // What genie-host runs, as the tray and the quit read it, kept as it changes (Tynn #953, 2g-2).
-    ownProtocol.watchSummary((summary) => { hostSummaryNow = summary; refreshTray(); });
+    // ...and this machine's role and its Tynn account (Tynn #954, 2g-3a): another account (or none) closes the relay windows
+    // opened under the last one, which hold its grants (M0 finding 2).
+    ownProtocol.watchSummary((summary) => {
+        if (summary.tynnAccountKey !== hostSummaryNow.tynnAccountKey) { hostSummaryNow = summary; closeRelayWindowsOfOtherAccounts(); }
+        hostSummaryNow = summary;
+        refreshTray();
+    });
     windowTunnelNow = windowTunnel;
     // Browser/UI facts this window owns: its pane and its notice are said down the tunnel, where genie-host reads its
     // features again (genie-host's own sources invalidate them too: its Tynn and GitHub accounts, its relay role, …).
@@ -1974,7 +1976,6 @@ async function boot(): Promise<void> {
             console.warn('[genie] the keyring check failed', error);
         }
         keyring?.onChange(() => {
-            pushFeatures();
             if (keyring?.canKeepSecrets()) void services?.moveSecretsAgain();
         });
         console.log(`[genie] keyring: ${keyring?.canKeepSecrets() ? 'can keep secrets' : 'cannot keep secrets'} (backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'})`);
@@ -1987,11 +1988,10 @@ async function boot(): Promise<void> {
     // A move of an older Genie's pairing that finished before this line had nobody to tell.
     void tynnAccount.reload().catch(() => {});
 
-    afterTynnUrl = pushFeatures;
     // A SIGN-IN THAT WAITED FOR THE KEYRING (linux-keyring.ts): the card's Restart Genie left a note (which sign-in, never
     // a code); with the keyring working now, Tynn's sign-in opens again by itself, so the person is not left to find it.
     if (takeResumeSignIn(genieRoot()) === 'tynn' && (keyring?.canKeepSecrets() ?? true) && !tynnAccount.status().signedIn) {
-        void tynnAccount.startSignIn().then(() => { pushFeatures(); }, () => { /* the person signs in by hand */ });
+        void tynnAccount.startSignIn().catch(() => { /* the person signs in by hand */ });
     }
     // GITHUB (beta.33 item 25; Genie 1's main/github/*): Genie 1's sign-in carried over — read from its genie.db, decrypted
     // with this Genie's safeStorage (the same userData, so the same key: measured) and kept encrypted in ~/.genie — or the
@@ -1999,7 +1999,7 @@ async function boot(): Promise<void> {
     // Check again or after a sign-in (no polling of the API).
     // THE ACCOUNT AND ITS TOKENS ARE THE HOST'S (P3.4 cut c): this window reads a replica and asks the host to act.
     githubAccount = agentEngineLink.client.github({ openExternal: (url) => shell.openExternal(url) });
-    githubAccount.onChange(() => { pushFeatures(); registry?.touch(); });
+    githubAccount.onChange(() => { registry?.touch(); });
     // A move of an older Genie's sign-in that finished before this line had nobody to tell.
     void githubAccount.reload().catch(() => {});
     void githubAccount.refresh();
@@ -2017,22 +2017,18 @@ async function boot(): Promise<void> {
      * reads synchronously (fail closed: a drone until the host has answered) and hands over Genie 1's record, which only it
      * can open.
      */
+    // Only for the one registration that hands over Genie 1's record (until 2g-3b, Tynn #954: it travels with the legacy
+    // secrets and genie-host registers itself). The role and the account are the summary's (watchSummary).
     const linkedRelayHost = agentEngineLink.client.relayHost();
-    {
-        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); pushFeatures(); });
-        void linkedRelayHost.refresh().catch((error: unknown) => console.error(`[tynn relay] ${error instanceof Error ? error.message : String(error)}`));
-    }
     let registering: Promise<void> | null = null;
     const registerWorkstation = (): Promise<void> => {
         if (registering) return registering;
         if (!tynnAccount) return Promise.resolve();
-        registering = (async () => { await linkedRelayHost.register(await genie1Identity().catch(() => null)); })().finally(() => { registering = null; pushFeatures(); });
+        registering = (async () => { await linkedRelayHost.register(await genie1Identity().catch(() => null)); })().finally(() => { registering = null; });
         return registering;
     };
     registerWorkstationNow = registerWorkstation;
     tynnAccount.onChange(() => { void registerWorkstation(); });
-    // Another account (or none): the relay windows opened under the last one hold its grants (M0 finding 2).
-    tynnAccount.onChange(() => { closeRelayWindowsOfOtherAccounts(); });
     void registerWorkstation();
     // A sign-in that came back before the account was open (this launch's own argv, or an early second launch).
     if (pendingGenieUrl !== null) { const url = pendingGenieUrl; pendingGenieUrl = null; openGenieUrl(url); }
