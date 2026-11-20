@@ -33,7 +33,7 @@ export const WINDOW_CAPABILITIES = [
 ] as const;
 export type WindowCapability = (typeof WINDOW_CAPABILITIES)[number];
 
-/** The steps of Tynn #898 that still move something onto the one protocol: 2b #896, 2c #897, 2f (#912, then #941), 2g #913. */
+/** The steps of Tynn #898 that still move something onto the one protocol: 2b #896, 2c #897, 2f (#912, #941; done), 2g #913. */
 export const MOVE_STEPS = ['2b', '2c', '2f', '2g'] as const;
 export type MoveStep = (typeof MOVE_STEPS)[number];
 
@@ -79,8 +79,9 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-reveal', 'window:os-shell'],
     // The picker is the window's; its copy step moves to the host in P5.
     ['genie:files-export', 'window:file-dialog'],
-    // 2f-2 (#941): its relay mode opens through the host's device link (link.browserVia).
-    ['genie:browser-window-open', 'move:2f'],
+    // This machine's own Genie browser, over the window that asked (Tynn #739). A window driving a Tynn workstation opens
+    // that workstation's over its own session since 2f-2 (Tynn #941: deviceLink.openBrowser, genie-host's).
+    ['genie:browser-window-open', 'window:feature-effect'],
     ['genie:files-popout', 'window:pop-out'],
     ['genie:terminals-popout', 'window:pop-out'],
     ['genie:remote-open-window', 'window:pop-out'],
@@ -90,11 +91,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // A pasted share link (Tynn #896, 2b-4): genie-host decides what it is (tynnNetwork.classifyLink); the window opens it,
     // in the person's browser or a workstation's window.
     ['genie:connect-link', 'window:os-shell'],
-    // 2f-2 (#941): the host's device link, a second frame path beside the protocol door's.
-    ['genie:relay-open', 'move:2f'],
-    ['genie:relay-send', 'move:2f'],
-    ['genie:relay-close', 'move:2f'],
-    ['genie:device-open', 'move:2f'],
+    // A channel to another machine is the window's own protocol session's since 2f-2 (Tynn #941): deviceLink.*, genie-host's.
     ['genie:files-bringback', 'window:pop-out'],
     ['genie:files-windows', 'window:pop-out'],
     ['genie:features-browser-bounds', 'window:feature-effect'],
@@ -152,15 +149,12 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['browserCall', 'window:feature-effect'],
     ['onBrowserEvent', 'window:feature-effect'],
     ['gappSessions', 'window:gapp-window'],
-    // 2f-2 (#941): main's deck liveness until the question window and the tray badge read the host's deck (the coordinator,
-    // 2026-11-19). Take Over itself is the protocol's since 2b-1 (#896).
-    ['takeOvers', 'move:2f'],
+    // The question window and the tray read genie-host's Deck (deck.watch, Tynn #941 2f-2): main keeps no Take Over liveness.
     // 2g (#913), re-labelled from 2c by the coordinator (2026-11-19, 2c-5): the crash report (2c-2) and the scratch terminal
     // (2c-4) are the protocol's. main's terminals replica is still read by its own MCP tool server (genieToolDeps) and,
     // synchronously, by the tray count, the Restart/Shut-down list, the quit plan and quit's closeAll: they move with it.
     ['terminals', 'move:2g'],
-    // 2f-2 (#941): the device link's frames. The question window's answers left in 2f-1 (#912).
-    ['deviceLink', 'move:2f'],
+    // A window's channels to another machine are its own session's (Tynn #941, 2f-2): main holds no device link.
     // 2g (#913): what the window still composes (composeWindowServices) or reads over genie-host's replicas.
     ['appInbox', 'move:2g'],
     ['catalog', 'move:2g'],

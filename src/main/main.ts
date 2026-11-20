@@ -19,13 +19,11 @@ import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../cor
 import { takeOverRouteOf } from '../core/take-over-route.js';
 import { browserConnectionFor } from '../core/browser-connection.js';
 import { drivablePages } from './page-navigation-electron.js';
-import { isGenHost } from './relay-site.js';
 import { type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { CommsCache } from '../core/comms.js';
-import { askerLiveFrom } from './asker-live.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
@@ -35,7 +33,6 @@ import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl } from '../core/whats-new.js';
 import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
-import type { TakeOverReplica } from './take-over-replica.js';
 import { FilesWindows } from './files-windows.js';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
@@ -73,11 +70,9 @@ import type { SessionEngineClient } from './session-engine-client.js';
 import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { gatherSources } from './keychain-migration.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
-import { droneRefusal, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
-import { deviceLinkGate } from './device-link-gate.js';
+import { outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { actOnConnectLink, connectLinkDecisionOf } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
-import { wordTynnRefusal } from './drone-refusal.js';
 import { appInboxCardState, restartAppSource } from './host-owner-ops.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { mkdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
@@ -120,7 +115,7 @@ import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers, type TrayItem } from './tray.js';
-import { needsYouCount } from '../core/deck.js';
+import { needsYouCount, type DeckItem } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
@@ -660,8 +655,6 @@ let filesHost: FilesHost | null = null;
  */
 let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
-/** genie-host's, read through its replica. */
-let takeOvers: TakeOverReplica | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
 /**
@@ -700,12 +693,6 @@ function reportProxies(client: SessionEngineClient, log: (line: string) => void)
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
 let activityFeeds: ActivityFeeds | null = null;
 
-/**
- * Has Genie heard the roster and the session host ONCE? Until then a question's agent cannot be judged: "we have not
- * heard" is not "it is gone", so the Deck marks nothing stale (`askerLive` answers `undefined`). Set after the
- * registry's first load, when the session host already exists.
- */
-let askerLivenessKnown = false;
 /** The Dashboard's comms cell (§4.1): AgentInbox traffic since the session started, bounded to the newest 2000 mails. */
 const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.involving(agentId as AgentId, 2000) : null));
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b). */
@@ -1030,7 +1017,6 @@ const isRemoteWindow = (sender: Electron.WebContents): boolean => [...remoteWind
 /** The Tynn account each relay window was opened under (accountKeyOf). */
 const remoteWindowAccount = new Map<BrowserWindow, string | null>();
 const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
-const relayLiveFor = (win: BrowserWindow): boolean => [...linkedRelays.values()].some((c) => c.sender === win.webContents);
 function openRemoteWindow(url: string, name?: string | null): void {
     // The machine's NAME rides with the window (Genie 1's openWorkstationById: "The display name drives the host window
     // title"): its connecting screen says it, never the raw `relay:<id>`.
@@ -1041,8 +1027,8 @@ function openRemoteWindow(url: string, name?: string | null): void {
     const account = tynnAccountKeyNow();
     const action = remoteWindowAction({
         exists,
+        // Whether its link is up is the window's own to know: asked to reconnect, it does nothing while connected (Tynn #941).
         relay: relayWorkstationOf(url) !== null,
-        live: exists && relayLiveFor(open),
         openedBy: exists ? remoteWindowAccount.get(open) ?? null : null,
         account,
     });
@@ -1118,27 +1104,12 @@ let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
-/** What Tynn answered (`null` = not yet): tells a drone from "not known", which asks Tynn again before refusing. */
-let workstationSaidNow: WorkstationRole | null = null;
-/** Why the role is not known, when genie-host knows (not registered, a sign-in Tynn has not bound): the refusal's words. */
-let workstationWhyNow: string | null = null;
-/** Read this machine's role from Tynn again (set where the reader is built). */
-let readWorkstationRoleNow: (() => Promise<void>) | null = null;
-/** Tynn refused this caller: read the role again FIRST, then word the refusal from it (genie#1278, M0 finding 3). */
-const rereadRole = async (): Promise<WorkstationRole | null> => { await readWorkstationRoleNow?.(); return workstationRoleNow; };
 /** Re-applies the relay host after the remote-access switch moves (set once the Tynn account is open). */
 /** This Genie on the Tynn relay as a host (Tynn #838): `null` = not started (remote access off, or not registered). */
 let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
 const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
-/**
- * A window's connection to a Tynn workstation that GENIE-HOST holds (Tynn #552, P5d.4; audit M-e): the grant, the key and
- * the relay member are the host's; this window has the channel.
- */
-const linkedRelays = new Map<string, { sender: Electron.WebContents; workstationId: string }>();
-/** The sockets to other machines the host holds for each window (genie:device-open). */
-const deviceChannels = new Map<string, Electron.WebContents>();
 let pendingGenieUrl: string | null = genieUrlIn(process.argv);
 let afterTynnUrl: (() => void) | null = null;
 
@@ -1602,8 +1573,6 @@ async function boot(): Promise<void> {
     const draftPruner = rosterPruner({ ids: draftAgents, prune: (ids) => drafts.prune(ids), failed: pruneFailed });
     await draftPruner.start();
     registry.subscribe(() => draftPruner.changed());
-    // The first roster snapshot is in, and the session host was built above it: a question's agent can be judged now.
-    askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
     await writeOsaHome({
         dir: osaHomeDir(genieRoot()),
@@ -1679,16 +1648,10 @@ async function boot(): Promise<void> {
     filesWindows = new FilesWindows({ openWindow: (route) => openFilesWindow(route, 'user-gesture'), closeWindow: closeWindowAt });
     filesWindows.onChange((list) => broadcast('genie:files-windows-changed', list));
     /*
-     * TAKE OVER (§1). The host opens the TUI in a workspace terminal and asks for a window on
-     * it; the window is the session, so closing it closes the terminal. The registry reads
-     * the host's probe to draw the Observed row. Nothing here manages the TUI.
+     * TAKE OVER (§1) is genie-host's: it opens the TUI and asks this window for a window on it (Tynn #896). Whether a
+     * question's agent is still waiting, its session or its Take Over terminal, is judged by genie-host's own Deck, which
+     * the question window and the tray read (deck.watch, Tynn #941 2f-2).
      */
-    // MAIN'S DECK LIVENESS ONLY (askerLive, below; Tynn #896 → #912): a question from a Take Over TUI is not stale. Its
-    // registry's deck is redrawn as each TUI starts and ends. 2f retires this once the deck is the host's.
-    takeOvers = agentEngineLink.client.takeOvers();
-    const takeOversNow = takeOvers;
-    takeOversNow.onChange(() => { theRegistry.touch(); });
-    void takeOversNow.refresh().catch((error: unknown) => console.error(`[take over] ${error instanceof Error ? error.message : String(error)}`));
 
     /*
      * UPDATES (§7), GENIE-HOST'S (the host split, P5b; updates-host.ts). The host holds the state, checks on its schedule —
@@ -1781,22 +1744,16 @@ async function boot(): Promise<void> {
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
     // WHICH BROWSER is decided by the window that asked (core/browser-connection.ts): this machine's sites, or — for a window
     // driving a Tynn workstation — that workstation's, over that window's own relay channel. Never by what it says.
-    ipcMain.handle('genie:browser-window-open', async (event, address: unknown, rawHosts: unknown) => {
+    // A window driving a Tynn workstation opens THAT workstation's browser over its own session (deviceLink.openBrowser,
+    // genie-host's, on the channel it owns; Tynn #941 2f-2). Here only this machine's own windows open this machine's.
+    ipcMain.handle('genie:browser-window-open', async (event, address: unknown) => {
         const at = typeof address === 'string' ? address : undefined;
         const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
-        const link = deviceLinkNow();
-        const relays = link ? [...linkedRelays].filter(([, c]) => c.sender === event.sender).map(([channel, c]) => ({ workstationId: c.workstationId, transport: channel })) : [];
-        const conn = browserConnectionFor({ remoteUrl, relays });
-        if (conn.kind === 'refused') return { ok: false, error: conn.reason };
+        const conn = browserConnectionFor({ remoteUrl, relays: [] });
+        if (conn.kind !== 'local') return { ok: false, error: conn.kind === 'refused' ? conn.reason : 'This window opens its workstation’s browser over its own connection.' };
         // The window that asked: the browser opens over it, on its display, never on whichever is primary (Tynn #739).
         const anchor = BrowserWindow.fromWebContents(event.sender)?.getBounds() ?? null;
-        if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture', anchor);
-        // A channel genie-host holds (Tynn #552): its door to that workstation's sites is the host's too.
-        const via = link ? await link.browserVia(conn.transport) : null;
-        if (!via) return { ok: false, error: 'This window is not connected to its workstation right now. Reconnect, then open the browser again.' };
-        const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
-        const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
-        return askBrowser([at ?? null, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port(), ca: via.ca(), hosts }, anchor]);
+        return openLocalBrowser(at, 'user-gesture', anchor);
     });
     // THE DASHBOARD'S WINDOWS COLUMN (Tynn #706): a workspace's terminals view in a window of its own; a second ask brings it up.
     ipcMain.handle('genie:terminals-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string' && workspaceId !== '') openTerminalsWindow(terminalsWindowRoute(workspaceId), 'user-gesture'); });
@@ -1822,7 +1779,8 @@ async function boot(): Promise<void> {
      * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
      * app window opens (they share the default session; the Genie browser has its own) is cancelled while this machine
      * is a drone. Main's own sockets (the relay, Pusher) are Node's and do not pass through here. A desktop window no longer
-     * dials (genie:device-open, below, refuses first): this stays as defence in depth for anything else a window opens.
+     * dials: genie-host does, and refuses a drone first (device-link-protocol.ts); this stays as defence in depth for anything
+     * else a window opens.
      */
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
@@ -1840,65 +1798,14 @@ async function boot(): Promise<void> {
             openWorkstation: (id, name) => openRemoteWindow(`relay:${id}`, name ?? null),
         });
     });
-    ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
-        if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
-        const refusedByRole = droneRefusal(workstationRoleNow);
-        if (refusedByRole) return { ok: false, reason: refusedByRole };
-        // GENIE-HOST DIALS (Tynn #552, P5d.4; audit M-e): it mints the grant, keeps the key, opens the relay member; this
-        // window gets a channel. Tynn's own refusal comes back for this window to word, from the role it read.
-        const link = deviceLinkNow();
-        if (link) {
-            hearDeviceLink(link);
-            const sender = event.sender;
-            const offStep = link.onStep((id, step) => { if (id === workstationId && !sender.isDestroyed()) sender.send('genie:relay-open-step', workstationId, step); });
-            const opened = await link.openRelay(workstationId).finally(offStep);
-            if (!opened.ok) return 'refusal' in opened ? { ...(await wordTynnRefusal(opened.refusal, rereadRole)), stage: 'tynn' } : opened;
-            deviceChannels.set(opened.channel, sender);
-            linkedRelays.set(opened.channel, { sender, workstationId });
-            // The window went: its connection goes with it.
-            sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) { linkedRelays.delete(opened.channel); link.close(opened.channel); } });
-            return { ok: true, channel: opened.channel };
-        }
-        return { ok: false, reason: 'Genie’s host is not connected' };
-    });
     // SHARING THIS MACHINE THROUGH TYNN (Tynn #839; Genie 1's workspace share links), over the session.
     const ownWorkstation = () => (tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null);
     const shareRequest = (path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }) => {
         if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
         return tynnAccount.request(path, init);
     };
-    // ANOTHER MACHINE, BY ITS ADDRESS (P3.4 cut e, audit M-e): refused here on a drone, then the host dials, and holds the token. The window's frames use the relay's channels.
-    const deviceLinkNow = () => agentEngineLink?.client.deviceLink() ?? null;
-    let deviceLinkHeard: unknown = null;
-    const hearDeviceLink = (link: NonNullable<ReturnType<typeof deviceLinkNow>>) => {
-        if (deviceLinkHeard === link) return;
-        deviceLinkHeard = link;
-        link.onFrame((channel, text) => { const sender = deviceChannels.get(channel); if (sender && !sender.isDestroyed()) sender.send('genie:relay-message', channel, text); });
-        link.onClosed((channel, reason) => {
-            const sender = deviceChannels.get(channel);
-            deviceChannels.delete(channel);
-            linkedRelays.delete(channel);
-            if (sender && !sender.isDestroyed()) sender.send('genie:relay-closed', channel, reason);
-        });
-    };
-    ipcMain.handle('genie:device-open', async (event, url: unknown) => {
-        const link = deviceLinkNow();
-        if (link) hearDeviceLink(link);
-        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, said: () => workstationSaidNow, why: () => workstationWhyNow, reread: async () => { await readWorkstationRoleNow?.(); }, link: () => link });
-        if (!opened.ok) return opened;
-        const sender = event.sender;
-        deviceChannels.set(opened.channel, sender);
-        // The window went: its connection goes with it.
-        sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) link?.close(opened.channel); });
-        return opened;
-    });
-    // Only the window that opened a channel may use it.
-    ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
-        if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender && typeof text === 'string') { deviceLinkNow()?.send(channel, text); return; }
-    });
-    ipcMain.on('genie:relay-close', (event, channel: unknown) => {
-        if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender) { deviceLinkNow()?.close(channel); return; }
-    });
+    // ANOTHER MACHINE (P3.4 cut e, audit M-e; Tynn #552): genie-host dials it, refuses a drone, and holds the token and the
+    // grant; a window's channel is its own protocol session's since 2f-2 (Tynn #941, device-link-protocol.ts). main holds none.
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
     ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
 
@@ -2056,7 +1963,6 @@ async function boot(): Promise<void> {
         workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
-        askerLive: askerLiveFrom({ known: () => askerLivenessKnown, engine: () => host, takeOvers: () => takeOvers }),
         // Remote access is genie-host’s (Tynn #409); this window drives it through the replica and serves no protocol itself.
         remoteAccess: linkedRemote,
     });
@@ -2194,11 +2100,9 @@ async function boot(): Promise<void> {
      */
     const linkedRelayHost = agentEngineLink.client.relayHost();
     {
-        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); workstationSaidNow = linkedRelayHost.said(); workstationWhyNow = linkedRelayHost.unknownWhy(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
+        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
         void linkedRelayHost.refresh().catch((error: unknown) => console.error(`[tynn relay] ${error instanceof Error ? error.message : String(error)}`));
     }
-    // The host reads, then this window takes its answer, so a caller that awaited it decides on the new role.
-    readWorkstationRoleNow = async () => { await readRole(); await linkedRelayHost.refresh(); };
     const readRole = (): Promise<void> => linkedRelayHost.readRole();
     let registering: Promise<void> | null = null;
     const registerWorkstation = (): Promise<void> => {
@@ -2512,6 +2416,14 @@ async function boot(): Promise<void> {
     // THE CONNECTED MACHINE'S QUESTIONS (Tynn #726): a window driving another machine reports that machine's live
     // questions; they join this window and its queue, and an answer goes back through that window to the host's own
     // features.act (main/remote-questions.ts).
+    /** genie-host's Deck as it last said (deck.watch, Tynn #941 2f-2); empty until it does. */
+    let hostDeckNow: readonly DeckItem[] = [];
+    // The tray follows the Deck: the badge's own count (core/deck.ts needsYouCount) of this window's error notices and the
+    // host's Deck, redrawn only when it changes.
+    const refreshTrayWaiting = (): void => {
+        const waiting = needsYouCount([...mainErrors.deckItems(), ...hostDeckNow]);
+        if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
+    };
     const remoteQuestions = new RemoteQuestions({
         send: (sender, request) => {
             const contents = webContents.fromId(sender);
@@ -2533,7 +2445,9 @@ async function boot(): Promise<void> {
         if (typeof id === 'string') remoteQuestions.settle(event.sender.id, id, outcome);
     });
     questionWindow = new QuestionWindow({
-        items: () => [...composed.deckItems(), ...remoteQuestions.items()],
+        // genie-host's Deck (deck.watch, Tynn #941 2f-2): the same questions every window's Pending Questions shows, judged
+        // stale there; and the connected machine's (Tynn #726).
+        items: () => [...hostDeckNow, ...remoteQuestions.items()],
         open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow, workspacePath: (id) => registry?.workspace(id)?.path ?? null,
             // Its page reaches genie-host over the one protocol, on this door like every Genie window (Tynn #912, 2f-1): this
             // machine's answers and Dismiss (features.act), and its question's files and visuals (questions.*).
@@ -2552,7 +2466,12 @@ async function boot(): Promise<void> {
         // reply at once (attention-store.ts), and the question waits in Pending Questions.
         dnd: () => composed.settings.snapshot().do_not_disturb === true,
     });
-    composed.attention.onChange(() => questionWindow?.changed());
+    // The host's Deck as it changes: the question window, and the tray's count (Tynn #941, 2f-2).
+    ownProtocol.watchDeck((items) => {
+        hostDeckNow = items;
+        questionWindow?.changed();
+        refreshTrayWaiting();
+    });
     // Do Not Disturb turned OFF, by hand or on its schedule, opens what waited (Tynn #721).
     composed.settings.onChange((key) => { if (key === 'do_not_disturb') questionWindow?.changed(); });
     // Questions already waiting when Genie starts come up too.
@@ -2564,12 +2483,8 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
-    // The tray follows the same registry snapshots the protocol sends to windows.
-    registry.subscribe((snapshot) => {
-        // The tray follows the Deck: the badge's own count (core/deck.ts needsYouCount), redrawn only when it changes.
-        const waiting = needsYouCount(snapshot.deckItems ?? []);
-        if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
-    });
+    // This window's own error notices change with its registry; the host's Deck as it says.
+    registry.subscribe(() => { refreshTrayWaiting(); });
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -2705,11 +2620,6 @@ async function boot(): Promise<void> {
     };
     composed.sites.onChange(() => { publishBrowserFacts(); });
     publishBrowserFacts();
-    // Another workstation's door moved, or learned that host's CA: its window in the browser process reads it live.
-    deviceLinkNow()?.onVia((channel, port, ca) => {
-        const relay = linkedRelays.get(channel);
-        if (relay) void agentEngineLink?.client.browserCall('remoteVia', [`relay:${relay.workstationId}`, port, ca]).catch((error: unknown) => { console.error(`[genie] browser: the door to ${relay.workstationId} could not be updated: ${error instanceof Error ? error.message : String(error)}`); });
-    });
     // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
     // Genie with nothing left running ends (core/tray-only.ts).
     if (agentEngineLink) setInterval(watchTrayOnly, 5_000).unref?.();

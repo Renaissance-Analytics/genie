@@ -78,7 +78,7 @@ import { fromBase64 } from '../core/mobile-wire.js';
 import { deviceAuth, knownHosts, moveRememberedTokens, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
 import { withAsking, type RelayConnect } from '../core/relay-connect.js';
-import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
+import { channelTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { shareDoor } from './share-door.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
@@ -342,6 +342,15 @@ function visibleAgentSubject(snapshot: GenieSnapshot, subject: string | null): s
     return resolveChatAgent(subject, snapshot.agents) ? subject : null;
 }
 
+/**
+ * Where THIS machine's Genie browser opens for a relay window's workstation, and what it is called: over this window, on its
+ * display (Tynn #739). genie-host opens it (deviceLink.openBrowser, Tynn #941); this is only where, never which.
+ */
+function browserView(): import('./device-channels.js').BrowserView {
+    if (typeof window === 'undefined') return {};
+    return { title: document.title, anchor: { x: window.screenX, y: window.screenY, width: window.outerWidth, height: window.outerHeight } };
+}
+
 /** The own window's cached bridge, including local protocol families and retained native window/channel ports. */
 function ownWindowBridge(): GenieBridge | undefined {
     return typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie);
@@ -459,11 +468,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                         return false;
                     }
                     setRelayConnect({ kind: 'working', step: 'host' });
-                    const transport = ipcRelayTransport(net, opened.channel);
-                    // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
-                    const localBrowser = window.genie?.browserWindow;
+                    const transport = channelTransport(net, opened.channel);
                     // A drone older than this Pilot needs is said as such, never as its protocol words (Tynn #651).
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}), minBuild: DRONE_MIN_BUILD });
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(net.openBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => net.openBrowser!(opened.channel, address ?? null, hosts, browserView()) } : {}), minBuild: DRONE_MIN_BUILD });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -495,7 +502,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 last.current = { url: url.url, label };
                 const opened = await link.open(url.url);
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
-                const transport = ipcRelayTransport(net, opened.channel);
+                const transport = channelTransport(net, opened.channel);
                 const ticket = companionTicket.current;
                 const next = connectRemote(transport, auth, label || 'another screen', ticket ? { companion: ticket } : { drive: true });
                 // Dropped after it was up: the host's words, when it has some.
@@ -1063,7 +1070,10 @@ function DesktopApp({ bridge }: AppProps) {
     // main asks it to connect again — with a grant minted now, under the account signed in now — instead of only focusing.
     const reconnectNow = useRef(remote.reconnect);
     reconnectNow.current = remote.reconnect;
-    useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
+    // Main brings this window up and asks it to reconnect; whether its link is up is this window's own to know (Tynn #941).
+    const remoteConnectedNow = useRef(false);
+    remoteConnectedNow.current = remote.state?.connected === true;
+    useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => { if (remoteConnectedNow.current) return; reconnectNow.current(); })), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     // A window BOUND to another host reads that host's Genie, and nothing of this machine's while it connects (window-address.ts).
     // This window's own bridge (its preload): what is the WINDOW's, whichever machine it reads — its buttons (Tynn #726).

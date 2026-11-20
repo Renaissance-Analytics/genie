@@ -173,8 +173,6 @@ export const ENGINE_METHODS = [
     'engine.runTool',
     // This machine as a workstation: the host holds its key and signs: `[method, args]`.
     'engine.workstation',
-    // Another machine's socket, dialled by the host; the window holds a channel (P3.4 cut e): `[method, args]`.
-    'engine.deviceLink',
     // THE WINDOW'S PROTOCOL CONNECTIONS, TUNNELLED (Tynn #898 step 2d-4b: protocol-tunnels.ts, window-tunnel.ts): `[op,
     // tunnel, payload]` with call id 0, a notification, in order on this one socket. `open {window, label}`, `frame text`,
     // `close reason`, `browser state`. genie-host's RemoteHost answers them; its frames come back as `protocol.frame`.

@@ -148,9 +148,9 @@ const pidOfPort = (port) => {
 };
 /** Say a hello through the real bridge, on a real channel, and collect what comes back. */
 const dialFrom = (cdp, url, auth) => cdp.evaluate(`(async () => {
-    const opened = await window.genie.deviceLink.open(${JSON.stringify(url)});
+    const opened = await window.genieTest.deviceLink.open(${JSON.stringify(url)});
     if (!opened.ok) return { opened };
-    const net = window.genie.tynnNetwork;
+    const net = window.genieTest.tynnNetwork;
     const frames = [];
     let closed = null;
     const offM = net.onMessage((c, t) => { if (c === opened.channel) frames.push(t); });
@@ -196,7 +196,7 @@ try {
     delete env.NODE_EXTRA_CA_CERTS;
     const cdp = await launch(env);
     // Main is a drone until Tynn's first answer (fail closed), and signed out that answer is "not on the network".
-    const dialable = await until('main to allow a dial', 30_000, async () => (await cdp.evaluate(`window.genie.deviceLink.open(${JSON.stringify(URL_OLD)}).then((o) => { if (o.ok) window.genie.tynnNetwork.close(o.channel); return o.ok; })`)) === true);
+    const dialable = await until('main to allow a dial', 30_000, async () => (await cdp.evaluate(`window.genieTest.deviceLink.open(${JSON.stringify(URL_OLD)}).then((o) => { if (o.ok) window.genieTest.tynnNetwork.close(o.channel); return o.ok; })`)) === true);
     check(Boolean(dialable), '1-a-window-can-open-a-channel');
 
     say('an earlier Genie left a token in localStorage');

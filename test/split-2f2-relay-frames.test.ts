@@ -1,15 +1,22 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_PIECE_CHARS, FrameJoiner, framePieces } from '../src/core/device-frames.js';
 import { ENGINE_METHODS } from '../src/core/engine-protocol.js';
 import { IPC_INVENTORY, WINDOW_ENGINE_INVENTORY } from '../src/core/ipc-inventory.js';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../src/core/local-frame.js';
-import { CONTROL_METHODS, LOCAL_EVENTS, REMOTE_METHODS, capabilityOf, type CallContext, type RemoteMethod } from '../src/core/remote-protocol.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
+import { CONTROL_METHODS, LOCAL_EVENTS, REMOTE_METHODS, capabilityOf, inMemoryPair, parseMessage, type CallContext, type RemoteMethod, type ServerTransport, type WireMessage } from '../src/core/remote-protocol.js';
 import { remoteWindowAction } from '../src/core/remote-window-policy.js';
 import { deviceLinkProtocol } from '../src/main/device-link-protocol.js';
 import { HOST_ALONE_METHODS } from '../src/main/host-alone-api.js';
+import { ownProtocolClient } from '../src/main/own-protocol-client.js';
+import { DeviceStore } from '../src/main/remote-devices.js';
+import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
 import { deviceChannels } from '../src/renderer/device-channels.js';
 
@@ -361,7 +368,74 @@ describe('the question window and the tray read genie-host’s Deck (takeOvers g
 
     it('RemoteHost: a deck.watch connection hears the Deck when it changes, and no estate snapshot', () => {
         const rh = code(src('src/main/remote-host.ts'));
-        expect(rh).toMatch(/if \(method === 'deck\.watch'\)/);
+        expect(rh).toMatch(/case 'deck\.watch': \{\s*if \(!connection\.local\) return refuse\(/);
         expect(rh).toMatch(/if \(c\.deckOnly\) \{/);
+    });
+});
+
+describe('over the wire: RemoteHost serves the Deck connection and the device events', () => {
+    const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0)); };
+    async function host(api: Partial<HostApi>, transport: ServerTransport) {
+        const home = await mkdtemp(join(tmpdir(), 'genie-2f2-'));
+        const devices = await DeviceStore.open(home, { now: Date.now, random: () => 'tok' });
+        const remote = new RemoteHost({ api: { workspaceOfAgent: () => null, onEvent: () => () => {}, invoke: async () => null, ...api } as HostApi, hostName: 'alphar', baton: new Baton(), devices,
+            pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing, transport });
+        return { remote, done: async () => { await devices.flushed(); await rm(home, { recursive: true, force: true }); } };
+    }
+
+    it('main’s Deck connection hears the Deck at once, again only when it changes, and never an estate snapshot', async () => {
+        let emit: (channel: string, payload: unknown) => void = () => {};
+        let snapshot: Record<string, unknown> = { agents: [], deckItems: [{ id: 'q_1' }] };
+        const own = ownProtocolClient();
+        const h = await host({ invoke: async (m: RemoteMethod) => (m === 'snapshot' ? snapshot : null), onEvent: (l) => { emit = l; return () => {}; } }, own.door);
+        const heard: unknown[] = [];
+        const stop = own.watchDeck((items) => heard.push(items));
+        try {
+            await settle();
+            expect(heard).toEqual([[{ id: 'q_1' }]]);
+            emit(LOCAL_EVENTS.snapshot, snapshot);
+            await settle();
+            expect(heard).toHaveLength(1);
+            snapshot = { agents: [{ id: 'a' }], deckItems: [{ id: 'q_1' }, { id: 'q_2' }] };
+            emit(LOCAL_EVENTS.snapshot, snapshot);
+            emit(LOCAL_EVENTS.updates, { state: 'idle' });
+            await settle();
+            expect(heard).toEqual([[{ id: 'q_1' }], [{ id: 'q_1' }, { id: 'q_2' }]]);
+        } finally { stop(); await h.done(); }
+    });
+
+    it('eventTo reaches the connection named and no other; the device methods are refused to another machine’s connection', async () => {
+        let accept: (c: ReturnType<typeof inMemoryPair>['server']) => void = () => {};
+        const asked: string[] = [];
+        const h = await host({ invoke: async (m: RemoteMethod) => { asked.push(m); return { ok: true, channel: 'device_1' }; } }, { onConnection: (l) => { accept = l; return () => {}; } });
+        const connect = async (preAuth: Record<string, unknown>) => {
+            const pair = inMemoryPair();
+            const frames: WireMessage[] = [];
+            pair.client.onMessage((m) => { const r = parseMessage(m); if (r.ok) frames.push(r.message); });
+            accept({ ...pair.server, preAuth: preAuth as never });
+            pair.client.send(JSON.stringify({ kind: 'hello', auth: { kind: preAuth.kind }, label: 'x' }));
+            await settle();
+            const welcome = frames.find((m) => m.kind === 'welcome') as { connectionId?: string } | undefined;
+            return { pair, frames, id: welcome?.connectionId ?? '' };
+        };
+        try {
+            const mine = await connect({ kind: 'local', label: 'this Genie window', isOwner: true, workspaceId: null, readonly: false, window: 'remote' });
+            const other = await connect({ kind: 'local', label: 'another window', isOwner: true, workspaceId: null, readonly: false, window: 'main' });
+            const far = await connect({ kind: 'relay', label: 'laptop', isOwner: true, workspaceId: null, readonly: false });
+            expect(mine.id).not.toBe('');
+            expect(h.remote.eventTo(mine.id, LOCAL_EVENTS.device, { type: 'frame', channel: 'device_1', text: 'hi' })).toBe(true);
+            expect(h.remote.eventTo('conn_none', LOCAL_EVENTS.device, {})).toBe(false);
+            expect(h.remote.eventTo(far.id, LOCAL_EVENTS.device, {})).toBe(false);
+            await settle();
+            const events = (f: WireMessage[]) => f.filter((m) => m.kind === 'event' && (m as { channel?: string }).channel === LOCAL_EVENTS.device);
+            expect(events(mine.frames)).toHaveLength(1);
+            expect(events(other.frames)).toHaveLength(0);
+            mine.pair.client.send(JSON.stringify({ kind: 'call', id: 5, method: 'deviceLink.open', args: ['wss://x/genie'] }));
+            far.pair.client.send(JSON.stringify({ kind: 'call', id: 6, method: 'deviceLink.open', args: ['wss://x/genie'] }));
+            await settle();
+            expect(mine.frames.find((m) => m.kind === 'result' && m.id === 5)).toMatchObject({ ok: true });
+            expect(far.frames.find((m) => m.kind === 'result' && m.id === 6)).toMatchObject({ ok: false });
+            expect(asked.filter((m) => m === 'deviceLink.open')).toHaveLength(1);
+        } finally { await h.done(); }
     });
 });

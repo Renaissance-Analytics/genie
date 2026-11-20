@@ -27,6 +27,7 @@ import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
 import { localArtboardClient } from './local-artboard-client.js';
+import { deviceChannels } from './device-channels.js';
 import type { DisplayPost } from '../core/artboard.js';
 import type { QuestionMedia } from '../core/question-media.js';
 import type { SavePreview, SaveResult } from '../core/workspace-save.js';
@@ -412,7 +413,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     // Native type guards can see bigint or cyclic objects. Keep their refusal order on the host,
     // and send only string slots (or null), without serializing an invalid object's contents.
     const ownerText = (value: unknown): string | null => typeof value === 'string' ? value : null;
-    const localOwner: import('./bridge.js').LocalOwnerBridge | undefined = local ? {
+    // A channel to another machine (Tynn #941, 2f-2): genie-host's device link, owned by this connection, heard on its events.
+    const devices = local ? deviceChannels({ call: (method, ...args) => read(method as RemoteMethod, ...args), on: (listener) => on(LOCAL_EVENTS.device, listener) }) : null;
+    // genie-host closes a connection's channels when it goes, and cannot say so over it: said here, for each one open.
+    if (devices) transport.onClose(() => devices.lost('Genie’s connection to its host closed'));
+    const localOwner: import('./bridge.js').LocalOwnerBridge | undefined = local && devices ? {
         appInbox: {
             state: (id) => read('appInbox.state', ownerText(id)),
             createKey: (id, name) => read('appInbox.createKey', ownerText(id), ownerText(name)),
@@ -420,11 +425,19 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             source: (id, op, kind, source) => read('appInbox.source', ownerText(id), ownerText(op), ownerText(kind), ownerText(source)),
         },
         deviceLink: {
+            open: (url) => devices.open(url),
             hosts: () => read('deviceLink.hosts'),
             forget: (url) => read('deviceLink.forget', ownerText(url)),
             adopt: (url, token) => read('deviceLink.adopt', ownerText(url), ownerText(token)),
         },
         tynnNetwork: {
+            open: (workstationId) => devices.openRelay(workstationId),
+            onOpenStep: (listener) => devices.onOpenStep(listener),
+            send: (channel, text) => devices.send(channel, text),
+            close: (channel) => devices.close(channel),
+            onMessage: (listener) => devices.onMessage(listener),
+            onClosed: (listener) => devices.onClosed(listener),
+            openBrowser: (channel, address, hosts, view) => devices.openBrowser(channel, address, hosts, view),
             workstations: () => read('tynnNetwork.workstations'),
             setRole: (id, role, code) => read('tynnNetwork.setRole', ownerText(id), ownerText(role), ownerText(code)),
             shares: {

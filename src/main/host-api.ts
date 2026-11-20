@@ -161,6 +161,8 @@ export interface HostApiDeps {
     questions?: import('./host-question-reads.js').HostQuestionReads;
     /** A file opened, or shown, on this host's own screen for a client on another machine (host-shell.ts; Tynn #912, 2f-1). */
     hostShell?: import('./host-shell.js').HostShell;
+    /** A window's transport to another machine, owned by its connection (device-link-protocol.ts; Tynn #941, 2f-2). */
+    deviceLinkProtocol?: Pick<import('./device-link-protocol.js').DeviceLinkProtocol, 'call' | 'dropOwner'>;
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -755,6 +757,15 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!deps.questions) return { ok: false, reason: 'this host cannot read a question’s visuals' };
                 if (typeof args[0] !== 'string') return { ok: false, reason: 'Genie does not know this question' };
                 return deps.questions.visuals(args[0], context);
+            // A remote window's transport to another machine (Tynn #941, 2f-2): owned by the CALLING connection, which only
+            // this machine's own windows are (`local`, RemoteHost's).
+            case 'deviceLink.open':
+            case 'deviceLink.openRelay':
+            case 'deviceLink.send':
+            case 'deviceLink.close':
+            case 'deviceLink.openBrowser':
+                if (!deps.deviceLinkProtocol || !context) return { ok: false, reason: 'this Genie connects to no other machines' };
+                return deps.deviceLinkProtocol.call(context.connectionId, method.slice('deviceLink.'.length), args);
             // Open with / Show in file manager on this host's own screen (Tynn #841; #912 2f-1). Who may is RemoteHost's (the owner's).
             case 'files.openExternal':
             case 'files.reveal':
@@ -865,7 +876,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             },
         },
         invoke,
-        releaseCaller: context => deps.features.releaseCaller?.(context),
+        // A connection went: its feature caller, and every channel to another machine it opened (Tynn #941, 2f-2).
+        releaseCaller: context => { deps.features.releaseCaller?.(context); deps.deviceLinkProtocol?.dropOwner(context.connectionId); },
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),

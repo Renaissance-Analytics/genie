@@ -6,7 +6,6 @@ import type { KeyringService } from './keyring-service.js';
 import type { WorkstationService } from './workstation-service.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
-import type { DeviceLinkEvent, DeviceLinkService } from './device-link-service.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
@@ -105,8 +104,6 @@ export interface EngineServerOptions {
     readonly features?: FeatureCallers;
     /** This machine as a workstation (P3.4): the host holds its key. */
     readonly workstation?: WorkstationService;
-    /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
-    readonly deviceLink?: DeviceLinkService;
     /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
     readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown };
     /** The Tynn relay host's registration, role and link (Tynn #410): read and driven from a LOCAL window only. */
@@ -491,7 +488,6 @@ export class SessionEngineServer {
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) this.#options.tynnIssues?.dropOwner(conn.id);
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
-            if (was) this.#options.deviceLink?.dropOwner(conn.id);
             // Every protocol connection this window process tunnelled ends with its link (the page reconnects).
             if (was) this.#options.protocol?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
@@ -911,9 +907,6 @@ export class SessionEngineServer {
             case 'engine.configSync':
                 if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
                 return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);
-            case 'engine.deviceLink':
-                if (!this.#options.deviceLink) throw new Error('This host dials no other machines.');
-                return this.#options.deviceLink.call(conn.id, str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.workstation':
                 if (!this.#options.workstation) throw new Error('This host keeps no workstation identity.');
                 return this.#options.workstation.call(str(0), Array.isArray(args[1]) ? args[1] : []);
@@ -1009,11 +1002,6 @@ export class SessionEngineServer {
         const conn = owner === null ? [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1) ?? null : this.#localWindow(owner);
         if (!conn) return Promise.reject(new Error(owner === null ? 'no Genie window is open on this machine' : 'the caller’s own window is no longer connected'));
         return this.#reverseTo(conn, 'client.windowOp', [op, args]);
-    }
-
-    /** A socket to another machine said something: to the window that opened it, and no other. */
-    deviceEvent(owner: string, event: DeviceLinkEvent): void {
-        for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'device.event', event);
     }
 
     /** A board's ring or state, to the connection whose views watch that workspace, and no other (P5c). */

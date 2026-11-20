@@ -101,6 +101,8 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
     'terminals.scratch',
     // A question's files and visuals, from genie-host's own Deck; a file opened on its own screen (Tynn #912, 2f-1).
     'questions.files', 'questions.file', 'questions.visuals', 'files.openExternal', 'files.reveal',
+    // A remote window's transport to another machine, owned by the calling connection (Tynn #941, 2f-2).
+    'deviceLink.open', 'deviceLink.openRelay', 'deviceLink.send', 'deviceLink.close', 'deviceLink.openBrowser',
 ]);
 
 /** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
@@ -139,6 +141,8 @@ export interface HostAlonePorts {
     readonly questions?: HostApiDeps['questions'];
     /** A file opened on this host's own screen (Tynn #912, 2f-1). Absent = it cannot. */
     readonly hostShell?: HostApiDeps['hostShell'];
+    /** A window's transport to another machine (Tynn #941, 2f-2). Absent = this Genie connects to none. */
+    readonly deviceLinkProtocol?: HostApiDeps['deviceLinkProtocol'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -286,6 +290,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.scratchTerminals ? { scratchTerminals: ports.scratchTerminals } : {}),
         ...(ports.questions ? { questions: ports.questions } : {}),
         ...(ports.hostShell ? { hostShell: ports.hostShell } : {}),
+        ...(ports.deviceLinkProtocol ? { deviceLinkProtocol: ports.deviceLinkProtocol } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,
