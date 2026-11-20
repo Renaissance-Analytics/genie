@@ -2901,6 +2901,13 @@ function FirewallRow({ rule, enabled, outcome, onAction, button }: { rule: Firew
  * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
  * link, made from a workspace's Share (ShareWorkspaceModal); the old local share link here was removed (audit M-d).
  */
+/** When the relay link was lost (Tynn #940): the time today, or the day and time when it was earlier. */
+function sinceWords(since: number, now: number = Date.now()): string {
+    const at = new Date(since);
+    const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return at.toDateString() === new Date(now).toDateString() ? time : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
 export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date.now() }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined; now?: number | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
@@ -2950,6 +2957,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                     {remote.tynnWorkstation.relay ? (
                                         <span data-tynn-relay={remote.tynnWorkstation.relay.state} className="basis-full text-xs text-[var(--fg-3)]">
                                             {remote.tynnWorkstation.relay.state === 'reachable' ? `Reachable through the Tynn relay (${remote.tynnWorkstation.relay.relay.replace(/^wss?:\/\//, '')}).`
+                                                : remote.tynnWorkstation.relay.state === 'reconnecting' ? <>Reconnecting to the Tynn relay since <time dateTime={new Date(remote.tynnWorkstation.relay.since).toISOString()}>{sinceWords(remote.tynnWorkstation.relay.since, now)}</time>: {remote.tynnWorkstation.relay.reason}.</>
                                                 : remote.tynnWorkstation.relay.state === 'unavailable' ? `Not reachable through Tynn: ${remote.tynnWorkstation.relay.reason}`
                                                 : remote.tynnWorkstation.relay.state === 'connecting' ? 'Connecting to the Tynn relay…'
                                                 : 'Turn on remote access to be reachable through Tynn.'}

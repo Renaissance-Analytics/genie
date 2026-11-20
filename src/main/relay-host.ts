@@ -37,6 +37,11 @@ export interface RelayHostLinkDeps {
     revalidateMs?: number;
     /** Redial backoff; `minMs: 0` = do not redial. */
     reconnect?: { minMs: number; maxMs: number };
+    /**
+     * A SILENT RELAY ENDS THE LINK (Tynn #940): nothing from the relay (no frame, no heartbeat ping) for this long, and
+     * the socket is terminated and redialled. The relay pings every 30 s; default 75 s, about 2.5 heartbeats. 0 = never.
+     */
+    silentMs?: number;
     onState?(state: RelayLinkState, detail?: string): void;
     log?(message: string): void;
     /**
@@ -84,6 +89,9 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
     let reconnectDelay = deps.reconnect?.minMs ?? 1_000;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let revalidateTimer: ReturnType<typeof setInterval> | null = null;
+    const silentMs = deps.silentMs ?? 75_000;
+    let lastHeard = 0;
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const setState = (next: RelayLinkState, detail?: string) => {
         state = next;
@@ -292,18 +300,21 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
     const teardown = () => {
         if (revalidateTimer) clearInterval(revalidateTimer);
         revalidateTimer = null;
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = null;
         for (const p of pendingPop.values()) clearTimeout(p.timer);
         pendingPop.clear();
         preAdmit.clear();
         for (const sid of [...sessions.keys()]) forget(sid);
     };
 
-    const scheduleReconnect = () => {
+    const scheduleReconnect = (reason: string) => {
         const min = deps.reconnect?.minMs ?? 1_000;
         const max = deps.reconnect?.maxMs ?? 30_000;
         if (min <= 0 || closing) return;
         const delay = reconnectDelay;
         reconnectDelay = Math.min(delay * 2, max);
+        deps.log?.(`redial in ${Math.round(delay / 1000)} s (${reason})`);
         reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
             void dial();
@@ -317,18 +328,28 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
             hello = await deps.hello();
         } catch (error) {
             // No ticket: Tynn's refusal, said; tried again later.
-            setState('closed', error instanceof Error ? error.message : String(error));
-            scheduleReconnect();
+            const reason = error instanceof Error ? error.message : String(error);
+            setState('closed', reason);
+            scheduleReconnect(reason);
             return;
         }
         if (closing) return;
         const socket = deps.socket(`${deps.relayUrl.replace(/\/+$/, '')}/ws/host`);
         ws = socket;
+        /** The relay's refusal of this hello, said when its close comes. */
+        let refused: string | null = null;
+        // Anything from the relay is life: a frame, or its heartbeat ping (which `ws` answers itself and never delivers).
+        const heard = () => { if (ws === socket) lastHeard = Date.now(); };
+        socket.on?.('ping', heard);
         socket.onopen = () => {
+            if (ws !== socket) return;
+            heard();
+            watchSilence(socket);
             setState('authenticating');
             socket.send(JSON.stringify(hello));
         };
         socket.onmessage = (event) => {
+            heard();
             const raw = textOf(event.data);
             if (raw === null || ws !== socket) return;
             if (state === 'authenticating') {
@@ -340,10 +361,12 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
                 }
                 if (msg.type === 'host-welcome') {
                     reconnectDelay = deps.reconnect?.minMs ?? 1_000;
+                    deps.log?.(`open (${deps.relayUrl})`);
                     setState('open');
                     if ((deps.revalidateMs ?? 30_000) > 0) revalidateTimer = setInterval(() => { void revalidate(); }, deps.revalidateMs ?? 30_000);
                 } else {
-                    deps.log?.(`the relay refused this host: ${typeof msg.reason === 'string' ? msg.reason : String(msg.type ?? 'no reason')}`);
+                    refused = `the relay refused this host: ${typeof msg.reason === 'string' ? msg.reason : String(msg.type ?? 'no reason')}`;
+                    deps.log?.(refused);
                     socket.close();
                 }
                 return;
@@ -357,14 +380,47 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
             }
             handle(frame);
         };
-        socket.onclose = () => {
-            if (ws !== socket) return;
-            teardown();
-            ws = null;
-            setState('closed');
-            scheduleReconnect();
-        };
+        socket.onclose = () => { lose(socket, refused ?? 'the relay closed the link', false); };
         socket.onerror = () => { /* a close follows */ };
+    };
+
+    /**
+     * THIS SOCKET IS GONE (Tynn #940), by its own close or because the relay went silent: said in the log, the sessions on
+     * it ended, the state told, and a redial scheduled. A silent socket is TERMINATED, not closed (a half-open socket's
+     * close handshake never completes), and is let go first, so its own close, when `ws` sends it, does nothing more.
+     */
+    const lose = (socket: RelaySocket, reason: string, kill: boolean) => {
+        if (ws !== socket) return;
+        teardown();
+        ws = null;
+        deps.log?.(`closed (${reason})`);
+        if (kill) {
+            try {
+                if (socket.terminate) socket.terminate();
+                else socket.close();
+            } catch { /* already gone */ }
+        }
+        setState('closed', reason);
+        scheduleReconnect(reason);
+    };
+
+    /** Watch this socket for silence: re-armed for what is left of the window, so a busy link costs one timer a window. */
+    const watchSilence = (socket: RelaySocket) => {
+        if (silentMs <= 0) return;
+        if (silenceTimer) clearTimeout(silenceTimer);
+        const check = () => {
+            silenceTimer = null;
+            if (ws !== socket) return;
+            const quiet = Date.now() - lastHeard;
+            if (quiet < silentMs) {
+                silenceTimer = setTimeout(check, silentMs - quiet);
+                silenceTimer.unref?.();
+                return;
+            }
+            lose(socket, `the relay sent nothing for ${Math.round(silentMs / 1000)} s`, true);
+        };
+        silenceTimer = setTimeout(check, silentMs);
+        silenceTimer.unref?.();
     };
 
     const revalidate = async () => {
