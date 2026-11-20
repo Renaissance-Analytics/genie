@@ -98,13 +98,16 @@ const rows: TimedEvent[] = [
     t('a1:0', { kind: 'turn', n: 1, by: 'you' }),
     bash('a1:1', 'c0', 'git status', 'completed'),
     bash('a1:2', 'c1', COMMAND, 'in_progress'),
-    t('a1:3', { kind: 'message', speaker: 'agent', peerName: null, text: 'waiting on gh' }),
+    // A row AFTER the call (a call the agent ran alongside it). Not an agent message: replies live in the chat, not here.
+    bash('a1:3', 'c2', 'git log -1', 'completed'),
 ];
 
 describe('the Stream shows the silent call at its own entry', () => {
     it('right after that call\'s row, and nowhere else', () => {
         const html = renderToStaticMarkup(<Stream rows={rows} lanes={null} at={null} selectedId={null} onSelect={() => {}} agentName="atlas" silentCall={{ call: silent, onStop: () => {} }} />);
         const entry = html.indexOf('data-silent-call="c1"');
+        // POSITIVE CONTROL: every row the order is measured against is drawn.
+        for (const id of ['a1:1', 'a1:2', 'a1:3']) expect(html, id).toContain(`data-stream-row="${id}"`);
         expect(entry, 'the silent call is in the stream').toBeGreaterThan(-1);
         // After c1's row (a1:2), before the row that follows it (a1:3), and after the earlier call (a1:1).
         expect(html.indexOf('data-stream-row="a1:2"')).toBeLessThan(entry);
