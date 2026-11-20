@@ -153,7 +153,6 @@ import { accountsOwnAnswers, type AccountsPort } from './accounts-protocol.js';
 import { uploadSender } from './uploads.js';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { RelayHostService } from './relay-host-service.js';
-import { connectOutRefusal, mayBrowse } from '../core/workstation-role.js';
 import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
 import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
@@ -1254,12 +1253,8 @@ async function main(): Promise<void> {
          * here; the window gets a channel. The browser's door to that workstation's sites is here too.
          */
         relay: {
+            // No local role gate (Tynn #963): Tynn decides the grant, and a refusal is worded from the role read again.
             signedIn: () => tynnAccountNow?.status().signedIn === true,
-            // Not known to be a drone: ask Tynn first (beta.61.1); only its own "drone" is refused as one.
-            refusal: async () => {
-                if (!mayBrowse(relayHostService.role()) && relayHostService.said() === null) await relayHostService.readRole().catch(() => {});
-                return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said(), why: relayHostService.unknownWhy() });
-            },
             keypair: () => PopKeypair.generate(),
             mint: (workstationId, jwk) => (tynnAccountNow
                 ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
@@ -1989,6 +1984,8 @@ async function main(): Promise<void> {
         shares: shareLinksOver({
             request: (path, init) => (tynnAccountNow ? tynnAccountNow.request(path, init) : Promise.reject(new Error('this Genie has no Tynn account'))),
             workstation: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
+            // Tynn's 404 is worded from the role read again (Tynn #963): a drone is told it is one, never "sign in".
+            rereadRole: () => rereadRoleForGrant(),
             // A revoked link's live guest session is dropped now, not at the next re-check (audit M-c).
             endSessions: async () => { await relayHostService.call('revalidate', []); },
         }),
