@@ -1,7 +1,8 @@
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ToolchainSurface, LanguageVersionChips } from '../src/renderer/components/FeatureSurfaces.js';
+import { ToolCardView, ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
+import { toolchainCards } from '../src/renderer/toolchain-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from '../src/renderer/features.js';
 
 /**
@@ -26,7 +27,9 @@ const php = {
 const node = { managed: [{ version: '22.23.2', dir: 'C:/n/22.23.2' }], system: null, available: [{ version: '22.24.0', installed: false }, { version: '24.22.1', installed: false }] };
 const python = { managed: [{ version: '3.13.1', dir: 'C:/p/3.13.1' }], system: null, available: [{ version: '3.13.2', installed: false }] };
 const full = { tools, checkedAt: 1, php, node, python, defaults: { php: '8.4.24', node: '22.23.2', go: null, python: '3.13.1', dotnet: null, rust: null, ruby: null, java: null } } as unknown as FeatureData['toolchain'];
-const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} />);
+const render = (toolchain: FeatureData['toolchain'], selected?: string) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} {...(selected ? { selected } : {})} />);
+/** The open side panel's markup (Tynn #962): a language's versions are drawn there, for the card that is chosen. */
+const panel = (html: string) => html.slice(html.indexOf('data-toolchain-panel='));
 
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
     const out: ReactElement<Record<string, unknown>>[] = [];
@@ -67,32 +70,39 @@ describe('#713 — the section: chips, the default, a patch per installed versio
         expect(html).toMatch(/data-version-chip="python:3\.13\.1"[^>]*data-default="true"/);
     });
 
+    // Tynn #962: the patch per installed version is on that version's row in the language's PANEL; the card offers the
+    // default's patch as its one primary.
     it('a patch update per installed version, inside its own line: 8.4.24 to 8.4.27, 8.5.11 to 8.5.12 (not 8.5.12 for the 8.4)', () => {
-        const html = render(full);
-        expect(html).toMatch(/data-patch-update="php:8\.4\.24"[^>]*data-version="8\.4\.27"/);
-        expect(html).toMatch(/data-patch-update="php:8\.5\.11"[^>]*data-version="8\.5\.12"/);
-        expect(html).toMatch(/data-patch-update="node:22\.23\.2"[^>]*data-version="22\.24\.0"/);
-        expect(html).toMatch(/data-patch-update="python:3\.13\.1"[^>]*data-version="3\.13\.2"/);
-        expect((html.match(/data-patch-update=/g) ?? [])).toHaveLength(4);
+        const php = panel(render(full, 'php'));
+        expect(php).toMatch(/data-patch-update="php:8\.4\.24"[^>]*data-version="8\.4\.27"/);
+        expect(php).toMatch(/data-patch-update="php:8\.5\.11"[^>]*data-version="8\.5\.12"/);
+        expect((php.match(/data-patch-update=/g) ?? [])).toHaveLength(2);
+        expect(panel(render(full, 'node'))).toMatch(/data-patch-update="node:22\.23\.2"[^>]*data-version="22\.24\.0"/);
+        expect(panel(render(full, 'python'))).toMatch(/data-patch-update="python:3\.13\.1"[^>]*data-version="3\.13\.2"/);
+        expect(render(full)).toMatch(/data-tool-card="php"[^]*?data-card-primary="patch"[^>]*data-version="8\.4\.27"/);
     });
 
     it('CONTROL: a version already at its line’s newest has no patch button', () => {
-        const html = render({ ...(full as object), php: { ...php, available: [{ version: '8.4.24', installed: true }] } } as unknown as FeatureData['toolchain']);
+        const html = render({ ...(full as object), php: { ...php, available: [{ version: '8.4.24', installed: true }] } } as unknown as FeatureData['toolchain'], 'php');
+        expect(html).toContain('data-toolchain-panel="php"');
         expect(html).not.toContain('data-patch-update="php:8.4.24"');
     });
 
     it('the patch is an Install beside the old one — it never switches the default: the click is installPhp for that version', () => {
         const sent: FeatureAction[] = [];
-        const chips = LanguageVersionChips({ lang: 'php', managed: php.managed.map((m) => m.version), current: '8.4.24', available: php.available, busy: false, onAction: (a: FeatureAction) => { sent.push(a); } });
-        const button = elements(chips).find((e) => e.props['data-patch-update'] === 'php:8.4.24');
+        const card = toolchainCards(full!).flatMap((g) => g.cards).find((c) => c.key === 'php')!;
+        const view = ToolCardView({ card, selected: false, busy: false, updating: null, updated: null, refusal: null, check: undefined, install: undefined, progress: null, onSelect: () => {}, onAction: (a: FeatureAction) => { sent.push(a); } });
+        const button = elements(view).find((e) => e.props['data-card-primary'] === 'patch');
         expect(button).toBeDefined();
         (button!.props['onClick'] as () => void)();
         expect(sent).toEqual([{ kind: 'toolchain.installPhp', version: '8.4.27', consent: true }]);
     });
 
+    // Install another version (Tynn #962): every version not here is a choice in one select, beside one Install.
     it('Install per version not here, and Remove for an unused one, are still there', () => {
-        const html = render(full);
-        expect(html).toContain('data-php-install="8.3.36"');
+        const html = panel(render(full, 'php'));
+        for (const v of ['8.5.12', '8.4.27', '8.3.36']) expect(html).toContain(`<option value="${v}"`);
+        expect(html).toContain('data-php-install="8.5.12"');
         expect(html).toMatch(/data-php-version="8\.5\.11"[^]*?>Remove</);
     });
 });

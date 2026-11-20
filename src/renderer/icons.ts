@@ -175,6 +175,8 @@ export const ICON_NAMES: readonly string[] = [
     // A workspace's built-in tabs are icons (Tynn #945), named in data (`BUILT_IN_TAB`); Tynn's is its logo. Hibernate / Wake
     // on its Settings use 'moon' and 'play' (above); the Files view menu is 'ellipsis' (above).
     ...Object.values(BUILT_IN_TAB).flatMap((t) => (t.icon ? [t.icon] : [])),
+    // The Toolchain's Check and repair (Tynn #962).
+    'stethoscope',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */

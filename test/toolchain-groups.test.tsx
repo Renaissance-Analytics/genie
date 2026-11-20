@@ -50,11 +50,21 @@ describe('the surface', () => {
         status('docker', '29.7.2', null, 'unknown'),
     ];
 
+    // Tynn #962: the approved redesign draws the five types as three rows of cards — Languages; Package managers · Version
+    // control · Containers; Agent CLIs · Browsers — still every tool in exactly one.
     it('one section per group, in order, each with its heading', () => {
         const html = render(scan);
-        const order = [...html.matchAll(/data-tool-group="([a-z-]+)"/g)].map((m) => m[1]);
-        expect(order).toEqual(['languages', 'package-managers', 'version-control', 'containers', 'agents']);
-        expect(html).toMatch(/Languages and runtimes[\s\S]*Package managers[\s\S]*Version control[\s\S]*Containers[\s\S]*Agent CLIs/);
+        const order = [...html.matchAll(/data-card-group="([a-z-]+)"/g)].map((m) => m[1]);
+        expect(order).toEqual(['languages', 'tools', 'agents']);
+        expect(html).toMatch(/>Languages<[\s\S]*Package managers · Version control · Containers[\s\S]*Agent CLIs · Browsers/);
+        const inGroup = (group: string) => {
+            const at = html.indexOf(`data-card-group="${group}"`);
+            const next = html.indexOf('data-card-group="', at + 1);
+            return [...html.slice(at, next < 0 ? undefined : next).matchAll(/data-tool-card="([a-z-]+)"/g)].map((m) => m[1]);
+        };
+        expect(inGroup('languages')).toEqual(['php', 'node']);
+        expect(inGroup('tools')).toEqual(['composer', 'git', 'docker']);
+        expect(inGroup('agents')).toEqual(['claude-code']);
     });
 
     it('never the word "unknown"; every installed tool can be updated from here (COUNTED: six rows, six actions)', () => {
