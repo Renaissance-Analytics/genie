@@ -26,7 +26,8 @@ describe('one workspace’s settings page', () => {
     it('titled cards, in order: General, Hosting, Repos (COUNTED)', () => {
         const html = render();
         const cards = [...html.matchAll(/data-ws-card="([a-z-]+)"/g)].map((m) => m[1]);
-        expect(cards).toEqual(['general', 'hosting', 'repos']);
+        // Hibernate moved here from the bar (Tynn #945), after Repos.
+        expect(cards).toEqual(['general', 'hosting', 'repos', 'hibernate']);
         expect(html).toMatch(/data-ws-card="general"[\s\S]*?<h2[^>]*>General<\/h2>/);
     });
 

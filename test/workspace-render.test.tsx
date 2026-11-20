@@ -49,7 +49,10 @@ describe('the Workspace surface, before any terminal exists', () => {
         const html = renderToStaticMarkup(<Workspace view="home" workspace={workspace} terminals={terminals} />);
 
         expect(html).toMatch(/<nav data-view-header=""[^>]*data-top-bar=""[^>]*\bmin-h-8\b/);
-        expect(html).toContain('title="C:\\_Projects\\tynn.ai"');
+        // The path rides in the Dashboard tab's react-fancy Tooltip since Tynn #945 (hovered in workspace-header-icons-945),
+        // not a native title: the tab is there, named, and carries no title of its own.
+        expect(html).toMatch(/data-workspace-tab="home"[^>]*aria-label="Dashboard"|aria-label="Dashboard"[^>]*data-workspace-tab="home"/);
+        expect(html).not.toContain('title="C:\\_Projects\\tynn.ai"');
         expect(html).not.toContain('<header data-view-header');
     });
 

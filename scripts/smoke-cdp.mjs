@@ -1021,7 +1021,7 @@ if (!approvalEnabled) {
         dashboard: Boolean(document.querySelector('[data-workspace-dashboard]')),
         pills: document.querySelectorAll('[data-agent-pill]').length,
         agentTabs: document.querySelectorAll('[data-workspace-tab^="agent:"]').length,
-        tab: document.querySelector('[data-workspace-tab="home"]')?.textContent ?? null,
+        tab: document.querySelector('[data-workspace-tab="home"]')?.getAttribute('aria-label') ?? null,
         settings: Boolean(document.querySelector('[data-workspace-settings]')),
         terminals: Boolean(document.querySelector('[data-terminal-tabs]')),
     }))()`);

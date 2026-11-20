@@ -4,9 +4,10 @@
  * text colour in light and dark. Tynn is shown by its logo, not its name (the owner: logos over words); the name is the
  * accessible name, so dropping the word costs a screen reader nothing.
  */
-export function TynnLogo({ size = 14, className = '' }: { size?: number; className?: string }) {
+/** `title: null` = no native tooltip, for a logo inside something that has its own (a tab's react-fancy Tooltip, Tynn #945). */
+export function TynnLogo({ size = 14, className = '', title = 'Tynn' }: { size?: number; className?: string; title?: string | null }) {
     return (
-        <span role="img" aria-label="Tynn" title="Tynn" data-tynn-logo="" className={`inline-flex shrink-0 items-center justify-center ${className}`.trim()}>
+        <span role="img" aria-label="Tynn" {...(title ? { title } : {})} data-tynn-logo="" className={`inline-flex shrink-0 items-center justify-center ${className}`.trim()}>
             <svg width={size} height={size} viewBox="0 0 1500 1500" fill="none" stroke="currentColor" strokeWidth={70} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M962.08,450.64c26.96-50.68,62.84-108.34,110.55-167.67c80.73-100.4,166.44-169.65,234.12-215.58c5.1,22.03,11.86,53.89,17.85,92.59c11.09,71.64,25.34,163.69,11.52,271.31c-6.9,53.76-23.91,135.52-70.94,229.4" />
                 <path d="M542.9,450.18c-28.99-51.07-66.56-108.36-115.15-167.21c-80.88-97.96-165.33-167.62-234.12-215.58c-5.1,22.03-11.86,53.89-17.85,92.59c-10.49,67.77-24.84,160.76-11.52,271.31c6.64,55.07,22.96,137.82,67.71,233.08" />

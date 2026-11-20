@@ -26,7 +26,9 @@ describe('the strip', () => {
         const opened: string[] = [];
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'artboard' }} canDesign hasSettings onView={(v) => opened.push(v)} onAdd={() => {}} onOpenAgent={() => {}} />);
         expect(control(html, 'data-workspace-tab="artboard"')).toMatchObject({ tag: 'button', tab: true });
-        expect(control(html, 'data-workspace-tab="artboard"')!.text).toMatch(/^ArtBoard(?![\w])/);
+        // An icon since Tynn #945, named ArtBoard for a screen reader and in its tooltip.
+        expect(control(html, 'data-workspace-tab="artboard"')!.open).toContain('aria-label="ArtBoard"');
+        expect(control(html, 'data-workspace-tab="artboard"')!.text).toBe('');
         expect(control(html, 'data-workspace-tab="artboard"')!.open).toContain('aria-selected="true"');
         expect(control(html, 'data-workspace-tab="files"')!.open).toContain('aria-selected="false"');
         // The strip lists Files before ArtBoard.
@@ -43,7 +45,7 @@ describe('the badge: items waiting for a verdict', () => {
     it('shows the count on the tab, and flags it', () => {
         const html = tabs(3);
         expect(html).toContain('data-artboard-badge="3"');
-        expect(control(html, 'data-workspace-tab="artboard"')!.text).toMatch(/ArtBoard\s*3/);
+        expect(control(html, 'data-workspace-tab="artboard"')!.text).toBe('3');
         expect(control(html, 'data-workspace-tab="artboard"')!.open).toContain('data-artboard-waiting="true"');
     });
 
@@ -51,7 +53,7 @@ describe('the badge: items waiting for a verdict', () => {
         for (const html of [tabs(0), tabs(undefined)]) {
             expect(html).not.toContain('data-artboard-badge');
             expect(control(html, 'data-workspace-tab="artboard"')!.open).not.toContain('data-artboard-waiting');
-            expect(control(html, 'data-workspace-tab="artboard"')!.text).toMatch(/^ArtBoard$/);
+            expect(control(html, 'data-workspace-tab="artboard"')!.text).toBe('');
         }
     });
 });

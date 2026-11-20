@@ -4,6 +4,7 @@ import { FEATURE_ICONS } from '../core/rail-view.js';
 import { NAV_GROUPS } from '../core/settings-nav.js';
 import { KIND_COPY } from './components/AddWorkspaceWizard.js';
 import { ORDER_ICON } from '../core/inbox-view.js';
+import { BUILT_IN_TAB } from './components/WorkspaceTabs.js';
 
 /**
  * ICON REGISTRATION — and the reason it has its own file and its own test.
@@ -169,6 +170,9 @@ export const ICON_NAMES: readonly string[] = [
     ...Object.values(ORDER_ICON),
     'chevrons-down', 'chevrons-up', 'arrow-up-to-line', 'arrow-down-to-line',
     'circle', 'sticky-note', 'circle-slash', 'archive-x', 'search-x',
+    // A workspace's built-in tabs are icons (Tynn #945), named in data (`BUILT_IN_TAB`); Tynn's is its logo. Hibernate / Wake
+    // on its Settings use 'moon' and 'play' (above); the Files view menu is 'ellipsis' (above).
+    ...Object.values(BUILT_IN_TAB).flatMap((t) => (t.icon ? [t.icon] : [])),
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */

@@ -81,6 +81,6 @@ describe('FilesPanel', () => {
     it('header: the workspace chip, pin and close; the pin lamp reflects the dock', () => {
         expect(render({})).toContain('data-pin="off"');
         expect(render({ pinned: true })).toContain('data-pin="on"');
-        expect(render({})).toContain('data-action="close-files"');
+        expect(render({})).toContain('data-action="files-view-menu"');
     });
 });

@@ -255,11 +255,14 @@ const BAR_PROBE = (surface) => `
             // THE POSITIVE CONTROLS: the bar is there, it is this surface's first child, and the selected tab is in it.
             bar: Boolean(bar),
             id: surface?.getAttribute('data-workspace') ?? surface?.getAttribute('data-agent') ?? null,
-            selected: (selected?.textContent ?? '').trim(),
+            // A built-in tab is an icon named by aria-label since Tynn #945; an agent's or a designed tab says its name.
+            selected: (selected?.getAttribute('aria-label') ?? selected?.textContent ?? '').trim(),
             selectedWidth: selected ? Math.round(selected.getBoundingClientRect().width) : null,
             selectedLines: lines(selected),
             title: selected?.getAttribute('title') ?? null,
             actions: bar ? bar.querySelectorAll('[data-bar-actions] [data-action]').length : 0,
+            // Every action at the bar's right end (Share is drawn by the strip, beside the view's own actions).
+            trailing: bar ? [...bar.querySelectorAll('[data-bar-trailing] [data-action]')].map((b) => b.getAttribute('data-action')).sort().join(',') : '',
             chips: bar ? bar.querySelectorAll('[data-repo-chip]').length : 0,
             crumbs: surface ? surface.querySelectorAll('[data-crumb], [data-react-fancy-breadcrumbs], [data-header-path]').length : -1,
             subviews: Boolean(bar?.querySelector('[data-agent-subviews] [data-tab]')),
@@ -282,7 +285,9 @@ for (const width of WIDTHS) {
     await new Promise((r) => setTimeout(r, 250));
     const r = JSON.parse(await evaluate(BAR_PROBE('workspace')));
     workspaceHeights.set(width, r.height);
-    check(r.bar && r.id === 'tynn' && r.selected === 'Dashboard' && (r.title ?? '') !== '' && r.actions >= 3 && r.chips === 0 && r.crumbs === 0, `${width}px — the seeded workspace's ONE bar: its Dashboard tab selected (the path its tooltip), its actions, no repo list, no crumbs`, JSON.stringify({ bar: r.bar, id: r.id, selected: r.selected, title: r.title, actions: r.actions, chips: r.chips, crumbs: r.crumbs }));
+    // Tynn #945: the bar's actions are exactly Terminal, Share and Clean up; the Dashboard tab is an icon whose path is in its
+    // react-fancy Tooltip, so it carries no native title (two bubbles otherwise).
+    check(r.bar && r.id === 'tynn' && r.selected === 'Dashboard' && r.title === null && ['open-scratch-terminal,remove-workspace', 'open-scratch-terminal,remove-workspace,share-workspace'].includes(r.trailing) && r.chips === 0 && r.crumbs === 0, `${width}px — the seeded workspace's ONE bar: its Dashboard tab selected (an icon, the path its tooltip), Terminal, Share (where this Genie can share) and Clean up only, no repo list, no crumbs`, JSON.stringify({ bar: r.bar, id: r.id, selected: r.selected, title: r.title, trailing: r.trailing, chips: r.chips, crumbs: r.crumbs }));
     // One 32px line wherever the page is wide enough for it (from 1024px, measured by scripts/one-bar-proof.mjs). At 800px the
     // pinned chat leaves the page 72px: the bar wraps there by design (TopBar.tsx), and only "nothing spills" is asked.
     if (width >= 1024) check(r.height === 32, `${width}px — the workspace bar is one 32px line`, `${r.height}px`);

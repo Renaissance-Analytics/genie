@@ -106,7 +106,8 @@ describe('the chat is a column beside the page, never over it', () => {
         const html = shell({ route: 'genie://workspace/ws?panel=files', pinned: 'files', filesWorkspaceId: 'ws', onPopOutFiles: () => {} });
         expect(html).toContain('data-files-panel="ws"');
         expect(html).not.toContain('data-action="pin-files"');
-        expect(html).toContain('data-action="pop-out-files"');
+        // Pop out is an item of the Files view menu (Tynn #945); the menu is there.
+        expect(html).toContain('data-action="files-view-menu"');
         expect(html).not.toContain('data-dock="files"');
     });
 });

@@ -318,10 +318,11 @@ try {
     await hostCdp.evaluate(`(${installHostGauge.toString()})((${createGapGauge.toString()}))`);
     const pageGauge = await page.evaluate(`(${installPageGauge.toString()})((${createGapGauge.toString()}))`);
     const focusField = () => page.evaluate(`document.querySelector('[data-ui-lag-typing]').focus(); true`);
-    const filesOpen = () => page.evaluate(`document.querySelector('[data-action="toggle-files"]')?.getAttribute('data-panel-open') === 'true'`);
-    const toggleFiles = async (want) => {
+    const filesOpen = () => page.evaluate(`document.querySelector('[data-workspace-tab="files"]')?.getAttribute('aria-selected') === 'true'`);
+    // Files is a tab since Tynn #945 (no bar button): open it by its tab; close it by going back to the tab it was opened from.
+    const toggleFiles = async (want, back = 'home') => {
         if ((await filesOpen()) === want) return;
-        await page.evaluate(`document.querySelector('[data-action="toggle-files"]').click(); true`);
+        await page.evaluate(`document.querySelector('[data-workspace-tab="${want ? 'files' : back}"]').click(); true`);
         await until(`the Files panel ${want ? 'open' : 'closed'}`, async () => (await filesOpen()) === want, 15000);
     };
 
@@ -411,7 +412,7 @@ try {
         phases.push({ ...p, end: await mark('build-files-end'), input });
         const build = json(done);
         demand(build?.run === run && build.writes > 0, `the ${label} build ran to its end (${JSON.stringify(build)})`);
-        await toggleFiles(false);
+        await toggleFiles(false, termTab);
         await until('the terminal again', () => page.evaluate(`Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`), 30000);
         /*
          * PAST THE OUTPUT CAP (Tynn #542): the terminal stays on screen while more than the view keeps per terminal streams
