@@ -61,7 +61,7 @@ describe('reading the VIP lane', () => {
         expect(tynnPagePath('p1', 'vip', { view: 'x', project_id: 'other' })).toBe('/api/v1/projects/p1/vip');
         const ids = TYNN_SECTIONS.map((s) => s.id);
         expect(ids.indexOf('vip')).toBe(ids.indexOf('board') + 1);
-        expect(TYNN_SECTIONS.find((s) => s.id === 'vip')).toMatchObject({ icon: 'flame', label: 'VIP' });
+        expect(TYNN_SECTIONS.find((s) => s.id === 'vip')).toMatchObject({ icon: 'flame', label: 'Hotfix' });
     });
 });
 

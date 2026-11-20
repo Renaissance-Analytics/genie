@@ -37,7 +37,8 @@ const tools = [{ name: 'imDone', description: 'x' }];
 /** Tynn's work model, statement by statement, as the protocol must carry it when signed in. */
 const MODEL: ReadonlyArray<[string, RegExp]> = [
     ['a release is a version', /release is a version/i],
-    ['a story is one PR, its tasks are the plan', /story is one PR[^.\n]*tasks are that PR['’]s plan/i],
+    // PM G-0 (Tynn #933): a story is a Slice since Tynn PM-1.
+    ['a Slice is one PR, its tasks are the plan', /Slice is one PR[^.\n]*tasks are that PR['’]s plan/i],
     ['items move through the workflow as work happens', /through `workflow` as work happens/],
     ['a go request lists what is NOT in the build', /go request lists what is NOT in/],
     ['local plan files are only a fallback', /local plan files are only a fallback/i],
@@ -61,7 +62,7 @@ describe('the protocol Genie writes', () => {
         const md = store.get(SHARED)!;
         expect(md).toMatch(FALLBACK);
         expect(md).toContain('.ai/plans/');
-        expect(md).not.toMatch(/story is one PR/i);
+        expect(md).not.toMatch(/Slice is one PR/i);
         expect(md).not.toContain('`tynn-guidelines`');
         // Left unsaid, a sync writes the fallback: Genie never claims Tynn it was not told about.
         const unsaid = memFs();
