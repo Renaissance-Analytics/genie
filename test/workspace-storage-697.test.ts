@@ -20,7 +20,7 @@ import { WorkspaceStorage, retryTransient, type ChatFile } from '../src/main/wor
  *  - the refusals: a worktree with uncommitted changes, with commits not on any remote, locked, or outside the workspace, and
  *    any id the window invents, are never moved;
  *  - measuring never follows a symlink, and never leaves the workspace;
- *  - Move to .trash records each item's origin, so it can be restored; a worktree is moved and locked by git itself;
+ *  - Move to .trash records each item's origin, so it can be restored; a worktree is moved and git forgets it (Tynn #947), Restore registers it again;
  *  - Empty trash deletes ONLY what is in .trash, only with an approval naming exactly what is there and how much.
  */
 // A failing command says its exit code, signal, timeout, stdout and stderr (genie#1992: this fixture's git failed on Windows with only "Command failed").
@@ -203,16 +203,15 @@ describe('Move to .trash', () => {
         expect(r.totals.trash).toBe(1000);
     });
 
-    it('a worktree: moved by git itself into .trash and LOCKED there (git still knows it), origin with repo and branch', async () => {
+    it('a worktree: moved into .trash and FORGOTTEN by git (Tynn #947: no pointer left into .trash), origin with repo and branch', async () => {
         expect(await storage.moveToTrash(root, 'worktrees:wt/clean', { chatFiles: [] })).toMatchObject({ ok: true });
         expect(existsSync(join(root, 'wt', 'clean'))).toBe(false);
         const list = parseWorktreeList((await git(join(root, 'repos', 'app'), 'worktree', 'list', '--porcelain')).stdout);
-        const trashed = list.find((w) => w.branch === 'wt-clean')!;
-        expect(resolve(trashed.path).startsWith(resolve(root, '.trash'))).toBe(true);
-        expect(trashed.locked).toBe(true);
+        expect(list.some((w) => w.branch === 'wt-clean')).toBe(false);
+        expect(list.some((w) => resolve(w.path).startsWith(resolve(root, '.trash')))).toBe(false);
         const [dir] = await trashDirs();
         const record = JSON.parse(await readFile(join(root, '.trash', dir!, 'genie-trash.json'), 'utf8'));
-        expect(record.origin).toEqual({ kind: 'worktree', repoRel: 'repos/app', rel: 'wt/clean', branch: 'wt-clean', head: expect.stringMatching(/^[0-9a-f]{40}$/), external: false });
+        expect(record.origin).toEqual({ kind: 'worktree', repoRel: 'repos/app', rel: 'wt/clean', branch: 'wt-clean', head: expect.stringMatching(/^[0-9a-f]{40}$/), external: false, pruned: true });
     });
 
     it('an external worktree goes into this workspace’s .trash through git, and Restore puts it back at its own absolute place', async () => {
@@ -310,7 +309,7 @@ describe('Empty trash — permanent, only with approval, only inside .trash', ()
 
     it('approved: everything in .trash is gone, .trash stays, a worktree is gone from git too; what a link pointed at survives', async () => {
         const trash = await fill();
-        expect(await storage.emptyTrash(root, approvalFor(trash))).toEqual({ ok: true, deleted: 2, bytes: approvalFor(trash).bytes });
+        expect(await storage.emptyTrash(root, approvalFor(trash))).toEqual({ ok: true, deleted: 2, bytes: approvalFor(trash).bytes, failed: [] });
         expect(await readdir(join(root, '.trash'))).toEqual([]);
         expect((await lstat(join(root, '.trash'))).isDirectory()).toBe(true);
         expect(existsSync(join(outside, 'big.bin'))).toBe(true);
@@ -326,7 +325,7 @@ describe('Empty trash — permanent, only with approval, only inside .trash', ()
         await writeFile(join(root, '.trash', 'old-notes.txt'), Buffer.alloc(40));
         const trash = (await storage.measure(root, { chatFiles: [] })).trash;
         expect(trash).toEqual([{ id: 'old-notes.txt', origin: { kind: 'unknown', name: 'old-notes.txt' }, movedAt: null, bytes: 40 }]);
-        expect(await storage.emptyTrash(root, approvalFor(trash))).toEqual({ ok: true, deleted: 1, bytes: 40 });
+        expect(await storage.emptyTrash(root, approvalFor(trash))).toEqual({ ok: true, deleted: 1, bytes: 40, failed: [] });
     });
 });
 

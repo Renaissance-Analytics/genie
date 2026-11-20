@@ -61,6 +61,57 @@ export interface StorageItem {
     readonly external?: boolean;
     /** The newest file's modification time in it, ms; null when it holds no file. */
     readonly newest?: number | null;
+    /** A worktree's repository, workspace-relative (`.` for the workspace itself) (Tynn #946). */
+    readonly repo?: string;
+    /** A worktree's branch; `null` when detached (then `head` says where). */
+    readonly branch?: string | null;
+    readonly head?: string | null;
+}
+
+/** A folder something live is working in (a terminal, a process, an agent), and who, in words (Tynn #946). */
+export interface InUseFolder {
+    readonly path: string;
+    readonly by: string;
+}
+
+const BUILD_CACHES = ['.vite', '.turbo', '.parcel-cache', '.pytest_cache'];
+const TEST_RESULTS = ['test-results', 'playwright-report', '.nyc_output'];
+
+/** What an item IS, in words, for its row (Tynn #946: a worktree in repos/ read as a repository). */
+export function itemKind(item: StorageItem): string {
+    switch (item.category) {
+        case 'repos': return 'Repository';
+        case 'worktrees': {
+            const of = item.repo ? `Worktree of ${item.repo}` : 'Worktree';
+            if (item.branch) return `${of}, on ${item.branch}`;
+            return item.head ? `${of}, detached at ${item.head.slice(0, 7)}` : of;
+        }
+        case 'ci-artifacts': {
+            const name = item.rel.split('/').at(-1) ?? '';
+            if (name === 'coverage') return 'Coverage';
+            if (TEST_RESULTS.includes(name)) return 'Test results';
+            if (BUILD_CACHES.includes(name)) return 'Build cache';
+            if (name === 'ci-out' || name === 'smoke-out') return 'CI output';
+            return 'Test queue result';
+        }
+        case 'chat-files': return 'Shared in chat';
+        case 'dirty': return 'Dropped in .ai/_dirty';
+        default: return 'In .trash';
+    }
+}
+
+/** The Clean up confirmation's groups, in this order (Tynn #946). */
+export const CLEANUP_GROUPS: readonly string[] = ['Worktrees', 'Coverage', 'Test results', 'CI output', 'Build caches', 'Test queue results'];
+export function cleanupGroup(item: StorageItem): string {
+    if (item.category === 'worktrees') return 'Worktrees';
+    const kind = itemKind(item);
+    return kind === 'Build cache' ? 'Build caches' : kind === 'Test queue result' ? 'Test queue results' : kind;
+}
+
+/** Each item once, by id: the list a window draws never shows one thing twice. */
+export function uniqueItems(items: readonly StorageItem[]): StorageItem[] {
+    const seen = new Set<string>();
+    return items.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
 }
 
 /**
@@ -116,7 +167,11 @@ export function suggestedCleanup(items: readonly StorageItem[], now: number): st
 export type TrashOrigin =
     | { readonly kind: 'path'; readonly category: StorageCategory; readonly rel: string }
     /** `rel` is workspace-relative, or absolute for a worktree outside the workspace (`external`); `head` is its commit, to find it again. */
-    | { readonly kind: 'worktree'; readonly repoRel: string; readonly rel: string; readonly branch: string | null; readonly head?: string | null; readonly external?: boolean }
+    /**
+     * `pruned` (Tynn #947): the folder was moved and git told to forget it, so no pointer is left into .trash; Restore
+     * registers it again. Without it, an entry from before: moved and locked by git, still registered.
+     */
+    | { readonly kind: 'worktree'; readonly repoRel: string; readonly rel: string; readonly branch: string | null; readonly head?: string | null; readonly external?: boolean; readonly pruned?: boolean }
     | { readonly kind: 'chat-file'; readonly agentId: string; readonly attachmentId: string; readonly path: string }
     /** Items cleared off the workspace's ArtBoard (genie#847): their index records and files; restore puts them back on the board. */
     | { readonly kind: 'artboard'; readonly ids: readonly string[]; readonly label: string }
@@ -149,6 +204,25 @@ export interface StorageView {
     readonly error: string | null;
     /** What the last Move, Restore or Empty did, in words. */
     readonly outcome: string | null;
+    /** The Move or Empty the host is doing now (Tynn #947): how far it is; absent or null when nothing runs. */
+    readonly progress?: StorageProgress | null;
+    /** Each item the last Move or Empty did not move or delete, with the reason in words (Tynn #947). */
+    readonly failures?: readonly StorageFailure[];
+}
+
+export interface StorageProgress {
+    readonly action: 'move' | 'empty';
+    readonly done: number;
+    readonly total: number;
+    /** Bytes moved or deleted so far. */
+    readonly bytes: number;
+    /** The item being worked on now, by its label. */
+    readonly current: string | null;
+}
+
+export interface StorageFailure {
+    readonly label: string;
+    readonly reason: string;
 }
 
 /** The person's approval to empty the trash: exactly these entries, this many bytes. */

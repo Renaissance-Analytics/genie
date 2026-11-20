@@ -19,7 +19,7 @@ import { SitePanel } from './SitePanel.js';
 import { siteWebviewLayerFor, tabsChanged, type SeenTabs } from '../site-webview-layer.js';
 import { TerminalCell } from './TerminalCell.js';
 import { TrustStep } from './TrustStep.js';
-import type { FeatureAction, TrustStepView } from '../features.js';
+import type { ActOutcome, FeatureAction, TrustStepView } from '../features.js';
 import type { StorageView } from '../../core/workspace-storage.js';
 import { StoragePanel } from './StoragePanel.js';
 import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, sitePanelKeys, type TabsState } from '../../core/workspace-tabs.js';
@@ -198,7 +198,7 @@ export interface WorkspaceProps {
     onRefreshIssueWatch?: (() => void) | undefined;
     /** The Storage tab (Tynn #697): this workspace's view, as main holds it, and how it asks main. Absent `onStorageAction` = no tab. */
     storage?: StorageView | null | undefined;
-    onStorageAction?: ((action: FeatureAction) => void) | undefined;
+    onStorageAction?: ((action: FeatureAction) => void | Promise<ActOutcome | void>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
     tynnBoard?: TynnTabHost | undefined;
     /** The Tynn tab's Issues page (genie#1295 I1); absent = the tab has no Issues page. */

@@ -377,6 +377,11 @@ export class ProcessSupervisor {
         return this.#entries.get(id)?.spec.command;
     }
 
+    /** The folder a process runs in (Tynn #946: a worktree a process works in is never offered for .trash). */
+    cwd(id: string): string | undefined {
+        return this.#entries.get(id)?.spec.cwd;
+    }
+
     /**
      * The process's output so far, across its runs — kept by the supervisor, so it is there after the
      * process exited or crashed. `undefined` only for a process the supervisor does not know.

@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveProgram } from '../core/program-lookup.js';
 import {
-    ARTIFACT_WALK_SKIP, DIRTY_REL, STORAGE_CATEGORIES, approvalMatches, isArtifactPath, suggestedCleanup, mergedIntoLine, parseWorktreeList, worktreeRefusal, worktreeState,
-    type StorageCategory, type StorageItem, type StorageReport, type TrashApproval, type TrashEntry, type TrashOrigin, type WorktreeState,
+    ARTIFACT_WALK_SKIP, DIRTY_REL, STORAGE_CATEGORIES, approvalMatches, isArtifactPath, originLabel, suggestedCleanup, mergedIntoLine, parseWorktreeList, worktreeRefusal, worktreeState, WORKTREE_STATE_LABEL,
+    type InUseFolder, type StorageCategory, type StorageItem, type StorageReport, type TrashApproval, type TrashEntry, type TrashOrigin, type WorktreeState,
 } from '../core/workspace-storage.js';
 import { sizeOf as defaultSizeOf, type DirSize } from './dir-size.js';
 import { gitExecFile } from './git-exec.js';
@@ -48,7 +48,36 @@ export type StorageResult<T extends object = object> = ({ ok: true } & T) | { ok
 export interface StoragePorts {
     readonly now?: () => number;
     readonly sizeOf?: (path: string) => Promise<DirSize>;
+    /** Deletes one .trash entry for good (tests: a failure on one entry). */
+    readonly remove?: (path: string) => Promise<void>;
 }
+
+/** How far a Move or Empty is, after each item (Tynn #947). */
+export interface StorageProgressEvent {
+    readonly done: number;
+    readonly total: number;
+    readonly bytes: number;
+    readonly current: string | null;
+}
+
+/** An item a Move or Empty did not move or delete, and why, in words. */
+export interface StorageProblem {
+    readonly id: string;
+    readonly label: string;
+    readonly reason: string;
+}
+
+export interface CleanUpResult {
+    readonly moved: string[];
+    readonly skipped: string[];
+    readonly failed: string[];
+    /** Each skipped or failed item, with the reason. */
+    readonly problems: StorageProblem[];
+    /** The bytes of what was moved. */
+    readonly bytes: number;
+}
+
+export type EmptyTrashResult = StorageResult<{ deleted: number; bytes: number; failed: StorageProblem[] }>;
 
 const RECORD = TRASH_RECORD;
 const PAYLOAD = TRASH_PAYLOAD;
@@ -116,6 +145,50 @@ async function move(from: string, to: string): Promise<void> {
     }
 }
 
+/** A folder rename that Windows refuses for a moment while a handle inside it closes (see TRANSIENT_GIT_FAILURE): tried again. */
+async function renameRetrying(from: string, to: string, attempts = 8): Promise<void> {
+    for (let n = 1; ; n += 1) {
+        try { await rename(from, to); return; } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code ?? '';
+            if (n >= attempts || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw error;
+            await new Promise((done) => setTimeout(done, TRY_AGAIN_MS * n));
+        }
+    }
+}
+
+const words = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** A worktree that is in .trash, where git still names it: its files must stay there, recorded, and the reason said. */
+class MovedButStillListed extends Error {}
+
+/** Two paths name the same place (git prints `/`, Windows is case-insensitive). */
+function samePath(a: string, b: string): boolean {
+    const norm = (p: string) => { const r = resolve(p); return process.platform === 'win32' ? r.toLowerCase() : r; };
+    return norm(a) === norm(b);
+}
+
+/** `child` is `parent` or inside it. */
+function isUnder(child: string, parent: string): boolean {
+    const rel = relative(resolve(parent), resolve(child));
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/** A folder whose `.git` is a file naming `…/worktrees/<name>`: a linked worktree (a submodule's names `…/modules/…`). */
+async function isLinkedWorktree(dir: string): Promise<boolean> {
+    try {
+        const s = await lstat(join(dir, '.git'));
+        if (!s.isFile()) return false;
+        const m = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(join(dir, '.git'), 'utf8'));
+        return m !== null && /[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(m[1]!);
+    } catch { return false; }
+}
+
+/** What a measure, a Move or a clean-up is told about the host now: chat files, and the folders something is working in. */
+export interface StorageInput {
+    readonly chatFiles: readonly ChatFile[];
+    readonly inUse?: readonly InUseFolder[];
+}
+
 /** At most `n` at once, in order. */
 async function pooled<T, R>(list: readonly T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
     const out: R[] = new Array(list.length);
@@ -126,15 +199,19 @@ async function pooled<T, R>(list: readonly T[], n: number, fn: (t: T) => Promise
     return out;
 }
 
-interface WorktreeFound { id: string; rel: string; abs: string; repoAbs: string; repoRel: string; branch: string | null; head: string | null; external: boolean; state: WorktreeState; refusal: string | null }
+/** A worktree git lists for one of the workspace's repositories, before its state is read. */
+interface WorktreeListed { id: string; rel: string; abs: string; repoAbs: string; repoRel: string; branch: string | null; head: string | null; external: boolean; locked: boolean; /** The path as git lists it (it can differ from the real path, e.g. a short Windows name). */ listed: string }
+interface WorktreeFound extends WorktreeListed { state: WorktreeState; refusal: string | null }
 
 export class WorkspaceStorage {
     readonly #now: () => number;
     readonly #sizeOf: (path: string) => Promise<DirSize>;
+    readonly #remove: (path: string) => Promise<void>;
 
     constructor(ports: StoragePorts = {}) {
         this.#now = ports.now ?? Date.now;
         this.#sizeOf = ports.sizeOf ?? ((p) => defaultSizeOf(p));
+        this.#remove = ports.remove ?? ((p) => rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
     }
 
     /** Every repository of the workspace: the workspace itself when it is one, and each `repos/<name>` that is. */
@@ -147,19 +224,35 @@ export class WorkspaceStorage {
         } catch { /* no repos/ */ }
         for (const n of names) {
             const abs = join(rootReal, 'repos', n);
-            if (await exists(join(abs, '.git'))) out.push({ abs, rel: `repos/${n}` });
+            // A linked worktree that sits in repos/ (the owner's repos/genie2-vm, Tynn #946) is not a repository: it is
+            // listed once, as a worktree of the repository git says it belongs to. A submodule's .git file is kept.
+            if (await exists(join(abs, '.git')) && !(await isLinkedWorktree(abs))) out.push({ abs, rel: `repos/${n}` });
         }
         return out;
     }
 
     /**
      * Every worktree git lists for the workspace's repositories, inside the workspace or not (never a main checkout, never one
-     * in .trash, never one that is itself a link), each with its state: dirty, unpushed, clean and merged, clean and unmerged.
+     * in .trash, never one that is itself a link), each with its state: dirty, unpushed, clean and merged, clean and unmerged,
+     * and whether something is working in it now.
      */
-    async #worktrees(rootReal: string): Promise<WorktreeFound[]> {
+    async #worktrees(rootReal: string, inUse: readonly InUseFolder[] = []): Promise<WorktreeFound[]> {
         const out: WorktreeFound[] = [];
+        for (const w of await this.#listWorktrees(rootReal)) out.push(await this.#checkWorktree(w, inUse));
+        return out;
+    }
+
+    /**
+     * What git lists, one `git worktree list` per repository: no worktree's own git is asked yet (cheap, Tynn #947). Each
+     * worktree ONCE, by its real path (Tynn #946), however many repositories' lists name it.
+     */
+    async #listWorktrees(rootReal: string): Promise<WorktreeListed[]> {
+        const out: WorktreeListed[] = [];
+        const seen = new Set<string>();
         const trashReal = join(rootReal, '.trash');
-        for (const repo of await this.#repos(rootReal)) {
+        const repos = await this.#repos(rootReal);
+        const repoReal = new Set(repos.map((r) => r.abs));
+        for (const repo of repos) {
             const listed = await git(repo.abs, ['worktree', 'list', '--porcelain']);
             if (!listed.ok) continue;
             const list = parseWorktreeList(listed.out);
@@ -167,20 +260,54 @@ export class WorkspaceStorage {
                 if (w.bare) continue;
                 let real: string;
                 try { if ((await lstat(w.path)).isSymbolicLink()) continue; real = await realpath(w.path); } catch { continue; }
-                if (real === rootReal || inside(trashReal, real) !== null || real === trashReal) continue;
+                if (real === rootReal || repoReal.has(real) || inside(trashReal, real) !== null || real === trashReal) continue;
+                const key = process.platform === 'win32' ? real.toLowerCase() : real;
+                if (seen.has(key)) continue;
+                seen.add(key);
                 const inRoot = inside(rootReal, real);
                 const rel = inRoot ?? toSlash(real);
-                const status = await git(real, ['status', '--porcelain']);
-                const ahead = await git(real, ['rev-list', '--count', 'HEAD', '--not', '--remotes']);
-                const unpushed = ahead.ok && /^\d+\s*$/.test(ahead.out) ? Number(ahead.out.trim()) : null;
-                const contains = await git(real, ['for-each-ref', '--contains', 'HEAD', '--format=%(refname)', 'refs/remotes']);
-                const dirty = !status.ok || status.out.trim() !== '';
-                const merged = contains.ok && mergedIntoLine(contains.out.split(/\r?\n/).filter((l) => l !== ''));
-                const refusal = !status.ok ? `Genie could not read its status: ${status.error}` : worktreeRefusal({ locked: w.locked, dirty, unpushed });
-                out.push({ id: `worktrees:${rel}`, rel, abs: real, repoAbs: repo.abs, repoRel: repo.rel, branch: w.branch, head: w.head, external: inRoot === null, state: worktreeState({ locked: w.locked, dirty, unpushed, merged }), refusal });
+                out.push({ id: `worktrees:${rel}`, rel, abs: real, repoAbs: repo.abs, repoRel: repo.rel, branch: w.branch, head: w.head, external: inRoot === null, locked: w.locked, listed: w.path });
             }
         }
         return out.sort((a, b) => a.rel.localeCompare(b.rel));
+    }
+
+    /** One worktree's state, read now from its own git: in use, dirty, unpushed, merged. */
+    async #checkWorktree(w: WorktreeListed, inUse: readonly InUseFolder[] = []): Promise<WorktreeFound> {
+        // IN USE (Tynn #946): a terminal, a process or an agent working in it, or git itself (its index.lock): never offered.
+        const user = inUse.find((u) => isUnder(u.path, w.abs) || samePath(u.path, w.listed) || isUnder(u.path, w.listed));
+        const lock = await git(w.abs, ['rev-parse', '--git-path', 'index.lock']);
+        const gitBusy = lock.ok && lock.out.trim() !== '' && await exists(resolve(w.abs, lock.out.trim()));
+        const status = await git(w.abs, ['status', '--porcelain']);
+        const ahead = await git(w.abs, ['rev-list', '--count', 'HEAD', '--not', '--remotes']);
+        const unpushed = ahead.ok && /^\d+\s*$/.test(ahead.out) ? Number(ahead.out.trim()) : null;
+        const contains = await git(w.abs, ['for-each-ref', '--contains', 'HEAD', '--format=%(refname)', 'refs/remotes']);
+        const dirty = !status.ok || status.out.trim() !== '';
+        const merged = contains.ok && mergedIntoLine(contains.out.split(/\r?\n/).filter((l) => l !== ''));
+        const refusal = user ? `In use: ${user.by} is working in it.`
+            : gitBusy ? 'In use: git is working in it right now.'
+            : !status.ok ? `Genie could not read its status: ${status.error}` : worktreeRefusal({ locked: w.locked, dirty, unpushed });
+        return { ...w, state: worktreeState({ locked: w.locked, dirty, unpushed, merged }), refusal };
+    }
+
+    /** One worktree of the workspace by its id, checked now; `null` when git does not list it. */
+    async #worktree(rootReal: string, itemId: string, inUse: readonly InUseFolder[] = []): Promise<WorktreeFound | null> {
+        const w = (await this.#listWorktrees(rootReal)).find((x) => x.id === itemId);
+        return w ? this.#checkWorktree(w, inUse) : null;
+    }
+
+    /** A CI/test artifact folder of the workspace by its relative path, as a fresh look finds it; `null` when it is not one. */
+    async #artifactAt(rootReal: string, rest: string): Promise<string | null> {
+        const segments = rest.split('/');
+        if (rest === '' || isAbsolute(rest) || segments.some((s) => s === '' || s === '.' || s === '..' || ARTIFACT_WALK_SKIP.includes(s)) || !isArtifactPath(rest)) return null;
+        if (rest === DIRTY_REL || rest.startsWith(`${DIRTY_REL}/`)) return null;
+        const abs = join(rootReal, ...segments);
+        try {
+            const s = await lstat(abs);
+            if (s.isSymbolicLink() || !s.isDirectory()) return null;
+            if (inside(rootReal, await realpath(abs)) !== rest) return null;
+        } catch { return null; }
+        return abs;
     }
 
     /** CI/test artifact folders by name, bounded, never through a link, never inside node_modules, .git or .trash. */
@@ -255,9 +382,9 @@ export class WorkspaceStorage {
     }
 
     /** The workspace's disk, by category, with what may be reclaimed and why not. */
-    async measure(root: string, input: { chatFiles: readonly ChatFile[] }): Promise<StorageReport> {
+    async measure(root: string, input: StorageInput): Promise<StorageReport> {
         const rootReal = await realpath(root);
-        const [repos, worktrees, artifacts, dirty, trash] = await Promise.all([this.#repos(rootReal), this.#worktrees(rootReal), this.#artifacts(rootReal), this.#dirtyEntries(rootReal), this.listTrash(rootReal)]);
+        const [repos, worktrees, artifacts, dirty, trash] = await Promise.all([this.#repos(rootReal), this.#worktrees(rootReal, input.inUse), this.#artifacts(rootReal), this.#dirtyEntries(rootReal), this.listTrash(rootReal)]);
         let truncated = false;
         const sized = async (abs: string) => { const s = await this.#sizeOf(abs); if (s.truncated) truncated = true; return s; };
         const items: StorageItem[] = [];
@@ -268,7 +395,7 @@ export class WorkspaceStorage {
         items.push(...repoItems);
         items.push(...await pooled(worktrees, WALKS_AT_ONCE, async (w) => {
             const s = await sized(w.abs);
-            return { id: w.id, category: 'worktrees' as const, label: w.branch ? `${w.rel} (${w.branch})` : w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external };
+            return { id: w.id, category: 'worktrees' as const, label: w.branch ? `${w.rel} (${w.branch})` : w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external, repo: w.repoRel, branch: w.branch, head: w.head };
         }));
         items.push(...await pooled(artifacts, WALKS_AT_ONCE, async (rel) => {
             const s = await sized(join(rootReal, ...rel.split('/')));
@@ -291,7 +418,7 @@ export class WorkspaceStorage {
     }
 
     /** Move one item to the workspace's .trash, re-validated now; its origin recorded beside it. */
-    async moveToTrash(root: string, itemId: string, input: { chatFiles: readonly ChatFile[] }): Promise<StorageResult<{ trashId: string; label: string }>> {
+    async moveToTrash(root: string, itemId: string, input: StorageInput): Promise<StorageResult<{ trashId: string; label: string }>> {
         const rootReal = await realpath(root);
         const colon = itemId.indexOf(':');
         const category = colon > 0 ? itemId.slice(0, colon) : '';
@@ -300,29 +427,29 @@ export class WorkspaceStorage {
         let plan: Plan;
         if (category === 'repos') return { ok: false, reason: 'A repository cannot be moved to .trash.' };
         if (category === 'ci-artifacts') {
-            const notArtifact = { ok: false as const, reason: 'That is not a CI or test artifact Genie found in this workspace.' };
-            const segments = rest.split('/');
-            if (rest === '' || isAbsolute(rest) || segments.some((s) => s === '' || s === '.' || s === '..' || ARTIFACT_WALK_SKIP.includes(s)) || !isArtifactPath(rest)) return notArtifact;
-            if (rest === DIRTY_REL || rest.startsWith(`${DIRTY_REL}/`)) return notArtifact;
-            const abs = join(rootReal, ...segments);
-            try {
-                const s = await lstat(abs);
-                if (s.isSymbolicLink() || !s.isDirectory()) return notArtifact;
-                if (inside(rootReal, await realpath(abs)) !== rest) return notArtifact;
-            } catch { return notArtifact; }
-            plan = { origin: { kind: 'path', category: 'ci-artifacts', rel: rest }, label: rest, run: (payload) => rename(abs, payload) };
+            const abs = await this.#artifactAt(rootReal, rest);
+            if (abs === null) return { ok: false, reason: 'That is not a CI or test artifact Genie found in this workspace.' };
+            plan = { origin: { kind: 'path', category: 'ci-artifacts', rel: rest }, label: rest, run: (payload) => renameRetrying(abs, payload) };
         } else if (category === 'worktrees') {
-            const w = (await this.#worktrees(rootReal)).find((x) => x.id === itemId);
+            // Only this one worktree's git is asked (Tynn #947: re-checking every worktree for every item made 641 items take hours).
+            const w = await this.#worktree(rootReal, itemId, input.inUse);
             if (!w) return { ok: false, reason: 'That is not a worktree Genie may move: only one registered with a repository of this workspace, other than its main checkout.' };
             if (w.refusal) return { ok: false, reason: w.refusal };
             plan = {
-                origin: { kind: 'worktree', repoRel: w.repoRel, rel: w.rel, branch: w.branch, head: w.head, external: w.external },
+                // PRUNED (Tynn #947): the folder goes into .trash and git forgets it, so `git worktree list` names nothing in
+                // .trash. Nothing is lost by that: it is clean and every commit is on a remote (the refusal above), and
+                // Restore registers it again with its own files.
+                origin: { kind: 'worktree', repoRel: w.repoRel, rel: w.rel, branch: w.branch, head: w.head, external: w.external, pruned: true },
                 label: w.rel,
                 run: async (payload) => {
-                    const moved = await retryTransient(() => git(w.repoAbs, ['worktree', 'move', w.abs, payload]));
-                    if (!moved.ok) throw new Error(`git did not move the worktree into .trash (it cannot across drives, nor with submodules): ${moved.error}`);
-                    const locked = await retryTransient(() => git(w.repoAbs, ['worktree', 'lock', '--reason', 'In the workspace .trash (Genie)', payload]));
-                    if (!locked.ok) throw new Error(`git moved the worktree but did not lock it: ${locked.error}`);
+                    try { await renameRetrying(w.abs, payload); } catch (error) {
+                        if ((error as NodeJS.ErrnoException).code === 'EXDEV') throw new Error('It is on another drive than this workspace: Genie does not copy a worktree across drives.');
+                        throw new Error(`It could not be moved: ${words(error)}`);
+                    }
+                    const pruned = await retryTransient(() => git(w.repoAbs, ['worktree', 'prune']));
+                    if (!pruned.ok) throw new MovedButStillListed(`It is in .trash, but git did not forget it: ${pruned.error}`);
+                    const still = await git(w.repoAbs, ['worktree', 'list', '--porcelain']);
+                    if (still.ok && parseWorktreeList(still.out).some((x) => samePath(x.path, w.abs) || samePath(x.path, w.listed))) throw new MovedButStillListed('It is in .trash, but git still lists it where it was.');
                 },
             };
         } else if (category === 'dirty') {
@@ -343,32 +470,75 @@ export class WorkspaceStorage {
         const trashId = `genie-${this.#now()}-${randomBytes(3).toString('hex')}`;
         const entry = join(t.dir!, trashId);
         await mkdir(entry);
+        const record = (): Promise<void> => writeFile(join(entry, RECORD), JSON.stringify({ version: 1, movedAt: this.#now(), origin: plan.origin }), 'utf8');
         try {
             await plan.run(join(entry, PAYLOAD));
         } catch (error) {
+            // Moved, and only git's bookkeeping failed: the files are in .trash and must stay there, recorded, never deleted here.
+            if (error instanceof MovedButStillListed) { await record(); return { ok: false, reason: error.message }; }
             await rm(entry, { recursive: true, force: true }).catch(() => undefined);
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+            return { ok: false, reason: words(error) };
         }
-        await writeFile(join(entry, RECORD), JSON.stringify({ version: 1, movedAt: this.#now(), origin: plan.origin }), 'utf8');
+        await record();
         return { ok: true, trashId, label: plan.label };
     }
 
     /**
-     * THE ONE-CLICK CLEAN-UP: move several items, but only those that a FRESH measure still suggests (a merged, quiet
-     * worktree; a test result older than a day). The window's list is a request, never the authority: an id that is not
-     * suggested now (dirty since, newer, unmerged, a chat file) is skipped and said so.
+     * THE ONE-CLICK CLEAN-UP: move several items, but only those still suggested NOW (a merged, quiet worktree; a test result
+     * older than a day). The window's list is a request, never the authority: an id that is not suggested now (dirty since,
+     * newer, unmerged, a chat file) is skipped, and the reason is said.
+     *
+     * Tynn #947: it re-checks ONLY the items asked for (each one's size and, for a worktree, its own git), never the whole
+     * workspace: a full measure per click, then a check of every worktree for every item, made the owner's 641 items take
+     * hours. `onProgress` is told after each item.
      */
-    async cleanUp(root: string, itemIds: readonly string[], input: { chatFiles: readonly ChatFile[] }): Promise<{ moved: string[]; skipped: string[]; failed: string[] }> {
-        const report = await this.measure(root, input);
-        const allowed = new Set(suggestedCleanup(report.items, this.#now()));
-        const out = { moved: [] as string[], skipped: [] as string[], failed: [] as string[] };
-        // One at a time: two git worktree moves in one repository would race for its lock.
-        for (const id of [...new Set(itemIds)]) {
-            if (!allowed.has(id)) { out.skipped.push(id); continue; }
-            const r = await this.moveToTrash(root, id, input);
-            (r.ok ? out.moved : out.failed).push(id);
+    async cleanUp(root: string, itemIds: readonly string[], input: StorageInput, onProgress?: (e: StorageProgressEvent) => void): Promise<CleanUpResult> {
+        const rootReal = await realpath(root);
+        const ids = [...new Set(itemIds)];
+        const out: CleanUpResult = { moved: [], skipped: [], failed: [], problems: [], bytes: 0 };
+        let bytes = 0;
+        // One at a time: two moves in one repository would race for git's lock.
+        for (const [n, id] of ids.entries()) {
+            const fresh = await this.#suggestedNow(rootReal, id, input.inUse ?? []);
+            if (!fresh.ok) {
+                out.skipped.push(id);
+                out.problems.push({ id, label: fresh.label, reason: fresh.reason });
+            } else {
+                const r = await this.moveToTrash(root, id, input);
+                if (r.ok) { out.moved.push(id); bytes += fresh.bytes; } else { out.failed.push(id); out.problems.push({ id, label: fresh.label, reason: r.reason }); }
+            }
+            onProgress?.({ done: n + 1, total: ids.length, bytes, current: fresh.label });
         }
-        return out;
+        return { ...out, bytes };
+    }
+
+    /** Whether one item is suggested for the one-click clean-up now, read fresh; the reason in words when not. */
+    async #suggestedNow(rootReal: string, id: string, inUse: readonly InUseFolder[]): Promise<{ ok: true; label: string; bytes: number } | { ok: false; label: string; reason: string }> {
+        const colon = id.indexOf(':');
+        const category = colon > 0 ? id.slice(0, colon) : '';
+        const rest = colon > 0 ? id.slice(colon + 1) : id;
+        const now = this.#now();
+        let item: StorageItem;
+        if (category === 'worktrees') {
+            const w = await this.#worktree(rootReal, id, inUse);
+            if (!w) return { ok: false, label: rest, reason: 'Git no longer lists it as a worktree of this workspace.' };
+            const s = await this.#sizeOf(w.abs);
+            item = { id, category: 'worktrees', label: w.rel, rel: w.rel, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: w.refusal === null, refusal: w.refusal, state: w.state, external: w.external, repo: w.repoRel, branch: w.branch, head: w.head };
+        } else if (category === 'ci-artifacts') {
+            const abs = await this.#artifactAt(rootReal, rest);
+            if (abs === null) return { ok: false, label: rest, reason: 'It is no longer a CI or test result folder in this workspace.' };
+            const s = await this.#sizeOf(abs);
+            item = { id, category: 'ci-artifacts', label: rest, rel: rest, bytes: s.bytes, files: s.files, truncated: s.truncated, newest: s.newest, reclaimable: true, refusal: null };
+        } else if (STORAGE_CATEGORIES.includes(category as StorageCategory)) {
+            return { ok: false, label: rest, reason: 'The one-click clean-up moves only merged worktrees and old test results: move this one by itself.' };
+        } else {
+            return { ok: false, label: id, reason: 'Genie does not know that item.' };
+        }
+        if (suggestedCleanup([item], now).length === 1) return { ok: true, label: item.label, bytes: item.bytes };
+        if (item.refusal) return { ok: false, label: item.label, reason: item.refusal };
+        if (item.category === 'worktrees' && item.state !== 'merged') return { ok: false, label: item.label, reason: `It is ${WORKTREE_STATE_LABEL[item.state ?? 'unknown'].toLowerCase()}.` };
+        if (item.category === 'worktrees') return { ok: false, label: item.label, reason: 'It changed in the last hour: an agent may be using it.' };
+        return { ok: false, label: item.label, reason: 'It is less than a day old: it may still be read.' };
     }
 
     /** Put one of Genie's .trash entries back where it came from; never over something already there. */
@@ -404,6 +574,13 @@ export class WorkspaceStorage {
                 if (o.repoRel !== '.' && inside(rootReal, repo) !== o.repoRel) return cannot;
                 if (await exists(target)) return taken(o.rel);
                 await mkdir(dirname(target), { recursive: true });
+                if (o.pruned === true) {
+                    const back = await this.#registerAgain(repo, target, payload, o.branch, o.head ?? null);
+                    if (!back.ok) return back;
+                    await rm(entry, { recursive: true, force: true });
+                    return { ok: true, label: o.rel };
+                }
+                // An entry from before Tynn #947: moved and locked by git, so git still knows it: unlock and move it back.
                 const unlocked = await retryTransient(() => git(repo, ['worktree', 'unlock', payload]));
                 if (!unlocked.ok) return { ok: false, reason: `git did not unlock the worktree: ${unlocked.error}` };
                 const moved = await retryTransient(() => git(repo, ['worktree', 'move', payload, target]));
@@ -434,30 +611,71 @@ export class WorkspaceStorage {
      * entry is removed by name inside .trash (`rm` removes a link, never what it points at); a trashed worktree is removed
      * through git first, so git forgets it. Nothing outside .trash is touched.
      */
-    async emptyTrash(root: string, approval: TrashApproval | null): Promise<StorageResult<{ deleted: number; bytes: number }>> {
+    async emptyTrash(root: string, approval: TrashApproval | null, onProgress?: (e: StorageProgressEvent) => void): Promise<EmptyTrashResult> {
         if (!approval) return { ok: false, reason: 'Emptying the trash needs your approval of what is in it.' };
         const rootReal = await realpath(root);
         const t = await this.#trashDir(rootReal, false);
         if (!t.ok) return t;
         const trash = await this.listTrash(rootReal);
         if (!approvalMatches(trash, approval)) return { ok: false, reason: 'The trash changed since you approved it: look again and approve what is there now.' };
-        if (t.dir === null) return { ok: true, deleted: 0, bytes: 0 };
+        if (t.dir === null) return { ok: true, deleted: 0, bytes: 0, failed: [] };
         const repos = new Set<string>();
-        for (const e of trash) {
+        const failed: StorageProblem[] = [];
+        let deleted = 0;
+        let bytes = 0;
+        for (const [n, e] of trash.entries()) {
             const entry = join(t.dir, e.id);
-            if (dirname(entry) !== t.dir || basename(entry) !== e.id) continue;
-            if (e.origin.kind === 'worktree') {
-                const repo = e.origin.repoRel === '.' ? rootReal : join(rootReal, ...e.origin.repoRel.split('/'));
-                if (await isDir(repo)) {
-                    await retryTransient(() => git(repo, ['worktree', 'remove', '--force', '--force', join(entry, PAYLOAD)]));
-                    repos.add(repo);
+            const label = originLabel(e.origin);
+            if (dirname(entry) === t.dir && basename(entry) === e.id) {
+                // One entry that cannot be deleted is named, and the rest still go (Tynn #947): never one failure for all.
+                try {
+                    // A worktree git still knows (an entry from before #947) is removed through git first, so git forgets it.
+                    if (e.origin.kind === 'worktree') {
+                        const repo = e.origin.repoRel === '.' ? rootReal : join(rootReal, ...e.origin.repoRel.split('/'));
+                        if (await isDir(repo)) {
+                            if (e.origin.pruned !== true) await retryTransient(() => git(repo, ['worktree', 'remove', '--force', '--force', join(entry, PAYLOAD)]));
+                            repos.add(repo);
+                        }
+                    }
+                    await this.#remove(entry);
+                    deleted += 1;
+                    bytes += e.bytes;
+                } catch (error) {
+                    failed.push({ id: e.id, label, reason: words(error) });
                 }
+            } else {
+                failed.push({ id: e.id, label, reason: 'Its name is not one Genie deletes inside .trash.' });
             }
-            // Retried: Windows answers EBUSY/EPERM for a moment after git or a scanner closes a handle.
-            await rm(entry, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+            onProgress?.({ done: n + 1, total: trash.length, bytes, current: label });
         }
         for (const repo of repos) await git(repo, ['worktree', 'prune']);
-        return { ok: true, deleted: trash.length, bytes: approval.bytes };
+        return { ok: true, deleted, bytes, failed };
+    }
+
+    /**
+     * A pruned worktree back as git's own (Tynn #947): git makes the worktree again at its place without checking anything
+     * out, the files it had (ignored ones too, an .env) are moved back in, and the index is read from its commit, so its
+     * status is what it was: clean. Its branch if git still has it free, else its commit, detached.
+     */
+    async #registerAgain(repo: string, target: string, payload: string, branch: string | null, head: string | null): Promise<StorageResult> {
+        const attempts: string[][] = [];
+        if (branch) attempts.push(['worktree', 'add', '--no-checkout', target, branch]);
+        if (head) attempts.push(['worktree', 'add', '--no-checkout', '--detach', target, head]);
+        if (attempts.length === 0) return { ok: false, reason: 'Genie does not know its branch or commit, so git cannot make it again.' };
+        let added: Awaited<ReturnType<typeof git>> = { ok: false, error: '' };
+        for (const args of attempts) { added = await git(repo, args); if (added.ok) break; }
+        if (!added.ok) return { ok: false, reason: `git did not make the worktree again: ${added.error}` };
+        try {
+            for (const name of await readdir(payload)) {
+                if (name === '.git') continue;
+                await renameRetrying(join(payload, name), join(target, name));
+            }
+        } catch (error) {
+            return { ok: false, reason: `git made the worktree again, but its files did not all go back (the rest are still in .trash): ${words(error)}` };
+        }
+        const indexed = await git(target, ['reset', '--quiet']);
+        if (!indexed.ok) return { ok: false, reason: `Its files are back, but git did not read its index: ${indexed.error}` };
+        return { ok: true };
     }
 }
 
