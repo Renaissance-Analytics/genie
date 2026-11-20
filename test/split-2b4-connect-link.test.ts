@@ -75,10 +75,9 @@ describe('tynnNetwork.classifyLink: the host decides what a pasted link is', () 
         expect((out as { note: string }).note).toMatch(/elsewhere\.example[\s\S]*tynn\.example/);
     });
 
-    it('the HOST’s role decides: a machine Tynn made a drone opens nothing, whatever the window thinks', async () => {
+    it('a drone host decides a share link as a pilot does: Tynn, not the role, decides the grant (Tynn #963)', async () => {
         const api = hostWith({ signedIn: true, host: TYNN, role: 'drone' });
-        const out = await api.invoke(METHOD, [`${TYNN}/invites/accept/tok_1`], LOCAL) as Decision;
-        expect(out.ok).toBe(false);
+        expect(await api.invoke(METHOD, [`${TYNN}/invites/accept/tok_1`], LOCAL)).toEqual({ ok: true, link: { kind: 'invite', url: `${TYNN}/invites/accept/tok_1` } });
     });
 
     it('signed out of Tynn, or no Tynn account: it says to sign in, and opens nothing', async () => {

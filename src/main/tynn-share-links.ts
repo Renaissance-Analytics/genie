@@ -8,6 +8,8 @@
  * link says (main/relay-grant.ts principalOf). A link can be revoked.
  */
 
+import type { WorkstationRole } from '../core/workstation-role.js';
+
 type SessionRequest = (path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
 export interface ShareLink {
@@ -48,11 +50,20 @@ function linkFrom(raw: unknown): ShareLink | null {
     };
 }
 
-async function refusal(res: { status: number; json(): Promise<unknown> }, what: string): Promise<string> {
-    if (res.status === 401 || res.status === 404 || res.status === 419) return `Tynn did not let this Genie ${what}: sign in to Tynn`;
+/** A refusal; `refusedByTynn` = Tynn's 404 (it answers every refusal so, signed out or not allowed), for shareLinksOver to word. */
+export type ShareRefusal = { ok: false; reason: string; refusedByTynn?: true };
+
+async function refusal(res: { status: number; json(): Promise<unknown> }, what: string): Promise<ShareRefusal> {
+    if (res.status === 401 || res.status === 404 || res.status === 419) return { ok: false, reason: `Tynn did not let this Genie ${what}: sign in to Tynn`, refusedByTynn: true };
     const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
-    return typeof body?.message === 'string' && body.message !== '' ? body.message : `Tynn refused to ${what} (${res.status})`;
+    return { ok: false, reason: typeof body?.message === 'string' && body.message !== '' ? body.message : `Tynn refused to ${what} (${res.status})` };
 }
+
+/**
+ * WHAT A DRONE IS TOLD WHEN TYNN REFUSES ITS SHARE LINKS (Tynn #963): signed in, so "sign in to Tynn" was untrue. Tynn has
+ * this machine as a drone and refuses a drone's share links; that is Tynn's rule, not this person's sign-in.
+ */
+export const DRONE_SHARE_REFUSAL = 'Tynn has this workstation as a drone and refused its share links. You are signed in, so signing in again will not change this';
 
 const reach = (error: unknown) => `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})`;
 const linksPath = (workstationId: string) => `/api/v1/workstations/${encodeURIComponent(workstationId)}/share-links`;
@@ -62,12 +73,12 @@ export async function mintShareLink(
     request: SessionRequest,
     workstationId: string | null,
     input: { workspaceId: string | null; capability: 'control' | 'readonly'; expiresInDays: number },
-): Promise<{ ok: true; link: ShareLink } | { ok: false; reason: string }> {
+): Promise<{ ok: true; link: ShareLink } | ShareRefusal> {
     if (!workstationId) return { ok: false, reason: NOT_REGISTERED };
     const scope = input.workspaceId === null ? { all_workspaces: true } : { workspace: input.workspaceId };
     try {
         const res = await request(linksPath(workstationId), { method: 'POST', body: { ...scope, capability: input.capability, expires_in_days: normalizeExpiryDays(input.expiresInDays) } });
-        if (!res.ok) return { ok: false, reason: await refusal(res, 'make a share link') };
+        if (!res.ok) return await refusal(res, 'make a share link');
         const link = linkFrom(((await res.json().catch(() => null)) as { link?: unknown } | null)?.link);
         return link ? { ok: true, link } : { ok: false, reason: 'Tynn answered without the link' };
     } catch (error) {
@@ -76,11 +87,11 @@ export async function mintShareLink(
 }
 
 /** The links that reach this workspace — its own and whole-workstation ones — or, for `null`, every link. */
-export async function listShareLinks(request: SessionRequest, workstationId: string | null, workspaceId: string | null): Promise<{ ok: true; links: ShareLink[] } | { ok: false; reason: string }> {
+export async function listShareLinks(request: SessionRequest, workstationId: string | null, workspaceId: string | null): Promise<{ ok: true; links: ShareLink[] } | ShareRefusal> {
     if (!workstationId) return { ok: false, reason: NOT_REGISTERED };
     try {
         const res = await request(linksPath(workstationId), { method: 'GET' });
-        if (!res.ok) return { ok: false, reason: await refusal(res, 'list share links') };
+        if (!res.ok) return await refusal(res, 'list share links');
         const rows = ((await res.json().catch(() => null)) as { links?: unknown } | null)?.links;
         const links = (Array.isArray(rows) ? rows : []).map(linkFrom).filter((l): l is ShareLink => l !== null)
             // The list never serves a URL, whatever comes back.
@@ -101,7 +112,7 @@ export async function revokeShareLink(
     workstationId: string | null,
     linkId: string,
     endSessions?: () => Promise<void>,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<{ ok: true } | ShareRefusal> {
     if (!workstationId) return { ok: false, reason: NOT_REGISTERED };
     let res: Awaited<ReturnType<SessionRequest>>;
     try {
@@ -109,7 +120,7 @@ export async function revokeShareLink(
     } catch (error) {
         return { ok: false, reason: reach(error) };
     }
-    if (!res.ok) return { ok: false, reason: await refusal(res, 'revoke that link') };
+    if (!res.ok) return refusal(res, 'revoke that link');
     if (endSessions) {
         try { await endSessions(); } catch { /* the revoke stands; the host's own 30 s re-check still ends the session */ }
     }
@@ -121,10 +132,17 @@ export async function revokeShareLink(
  * a window did. The workstation is read at each call (it registers after start); `endSessions` re-checks the relay's
  * live sessions after a revoke.
  */
-export function shareLinksOver(ports: { request: SessionRequest; workstation: () => string | null; endSessions?: () => Promise<void> }) {
+export function shareLinksOver(ports: { request: SessionRequest; workstation: () => string | null; endSessions?: () => Promise<void>; rereadRole?: () => Promise<WorkstationRole | null> }) {
+    // Tynn's 404, worded from the role read again (Tynn #963), as a grant's is (drone-refusal.ts); only {ok, reason} leaves.
+    const worded = async <R extends { ok: true }>(pending: Promise<R | ShareRefusal>): Promise<R | { ok: false; reason: string }> => {
+        const r = await pending;
+        if (r.ok) return r;
+        if (r.refusedByTynn && ports.rereadRole && (await ports.rereadRole().catch(() => null)) === 'drone') return { ok: false, reason: DRONE_SHARE_REFUSAL };
+        return { ok: false, reason: r.reason };
+    };
     return {
-        list: (workspaceId: string | null) => listShareLinks(ports.request, ports.workstation(), workspaceId),
-        mint: (input: { workspaceId: string | null; capability: 'control' | 'readonly'; expiresInDays: number }) => mintShareLink(ports.request, ports.workstation(), input),
-        revoke: (linkId: string) => revokeShareLink(ports.request, ports.workstation(), linkId, ports.endSessions),
+        list: (workspaceId: string | null) => worded(listShareLinks(ports.request, ports.workstation(), workspaceId)),
+        mint: (input: { workspaceId: string | null; capability: 'control' | 'readonly'; expiresInDays: number }) => worded(mintShareLink(ports.request, ports.workstation(), input)),
+        revoke: (linkId: string) => worded(revokeShareLink(ports.request, ports.workstation(), linkId, ports.endSessions)),
     };
 }
