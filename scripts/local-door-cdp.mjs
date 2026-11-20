@@ -260,7 +260,8 @@ async function nativeInterval(label, connectionId, startSummary, endSummary) {
     const sent = (summary) => summary.records.find((r) => r.connectionId === connectionId)?.frames;
     const nativeFrom = sent(startSummary), nativeTo = sent(endSummary);
     demand(Number.isSafeInteger(nativeFrom) && Number.isSafeInteger(nativeTo), `${label}: the socket counted connection ${connectionId} at both ends`);
-    const handle = await main.evaluate(`[...window.__doorCdp.connections].find(([, id]) => id === ${JSON.stringify(connectionId)})?.[0] ?? null`);
+    // The id is the app's (its welcome frame), so it goes in as an argument, not spliced into code (CodeQL #121).
+    const handle = await evaluateFn(main, (id) => [...window.__doorCdp.connections].find(([, c]) => c === id)?.[0] ?? null, connectionId);
     demand(handle, `${label}: the page knows the handle of connection ${connectionId}`);
     const span = await until(`${label}: the page received the socket's frame ${nativeTo}`,
         async () => pageSpan(await main.evaluate('window.__doorCdp.frames.map((f) => ({ seq: f.seq, handle: f.handle, n: f.n }))'), handle, nativeFrom, nativeTo), 8_000);

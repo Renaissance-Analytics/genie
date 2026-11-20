@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseBoard, timelineOf, trailFrom, type BoardPost, type DisplayPost } from '../src/core/artboard.js';
@@ -55,6 +56,83 @@ describe('the input (core/question-visuals.ts)', () => {
     it('CONTROL: sanitising keeps the mockup itself — its markup, its classes and its inline style', () => {
         const clean = sanitizeMockupHtml('<div class="card" style="color:red"><h1>Kept</h1></div>');
         expect(clean).toContain('<div class="card" style="color:red"><h1>Kept</h1></div>');
+    });
+
+    /*
+     * ONE PASS IS NOT A SANITISER (CodeQL js/incomplete-multi-character-sanitization, alerts #122-#124). Removing a match can
+     * JOIN its two sides into a new match: `<scr<script>ipt>` loses its inner tag and becomes `<script>`. Each case below is
+     * built so the old single pass assembled the very thing it removes. The oracle is a real HTML parser reading the result
+     * the way the frame would, not a regex over the string — a regex oracle shares the sanitiser's blind spots.
+     */
+    const BLOCKED_ELEMENTS = 'script, iframe, frame, frameset, object, embed, applet, noscript, template, base, link';
+    const URL_ATTRS = new Set(['src', 'srcset', 'href', 'action', 'formaction', 'poster', 'background', 'xlink:href', 'data']);
+    function violations(html: string): string[] {
+        const doc = new (new Window().DOMParser)().parseFromString(html, 'text/html');
+        const found: string[] = [];
+        for (const el of doc.querySelectorAll(BLOCKED_ELEMENTS)) found.push(`<${el.tagName.toLowerCase()}>`);
+        for (const el of doc.querySelectorAll('*')) {
+            for (const attr of Array.from(el.attributes)) {
+                const name = attr.name.toLowerCase();
+                // What a URL resolver sees: tabs and newlines anywhere are dropped, leading spaces and controls too.
+                const url = (attr.value ?? '').replace(/[\u0000- ]/g, '').toLowerCase();
+                if (name.startsWith('on')) found.push(`${name}=`);
+                if (/^(javascript|vbscript):|^data:text\/html/.test(url)) found.push(`${name}=${url}`);
+                if (URL_ATTRS.has(name) && /^(https?:)?\/\//.test(url)) found.push(`remote ${name}=${url}`);
+            }
+        }
+        // Counted in the whole document: a bare <meta> before <html> belongs in <head> by the spec's tree builder, which
+        // happy-dom does not follow there; the CONTROL below holds our own output to <head> explicitly.
+        const csp = doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]');
+        if (csp.length !== 1) found.push(`${csp.length} CSP metas`);
+        // A parser's view is not enough for an unclosed tag (happy-dom drops `<script>` with no end), so the text is read too.
+        const tag = /<(script|iframe|frame|frameset|object|embed|applet|noscript|template|base|link)\b/i.exec(html);
+        if (tag) found.push(`text <${tag[1]!.toLowerCase()}`);
+        for (const meta of doc.querySelectorAll('meta[http-equiv]')) {
+            if (meta.getAttribute('http-equiv') !== 'Content-Security-Policy') found.push(`http-equiv=${meta.getAttribute('http-equiv')}`);
+        }
+        return found;
+    }
+
+    const BYPASSES: Record<string, string> = {
+        'a tag joined from two halves': '<p>x</p><scr<script>ipt>alert(1)',
+        'a closed tag joined from two halves': '<scr<link>ipt>alert(1)</scr<link>ipt>',
+        'a handler joined from two halves': '<a o onclick="x"nclick="alert(1)">x</a>',
+        'a javascript: URL joined from two halves': '<a hr href="javascript:x"ef="javascript:alert(1)">x</a>',
+        'a remote source joined from two halves': '<img sr src="https://a.test/x"c="https://track.test/p.gif">',
+        'a handler after a slash, not a space': '<svg/onload=alert(1)><img/src="data:image/png;base64,AA"/onerror="alert(2)">',
+        'a handler straight after a quoted value': '<img src="data:image/png;base64,AA"onerror="alert(1)">',
+        'a javascript: URL spelled with entities': '<a href="jav&#x61;script:alert(1)">a</a><a href="java&#09;script:alert(2)">b</a><a href="javascript&colon;alert(3)">c</a>',
+        'a <head> the parser never sees (in a comment)': '<!--<head>--><p>x</p>',
+        'a refresh whose tag holds a quoted ">"': '<meta name=">" http-equiv="refresh" content="0;url=https://x.test/opened"><p>x</p>',
+    };
+    for (const [name, dirty] of Object.entries(BYPASSES)) {
+        it(`a single pass is not enough: ${name}`, () => {
+            // Positive control: the oracle sees the attack in the raw page, so an empty list below is a real absence.
+            expect(violations(dirty), 'the oracle must see the raw attack').not.toEqual([]);
+            expect(violations(sanitizeMockupHtml(dirty)), sanitizeMockupHtml(dirty)).toEqual([]);
+        });
+    }
+
+    it('nesting deeper than any real page still ends, and nothing survives it', () => {
+        const deep = `${'<scr'.repeat(200)}<script>${'ipt>'.repeat(200)}alert(1)`;
+        const clean = sanitizeMockupHtml(deep);
+        expect(violations(clean), clean.slice(0, 200)).toEqual([]);
+        expect(clean).not.toMatch(/<script/i);
+    });
+
+    it('CONTROL: what a mockup is made of survives — doctype first, <style>, data: images, local links, the CSP in <head>', () => {
+        const page = '<!DOCTYPE html><html><head><title>Mock</title><style>.card{color:red}</style></head>'
+            + '<body><a href="#pricing" class="nav">Pricing</a><img src="data:image/png;base64,AA" alt="logo"><div class="card" style="padding:4px">Kept</div></body></html>';
+        const clean = sanitizeMockupHtml(page);
+        expect(clean.startsWith('<!DOCTYPE html>'), 'a doctype that is not first puts the page in quirks mode').toBe(true);
+        expect(clean).toContain('<style>.card{color:red}</style>');
+        expect(clean).toContain('<a href="#pricing" class="nav">Pricing</a>');
+        expect(clean).toContain('<img src="data:image/png;base64,AA" alt="logo">');
+        expect(clean).toContain('<div class="card" style="padding:4px">Kept</div>');
+        expect(violations(clean)).toEqual([]);
+        const doc = new (new Window().DOMParser)().parseFromString(clean, 'text/html');
+        expect(doc.head.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').length, 'the policy is in <head>').toBe(1);
+        expect(doc.title).toBe('Mock');
     });
 
     it('a question carries at most 6 visuals; an ask at most 12; a stored visual is well-formed', () => {
