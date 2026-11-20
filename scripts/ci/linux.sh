@@ -58,6 +58,9 @@ ROWS=(
 declare -A TRACKED_RED=(
     [toolchain]="pacman:#968 elevation:#973 docker:#970"
 )
+# ROWS THAT CHANGE THE MACHINE, run once even when they fail during a machine stall (Tynn #967): toolchain removes git
+# and docker and moves sudo, so its INFRA rerun met a machine it had already changed and measured nothing.
+ONE_SHOT_ROWS=" toolchain "
 
 only=''
 from=''
@@ -862,7 +865,13 @@ run_rows() {
             stalled=0
             stall="$(machine_stall "$from" "$(now_ms)")" && stalled=1
             echo "$stall"
-            if [ "$stalled" = 1 ]; then
+            if [ "$stalled" = 1 ] && [[ "${ONE_SHOT_ROWS:-}" == *" $name "* ]]; then
+                # A ROW THAT CHANGES THE MACHINE RUNS ONCE (Tynn #967): its rerun would meet the machine it left, not the
+                # one it measures. Said as INFRA, and its own verdict stands.
+                local secs="${row_line#ROW "$name" FAIL }"
+                echo "INFRA $name FAIL ${secs%% *}: the machine stalled during the row ($(head -1 <<<"$stall")); not run again: this row changes the machine, so a rerun would not meet the machine it measures"
+                infra+=("$name (not rerun)")
+            elif [ "$stalled" = 1 ]; then
                 local secs="${row_line#ROW "$name" FAIL }"
                 echo "INFRA $name FAIL ${secs%% *}: the machine stalled during the row ($(head -1 <<<"$stall")); running it once more on this machine"
                 printf '\n=== INFRA: the machine stalled during the run above; the rerun follows\n' >>"$OUT/$name.log"

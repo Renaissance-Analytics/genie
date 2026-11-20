@@ -25,12 +25,50 @@ const start = source.indexOf('\n# >>> THE ROW LOOP');
 const end = source.indexOf('\n# <<< THE ROW LOOP');
 const loop = start > -1 && end > start ? source.slice(start + 1, end) : '';
 
-/** Quiet samples: no stall, so nothing here is an INFRA rerun. */
-function samples(): string {
+/** Samples every 2 s from 60 s ago to 120 s ahead: quiet (no INFRA reruns), or stalled (io full 50 %). */
+function samples(stalled = false): string {
     const now = Date.now();
     const lines = [];
-    for (let t = now - 60000; t <= now + 120000; t += 2000) lines.push(`MACHINE ${t} gap=2000 cpu=4 steal=0 io_some=0 io_full=0 mem_full=0 load=0.4`);
+    for (let t = now - 60000; t <= now + 120000; t += 2000) lines.push(`MACHINE ${t} gap=2000 cpu=4 steal=0 io_some=${stalled ? 60 : 0} io_full=${stalled ? 50 : 0} mem_full=0 load=0.4`);
     return lines.join('\n') + '\n';
+}
+
+/*
+ * A ROW THAT CHANGES THE MACHINE RUNS ONCE (#967, run 1120-225411-b810c7). The toolchain row failed during a stall and
+ * was run again on the machine it had already changed (git and docker removed, sudo moved), where it measured nothing
+ * and threw. A row in ONE_SHOT_ROWS that fails during a stall is said as INFRA, and not run again.
+ */
+function runStalled(): { out: string; count: (row: string) => number } {
+    const dir = mkdtempSync(join(tmpdir(), 'ci-oneshot-linux-'));
+    writeFileSync(join(dir, 'machine-samples.log'), samples(true));
+    const script = `
+set -uo pipefail
+cd ${JSON.stringify(root)}
+OUT=${JSON.stringify(dir)}; SETUP="$OUT/setup"; mkdir -p "$SETUP"
+MACHINE_SAMPLES="$OUT/machine-samples.log"
+failed=(); notes=(); infra=(); tracked=()
+blocked=''; blocked_here=''; skip_reason=''
+installed=''; electron_ok=''; built=''; built_why=''; display_ready=''; keyring_ready=''; app=''
+ceiling() { echo 60; }
+watchdog() { :; }
+machine_line() { :; }
+reap_leftovers() { :; }
+stop_app() { :; }
+block() { blocked="$1"; blocked_here=1; echo "--- $1"; return 1; }
+ONE_SHOT_ROWS=" oneshot "
+declare -A TRACKED_RED=([oneshot]="pacman:#968")
+ran() { echo x >> "$OUT/ran-$1"; }
+row_oneshot() { ran oneshot; echo "TRACK app FAIL none the page threw"; return 1; }
+row_again() { ran again; return 1; }
+${loop}
+selected=(oneshot again)
+run_rows
+infra_summary
+echo "FAILED: \${failed[*]}"
+`;
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 60000 });
+    const count = (row: string) => { try { return readFileSync(join(dir, `ran-${row}`), 'utf8').trim().split('\n').length; } catch { return 0; } };
+    return { out: `${r.stdout}${r.stderr}`, count };
 }
 
 function runLoop(): string {
@@ -131,6 +169,23 @@ describe.skipIf(process.platform !== 'linux')('linux.sh: tracked red rows (#967)
     it('CONTROL: untracked rows are judged as before', () => {
         expect(out).toMatch(/^ROW plain FAIL \d+$/m);
         expect(out).toMatch(/^ROW ok PASS \d+$/m);
+    });
+    describe('a row that changes the machine, failing during a stall', () => {
+        let out = '';
+        let count: (row: string) => number = () => -1;
+        beforeAll(() => { ({ out, count } = runStalled()); });
+        it('is said as INFRA and NOT run again: a rerun would not meet the machine it measures', () => {
+            expect(count('oneshot')).toBe(1);
+            expect(out).toMatch(/^INFRA oneshot FAIL \d+: the machine stalled during the row \(.*\); not run again: this row changes the machine/m);
+            expect(out).toMatch(/^ROW oneshot FAIL \d+ \(tracked row has a failed check: app\)$/m);
+        });
+        it('CONTROL: another row failing in the same stall is still run once more', () => {
+            expect(count('again')).toBe(2);
+        });
+        it('the summary names it as not rerun, and it is failed', () => {
+            expect(out).toMatch(/^INFRA ROWS: oneshot \(not rerun\) again \(rerun FAIL\)$/m);
+            expect(out).toMatch(/^FAILED: oneshot again$/m);
+        });
     });
     it('the summary names the tracked rows, and the run fails on every other failure', () => {
         expect(out).toMatch(/^TRACKED ROWS: known \(pacman #968, elevation #973 \(blocked\), docker #970\)$/m);

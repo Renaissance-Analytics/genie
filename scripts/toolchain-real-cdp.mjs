@@ -31,7 +31,7 @@
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mainWindow } from './cdp-main-window.mjs';
@@ -79,7 +79,9 @@ const ok = (command, ...args) => run(command, args).status === 0;
 /** sudo with no password: only while the image's NOPASSWD drop-in is still in place. */
 const sudoN = (...args) => ok('sudo', '-n', ...args);
 /** sudo as a person runs it: the password on stdin, never on argv. */
-const sudoP = (...args) => run('sudo', ['-S', '-p', '', ...args], { input: `${PW}\n` });
+// ...and then FORGOTTEN (`sudo -k`): sudo caches a password for minutes, and a cached one would let `sudo -n`, or an
+// elevated step of Genie's, through with no prompt. The 2026-11-20 run 2 read "sudo -n refused false" for exactly that.
+const sudoP = (...args) => { const r = run('sudo', ['-S', '-p', '', ...args], { input: `${PW}\n` }); run('sudo', ['-k']); return r; };
 const pkgVersion = (pkg) => { const v = out('pacman', '-Q', pkg).split(/\s+/)[1] ?? ''; return v.replace(/^\d+:/, '').replace(/-[^-]+$/, ''); };
 const sessionPath = (() => { const env = out('systemctl', '--user', 'show-environment'); return env.split('\n').find((l) => l.startsWith('PATH='))?.slice(5) || process.env.PATH; })();
 const answersInSession = (cmd, ...args) => run(cmd, args, { env: { ...process.env, PATH: sessionPath }, timeout: 60_000 });
@@ -149,10 +151,12 @@ async function finish() {
     await sleep(1500);
     for (const pid of [app?.pid, host]) { if (pid && alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } }
     // sudo as it was: the NOPASSWD drop-in back, the person's grant gone, and `sudo -n` answering again.
+    // Both by password: while the person's grant is there it is the last match, so sudo asks.
     if (asideDone) sudoP('mv', '-f', ASIDE, NOPASSWD);
     if (personDone) sudoP('rm', '-f', PERSON);
-    const restored = !asideDone || sudoN('true');
-    if (!restored) track('z-sudo-restored', 'FAIL', 'none', `the NOPASSWD drop-in could not be put back (${NOPASSWD}); later jobs on this VM would ask for a password`);
+    const restored = !(asideDone || personDone) || sudoN('true');
+    if (!restored) track('z-sudo-restored', 'FAIL', 'none', `sudo -n does not answer after the restore (${NOPASSWD} back: ${asideDone}, ${PERSON} removed: ${personDone}); later jobs on this VM would ask for a password`);
+    else if (asideDone || personDone) track('z-sudo-restored', 'PASS', 'none', 'sudo -n answers again, as the image had it');
     const files = filesHolding(join(homedir(), '.genie')).concat(filesHolding(OUT));
     if (leaks.size > 0 || files.length > 0) track('password-never-written', 'FAIL', 'none', `the password was found in: ${[...leaks, ...files].join(', ')}`);
     else track('password-never-written', 'PASS', 'none', 'not in any argv sampled during the row, nor in ~/.genie or ci-out');
@@ -172,7 +176,10 @@ process.on('SIGTERM', () => { void finish(); });
 // --- the page ---------------------------------------------------------------------------------------------------------
 /** A card as a person sees it: its badge, version, words and buttons. */
 const card = (tool) => cdp.evaluate(`(() => {
-    const li = document.querySelector('li[data-tool=${JSON.stringify(tool)}]');
+    // Its card, or, for a language that has a section of its own instead (php, node, go ...), the row in it that carries
+    // its install command: the 2026-11-20 run found no php card at all.
+    const li = document.querySelector('li[data-tool=${JSON.stringify(tool)}]')
+        ?? document.querySelector('[data-install-command=${JSON.stringify(tool)}]')?.closest('li, section, div');
     if (!li) return null;
     const buttons = [...li.querySelectorAll('button')].map((b) => ({ text: b.textContent.trim(), action: b.getAttribute('data-action'), version: b.getAttribute('data-version'), disabled: b.disabled }));
     return {
@@ -286,17 +293,24 @@ try {
     say(`user ${USER}; session PATH ${sessionPath}`);
     say(`pacman -Q: ${['git', 'php', 'composer', 'docker'].map((p) => `${p}=${pkgVersion(p) || '-'}`).join(' ')}; docker service ${out('systemctl', 'is-active', 'docker') || 'inactive'}; ${polkitFact()}`);
 
-    // 1. SUDO AS A PERSON HAS IT. While NOPASSWD still holds: a real password, a password-required grant, then NOPASSWD aside.
+    // 1. SUDO AS A PERSON HAS IT. While NOPASSWD still holds: a real password, and whether the drop-in is there (its
+    // folder is root's, 0750: only sudo can see into it). Then the password-required grant goes in. It sorts after the
+    // NOPASSWD drop-in and the last match wins, so from that moment sudo asks for the password. The 2026-11-20 run
+    // measured exactly that, with the grant written and `visudo -cf` failing, so a grant is judged by what sudo then
+    // does, never by visudo. And the NOPASSWD drop-in goes aside, with the password.
     const chp = run('sudo', ['-n', 'chpasswd'], { input: `${USER}:${PW}\n` });
     sudoN('passwd', '-u', USER);
+    const hadNopasswd = sudoN('test', '-e', NOPASSWD);
     const grant = join(mkdtempSync(join(tmpdir(), 'tc967-')), 'grant');
     writeFileSync(grant, `${USER} ALL=(ALL:ALL) ALL\n`);
-    personDone = sudoN('install', '-m', '0440', grant, PERSON) && sudoN('visudo', '-cf', PERSON);
-    asideDone = personDone && existsSync(NOPASSWD) ? sudoN('mv', '-f', NOPASSWD, ASIDE) : false;
+    // Recorded before it is judged: whatever happens next, the end of the run removes it.
+    personDone = true;
+    const written = sudoN('install', '-m', '0440', '-o', 'root', '-g', 'root', grant, PERSON);
+    asideDone = hadNopasswd && sudoP('mv', '-f', NOPASSWD, ASIDE).status === 0;
     const noNopasswd = !sudoN('true');
     const withPassword = sudoP('true').status === 0;
-    if (chp.status === 0 && personDone && noNopasswd && withPassword) track('control-sudo-asks-for-the-password', 'PASS', 'none', `sudo -n is refused; sudo with the password works (${asideDone ? `${NOPASSWD} moved aside` : 'no NOPASSWD drop-in was there'})`);
-    else { track('control-sudo-asks-for-the-password', 'FAIL', 'none', `chpasswd ${chp.status}, grant ${personDone}, sudo -n refused ${noNopasswd}, password works ${withPassword}`); throw new Error('sudo could not be set up as a person has it'); }
+    if (chp.status === 0 && written && noNopasswd && withPassword) track('control-sudo-asks-for-the-password', 'PASS', 'none', `sudo -n is refused; sudo with the password works (${asideDone ? `${NOPASSWD} moved aside` : 'no NOPASSWD drop-in was there'})`);
+    else { track('control-sudo-asks-for-the-password', 'FAIL', 'none', `chpasswd ${chp.status}, NOPASSWD drop-in there ${hadNopasswd}, grant written ${written}, moved aside ${asideDone}, sudo -n refused ${noNopasswd}, password works ${withPassword}`); throw new Error('sudo could not be set up as a person has it'); }
 
     // 2. git ABSENT, so its install is measured (the image ships it; npm ci has already run).
     const gitBefore = pkgVersion('git');
@@ -313,7 +327,9 @@ try {
     const page = await until(90_000, async () => { try { return mainWindow(await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()); } catch { return null; } });
     if (!page) throw new Error(`no main window on the debugger port ${PORT} within 90 s`);
     cdp = await Cdp.connect(page.webSocketDebuggerUrl);
-    await until(60_000, () => cdp.evaluate('typeof window.genie === "object"'));
+    // The bridge AND its features: window.genie can exist before features.act does (the 2026-11-20 rerun threw on it).
+    const bridged = await until(90_000, () => cdp.evaluate('typeof (window.genieTest ?? window.genie)?.features?.act === "function" && typeof (window.genieTest ?? window.genie)?.features?.snapshot === "function"'));
+    if (!bridged) throw new Error('the page has no features bridge (features.act / features.snapshot) within 90 s');
     await cdp.evaluate(`window.location.hash = '#genie://toolchain'; true`);
     // Every progress step a card shows, as it shows it: a step that lasts 50 ms is still a step the person saw.
     await cdp.evaluate(`(() => {
@@ -353,14 +369,23 @@ try {
     const installedByGenie = [];
     for (const [tool, pkg] of [['php', 'php'], ['composer', 'composer'], ['git', 'git']]) {
         const before = await card(tool);
-        if (!before || before.tone !== 'not-installed') { track(`${tool}-install`, 'FAIL', 'none', `CONTROL: the card should start not-installed; it shows ${JSON.stringify(before)?.slice(0, 200)}`); continue; }
+        if (!before) {
+            // No card and no install command anywhere: a language whose section offers only Genie's own builds. A person
+            // has no way to get the system's package from here.
+            const words = await cdp.evaluate(`[...document.querySelectorAll('[data-${tool}-versions] [data-${tool}-system], [data-${tool}-versions] [data-${tool}-install-refused]')].map((e) => e.textContent.trim()).join(' / ')`);
+            track(`${tool}-install`, 'RED', 'pacman', `no card offers to install ${pkg} with the system's package manager${words ? `; the ${tool} section says: "${words}"` : ''}`);
+            track(`${tool}-elevation`, 'BLOCKED', 'elevation', 'not reached: nothing to install with');
+            track(`${tool}-install-progress`, 'BLOCKED', 'pacman', 'not reached');
+            continue;
+        }
+        if (before.tone !== null && before.tone !== 'not-installed') { track(`${tool}-install`, 'FAIL', 'none', `CONTROL: the card should start not-installed; it shows ${JSON.stringify(before).slice(0, 200)}`); continue; }
         if (before.installRefused) {
             track(`${tool}-install`, 'RED', 'pacman', `the card offers no Install: "${before.installRefused}"`);
             track(`${tool}-elevation`, 'BLOCKED', 'elevation', 'not reached: nothing to install with');
             track(`${tool}-install-progress`, 'BLOCKED', 'pacman', 'not reached');
             continue;
         }
-        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { const c = await card(tool); return c && c.tone !== 'not-installed' && c.version ? c : null; }, pkg);
+        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && c.version ? c : null; }, pkg);
         const prompted = elevationVerdict(`${tool}-elevation`, r, pkg);
         const after = await card(tool);
         const have = pkgVersion(pkg);
@@ -420,13 +445,19 @@ try {
         }
     }
 
-    // 9. DOCKER, INSTALLED WITH ITS DAEMON OFF (the image): the card says Not running and offers Start; Start runs it.
+    // 9. DOCKER, INSTALLED WITH ITS DAEMON OFF: the card says Not running and offers Start; Start runs it. Off as
+    // `pacman -S docker` leaves it, with neither the service nor its socket enabled. The image enables docker.socket, so
+    // the first `docker` a probe runs starts the daemon (the 2026-11-20 run: inactive before the app, active by this
+    // step). Each unit's state as the image had it is said first.
     {
+        say(`docker as the image has it: service ${out('systemctl', 'is-enabled', 'docker.service') || '?'}/${out('systemctl', 'is-active', 'docker.service') || 'inactive'}, socket ${out('systemctl', 'is-enabled', 'docker.socket') || '?'}/${out('systemctl', 'is-active', 'docker.socket') || 'inactive'}`);
+        sudoP('systemctl', 'disable', '--now', 'docker.socket', 'docker.service');
+        await recheck();
         const c = await card('docker');
         const off = out('systemctl', 'is-active', 'docker') !== 'active';
         const says = c && /not running/i.test(c.text);
         const start = c?.buttons.find((b) => /^start/i.test(b.text) && !b.disabled);
-        if (!off) track('docker-daemon-off', 'FAIL', 'none', 'CONTROL: the image\'s docker daemon is already active; the daemon-off path cannot be measured');
+        if (!off) track('docker-daemon-off', 'FAIL', 'none', 'CONTROL: docker is still active after the harness disabled and stopped it and its socket');
         else if (says && start) track('docker-daemon-off', 'PASS', 'docker', `the card: "${c.text.slice(0, 160)}"`);
         else track('docker-daemon-off', 'RED', 'docker', `daemon inactive; the card shows "${c?.text?.slice(0, 160) ?? 'no docker card'}" (${says ? 'Not running' : 'no "Not running"'}, ${start ? 'Start' : 'no Start'})`);
         if (off && says && start) {
@@ -484,14 +515,19 @@ try {
         const pick = (nodeView?.available ?? []).find((a) => !a.installed)?.version ?? null;
         if (!pick) track('node-install', 'FAIL', 'none', `no Node version to install is offered (${JSON.stringify(nodeView)?.slice(0, 200)})`);
         else {
-            await act({ kind: 'toolchain.installNode', version: pick, consent: true });
-            const managed = ((await snapshot(['toolchain', 'node', 'managed'])) ?? []).some((m) => m.version === pick);
-            track('node-install', managed ? 'PASS' : 'FAIL', 'none', managed ? `Node ${pick} is in Genie's toolchain` : `Node ${pick} did not install: ${JSON.stringify(await snapshot(['toolchain', 'refusals']))?.slice(0, 200)}`);
-            if (managed) {
-                await act({ kind: 'toolchain.setDefault', lang: 'node', version: pick });
-                await recheck();
-                const c = await until(60_000, async () => { const x = await card('node'); return x?.version === pick ? x : null; });
-                track('node-default', c ? 'PASS' : 'FAIL', 'none', c ? `the node card shows ${pick}` : `the node card shows ${(await card('node'))?.version ?? '?'}, not ${pick}`);
+            // Node has its own section (no Toolchain card): its Install chip, then its row, then its Default mark.
+            const sel = (s) => JSON.stringify(s);
+            const clickNode = (s) => cdp.evaluate(`(() => { const b = document.querySelector(${sel(s)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
+            const pressed = await until(30_000, () => clickNode(`[data-node-install="${pick}"]`));
+            if (!pressed) await act({ kind: 'toolchain.installNode', version: pick, consent: true });
+            const row = await until(600_000, () => cdp.evaluate(`Boolean(document.querySelector(${sel(`li[data-node-version="${pick}"]`)}))`), 1000);
+            track('node-install', row ? 'PASS' : 'FAIL', 'none', row ? `Node ${pick} has its row in the Node section${pressed ? '' : ' (its Install chip was not there to press; installed through the same action)'}` : `Node ${pick} did not install: ${JSON.stringify(await snapshot(['toolchain', 'refusals']))?.slice(0, 200)}`);
+            if (row) {
+                const made = await until(30_000, () => clickNode(`[data-make-default="node:${pick}"]`));
+                if (!made) await act({ kind: 'toolchain.setDefault', lang: 'node', version: pick });
+                const isDefault = await until(120_000, () => cdp.evaluate(`Boolean(document.querySelector(${sel(`li[data-node-version="${pick}"][data-default="true"] [data-is-default="node:${pick}"]`)}))`), 1000);
+                const nodeNow = answersInSession('bash', '-lc', 'node --version').stdout?.trim() ?? '';
+                track('node-default', isDefault ? 'PASS' : 'FAIL', 'none', isDefault ? `Node ${pick} reads Default in its row${made ? '' : ' (its Make default button was not there to press)'}; a login shell's node: ${nodeNow || 'none'}` : `Node ${pick}'s row does not read Default; ${JSON.stringify(await snapshot(['toolchain', 'defaults']))?.slice(0, 160)}`);
             }
         }
     }
