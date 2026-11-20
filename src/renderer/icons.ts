@@ -79,6 +79,8 @@ export const ICON_NAMES: readonly string[] = [
     'git-branch', 'circle-alert',
     // the Agent view header's Stop
     'square',
+    // A call that has gone silent, at its own stream entry (Tynn #950).
+    'hourglass',
     // the four feature icons
     ...FEATURE_ICONS.map((f) => f.icon),
     // the Settings sidebar (Genie 1's, core/settings-nav.ts) — named in data, so registered from it
