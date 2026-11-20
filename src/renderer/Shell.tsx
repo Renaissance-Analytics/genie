@@ -698,6 +698,8 @@ export function Shell({
                 // DO NOT DISTURB (Tynn #655): Settings → General's own setting, read from this window's host snapshot and
                 // written through its feature channel — so a window on another machine shows and sets that machine's.
                 dnd={dndView && !scoped ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
+                // THE ACCOUNT PILLS (Tynn #949): in the title bar, beside the workstation name, so they are on every view.
+                accountPills={scoped ? undefined : { limits: rateLimits ?? {}, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, now }}
             />
             {remoteShown?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remoteShown.refusal ?? null} needsBaton={remoteShown.needsBaton === true && !remoteShown.driving} driver={remoteShown.driver} onTakeControl={remoteShown.onTakeControl} onDismiss={() => remoteShown.onDismissRefusal?.()} />
@@ -865,12 +867,8 @@ export function Shell({
                         <Dashboard
                             pulsing={pulsingWorkspaces}
                             rowEmoji={rowEmoji}
-                            rateLimits={rateLimits}
                             accounts={accounts}
                             onSwitchAccount={onSwitchAccount}
-                            onDismissSwitchOffer={onDismissSwitchOffer}
-                            onDesignSignIn={onDesignSignIn}
-                            now={now}
                             mailSignals={mailSignals}
                             rows={snapshot.agents}
                             // Genie's own row, its group first (the design mockup).

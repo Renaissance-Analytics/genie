@@ -15,6 +15,7 @@ import type { SwitchOffer } from '../src/core/switch-offer.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { Dashboard, RateLimitPills } from '../src/renderer/components/Dashboard.js';
+import { TitleBar } from '../src/renderer/components/TitleBar.js';
 import { control } from './helpers/control-markup.js';
 
 /**
@@ -140,13 +141,16 @@ describe('S10: the offer on the agent row, and every action a react-fancy Button
         collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null,
     };
     const html = () => renderToStaticMarkup(<Dashboard rows={[base, { ...base, id: 'c1', name: 'tern', provider: 'codex' }]} workspaces={[{ id: 'w', path: '/w/w' }]}
-        onOpenAgent={() => {}} onAddAgent={() => {}} accounts={SNAPSHOT([OFFER])} onSwitchAccount={() => {}} now={NOW} />);
+        onOpenAgent={() => {}} onAddAgent={() => {}} accounts={SNAPSHOT([OFFER])} onSwitchAccount={() => {}} />);
+    // The chip is in Genie's title bar (Tynn #949), not the Dashboard header.
+    const bar = () => renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'AlphaR', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} platform="generic"
+        accountPills={{ limits: {}, accounts: SNAPSHOT([OFFER]), onSwitchAccount: () => {}, now: NOW }} />);
     it('the provider\'s agent rows carry the offer as one button; another provider\'s row does not', () => {
         expect(control(html(), `data-switch-offer-row="${OFFER.id}"`)).toMatchObject({ tag: 'button', fancy: true });
         expect(html().split(`data-switch-offer-row="${OFFER.id}"`)).toHaveLength(2);
     });
     it('the chip is a react-fancy Button, and AccountsChip draws no raw <button>', () => {
-        expect(control(html(), 'data-account-chip="claude"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(bar(), 'data-account-chip="claude"')).toMatchObject({ tag: 'button', fancy: true });
         const chipSource = source('src/renderer/components/AccountsChip.tsx');
         expect(chipSource).not.toMatch(/<button\b/);
         for (const c of ['Popover', 'Progress', 'Avatar', 'Badge', 'Callout', 'Button']) expect(chipSource).toMatch(new RegExp(`import \\{[^}]*\\b${c}\\b[^}]*\\} from '@particle-academy/react-fancy'`));

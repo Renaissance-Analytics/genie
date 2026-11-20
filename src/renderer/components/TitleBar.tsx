@@ -13,13 +13,14 @@ import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 import type { DndHeaderView } from '../../core/dnd-header.js';
 import { FlowPills, type FlowPillsProps } from './FlowPills.js';
+import { RateLimitPills, type RateLimitPillsProps } from './Dashboard.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
  *
  * Left to right: the brand mark, `Genie`, the Command Window's search icon, the four feature icons and the system
- * icons, **the current route**, the running flows, and (at the right end) the remote badge, the update and the
- * workstation chip.
+ * icons, **the current route**, the running flows, and (at the right end) the remote badge, the update, the account
+ * pills and the workstation chip.
  *
  * ## Why the route is in the chrome
  *
@@ -111,6 +112,12 @@ export interface TitleBarProps {
      * only that workspace's flows show. Absent = no pills.
      */
     flows?: FlowPillsProps | undefined;
+    /**
+     * THE ACCOUNT PILLS (Tynn #949; the owner: "the account pills are supposed to be in the genie header, not the dashboard
+     * header"): a pill per provider (its account, usage and reset, and the popover with Use another account), at the right
+     * beside the workstation name, so they are on every view. A workspace-share window has none. Absent = no pills.
+     */
+    accountPills?: RateLimitPillsProps | undefined;
     connect?: {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
@@ -144,7 +151,7 @@ export function TitleBar(props: TitleBarProps) {
     // A workspace window (Tynn #690) carries none of the workstation's controls, whatever it was handed.
     const scopedHome = props.scopedHome;
     const { route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, onOpenUpdate, paletteKey, workspace, flows } = props;
-    const { update, version, inbox, connect, gapps, share, dnd } = scopedHome ? { update: null, version: null, inbox: undefined, connect: undefined, gapps: undefined, share: undefined, dnd: undefined } : props;
+    const { update, version, inbox, connect, gapps, share, dnd, accountPills } = scopedHome ? { update: null, version: null, inbox: undefined, connect: undefined, gapps: undefined, share: undefined, dnd: undefined, accountPills: undefined } : props;
     const [storeOpen, setStoreOpen] = useState(false);
     // The write is in flight until the host's next snapshot redraws the state: the button shows it is working meanwhile.
     const [dndPending, setDndPending] = useState(false);
@@ -417,6 +424,12 @@ export function TitleBar(props: TitleBarProps) {
                         {update.label}
                     </span>
                 )
+            ) : null}
+            {/* THE ACCOUNT PILLS (Tynn #949), beside the workstation name. no-drag: in the bar's drag region a click is the OS's. */}
+            {accountPills ? (
+                <div data-title-account-pills="" className="[-webkit-app-region:no-drag] flex shrink-0 items-center">
+                    <RateLimitPills {...accountPills} />
+                </div>
             ) : null}
             {workstation && !scopedHome ? (
                 <div
