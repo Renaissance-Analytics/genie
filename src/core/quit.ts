@@ -163,8 +163,6 @@ export interface QuitPorts {
     stopAgents(): void;
     /** What this window process runs, and what it drives in the host (the supervised processes). */
     closeWindow(): void;
-    /** Every terminal ended (§7.1). */
-    closeTerminals(): void;
     /** The stops' writes landed (SessionHost.drained), bounded by the caller. */
     drained(): Promise<unknown>;
     /** The host ended gracefully (`engine.shutdown`). */
@@ -172,13 +170,14 @@ export interface QuitPorts {
 }
 
 /**
- * SHUT DOWN EVERYTHING: the graceful stop it always was — agents first, then this window's work and the terminals, the
- * writes drained, and only then the host ended (a drain that fails still ends it, so a quit is never left half done).
+ * SHUT DOWN EVERYTHING: the graceful stop it always was — agents first, then this window's work, the writes drained, and
+ * only then the host ended, which ends its terminals too (a drain that fails still ends it, so a quit is never left half
+ * done).
  */
 export async function runQuit(ports: QuitPorts, options: { readonly drainMs?: number } = {}): Promise<void> {
     ports.stopAgents();
     ports.closeWindow();
-    ports.closeTerminals();
+    // The terminals are genie-host's: it ends them in its own shutdown, below (§7.1; Tynn #953, 2g-2).
     // The drain is bounded HERE, never by a race around the whole quit: that race once spent its bound on a slow drain and
     // the window exited before the host was told to end (ss-repeat5, 2026-11-05). The host's end has its own bound.
     let bound: ReturnType<typeof setTimeout> | undefined;

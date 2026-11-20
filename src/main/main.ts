@@ -110,7 +110,7 @@ import { needsYouCount, type DeckItem } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
-import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
+import { trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
 import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { panelRestart } from '../core/panel-restart.js';
 import { LeftRunningMark } from './left-running.js';
@@ -124,7 +124,6 @@ import { ensurePhpCaBundle, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, proce
 import { nodeLinkFs, restoreDefaultsEnv } from './toolchain-defaults.js';
 import { runElevatedBatch, type PrivilegedStep } from './elevate.js';
 import { nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
-import { ProcessScheduler } from './process-scheduler.js';
 import { osPidAlive } from './process-supervisor.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView, followFrontDoorInPanes } from './electron-browser-view.js';
@@ -156,8 +155,8 @@ import { gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { withActionSignal } from './mcp-signal.js';
 import type { Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
-import type { TerminalsApi } from './terminals-host.js';
-import type { ProcessBookApi } from './processes-host.js';
+import type { TerminalsPort } from './mcp-tools-more.js';
+import { EMPTY_HOST_SUMMARY, type HostSummary } from '../core/host-summary.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { watchRegistryRefresh } from './registry-refresh.js';
@@ -179,8 +178,6 @@ import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
-import { nodeSaveGit, workspaceSaveOps, type WorkspaceSaveOps } from './workspace-save-host.js';
-import { elementSourcesFor } from './workspace-save-sources.js';
 import { installContextMenu, type MenuWebContents } from './context-menu.js';
 import { nestGoverned } from '../core/rail-view.js';
 import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
@@ -389,13 +386,13 @@ function hostActivityNow(): HostActivity {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).length;
-    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
+    return { agents, terminals: hostSummaryNow.terminals.length, processes, services: servicesUp, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
 }
 
-/** What waits on the host's clock, from the host's own lists (core/tray-only.ts). With no host, nothing here outlives the window. */
+/** What waits on the host's clock, from genie-host's summary (core/tray-only.ts's rule). With no host, nothing outlives the window. */
 function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
     if (agentEngineLink?.live !== true) return { armedFlows: 0, scheduledTasks: 0 };
-    return onTheClock(agentEngineLink.client.flows().list(), agentEngineLink.client.processBook().kept());
+    return { armedFlows: hostSummaryNow.armedFlows.length, scheduledTasks: hostSummaryNow.scheduledTasks.length };
 }
 
 /**
@@ -424,7 +421,7 @@ function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : [];
     const workspaces = registry?.snapshot().workspaces ?? [];
     const seen = new Map<string, number>();
-    const terminalsOpen = (terminals?.list() ?? []).map((t) => {
+    const terminalsOpen = hostSummaryNow.terminals.map((t) => {
         const n = (seen.get(t.workspaceId) ?? 0) + 1;
         seen.set(t.workspaceId, n);
         const ws = workspaces.find((w) => w.id === t.workspaceId);
@@ -433,8 +430,8 @@ function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);
     const sites = (services?.routes() ?? []).map((r) => r.host);
-    const clockFlows = agentEngineLink?.live === true ? agentEngineLink.client.flows().list().filter((f) => f.armed).map((f) => f.name) : [];
-    const clockTasks = agentEngineLink?.live === true ? agentEngineLink.client.processBook().kept().filter((p) => p.wanted && p.schedule).map((p) => p.name) : [];
+    const clockFlows = agentEngineLink?.live === true ? [...hostSummaryNow.armedFlows] : [];
+    const clockTasks = agentEngineLink?.live === true ? [...hostSummaryNow.scheduledTasks] : [];
     return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
 }
 
@@ -514,7 +511,6 @@ let registry: Registry | null = null;
 /** Each workspace's colour (genie#1300): read from and written to its project.json. */
 let workspaceColors: WorkspaceColors | null = null;
 /** Save to repo (Tynn #756): this workspace's project.json and repo files, saved against upstream. */
-let workspaceSaver: WorkspaceSaveOps | null = null;
 const NO_OFFERS = { ok: false as const, reason: 'Genie’s host is not running, so nothing is watching the repo' };
 /**
  * ISSUEWATCH (Tynn #806; the host split, P5c): genie-host hears Tynn and holds the state — the latest entry per project,
@@ -589,7 +585,11 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const projectId = tynnProjectFor(workspaceId);
     return issueWatchNow?.summaryFor(projectId) ?? { state: 'stopped', linked: projectId !== null };
 }
-let terminals: TerminalsApi | null = null;
+/**
+ * WHAT GENIE-HOST RUNS, AS IT LAST SAID (Tynn #953, 2g-2): its live terminals, armed flows and scheduled tasks, kept by
+ * main's own client (summary.watch). The tray's count, its Restart/Shut-down list and the quit plan read it synchronously.
+ */
+let hostSummaryNow: HostSummary = EMPTY_HOST_SUMMARY;
 /**
  * MAIN'S OWN PROTOCOL CLIENT (Tynn #896, 2b-2b): what main itself asks of the host (the tray's Log in and Claude Design
  * login) is a protocol call answered by genie-host, one connection per call, tunnelled over the engine link like the
@@ -1234,9 +1234,6 @@ async function boot(): Promise<void> {
     // without a colour (one just added), and at most every 5 s otherwise, so an agent's edit of the colour is picked up.
     const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
     workspaceColors = colors;
-    workspaceSaver = workspaceSaveOps({ fs: nodeEnvelopeFs(), git: nodeSaveGit(), pathOf: (id) => theRegistry.workspace(id)?.path ?? null, mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true,
-        // What a save declares: this workspace's engines, its own settings and its agents' IssueWatch, read when the dialog asks.
-        elements: (id) => elementSourcesFor({ services: { list: () => services?.engines.list() ?? [] }, settings: { workspaceValues: (w) => services?.settings.workspaceValues(w) ?? {} }, registry: theRegistry, flows: { list: (w) => services?.flows.list(w) ?? [] }, processes: { kept: () => agentEngineLink?.client.processBook().kept() ?? [] } }, id) });
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
     let colorPassAt = 0;
     let colorPassQueued = false;
@@ -1547,7 +1544,6 @@ async function boot(): Promise<void> {
     // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
     // the open ones a previous window left running are taken back with what they printed.
     // THE TERMINALS ARE GENIE-HOST'S (P3.3e): their shells and scrollback outlive this window; it drives them by replica.
-    terminals = agentEngineLink.client.terminals();
     // SCROLLBACK IS NOT SAVED (the owner, 2026-11-02): what an older Genie left is deleted, and nothing writes it again.
     await removeSavedScrollback(genieRoot(), lifecycleLog);
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
@@ -1759,8 +1755,6 @@ async function boot(): Promise<void> {
     // THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6, process-book.ts): opened once the services are composed;
     // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
     // genie-host's when it runs (P3.3c): the book and its scheduler there, this window's replica here.
-    let processBook: ProcessBookApi | null = null;
-    let processScheduler: Pick<ProcessScheduler, 'runNow'> | null = null;
     // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
     // The Tynn this Genie uses: Help → Genie documentation opens its docs (Tynn #762).
     const tynnHost = (): string => TYNN_HOST;
@@ -1926,6 +1920,8 @@ async function boot(): Promise<void> {
     // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
     // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
     tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client));
+    // What genie-host runs, as the tray and the quit read it, kept as it changes (Tynn #953, 2g-2).
+    ownProtocol.watchSummary((summary) => { hostSummaryNow = summary; refreshTray(); });
     windowTunnelNow = windowTunnel;
     // Browser/UI facts this window owns: its pane and its notice are said down the tunnel, where genie-host reads its
     // features again (genie-host's own sources invalidate them too: its Tynn and GitHub accounts, its relay role, …).
@@ -2073,14 +2069,9 @@ async function boot(): Promise<void> {
         if (site) showToPerson({ activation: 'background', workspaceId: site.workspaceId, reason: 'sites open' });
         return r;
     };
-    // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
-    // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
-    {
-        // THE PROCESS BOOK AND ITS SCHEDULER ARE GENIE-HOST'S (P3.3c): what the person keeps running is restored there, and a
-        // scheduled task fires on its clock, with or without this window. This window lists and manages them by replica.
-        processBook = agentEngineLink.client.processBook();
-        processScheduler = agentEngineLink.client.processBook();
-    }
+    // THE PROCESS BOOK AND ITS SCHEDULER ARE GENIE-HOST'S (P3.3c): what the person keeps running is restored there, and a
+    // scheduled task fires on its clock, with or without this window. Every window manages them over the protocol; this
+    // process reads only what its tray says (hostSummaryNow, Tynn #953).
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
     // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.
     updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel));
@@ -2134,15 +2125,9 @@ async function boot(): Promise<void> {
             reportPlan: (agentId, steps) => host?.reportPlan(agentId as AgentId, steps) ?? false,
             // ...and read back from the agent's record, where every plan is kept across restarts (identity.ts `plan`).
             readPlan: (agentId) => registry?.find(agentId as AgentId)?.plan ?? null,
-            terminals: {
-                list: () => terminals!.list(),
-                open: (options) => terminals!.open(options),
-                write: (id, data) => terminals!.write(id, data),
-                scrollback: (id) => terminals!.scrollback(id),
-                finished: (id) => terminals!.finished(id),
-                // fancy-term-host's SCROLLBACK_MAX (1e6 characters): a buffer at the cap has been cut, and `manageTerminals` reads report `dropped`.
-                scrollbackCap: 1_000_000,
-            },
+            // manageTerminals, processes and flows are genie-host's own tools, never run here (mcp-host-tools.ts HOST_NATIVE_TOOLS;
+            // Tynn #953): their stores are the host's, said so if anything here ever asks.
+            terminals: hostOnly<TerminalsPort>('the terminals'),
             // An agent's terminal gets the env the Terminals tab gives the person's (service engines + Genie's endpoint).
             terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
             // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
@@ -2152,10 +2137,6 @@ async function boot(): Promise<void> {
             openInBrowser: agentOpensSite,
             // …and `sites` / `services` act only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
             workspaceTrusted: (workspaceId) => !composed.untrustedNow({ workspaceId }),
-            // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
-            ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines), ...(processScheduler ? { runNow: (id: string) => processScheduler!.runNow(id) } : {}) } } : {}),
-            // The agents' `flows` tool: the Flows tab's own store, and the scheduler's Run now (the tool runs only armed flows).
-            flows: { store: composed.flows, runNow: (id: string, by?: import('./flow-store.js').Actor) => composed.flowScheduler.runNow(id, by), stopRun: (id, by) => composed.flowScheduler.stopRun(id, by), approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call) },
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
             // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window.
@@ -2686,7 +2667,7 @@ app.on('before-quit', (event) => {
             // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
             // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
             const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
+            return quitPlan({ runningAgents: running, liveTerminals: hostSummaryNow.terminals.length, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
         },
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
@@ -2746,9 +2727,6 @@ const quitPorts: QuitPorts = {
         filesWatch?.close();
         clearGenieRunning(genieRoot());
     },
-    // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
-    // OpenConsole.exe processes with no message, because nothing reaped them.
-    closeTerminals: () => { terminals?.closeAll(); },
     drained: () => host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve(),
     // With the agent host (the host split): its sessions' writes drained, then the host itself ended gracefully.
     shutDownHost: () => agentEngineLink?.shutdown(QUIT_WRITES_MS) ?? Promise.resolve(),

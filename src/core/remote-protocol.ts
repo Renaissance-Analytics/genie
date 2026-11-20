@@ -223,7 +223,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
  * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -243,7 +243,9 @@ export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activit
     // A window's channels to another machine (Tynn #941, 2f-2): sent to the owning connection alone (RemoteHost eventTo).
     device: 'local-device',
     // The host's Deck, to a connection that said deck.watch (main's question window and tray, Tynn #941), when it changes.
-    deck: 'local-deck' } as const;
+    deck: 'local-deck',
+    // What genie-host runs (core/host-summary.ts), to a connection that said summary.watch (main's tray and quit, Tynn #953).
+    summary: 'local-summary' } as const;
 
 /** What another window on an agent is typing (Tynn #730), to a remote connection; this machine's windows hear LOCAL_EVENTS.typing. */
 export const TYPING_EVENT = 'agent-typing';

@@ -143,6 +143,8 @@ export interface HostAlonePorts {
     readonly hostShell?: HostApiDeps['hostShell'];
     /** A window's transport to another machine (Tynn #941, 2f-2). Absent = this Genie connects to none. */
     readonly deviceLinkProtocol?: HostApiDeps['deviceLinkProtocol'];
+    /** What this host runs, for this machine's tray and quit (Tynn #953, 2g-2). Absent = nothing said. */
+    readonly hostSummary?: HostApiDeps['hostSummary'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -291,6 +293,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.questions ? { questions: ports.questions } : {}),
         ...(ports.hostShell ? { hostShell: ports.hostShell } : {}),
         ...(ports.deviceLinkProtocol ? { deviceLinkProtocol: ports.deviceLinkProtocol } : {}),
+        ...(ports.hostSummary ? { hostSummary: ports.hostSummary } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

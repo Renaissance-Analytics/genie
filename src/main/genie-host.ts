@@ -111,6 +111,7 @@ import { NO_BROWSER_HERE, NO_UPDATES_HERE, hostCapabilities } from '../core/host
 import { fts5Refusal } from './fts5-check.js';
 import { restrictHostPipe } from './host-pipe-acl.js';
 import { onTheClock } from '../core/tray-only.js';
+import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
 import { FlowStore } from './flow-store.js';
@@ -672,6 +673,18 @@ async function main(): Promise<void> {
     // The book as the host's own `processes` tool reads and drives it: the service's list, its actions in place.
     const hostBook = new ProcessBookReplica((method, args) => processesService.call(method, args));
     processesService.onEvent((dump) => hostBook.rebase(dump));
+    /*
+     * WHAT THIS HOST RUNS, AS THIS MACHINE'S TRAY AND QUIT READ IT (Tynn #953, 2g-2): its live terminals, armed flows and
+     * scheduled tasks, said to main's own client (summary.watch) when any of them changes. Read after the replicas above
+     * took each change (their listeners come first).
+     */
+    const hostSummary = hostSummaryFeed({
+        read: () => hostSummaryOf(terminalHost.list(), hostFlows.list(), hostBook.kept()),
+        onChange: (listener) => {
+            const offs = [terminalHost.onChange(listener), flowsService.onEvent(() => listener()), processesService.onEvent(() => listener())];
+            return () => { for (const off of offs) off(); };
+        },
+    });
     const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
     const tynnOpening = proxyMemory.then((memory) => TynnAccount.open(hostTynnPorts({
         file: join(home, 'credentials', 'tynn.json'),
@@ -1867,6 +1880,8 @@ async function main(): Promise<void> {
         hostShell: hostShellFor({ absolute: (ws, path) => phoneFiles.absolute(ws, path), windowOp: (op, args) => (engineRef ? engineRef.windowOp(null, op, args) : Promise.reject(new Error('Genie is still starting; try again in a moment'))), hostName: () => hostname() }),
         // A remote window's transport to another machine, owned by its connection (Tynn #941, 2f-2).
         deviceLinkProtocol: deviceProtocol,
+        // What this host runs, for this machine's tray and quit (Tynn #953, 2g-2).
+        hostSummary,
         providerPrograms: hostProviderPrograms({
             file: () => providerChoiceFile(),
             refresh: (provider) => { void providerHealth.refresh(provider); },
@@ -2400,6 +2415,9 @@ async function main(): Promise<void> {
             // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
             // host nobody wants.
             await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
+            // ITS TERMINALS (§7.1: nothing Genie spawned outlives it; Tynn #953): this host holds them, so it ends them, never
+            // a window asking for it first. An upgrade once jammed on 31 orphaned OpenConsole.exe processes.
+            terminalHost.closeAll();
             files?.close();
             issueWatch.stop();
             await mcp?.stop();
