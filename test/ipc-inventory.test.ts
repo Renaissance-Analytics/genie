@@ -115,7 +115,7 @@ describe('P4 IPC inventory', () => {
         expect(ratchet([['genie:new-host-thing', 'move:2b']], []).joined).toEqual(['genie:new-host-thing']);
         expect(ratchet([['genie:relay-open', 'move:2c']], []).joined).toEqual(['genie:relay-open']);
         // The frozen list is empty now that 2f is done: the re-label check is shown on one like it was.
-        expect(ratchet([['genie:relay-open', 'window:pop-out']], ['genie:relay-open'], { 'genie:relay-open': '2f' }).relabelled).toEqual(['genie:relay-open']);
+        expect(ratchet([['genie:frozen-example', 'window:pop-out']], ['genie:frozen-example'], { 'genie:frozen-example': '2g' }).relabelled).toEqual(['genie:frozen-example']);
         // A frozen channel whose handler is gone needs no row (the stale check removes it): the list shrinks.
         expect(ratchet([], [])).toEqual({ joined: [], relabelled: [] });
     });
