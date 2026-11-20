@@ -75,11 +75,11 @@ describe('the process supervisor is genie-host\'s (P3.3b)', () => {
 });
 
 describe('the process book and its scheduler are genie-host\'s (P3.3c)', () => {
-    it('the host opens the book and runs the scheduler; a window with a host uses the replica, its own only on the emergency path', () => {
+    it('the host opens the book and runs the scheduler; the window holds no replica of it (Tynn #953, 2g-2)', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/await ProcessBook\.open\(home,/);
         expect(host).toMatch(/new ProcessScheduler\(\{/);
-        expect(code('src/main/main.ts')).toMatch(/processBook = agentEngineLink\.client\.processBook\(\);/);
+        expect(code('src/main/main.ts')).not.toMatch(/client\.processBook\(\)/);
     });
 });
 
@@ -94,11 +94,11 @@ describe('flows are genie-host\'s (P3.3d)', () => {
 });
 
 describe('the terminals are genie-host\'s (P3.3e)', () => {
-    it('the host runs them on its own `terminals` child; no window sends into it; a window with a host drives them by replica', () => {
+    it('the host runs them on its own `terminals` child; no window sends into it; main holds no replica (Tynn #953, 2g-2)', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/new TerminalHost\(terminalsClient\.ptyPort\(\)/);
         expect(host).toMatch(/send: \(profile, frame\) => \{ if \(profile === 'processes'\) relay\?\.send\('processes', frame\); \}/);
-        expect(code('src/main/main.ts')).toMatch(/terminals = agentEngineLink\.client\.terminals\(\);/);
+        expect(code('src/main/main.ts')).not.toMatch(/client\.terminals\(\)/);
     });
 });
 

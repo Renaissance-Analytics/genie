@@ -425,7 +425,8 @@ function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
         const n = (seen.get(t.workspaceId) ?? 0) + 1;
         seen.set(t.workspaceId, n);
         const ws = workspaces.find((w) => w.id === t.workspaceId);
-        return { name: `${ws ? basename(ws.path) : t.workspaceId} · terminal ${n}`, busy: terminalBusy(t.pid, table) };
+        // A terminal whose pid has not come in yet runs no command it could be busy with.
+        return { name: `${ws ? basename(ws.path) : t.workspaceId} · terminal ${n}`, busy: t.pid !== null && terminalBusy(t.pid, table) };
     });
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);

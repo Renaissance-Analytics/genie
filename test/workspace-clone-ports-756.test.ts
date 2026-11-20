@@ -127,8 +127,9 @@ describe('in the hosts', () => {
         for (const word of ['watchNewWorkspaces(', 'restoreClone(', 'cloneRestorePorts(']) expect(host, word).toContain(word);
     });
 
-    it('both hosts hand the flow store and the process book to Save to repo', () => {
-        for (const file of ['src/main/main.ts', 'src/main/genie-host.ts']) {
+    it('genie-host hands the flow store and the process book to Save to repo (main builds no save of its own, Tynn #953)', () => {
+        expect(src('src/main/main.ts')).not.toContain('elementSourcesFor(');
+        for (const file of ['src/main/genie-host.ts']) {
             const text = src(file);
             const at = text.indexOf('elementSourcesFor(');
             const call = text.slice(at, at + 900);
