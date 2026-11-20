@@ -346,11 +346,11 @@ describe('the wiring', () => {
         expect(host).toMatch(/takeOverCaller: \(id\) => takeOverHost\.callerFor\(id\)/);
     });
 
-    it('the window starts no Take Over: genie-host asks it to open the window (Tynn #896), and only its deck reads the replica', () => {
+    it('the window starts no Take Over: genie-host asks it to open the window (Tynn #896), and reads no replica of it (Tynn #941)', () => {
         const main = src('src/main/main.ts');
         expect(main).not.toMatch(/takeOvers\??\.start\(/);
         expect(main).toMatch(/openTerminalWindow: \(route\) => openTakeOverWindow\(route, 'user-gesture'\)/);
-        expect(main).toContain('agentEngineLink.client.takeOvers()');
+        expect(main).not.toContain('agentEngineLink.client.takeOvers()');
     });
 
     it('the tools\' caller is found with no window having told the host', () => {

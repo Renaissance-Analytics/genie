@@ -160,7 +160,10 @@ describe('3. a refusal on a drone says it is a drone — the role read again fro
         const ops = strip(readFileSync(new URL('../src/main/host-owner-ops.ts', import.meta.url), 'utf8'));
         expect(ops).toMatch(/const rereadRole = async \(\): Promise<WorkstationRole \| null> => \{ await tynn\.readRole\(\); return tynn\.role\(\); \};/);
         const list = /workstations: async \(\) => \{([^]*?)\n {12}\},/.exec(ops)?.[1] ?? '';
-        const open = /ipcMain\.handle\('genie:relay-open'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
+        // The grant is genie-host's device protocol's since 2f-2 (Tynn #941): Tynn's refusal worded from a role read again.
+        const host = strip(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8'));
+        const open = /wordTynnRefusal: \(refusal\) => ([^\n]*)/.exec(host)?.[1] ?? '';
+        expect(main).not.toContain("'genie:relay-open'");
         for (const handler of [list, open]) {
             expect(handler).toContain('wordTynnRefusal(');
             expect(handler).toContain('rereadRole');

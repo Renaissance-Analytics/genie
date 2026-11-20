@@ -144,11 +144,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // count, the Restart/Shut-down list, the quit plan and quit's closeAll. Those read it synchronously, so they move
         // with the replica in 2g, never as a second copy beside it.
         terminals: '2g',
-        // 2f-2 (#941): the device link's frames. The question window's answers moved in 2f-1 (#912).
-        deviceLink: '2f',
-        // Re-labelled from 2b by the coordinator (2026-11-19): main's deck liveness until the question window and the tray
-        // badge read the host's deck. Take Over moved in 2b-1.
-        takeOvers: '2f',
+        // 2f is done: the question window's answers moved in 2f-1 (#912); the device link's frames and main's Deck liveness
+        // (takeOvers: the question window and the tray read genie-host's Deck) in 2f-2 (#941).
         // 2g (#913): the services the window still composes over genie-host's replicas.
         appInbox: '2g', catalog: '2g', flows: '2g', github: '2g', hosting: '2g', keyring: '2g', plugins: '2g', processBook: '2g',
         recordsChanged: '2g', relayHost: '2g', remoteAccess: '2g', stores: '2g', supervisor: '2g', tynn: '2g', tynnPage: '2g',

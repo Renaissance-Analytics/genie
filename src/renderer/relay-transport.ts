@@ -110,3 +110,6 @@ export function watchTynnSignIn(
     void features.snapshot().then(see, () => {});
     return () => { stopped = true; off(); };
 }
+
+/** Stub (2f-2 RED): the channel transport over the window's own session. */
+export function channelTransport(_net: TynnNetworkBridge, _channel: string): RelayClientTransport { throw new Error('2f-2: not built yet'); }

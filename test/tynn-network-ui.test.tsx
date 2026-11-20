@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../src/core/remote-window.js';
 import { remoteUrl } from '../src/renderer/remote-session.js';
-import { ipcRelayTransport, type TynnNetworkBridge } from '../src/renderer/relay-transport.js';
+import { channelTransport, type TynnNetworkBridge } from '../src/renderer/relay-transport.js';
 import { ConnectRemote } from '../src/renderer/components/FeatureSurfaces.js';
 
 /**
@@ -47,10 +47,10 @@ function fakeNet() {
     return { net, sent, closed, message: (c: string, t: string) => { for (const l of messages) l(c, t); }, close: (c: string, r: string | null) => { for (const l of closes) l(c, r); } };
 }
 
-describe('ipcRelayTransport — the window’s end of main’s relay connection', () => {
+describe('channelTransport — the window’s end of genie-host’s connection to another machine (over its own session, Tynn #941)', () => {
     it('sends and receives on ITS channel only', () => {
         const f = fakeNet();
-        const t = ipcRelayTransport(f.net, 'c1');
+        const t = channelTransport(f.net, 'c1');
         const got: string[] = [];
         t.onMessage((m) => got.push(m));
         t.send('{"kind":"hello"}');
@@ -62,7 +62,7 @@ describe('ipcRelayTransport — the window’s end of main’s relay connection'
 
     it('closed by main: once, with the reason; closed here: main is told', () => {
         const f = fakeNet();
-        const t = ipcRelayTransport(f.net, 'c1');
+        const t = channelTransport(f.net, 'c1');
         let closes = 0;
         t.onClose(() => closes++);
         f.close('c2', 'not mine');
@@ -71,7 +71,7 @@ describe('ipcRelayTransport — the window’s end of main’s relay connection'
         f.close('c1', 'again');
         expect(closes).toBe(1);
         expect(t.closedBecause()).toBe('grant is no longer active');
-        const u = ipcRelayTransport(f.net, 'c3');
+        const u = channelTransport(f.net, 'c3');
         u.close();
         expect(f.closed).toEqual(['c3']);
     });

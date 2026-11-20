@@ -46,12 +46,13 @@ describe('offline is known as offline', () => {
         expect(opened).toMatchObject({ ok: false, offline: true });
     });
 
-    it('main says which step failed, and tells the window when Tynn gave the way in', () => {
-        const handler = /ipcMain\.handle\('genie:relay-open'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
-        expect(handler).toMatch(/stage: 'tynn'/);
-        expect(handler).toContain("'genie:relay-open-step'");
-        // genie-host mints and says the step (test/relay-member-link.test.ts).
-        expect(handler).not.toMatch(/mintConnectGrant\(/);
+    it('genie-host says which step failed, and tells the window when Tynn gave the way in (Tynn #941, 2f-2)', () => {
+        // The window's open is genie-host's device protocol over the window's own connection; the step is its `local-device`
+        // event (device-link-service.ts sends it, test/relay-member-link.test.ts). main says neither.
+        const protocol = readFileSync(new URL('../src/main/device-link-protocol.ts', import.meta.url), 'utf8');
+        expect(protocol).toMatch(/stage: 'tynn'/);
+        expect(protocol).not.toMatch(/mintConnectGrant\(/);
+        expect(main).not.toContain("'genie:relay-open-step'");
     });
 });
 

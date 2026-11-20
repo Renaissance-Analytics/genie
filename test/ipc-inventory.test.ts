@@ -97,11 +97,9 @@ describe('P4 IPC inventory', () => {
      * it, and a row on it cannot be re-labelled a window capability while its handler is still registered.
      */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2f-1 (#912) moved the question window's answers and reads; host-wait:act was re-labelled window:host-wait by the
-        // coordinator (2026-11-19): shown only while genie-host does not answer, a dead host cannot serve its own restart.
-        // 2f-2 (#941): the device/relay frame path and the relay browser open.
-        'genie:device-open': '2f', 'genie:relay-open': '2f', 'genie:relay-send': '2f', 'genie:relay-close': '2f',
-        'genie:browser-window-open': '2f',
+        // 2f is done: 2f-1 (#912) moved the question window's answers and reads, and host-wait:act was re-labelled
+        // window:host-wait (the coordinator, 2026-11-19); 2f-2 (#941) moved the device/relay frame path, and the browser
+        // opener kept only this machine's own browser (window:feature-effect).
     };
     const moveRows = (rows: readonly (readonly [string, string])[]) => rows.filter(([, d]) => d.startsWith('move:')).map(([c, d]) => [c, d.slice('move:'.length)] as const);
     const ratchet = (rows: readonly (readonly [string, string])[], registeredNow: readonly string[]) => ({
@@ -150,11 +148,11 @@ describe('P4 IPC inventory', () => {
             expect(rowsFor('doctor-process').sort()).toEqual([...doctorFile].sort());
         });
 
-        it('the site panels are the window\'s site-panel capability; the window\'s opener moves in 2f (its relay mode)', () => {
+        it('the site panels are the window\'s site-panel capability; the window\'s opener is its own browser only since 2f-2', () => {
             const panels = channels(readFileSync(src('site-panels-electron.ts'), 'utf8'), 'site-panels-electron.ts');
             expect(panels.length).toBeGreaterThan(0);
             expect(panels.filter((channel) => !rowsFor('window:site-panel').includes(channel))).toEqual([]);
-            expect(rowsFor('move:2f')).toContain('genie:browser-window-open');
+            expect(rowsFor('window:feature-effect')).toContain('genie:browser-window-open');
         });
     });
 

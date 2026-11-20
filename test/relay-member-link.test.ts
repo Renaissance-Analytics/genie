@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DeviceLinkReplica } from '../src/main/device-link-replica.js';
 import { DeviceLinkService, type DeviceLinkEvent, type RelayMemberPorts } from '../src/main/device-link-service.js';
 import { genieCatalog, RELAY_MEMBER_ELEMENT } from '../src/main/genie-catalog.js';
 import type { RelayMemberTransport } from '../src/main/relay-member.js';
@@ -126,34 +125,10 @@ describe('the relay member, in genie-host', () => {
     });
 });
 
-describe('the window\'s replica', () => {
-    it('opens a relay channel through the host, hears its step, keeps the door\'s port and CA as the host says, and ends it on a lost link', async () => {
-        const calls: Array<[string, readonly unknown[]]> = [];
-        const replica = new DeviceLinkReplica(async (method, args) => {
-            calls.push([method, args]);
-            if (method === 'openRelay') { replica.deliver({ type: 'step', workstationId: 'ws_alpha', step: 'relay' }); return { ok: true, channel: 'relay_1' }; }
-            if (method === 'browserVia') return { ok: true, port: 47001, ca: null };
-            return true;
-        });
-        const steps: string[] = [];
-        replica.onStep((workstationId, step) => steps.push(`${workstationId} ${step}`));
-        expect(await replica.openRelay('ws_alpha')).toEqual({ ok: true, channel: 'relay_1' });
-        expect(steps).toEqual(['ws_alpha relay']);
-        const via = await replica.browserVia('relay_1');
-        expect(via && [via.port(), via.ca()]).toEqual([47001, null]);
-        replica.deliver({ type: 'via', channel: 'relay_1', port: 47002, ca: 'PEM' });
-        expect(via && [via.port(), via.ca()]).toEqual([47002, 'PEM']);
-        const closed: string[] = [];
-        replica.onClosed((channel) => closed.push(channel));
-        replica.lost('the host went');
-        expect(closed).toEqual(['relay_1']);
-    });
-});
-
 describe('genie.relay-member in the catalog', () => {
-    it('is a host-service on both sides, linked by the engine link\'s device-link call and event', () => {
+    it('is a host-service on both sides, linked by the protocol\'s device-link methods and event (Tynn #941, 2f-2)', () => {
         expect(genieCatalog().list('host-service').find((d) => d.id === 'genie.relay-member')).toMatchObject({
-            reach: { side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.deviceLink'], events: ['device.event'] } },
+            reach: { side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['deviceLink.open', 'deviceLink.openRelay', 'deviceLink.send', 'deviceLink.close', 'deviceLink.openBrowser'], events: ['local-device'] } },
             payload: { start: 'deviceLink.openRelay', stop: 'deviceLink.close', health: 'deviceLink.relayHealth', settingsSection: 'workstation' },
         });
         expect(RELAY_MEMBER_ELEMENT.id).toBe('genie.relay-member');
@@ -169,8 +144,9 @@ describe('genie.relay-member in the catalog', () => {
 
 describe('with genie-host linked, the window mints no grant and opens no relay member (source guard)', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    it('genie:relay-open asks genie-host when linked, and the browser asks genie-host for the door', () => {
-        expect(main).toMatch(/const opened = await link\.openRelay\(workstationId\)/);
-        expect(main).toMatch(/await link\.browserVia\(/);
+    it('the window asks genie-host over its own connection; main opens no relay and asks for no door (Tynn #941, 2f-2)', () => {
+        expect(main).not.toMatch(/openRelay\(|browserVia\(/);
+        const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+        expect(host).toMatch(/const deviceProtocol = deviceLinkProtocol\(\{\s*link: deviceLinkService,/);
     });
 });

@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -127,8 +126,11 @@ describe('family5 owner methods and real recorded bridge calls', () => {
         const preload = { appInbox: { state: old, createKey: old, revokeKey: old, source: old }, deviceLink: { open, hosts: old, forget: old, adopt: old }, tynnNetwork: { open, send, close, onMessage, onClosed, onOpenStep, openLink, workstations: old, setRole: old, shares: { list: old, mint: old, revoke: old } }, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge;
         const b = pageBridge(preload); expect(pageBridge(preload)).toBe(b);
         expect(await row.call(b as Owner)).toEqual(row.value); expect(f.calls).toEqual([{ method: row.method, args: row.args }]); expect(old).not.toHaveBeenCalled();
-        expect(b.deviceLink!.open).toBe(open);
-        for (const key of ['open', 'send', 'close', 'onMessage', 'onClosed', 'onOpenStep', 'openLink'] as const) expect(b.tynnNetwork![key]).toBe(preload.tynnNetwork![key]);
+        // Since 2f-2 (Tynn #941) a channel to another machine is this window's session's, never the preload's: only the
+        // pasted link (connect-link, window:os-shell) stays native.
+        expect(b.deviceLink!.open).not.toBe(open);
+        for (const key of ['open', 'send', 'close', 'onMessage', 'onClosed', 'onOpenStep'] as const) expect(b.tynnNetwork![key]).not.toBe(preload.tynnNetwork![key]);
+        expect(b.tynnNetwork!.openLink).toBe(openLink);
     });
     it.each(rows)('pageBridge $method rejects a missing local door instead of using preload', async row => {
         vi.stubGlobal('window', {}); const old = vi.fn();
@@ -227,29 +229,25 @@ describe('native paths retired and P5/window boundaries pinned', () => {
         const script = readFileSync('scripts/device-link-cdp.mjs', 'utf8');
         expect(script).not.toContain('window.genie.deviceLink.hosts()'); expect(script.match(/window\.genieTest\.deviceLink\.hosts\(\)/g)).toHaveLength(2);
         expect(script).toContain('GENIE_PAGE_PROBE:'); expect(script).toContain('await waitForPageProbe(cdp)');
-        // Opening and channel ownership stay on their deferred native path.
-        expect(script).toContain('window.genie.deviceLink.open('); expect(script).toContain('window.genie.tynnNetwork');
+        // Opening and the channel are the page bridge's too since 2f-2 (Tynn #941): the window's own protocol session.
+        expect(script).not.toContain('window.genie.deviceLink.open('); expect(script).not.toContain('window.genie.tynnNetwork');
+        expect(script).toContain('window.genieTest.deviceLink.open('); expect(script).toContain('window.genieTest.tynnNetwork');
     });
-    // connect-link left this set in 2b-4 (Tynn #896): genie-host decides the link now, and the window only opens it.
-    it('leaves the four retained native bodies byte-identical apart from line endings', () => {
+    // The four retained native bodies left in 2f-2 (Tynn #941): a channel to another machine is the window's session's.
+    it('leaves none of the four retained native bodies', () => {
         const main = readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
-        const hashes = { 'relay-open': '98cdfeb54514ae882c367a9d2c5d0d3f23a280828c264029589ec4f226c23976', 'device-open': '4f2bd080e28c2d9e97eeca4a949dbbadc5bbc9a76cef9ef7f1d3ffae9cf40478', 'relay-send': 'f34a50135a124bcd30285701daadb10cc19c56739987bd628b95d85975645409', 'relay-close': 'cb283050ceec2132cef13da9b7bf9037ca55dded976d38189145ed4fb1c21143' };
-        for (const [channel, hash] of Object.entries(hashes)) {
-            const body = new RegExp(`^    ipcMain\\.(?:handle|on)\\('genie:${channel}'.*?^    \\}\\);`, 'ms').exec(main)?.[0];
-            expect(body, channel).toBeDefined(); expect(createHash('sha256').update(body!).digest('hex'), channel).toBe(hash);
-        }
+        for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(main, channel).not.toMatch(new RegExp(`ipcMain\\.(?:handle|on)\\('genie:${channel}'`));
     });
     it('removes all twelve native handlers, preload forwards and inventory entries', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inv = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         for (const channel of ['app-inbox-state', 'app-inbox-create-key', 'app-inbox-revoke-key', 'app-inbox-source', 'device-hosts', 'device-forget', 'device-adopt', 'tynn-workstations', 'tynn-workstation-role', 'tynn-share-links', 'tynn-share-mint', 'tynn-share-revoke']) { expect(main).not.toContain(`ipcMain.handle('genie:${channel}'`); expect(preload).not.toContain(`ipcRenderer.invoke('genie:${channel}'`); expect(inv).not.toContain(`['genie:${channel}',`); }
     });
-    it('connect links remain window ports and relay clients remain P5 with exact sender ownership', () => {
+    it('connect links remain window ports; relay clients are the protocol’s, owned by the calling connection (Tynn #941)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inv = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         expect(inv).toContain("['genie:connect-link', 'window:os-shell']"); expect(main).toContain("ipcMain.handle('genie:connect-link'"); expect(preload).toContain("ipcRenderer.invoke('genie:connect-link'");
-        for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(inv).toContain(`['genie:${channel}', 'move:2f']`);
-        expect(main).toContain("ipcMain.handle('genie:relay-open', async (event, workstationId: unknown)"); expect(main).toContain("ipcMain.handle('genie:device-open', async (event, url: unknown)");
-        expect(main.match(/deviceChannels\.get\(channel\) === event\.sender/g)).toHaveLength(2); expect(main.match(/c\.sender === event\.sender/g)).toHaveLength(1);
-        for (const event of ['relay-open-step', 'relay-message', 'relay-closed']) { expect(main).toContain(`'genie:${event}'`); expect(preload).toContain(`'genie:${event}'`); }
-        const protocol = readFileSync('src/core/remote-protocol.ts', 'utf8'); for (const event of ['local-relay-step', 'local-relay-message', 'local-relay-closed']) expect(protocol).not.toContain(event);
+        for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(inv).not.toContain(`['genie:${channel}',`);
+        for (const event of ['relay-open-step', 'relay-message', 'relay-closed']) { expect(main).not.toContain(`'genie:${event}'`); expect(preload).not.toContain(`'genie:${event}'`); }
+        // One event channel, to the owning connection alone (RemoteHost eventTo; split-2f2-relay-frames.test.ts).
+        const protocol = readFileSync('src/core/remote-protocol.ts', 'utf8'); expect(protocol).toContain("device: 'local-device'");
     });
 });
