@@ -40,18 +40,19 @@ const ops = (over: Partial<WorkspaceOpsProps> = {}): WorkspaceOpsProps => ({
     onHibernate: () => {}, onWake: () => {}, onPreviewRemove: () => {}, onConfirmRemove: () => {}, onCancelRemove: () => {},
     ...over,
 });
-const render = (o?: WorkspaceOpsProps) => renderToStaticMarkup(<Workspace workspace={{ id: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} ops={o} />);
+const render = (o?: WorkspaceOpsProps, view: 'home' | 'settings' = 'home') => renderToStaticMarkup(<Workspace view={view} workspace={{ id: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} ops={o} />);
 
 describe('the Workspace surface', () => {
-    it('without ops: no hibernate, no remove; with ops: Hibernate and Remove from Genie; asleep: a banner and Wake instead', () => {
-        const none = render();
+    // Hibernate / Wake left the bar for the workspace's Settings (Tynn #945: the bar is Terminal, Share and Clean up).
+    it('without ops: no hibernate, no remove; with ops: Remove from Genie in the bar, Hibernate on Settings; asleep: a banner and Wake instead', () => {
+        const none = render(undefined, 'settings');
         expect(none).not.toContain('data-action="hibernate"');
         expect(none).not.toContain('data-action="remove-workspace"');
-        const awake = render(ops());
+        expect(render(ops())).toContain('data-action="remove-workspace"');
+        const awake = render(ops(), 'settings');
         expect(awake).toContain('data-action="hibernate"');
-        expect(awake).toContain('data-action="remove-workspace"');
         expect(awake).not.toContain('data-asleep');
-        const asleep = render(ops({ asleep: true }));
+        const asleep = render(ops({ asleep: true }), 'settings');
         expect(asleep).toContain('data-asleep');
         expect(asleep).toMatch(/hibernating/);
         expect(asleep).toContain('data-action="wake"');

@@ -46,17 +46,20 @@ describe('the bar, drawn', () => {
         for (const c of ['shrink', 'min-w-0', 'max-w-full', 'flex-wrap']) expect(classOf(h, 'data-bar-trailing=""')).toContain(c);
     });
 
-    it('no path column: the path is the selected tab\'s tooltip', () => {
+    // The path rides in the selected tab's react-fancy Tooltip (Tynn #945: built-in tabs are icons with tooltips), pinned by
+    // hovering it in test/workspace-header-icons-945.test.tsx; a native title on top would show a second bubble.
+    it('no path column, and no native title on the selected built-in tab', () => {
         const h = bar(render(twelve));
         expect(h).not.toContain('data-header-path');
-        expect(h).toMatch(/data-workspace-tab="home"[^>]*title="\/w\/acme"|title="\/w\/acme"[^>]*data-workspace-tab="home"/);
+        expect(h).toContain('data-workspace-tab="home"');
+        expect(h).not.toMatch(/data-workspace-tab="home"[^>]*title=|title="[^"]*"[^>]*data-workspace-tab="home"/);
     });
 
     it('the actions are icons with a name: no words to wrap', () => {
         const h = bar(render(twelve));
-        const hib = h.match(/<button [^>]*data-action="hibernate"[^>]*>/)?.[0] ?? '';
-        expect(hib).toMatch(/aria-label="Hibernate"/);
-        expect(hib).toMatch(/title="Hibernate[^"]*"/);
-        expect(h).not.toMatch(/data-action="hibernate"[^>]*>(?:(?!<\/button>).)*>Hibernate</);
+        const rm = h.match(/<button [^>]*data-action="remove-workspace"[^>]*>/)?.[0] ?? '';
+        expect(rm).toMatch(/aria-label="Remove from Genie"/);
+        expect(rm).toMatch(/title="Remove from Genie[^"]*"/);
+        expect(h).not.toMatch(/data-action="remove-workspace"[^>]*>(?:(?!<\/button>).)*>Remove</);
     });
 });

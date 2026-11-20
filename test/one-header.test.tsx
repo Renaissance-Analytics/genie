@@ -76,7 +76,8 @@ describe('one bar, on top, the same in both views', () => {
         const w = ws();
         const a = av();
         for (const html of [w, a]) expect(html).not.toContain('data-header-path');
-        expect(w).toMatch(/data-workspace-tab="home"[^>]*title="[^"]*\/w\/acme"|title="[^"]*\/w\/acme"[^>]*data-workspace-tab="home"/);
+        // A built-in tab's path is in its react-fancy Tooltip (Tynn #945; hovered in workspace-header-icons-945.test.tsx).
+        expect(w).toContain('data-workspace-tab="home"');
         expect(a).toMatch(/data-workspace-tab="agent:a1"[^>]*title="[^"]*\/w\/acme\/repos\/api"|title="[^"]*\/w\/acme\/repos\/api"[^>]*data-workspace-tab="agent:a1"/);
     });
 
@@ -101,7 +102,7 @@ describe('one bar, on top, the same in both views', () => {
         }
         const w = bar(ws());
         expect(w).toContain('data-action="open-scratch-terminal"');
-        expect(w).toContain('data-action="hibernate"');
+        expect(w).toContain('data-action="remove-workspace"');
     });
 
     it('CONTROL: the workspace still draws its strip, every tab', () => {
