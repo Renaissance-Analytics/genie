@@ -387,11 +387,11 @@ describe('the wiring', () => {
         expect(src).toMatch(/deviceLink: deviceLinkService,/);
     });
 
-    it('main and genie-host restart an app source and read the card with the same code', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-owner-ops.ts']) {
-            const src = readFileSync(file, 'utf8');
-            expect(src, file).toMatch(/restartAppSource/);
-            expect(src, file).toMatch(/appInboxCardState\(/);
-        }
+    it('genie-host restarts an app source and reads the card; main keeps no copy of either (Tynn #952, 2g-1)', () => {
+        const ops = readFileSync('src/main/host-owner-ops.ts', 'utf8');
+        expect(ops).toMatch(/restartAppSource/);
+        expect(ops).toMatch(/appInboxCardState\(/);
+        const main = readFileSync('src/main/main.ts', 'utf8');
+        expect(main).not.toMatch(/restartAppSource|appInboxCardState/);
     });
 });
