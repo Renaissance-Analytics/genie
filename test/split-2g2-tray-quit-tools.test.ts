@@ -129,7 +129,8 @@ describe('genie-host computes it and ends its own terminals at shutdown', () => 
     const host = code(src('src/main/genie-host.ts'));
 
     it('composed over its terminal host, its flows and its process book, said on each of their changes', () => {
-        expect(host).toMatch(/const hostSummary = hostSummaryFeed\(\{\s*read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\)\),/);
+        // ...and since 2g-3a (Tynn #954) its role and Tynn account as a fourth argument (split-2g3a-relay-mirror.test.ts pins it).
+        expect(host).toMatch(/const hostSummary = hostSummaryFeed\(\{\s*read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\)[,)]/);
         expect(host).toMatch(/terminalHost\.onChange\(listener\)/);
         expect(host).toMatch(/hostSummary,/);
     });
