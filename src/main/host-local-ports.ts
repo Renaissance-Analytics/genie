@@ -9,6 +9,7 @@ import { createNativeTerminalPort } from './local-terminal-native.js';
 import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import type { TerminalHost } from './terminal-host.js';
+import type { TynnBoardPorts } from './tynn-board-client.js';
 
 /**
  * GENIE-HOST'S OWN LOCAL PORTS (Tynn #898 step 2d-3a, story #905). The families this machine's window asks of its host
@@ -48,6 +49,8 @@ export interface HostLocalSources {
     readonly appWindow?: (context: CallContext | undefined, packageId: string, preview: boolean) => Promise<void>;
     readonly say: (line: string) => void;
     readonly now?: () => Date;
+    /** The person's Tynn pairing (the Tynn tab's ports): a linked workspace's Tag release asks it for the release decision (PM G-4). */
+    readonly tynn?: () => Promise<TynnBoardPorts | null>;
 }
 
 export const APP_WINDOW = 'an app’s window opens in a Genie window: open it from Genie on this machine';
@@ -59,6 +62,7 @@ export function hostLocalPorts(sources: HostLocalSources): HostLocalPorts {
         workspacePath: sources.workspacePath,
         send: sources.sendFromPerson,
         now: () => (sources.now?.() ?? new Date()).toISOString(),
+        ...(sources.tynn ? { tynn: sources.tynn } : {}),
     };
     const gapps = (context?: CallContext): GAppsApi | null => {
         const book = sources.gapps();

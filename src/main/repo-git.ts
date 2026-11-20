@@ -3,10 +3,11 @@ import { GitDidNotAnswer, withinGitLimit, type GitLimit } from './git-ports.js';
 import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
 import { guardRepoPath, parseRepoStatus, type RepoStatus } from './repo-model.js';
 import { resolveProgram } from '../core/program-lookup.js';
+import type { ReleaseGate } from '../core/release-tag.js';
 
 /**
  * THE REPOSITORY PANEL'S GIT (beta.33 item 14; Genie 1 main/repo/index.ts). The engine behind the Repository official
- * plugin's panel: status, diff, stage, unstage, commit, branch, push, pull — every one the person's own click, run with the
+ * plugin's panel: status, diff, stage, unstage, commit, branch, push, pull, tag release — every one the person's own click, run with the
  * real `git` on the host that holds the workspace, its repo path confined to the workspace before git sees it. Push and pull
  * use the person's own git credentials (their credential helper, ssh agent) — Genie adds none. Pull is fast-forward only:
  * it never makes a merge commit nobody asked for. Destructive operations (force push, reset) are not offered.
@@ -83,9 +84,44 @@ export async function repoPull(root: string, repoRel: string): Promise<RepoResul
     return done(await inRepo(root, repoRel, ['pull', '--ff-only']));
 }
 
-/** PM G-4 (Tynn #937): stub for the red run. */
-export async function repoTagRelease(_root: string, _repoRel: string, _tag: string, _opts: { remote?: string; gate?: (commit: string) => Promise<import('../core/release-tag.js').ReleaseGate> }): Promise<RepoResult<{ tag: string; commit: string }>> {
-    return fail('PM G-4 not built yet');
+/** HEAD's full commit SHA: what a Tag release would tag. */
+export async function repoHead(root: string, repoRel: string): Promise<RepoResult<string>> {
+    const r = await asRead((limit) => inRepo(root, repoRel, ['rev-parse', '--verify', 'HEAD^{commit}'], limit));
+    return r.ok ? ok(r.value.trim()) : r;
+}
+
+/**
+ * TAG RELEASE (PM G-4, Tynn #937): an annotated tag on HEAD, pushed to the remote — that one tag, never `--tags`. The
+ * commit is read FIRST, as a full SHA, and that SHA is what the gate is asked about and what is tagged: HEAD moving while
+ * Tynn is asked cannot put the tag on a commit nobody signed. A linked workspace's gate is Tynn's release decision
+ * (release-tag-gate.ts); an unlinked workspace has none and tags as any git does. A refused push takes the local tag back,
+ * so the next try is clean and no unpushed release tag waits to ride out on someone's `git push --tags`.
+ */
+export async function repoTagRelease(root: string, repoRel: string, tag: string, opts: { remote?: string; gate?: (commit: string) => Promise<ReleaseGate> }): Promise<RepoResult<{ tag: string; commit: string }>> {
+    const name = String(tag ?? '').trim();
+    if (!name) return fail('A tag name is required.');
+    if (name.startsWith('-')) return fail(`"${name}" is not a tag name git takes.`);
+    const format = await inRepo(root, repoRel, ['check-ref-format', `refs/tags/${name}`]);
+    if (!format.ok) return fail(`"${name}" is not a tag name git takes.`);
+    const head = await inRepo(root, repoRel, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    if (!head.ok) return head;
+    const commit = head.value.trim();
+    let message = `Release ${name}`;
+    if (opts.gate) {
+        const gate = await opts.gate(commit);
+        if (!gate.ok) return fail(gate.reason);
+        const who = gate.signedBy ? `, signed by ${gate.signedBy}` : '';
+        message += `\n\nTynn release decision ${gate.recordId ?? '(unnamed)'} for version ${gate.versionNumber ?? '(unnumbered)'}${who}.`;
+    }
+    const made = await inRepo(root, repoRel, ['tag', '-a', '-m', message, name, commit]);
+    if (!made.ok) return made;
+    const remote = opts.remote || 'origin';
+    const pushed = await inRepo(root, repoRel, ['push', remote, `refs/tags/${name}:refs/tags/${name}`]);
+    if (!pushed.ok) {
+        await inRepo(root, repoRel, ['tag', '-d', name]);
+        return pushed;
+    }
+    return ok({ tag: name, commit });
 }
 
 export async function repoCreateBranch(root: string, repoRel: string, name: string): Promise<RepoResult<null>> {

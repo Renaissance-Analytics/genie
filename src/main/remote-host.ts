@@ -44,6 +44,7 @@ import { LocalPages } from './local-pages.js';
 import { LocalFilesContent } from './local-files-content.js';
 
 import { isLocalFilesMethod } from '../core/local-files.js';
+import { repoCallNeedsOwner } from '../core/release-tag.js';
 import { localFilesArguments } from './local-files-arguments.js';
 import { isLocalDraftMethod } from '../core/local-drafts.js';
 import { localDraftArguments } from './local-drafts-api.js';
@@ -1111,6 +1112,9 @@ export class RemoteHost {
         let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, artboard: Awaited<ReturnType<typeof localArtboardArguments>> | null = null, response: string | null = null;
         try {
             if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(method); }
+            // Tag release (PM G-4, Tynn #937) is the host owner's, as OWNER_ONLY's methods are: its op is repo.call's first
+            // argument, read only once a staged argument array has been taken, so it is checked here and not with OWNER_ONLY.
+            if (!auth.isOwner && repoCallNeedsOwner(method, files?.args ?? materialized.args)) throw new Error(`tagging a release on ${this.#hostName} is its owner's; only its owner can`);
             if (isLocalDraftMethod(method)) {
                 drafts = await localDraftArguments(method, materialized.args, connection.uploads);
                 if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin(method);

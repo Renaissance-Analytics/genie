@@ -3,7 +3,11 @@ import { basename, join } from 'node:path';
 import { listRepos } from '../core/repo-registry.js';
 import { pinArtBoardPost, readArtBoard, reviewArtBoardPost, type ReviewResult } from './artboard-host.js';
 import { clearArtBoard, restoreArtBoard } from './artboard-clear.js';
-import { repoCommit, repoCreateBranch, repoDiff, repoPull, repoPush, repoStage, repoStatus, repoUnstage, type RepoResult } from './repo-git.js';
+import { repoCommit, repoCreateBranch, repoDiff, repoHead, repoPull, repoPush, repoStage, repoStatus, repoTagRelease, repoUnstage, type RepoResult } from './repo-git.js';
+import { tynnProjectIdOf } from '../core/issue-watch.js';
+import type { TagOptions } from '../core/release-tag.js';
+import { releaseDecisionGate, tagVersions } from './release-tag-gate.js';
+import type { TynnBoardPorts } from './tynn-board-client.js';
 import type { ClearScope, ResolvedBoard } from '../core/artboard.js';
 import { readArtboardFiles, type ArtboardFilesBoard } from './artboard-files.js';
 
@@ -19,7 +23,7 @@ export interface PanelsHostDeps {
     readonly send: (agentId: string, text: string) => Promise<void>;
     readonly now: () => string;
     /** PM G-4 (Tynn #937): the person's Tynn pairing, for a linked workspace's Tag release; null = no Tynn account. */
-    readonly tynn?: () => Promise<import('./tynn-board-client.js').TynnBoardPorts | null>;
+    readonly tynn?: () => Promise<TynnBoardPorts | null>;
 }
 
 const unknownWorkspace = 'Genie does not have that workspace';
@@ -42,7 +46,38 @@ export async function workspaceRepos(root: string): Promise<{ rel: string; name:
     return out;
 }
 
-export type RepoOp = 'list' | 'status' | 'diff' | 'stage' | 'unstage' | 'commit' | 'branch' | 'push' | 'pull';
+export type RepoOp = 'list' | 'status' | 'diff' | 'stage' | 'unstage' | 'commit' | 'branch' | 'push' | 'pull' | 'tagOptions' | 'tag';
+
+/** The workspace's Tynn project, from its own project.json (the envelope's link); null = not linked. */
+async function linkedProject(root: string): Promise<string | null> {
+    let manifest: string | null = null;
+    try { manifest = await readFile(join(root, 'project.json'), 'utf8'); } catch { manifest = null; }
+    return tynnProjectIdOf(manifest);
+}
+
+/**
+ * TAG RELEASE (PM G-4, Tynn #937). A workspace linked to Tynn — its project.json names a Tynn project, whatever the
+ * account's state — tags only under a signed release decision for the version the person chose and HEAD's exact commit
+ * (release-tag-gate.ts), and is refused in Tynn's words otherwise. A repo of a linked envelope is gated by the envelope's
+ * link. An unlinked workspace tags freely and Tynn is never asked.
+ */
+async function repoTag(deps: PanelsHostDeps, root: string, repo: string, tag: unknown, versionId: unknown): Promise<RepoResult<unknown>> {
+    const projectId = await linkedProject(root);
+    const name = typeof tag === 'string' ? tag : '';
+    if (projectId === null) return repoTagRelease(root, repo, name, {});
+    if (typeof versionId !== 'string' || versionId === '') return { ok: false, error: 'This workspace is linked to Tynn: choose the Tynn version this tag releases.' };
+    const ports = deps.tynn ? await deps.tynn() : null;
+    return repoTagRelease(root, repo, name, { gate: (commit) => releaseDecisionGate(ports, projectId, versionId, commit) });
+}
+
+async function repoTagOptions(deps: PanelsHostDeps, root: string, workspaceId: string, repo: string): Promise<RepoResult<TagOptions>> {
+    const head = await repoHead(root, repo);
+    const projectId = await linkedProject(root);
+    if (projectId === null) return { ok: true, value: { linked: false, head: head.ok ? head.value : null, versions: [], reason: null } };
+    const ports = deps.tynn ? await deps.tynn() : null;
+    const tynn = await tagVersions(ports, workspaceId, projectId);
+    return { ok: true, value: { linked: true, head: head.ok ? head.value : null, ...tynn } };
+}
 
 export async function repoCall(deps: PanelsHostDeps, op: unknown, workspaceId: unknown, rel: unknown, a?: unknown, b?: unknown): Promise<RepoResult<unknown>> {
     const root = typeof workspaceId === 'string' ? deps.workspacePath(workspaceId) : null;
@@ -59,6 +94,8 @@ export async function repoCall(deps: PanelsHostDeps, op: unknown, workspaceId: u
         case 'branch': return repoCreateBranch(root, repo, typeof a === 'string' ? a : '');
         case 'push': return repoPush(root, repo, typeof a === 'string' && a ? a : 'origin');
         case 'pull': return repoPull(root, repo);
+        case 'tagOptions': return repoTagOptions(deps, root, workspaceId as string, repo);
+        case 'tag': return repoTag(deps, root, repo, a, b);
         default: return { ok: false, error: `the repository panel has no "${String(op)}"` };
     }
 }

@@ -1973,6 +1973,8 @@ async function main(): Promise<void> {
             marketplace: () => marketplaceHost ?? null,
             gapps: () => (gappBook ? gappsApi(gappBook, gappAsk, gappPreviews ?? undefined) : null),
             onGappsChanged: (listener) => gappBook?.onChange(listener) ?? (() => {}),
+            // Tag release in a linked workspace asks Tynn for the release decision (PM G-4); no account = refused, never ungated.
+            tynn: () => hostTynnBoard().catch(() => null),
             // AN APP'S WINDOW (step 2d-4b): opened by the window that asked, in its own process. Anyone else is told where.
             appWindow: async (context, packageId, preview) => {
                 const binding = context ? protocolTunnels.bindingOf(context.connectionId) : null;
