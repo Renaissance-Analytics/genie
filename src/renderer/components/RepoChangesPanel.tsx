@@ -93,6 +93,11 @@ export function RepoChangesView({ repos, repoRel, status, selected, diff, busy, 
     );
 }
 
+/** PM G-4 (Tynn #937): stub for the red run. */
+export function TagReleaseForm(_props: { options: import('../../core/release-tag.js').TagOptions | null; busy: boolean; onTag: (tag: string, versionId: string | null) => void; onCancel: () => void }) {
+    return null;
+}
+
 type RepoBridge = NonNullable<GenieBridge['repo']>;
 
 /** The panel's wiring: the repo picked, its status, the selection, the diff, and every action through the host. */

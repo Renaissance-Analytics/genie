@@ -83,6 +83,11 @@ export async function repoPull(root: string, repoRel: string): Promise<RepoResul
     return done(await inRepo(root, repoRel, ['pull', '--ff-only']));
 }
 
+/** PM G-4 (Tynn #937): stub for the red run. */
+export async function repoTagRelease(_root: string, _repoRel: string, _tag: string, _opts: { remote?: string; gate?: (commit: string) => Promise<import('../core/release-tag.js').ReleaseGate> }): Promise<RepoResult<{ tag: string; commit: string }>> {
+    return fail('PM G-4 not built yet');
+}
+
 export async function repoCreateBranch(root: string, repoRel: string, name: string): Promise<RepoResult<null>> {
     const branch = String(name ?? '').trim();
     if (!branch) return fail('A branch name is required.');

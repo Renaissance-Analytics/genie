@@ -18,6 +18,8 @@ export interface PanelsHostDeps {
     /** AgentInbox delivery of an ArtBoard verdict, from the person to the posting agent. */
     readonly send: (agentId: string, text: string) => Promise<void>;
     readonly now: () => string;
+    /** PM G-4 (Tynn #937): the person's Tynn pairing, for a linked workspace's Tag release; null = no Tynn account. */
+    readonly tynn?: () => Promise<import('./tynn-board-client.js').TynnBoardPorts | null>;
 }
 
 const unknownWorkspace = 'Genie does not have that workspace';
