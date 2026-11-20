@@ -162,6 +162,7 @@ import { ProtocolTunnels } from './protocol-tunnels.js';
 import { hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
 import { hostOwnerOps } from './host-owner-ops.js';
 import { LocalStagingArea } from './local-staging-area.js';
+import { withComms } from './dashboard-comms.js';
 import { Registry } from './registry.js';
 import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -1643,7 +1644,9 @@ async function main(): Promise<void> {
     const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
-    phoneRegistry.setProbe((id) => host.probe(id));
+    // The Dashboard's comms (Tynn #956): this machine's window has been served from this registry since Tynn #898 2d-4b, and
+    // the SessionHost's probe carries none, so the rows take them from the host's own inbox (main/dashboard-comms.ts).
+    phoneRegistry.setProbe(withComms((id) => host.probe(id), (id) => own.inbox.involving(id, 2000)));
     phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
     phoneRegistry.setSafeMode(() => safeMode.view());
     phoneRegistry.setHangNotice(() => crashState.view().notice);
