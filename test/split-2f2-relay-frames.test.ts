@@ -363,8 +363,9 @@ describe('the question window and the tray read genie-host’s Deck (takeOvers g
     it('main’s own client keeps the Deck connection open, says deck.watch on it, hears local-deck, and opens it again when it drops', () => {
         const own = code(src('src/main/own-protocol-client.ts'));
         expect(own).toMatch(/watchDeck\(onItems: \(items: readonly DeckItem\[\]\) => void\): \(\) => void/);
-        expect(own).toContain("method: 'deck.watch'");
-        expect(own).toContain('LOCAL_EVENTS.deck');
+        // One held-open connection per watch since 2g-2 (Tynn #953): the Deck's says deck.watch and hears local-deck.
+        expect(own).toContain("method: control");
+        expect(own).toContain("persistent('deck.watch', LOCAL_EVENTS.deck");
         expect(own).toMatch(/setTimeout\(open, /);
     });
 

@@ -95,6 +95,8 @@ export type LocalAgentDetail = { readonly rows: readonly unknown[] };
 export interface HostApi {
     /** The owned aggregator is supplied; its reads and events must not be answered by a window replica (Tynn #720). */
     readonly ownsFeatures?: boolean;
+    /** What this host runs, for a connection that says summary.watch (core/host-summary.ts; Tynn #953). Absent = nothing. */
+    hostSummary?(): unknown;
     /** Release transient view state for this admitted connection; never an invocation from the wire. */
     releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
@@ -205,6 +207,11 @@ interface Connection {
      */
     deckOnly: boolean;
     deckSent: string | null;
+    /**
+     * A SUMMARY-ONLY CONNECTION (`summary.watch`, Tynn #953 2g-2): main's own client, for its tray and quit. It hears what
+     * genie-host runs (`local-summary`) when it changes, and nothing else; no other connection hears it.
+     */
+    summaryOnly: boolean;
     /**
      * A TAKE OVER WINDOW (Tynn #529 part A): the window it was opened from, its one terminal, whether its click started the
      * TUI, and, once its window lost the baton or left, why it may type no more.
@@ -620,7 +627,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, deckSent: null, companion: null, negotiated: null, outside: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, deckSent: null, summaryOnly: false, companion: null, negotiated: null, outside: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -954,6 +961,11 @@ export class RemoteHost {
                 connection.deckSent = JSON.stringify(items);
                 return ok(items);
             }
+            // What genie-host runs, and nothing else (Tynn #953, 2g-2): main's tray and quit, this machine's.
+            case 'summary.watch':
+                if (!connection.local) return refuse(`what ${this.#hostName} runs is watched from its own Genie only`);
+                connection.summaryOnly = true;
+                return ok(this.#api.hostSummary?.() ?? null);
             case 'baton.status': {
                 const holder = this.#baton.holder();
                 return ok({ driver: holder?.label ?? null, mine: holder?.connectionId === connection.id, locked: this.#locked });
@@ -1334,6 +1346,7 @@ export class RemoteHost {
         // Read once for every deck-only connection: the Deck, said only when it changed (Tynn #941, 2f-2).
         let deck: { items: readonly unknown[]; key: string } | null = null;
         for (const c of windows) {
+            if (c.summaryOnly) continue;
             if (c.deckOnly) {
                 deck ??= (() => { const items = deckItemsOf(snapshot); return { items, key: JSON.stringify(items) }; })();
                 if (deck.key !== c.deckSent) { c.deckSent = deck.key; this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.deck, payload: { items: deck.items } }); }
@@ -1356,8 +1369,12 @@ export class RemoteHost {
         if (channel === LOCAL_EVENT_CHANNELS.snapshot) return this.#pushLocalSnapshot(payload);
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
-            // A deck-only connection hears the Deck and nothing else (Tynn #941, 2f-2).
+            // A deck-only connection hears the Deck and nothing else (Tynn #941, 2f-2); a summary-only one, the summary (#953).
             if (c.deckOnly) continue;
+            if (c.summaryOnly || channel === LOCAL_EVENT_CHANNELS.summary) {
+                if (c.summaryOnly && channel === LOCAL_EVENT_CHANNELS.summary) this.#send(c, { kind: 'event', channel, payload });
+                continue;
+            }
             if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;
             if (channel === LOCAL_EVENT_CHANNELS.files) {
                 const push = c.filesViews?.event(payload as FilesHubEvent);

@@ -150,10 +150,8 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['onBrowserEvent', 'window:feature-effect'],
     ['gappSessions', 'window:gapp-window'],
     // The question window and the tray read genie-host's Deck (deck.watch, Tynn #941 2f-2): main keeps no Take Over liveness.
-    // 2g (#913), re-labelled from 2c by the coordinator (2026-11-19, 2c-5): the crash report (2c-2) and the scratch terminal
-    // (2c-4) are the protocol's. main's terminals replica is still read by its own MCP tool server (genieToolDeps) and,
-    // synchronously, by the tray count, the Restart/Shut-down list, the quit plan and quit's closeAll: they move with it.
-    ['terminals', 'move:2g'],
+    // The tray, its Restart/Shut-down list and the quit read genie-host's summary (summary.watch, Tynn #953 2g-2); genie-host
+    // ends its own terminals at shutdown, and main's tool server keeps no host-native deps: no terminals or book replica.
     // A window's channels to another machine are its own session's (Tynn #941, 2f-2): main holds no device link.
     // 2g (#913): what the window still composes (composeWindowServices) or reads over genie-host's replicas.
     // appInbox, tynnPage and workstation left in 2g-1 (#952): main held them and nothing read them.
@@ -163,7 +161,6 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['hosting', 'move:2g'],
     ['keyring', 'move:2g'],
     ['plugins', 'move:2g'],
-    ['processBook', 'move:2g'],
     ['recordsChanged', 'move:2g'],
     ['relayHost', 'move:2g'],
     ['remoteAccess', 'move:2g'],

@@ -122,7 +122,6 @@ describe('runQuit', () => {
         const p: QuitPorts = {
             stopAgents: () => { calls.push('stopAll'); },
             closeWindow: () => { calls.push('window'); },
-            closeTerminals: () => { calls.push('terminals'); },
             drained: async () => { calls.push('drained'); },
             shutDownHost: async () => { calls.push('engine.shutdown'); },
         };
@@ -132,7 +131,7 @@ describe('runQuit', () => {
     it('"Shut down everything" calls stopAll and then engine.shutdown, in order, after the drain', async () => {
         const { calls, p } = ports();
         await runQuit(p);
-        expect(calls).toEqual(['stopAll', 'window', 'terminals', 'drained', 'engine.shutdown']);
+        expect(calls).toEqual(['stopAll', 'window', 'drained', 'engine.shutdown']);
     });
 
     it('a drain that fails still ends the host: a quit is never left half done', async () => {
@@ -150,6 +149,6 @@ describe('runQuit', () => {
         const quit = runQuit({ ...p, drained: () => { calls.push('drained'); return new Promise(() => {}); } }, { drainMs: 20 });
         const outcome = await Promise.race([quit.then(() => 'done'), new Promise((r) => setTimeout(() => r('held'), 1_000))]);
         expect(outcome).toBe('done');
-        expect(calls).toEqual(['stopAll', 'window', 'terminals', 'drained', 'engine.shutdown']);
+        expect(calls).toEqual(['stopAll', 'window', 'drained', 'engine.shutdown']);
     });
 });
