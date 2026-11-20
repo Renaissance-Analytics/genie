@@ -2,13 +2,18 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { migrateSecrets, type HostVault, type MigrationBook, type MigrationSource, type MigrationState } from '../src/main/keychain-migration.js';
-import { holdMigration, type MigrationPorts } from '../src/main/migration-holds.js';
+import type { HostVault, MigrationBook, MigrationSource, MigrationState } from '../src/main/keychain-migration.js';
+import { holdHostPorts, holdSources } from '../src/main/migration-holds.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { until } from './helpers/until.js';
 
 /**
- * THE TEST BUILD THAT HOLDS AT EACH STEP OF THE MOVE (plan §13, S4: a crash at each step leaves a working copy). scripts/upgrade-crash-acceptance.mjs kills a real window at each hold. These say
+ * THE TEST BUILD THAT HOLDS AT EACH STEP OF THE MOVE (plan §13, S4: a crash at each step leaves a working copy). scripts/upgrade-crash-acceptance.mjs kills a real Genie at each hold. These say
  * the holds land where their names say, wrap the ports and leave the engine as it ships, and do nothing at all in a build without the flag. test/keychain-migration.test.ts holds the engine itself.
+ *
+ * The move spans two processes since Tynn #959 (2g-3b): the window's delete holds at `after-book` (holdSources), genie-host's keychain and book at the other four (holdHostPorts). genie-host
+ * confirms every secret before it answers, and writes `done` once the window says what it deleted, so the secret BEFORE the held one is confirmed with the batch, its old copy goes with the
+ * window's deletes, and its `done` with genie-host's second half. At every hold it keeps a working copy.
  */
 const FIRST = 'github/access' as const;
 const SECOND = 'github/refresh' as const;
@@ -33,7 +38,12 @@ class World {
         read: async () => ({ ...this.states }),
         write: async (name, state) => { this.states[name] = state; },
     });
-    ports = (): MigrationPorts => ({ sources: this.sources(), vault: this.vault(), book: this.book() });
+}
+
+/** The window's half and genie-host's half, each wrapped as its own process wraps it. */
+function held(world: World, env: Readonly<Record<string, string | undefined>>): [MigrationSource[], HostVault, MigrationBook] {
+    const host = holdHostPorts({ vault: world.vault(), book: world.book() }, env);
+    return [[...holdSources(world.sources(), env)], host.vault, host.book];
 }
 
 describe('in a test build', () => {
@@ -47,16 +57,16 @@ describe('in a test build', () => {
     });
     afterEach(() => { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }); });
 
-    // Held on the SECOND secret, so each also shows the first one finished and untouched by what follows.
+    // Held on the SECOND secret, so each also shows what the first one has come to, and that it keeps a working copy.
     it.each([
-        { step: 'before-write', keychain: false, old: true, state: undefined },
-        { step: 'after-write', keychain: true, old: true, state: undefined },
-        { step: 'after-read-back', keychain: true, old: true, state: undefined },
-        { step: 'after-book', keychain: true, old: true, state: 'verified' },
-        { step: 'after-delete', keychain: true, old: false, state: 'verified' },
-    ] as const)('$step: stops there, says so, and the next launch finishes with nothing lost', async ({ step, keychain, old, state }) => {
+        { step: 'before-write', keychain: false, old: true, state: undefined, first: 'verified', firstOld: true, next: ['moved', 'moved'] },
+        { step: 'after-write', keychain: true, old: true, state: undefined, first: 'verified', firstOld: true, next: ['moved', 'moved'] },
+        { step: 'after-read-back', keychain: true, old: true, state: undefined, first: 'verified', firstOld: true, next: ['moved', 'moved'] },
+        { step: 'after-book', keychain: true, old: true, state: 'verified', first: 'verified', firstOld: false, next: ['moved', 'moved'] },
+        { step: 'after-delete', keychain: true, old: false, state: 'verified', first: 'done', firstOld: false, next: ['already', 'moved'] },
+    ] as const)('$step: stops there, says so, and the next launch finishes with nothing lost', async ({ step, keychain, old, state, first, firstOld, next }) => {
         const world = new World();
-        void migrateSecrets(...args(holdMigration(world.ports(), spec(step))));
+        void moveAll(...held(world, spec(step)));
         await until(() => existsSync(marker));
         expect(readFileSync(marker, 'utf8')).toBe(`${step}:${SECOND}`);
         // A moment for anything that should not have happened to happen.
@@ -64,35 +74,37 @@ describe('in a test build', () => {
         await new Promise((r) => setTimeout(r, 20));
         expect(world.compares).toBe(compares);
 
-        expect(world.states[FIRST]).toBe('done');
+        expect(world.states[FIRST]).toBe(first);
         expect(world.keychain.get(FIRST)).toBe('first-word');
+        expect(world.old.has(FIRST)).toBe(firstOld);
         expect(world.keychain.has(SECOND)).toBe(keychain);
         expect(world.old.has(SECOND)).toBe(old);
         expect(world.states[SECOND]).toBe(state);
 
         // The next launch: no hold.
-        const outcomes = await migrateSecrets(...args(world.ports()));
-        expect(outcomes.map((o) => o.status)).toEqual(['already', 'moved']);
+        const outcomes = await moveAll(world.sources(), world.vault(), world.book());
+        expect(outcomes.map((o) => o.status)).toEqual(next);
         expect(world.keychain.get(SECOND)).toBe('second-word');
         expect(world.old.has(SECOND)).toBe(false);
-        expect(world.states[SECOND]).toBe('done');
+        expect(world.old.has(FIRST)).toBe(false);
+        expect([world.states[FIRST], world.states[SECOND]]).toEqual(['done', 'done']);
     });
 
     it('after-write is past the write and before the read-back; after-read-back is past it (the two differ only there)', async () => {
         const atWrite = new World();
-        void migrateSecrets(...args(holdMigration(atWrite.ports(), spec('after-write', FIRST))));
+        void moveAll(...held(atWrite, spec('after-write', FIRST)));
         await until(() => existsSync(marker));
         expect(atWrite.compares).toBe(0);
         rmSync(marker);
         const atBack = new World();
-        void migrateSecrets(...args(holdMigration(atBack.ports(), spec('after-read-back', FIRST))));
+        void moveAll(...held(atBack, spec('after-read-back', FIRST)));
         await until(() => existsSync(marker));
         expect(atBack.compares).toBe(1);
     });
 
     it('only the named secret is held: with a name nothing has, all of it moves', async () => {
         const world = new World();
-        const outcomes = await migrateSecrets(...args(holdMigration(world.ports(), spec('before-write', 'tynn/pairing'))));
+        const outcomes = await moveAll(...held(world, spec('before-write', 'tynn/pairing')));
         expect(outcomes.map((o) => o.status)).toEqual(['moved', 'moved']);
         expect(existsSync(marker)).toBe(false);
     });
@@ -102,15 +114,22 @@ describe('in a test build', () => {
         ['no marker file', { GENIE_TEST_MIGRATION_HOLD: `before-write:${SECOND}` }],
         ['a step that does not exist', { GENIE_TEST_MIGRATION_HOLD: `somewhere:${SECOND}`, GENIE_TEST_MIGRATION_HOLD_FILE: 'x' }],
     ])('%s: the ports as they were', (_, env) => {
-        const ports = new World().ports();
-        expect(holdMigration(ports, env)).toBe(ports);
+        const world = new World();
+        const sources = world.sources();
+        const host = { vault: world.vault(), book: world.book() };
+        expect(holdSources(sources, env)).toBe(sources);
+        expect(holdHostPorts(host, env)).toBe(host);
     });
 });
 
 describe('in any other build', () => {
     it('the ports as they were, whatever the environment says', () => {
-        const ports = new World().ports();
-        expect(holdMigration(ports, { GENIE_TEST_MIGRATION_HOLD: `before-write:${FIRST}`, GENIE_TEST_MIGRATION_HOLD_FILE: 'x' })).toBe(ports);
+        const world = new World();
+        const sources = world.sources();
+        const host = { vault: world.vault(), book: world.book() };
+        const env = { GENIE_TEST_MIGRATION_HOLD: `before-write:${FIRST}`, GENIE_TEST_MIGRATION_HOLD_FILE: 'x' };
+        expect(holdSources(sources, env)).toBe(sources);
+        expect(holdHostPorts(host, env)).toBe(host);
     });
 
     it('the flag is built in only when asked for, and nothing that ships asks', () => {
@@ -122,12 +141,9 @@ describe('in any other build', () => {
 });
 
 describe('wired', () => {
-    it('the move runs through it, and the engine itself knows nothing about it', () => {
-        expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/migrateSecrets\(\.\.\.[^\n]*holdMigration\(/);
-        expect(readFileSync('src/main/keychain-migration.ts', 'utf8')).not.toMatch(/migration-holds|holdMigration/);
+    it('each half of the move runs through its holds, and the engine itself knows nothing about them', () => {
+        expect(readFileSync('src/main/legacy-unsealer.ts', 'utf8')).toMatch(/sources = holdSources\(await ports\.sources\(\), ports\.env\);/);
+        expect(readFileSync('src/main/host-legacy-adopt.ts', 'utf8')).toMatch(/const \{ vault, book \} = holdHostPorts\(\{ vault: ports\.vault, book: ports\.book \}, ports\.env\);/);
+        expect(readFileSync('src/main/keychain-migration.ts', 'utf8')).not.toMatch(/migration-holds|holdSources|holdHostPorts/);
     });
 });
-
-function args(ports: MigrationPorts): [MigrationSource[], HostVault, MigrationBook] {
-    return [[...ports.sources], ports.vault, ports.book];
-}

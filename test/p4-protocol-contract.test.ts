@@ -107,6 +107,8 @@ Object.assign(ROWS, {
     'deviceLink.hosts': [], 'deviceLink.forget': ['wss://example.test/genie'], 'deviceLink.adopt': ['wss://example.test/genie', 'synthetic-token'],
     'tynnNetwork.workstations': [], 'tynnNetwork.classifyLink': ['https://tynn.example/invites/accept/tok_fixture'], 'crashReport.draft': [], 'crashReport.send': ['the report', 'my notes'], 'providers.chooseProgram': ['claude', 'C:\\fixture\\claude.exe'], 'terminals.scratch': ['work'], 'questions.files': ['q_1', ['a.md']], 'questions.file': ['q_1', 'a.md'], 'questions.visuals': ['q_1'], 'files.openExternal': ['work', 'a.txt'], 'files.reveal': ['work', 'a.txt'], 'deviceLink.open': ['wss://example.test/genie'], 'deviceLink.openRelay': ['ws_fixture'], 'deviceLink.send': ['device_1', 'x', false], 'deviceLink.close': ['device_1'], 'deviceLink.openBrowser': ['relay_1', null, [], {}], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
     'tynnNetwork.shares.list': [null], 'tynnNetwork.shares.mint': [{ workspaceId: null, capability: 'readonly', expiresInDays: 7 }], 'tynnNetwork.shares.revoke': ['share_fixture'],
+    // Tynn #959 (2g-3b): no value in the row; this host has no adopter and no Tynn account, and says so the same both ways.
+    'keychain.adoptLegacy': [{ phase: 'removed', names: [] }], 'tynn.recheck': [],
 });
 type ResultFrame = Extract<WireMessage, { kind: 'result' }>;
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));

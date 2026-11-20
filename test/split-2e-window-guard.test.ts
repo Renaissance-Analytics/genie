@@ -145,9 +145,11 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // (takeOvers: the question window and the tray read genie-host's Deck) in 2f-2 (#941).
         // 2g (#913): the services the window still composes over genie-host's replicas. appInbox, tynnPage and workstation
         // left in 2g-1 (#952): main held them and nothing read them.
-        catalog: '2g', flows: '2g', github: '2g', hosting: '2g', keyring: '2g', plugins: '2g',
+        // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
+        // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy).
+        catalog: '2g', flows: '2g', hosting: '2g', plugins: '2g',
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
-        relayHost: '2g', remoteAccess: '2g', stores: '2g', supervisor: '2g', tynn: '2g',
+        remoteAccess: '2g', stores: '2g', supervisor: '2g',
     };
     const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[]) => ({
         joined: rows.filter(([u, d]) => d.startsWith('move:') && STILL_TO_MOVE[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),

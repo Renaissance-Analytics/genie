@@ -149,15 +149,18 @@ describe('when the keychain comes to answer', () => {
 
 describe('where it is wired', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-    it('with a host, main shows the host’s card; only its own engine reads Chromium’s store for it', () => {
+    // The card is genie-host's, and every window shows it from the host's features (Tynn #959, 2g-3b): main holds no replica of it.
+    it('the card is the host’s alone: main holds no keyring replica; genie-host reads its accounts again when the keychain answers', () => {
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        expect(main).toMatch(/keyring = agentEngineLink\.client\.keyring\(\)/);
+        expect(main).not.toMatch(/client\.keyring\(\)/);
         const host = strip(readFileSync('src/main/genie-host.ts', 'utf8'));
         expect(host).toMatch(/new KeyringService\(/);
         expect(host).toMatch(/onReady:/);
     });
 
-    it('a window hears the keychain is back, and tries its one-time move again', () => {
-        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/moveSecretsAgain\(\)/);
+    it('a window hears the keychain is back from the host’s summary, and hands an older Genie’s secrets over again', () => {
+        const host = strip(readFileSync('src/main/genie-host.ts', 'utf8'));
+        expect(host).toMatch(/opened\.keychain\.onAnswerChange\(pokeSummary\); opened\.keyring\?\.onChange\(pokeSummary\);/);
+        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/unsealer\.summary\(before, summary\);/);
     });
 });

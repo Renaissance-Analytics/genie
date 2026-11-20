@@ -127,7 +127,9 @@ describe('the capability table', () => {
         // opened on the host's own screen for a client on another machine) (Tynn #912, 2f-1).
         // 187 with `deviceLink.open` / `openRelay` / `send` / `close` / `openBrowser` (local): a window's transport to another
         // machine, owned by its own connection (Tynn #941, 2f-2).
-        expect(REMOTE_METHODS.length).toBe(187);
+        // 189 with `keychain.adoptLegacy` (local, main's own client only: what an older Genie sealed, into genie-host's keychain)
+        // and `tynn.recheck` (local: genie-host asks Tynn again) (Tynn #959, 2g-3b).
+        expect(REMOTE_METHODS.length).toBe(189);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

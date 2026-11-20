@@ -76,3 +76,8 @@ export function hostSummaryFeed(ports: { read(): HostSummary; onChange(listener:
         subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     };
 }
+
+/** The keychain became able to keep secrets between two summaries (Tynn #959, 2g-3b). */
+export function keychainBecameReady(_before: HostSummary, _after: HostSummary): boolean {
+    throw new Error('2g-3b: not built yet');
+}

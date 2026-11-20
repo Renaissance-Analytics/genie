@@ -60,3 +60,16 @@ export function holdMigration(ports: MigrationPorts, env: Readonly<Record<string
 export function portsOf(ports: MigrationPorts): [readonly MigrationSource[], HostVault, MigrationBook] {
     return [ports.sources, ports.vault, ports.book];
 }
+
+/** The window's half of the holds (Tynn #959, 2g-3b). */
+export function holdSources(_sources: readonly MigrationSource[], _env: Readonly<Record<string, string | undefined>> = process.env): readonly MigrationSource[] {
+    throw new Error('2g-3b: not built yet');
+}
+export interface HostMigrationPorts {
+    readonly vault: HostVault;
+    readonly book: MigrationBook;
+}
+/** genie-host's half of the holds (Tynn #959, 2g-3b). */
+export function holdHostPorts(_ports: HostMigrationPorts, _env: Readonly<Record<string, string | undefined>> = process.env): HostMigrationPorts {
+    throw new Error('2g-3b: not built yet');
+}

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { githubSealedSources } from '../src/main/github-account.js';
-import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type HostVault, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import { fileMigrationBook, gatherSources, stuckLines, type HostVault, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { workstationSealedSources } from '../src/main/workstation-identity.js';
 
 /**
@@ -27,17 +28,17 @@ function memoryBook(states: Record<string, MigrationState>, failing = false): Mi
 describe('a row confirmed, with nothing left to name it', () => {
     it('is finished: the book says done, and the keychain is not asked', async () => {
         const states: Record<string, MigrationState> = { [NAME]: 'verified' };
-        expect(await migrateSecrets([], vaultThatMustNotBeAsked, memoryBook(states))).toEqual([{ name: NAME, status: 'moved' }]);
+        expect(await moveAll([], vaultThatMustNotBeAsked, memoryBook(states))).toEqual([{ name: NAME, status: 'moved' }]);
         expect(states[NAME]).toBe('done');
     });
 
     it('the book not taking it is said, as for any other row', async () => {
-        expect(await migrateSecrets([], vaultThatMustNotBeAsked, memoryBook({ [NAME]: 'verified' }, true))).toEqual([{ name: NAME, status: 'book-failed' }]);
+        expect(await moveAll([], vaultThatMustNotBeAsked, memoryBook({ [NAME]: 'verified' }, true))).toEqual([{ name: NAME, status: 'book-failed' }]);
     });
 
     it('a row already done is left alone: nothing written, nothing to say (the second launch changes nothing)', async () => {
         const book = memoryBook({ [NAME]: 'done' });
-        expect(await migrateSecrets([], vaultThatMustNotBeAsked, book)).toEqual([]);
+        expect(await moveAll([], vaultThatMustNotBeAsked, book)).toEqual([]);
         expect(book.writes).toEqual([]);
     });
 
@@ -45,7 +46,7 @@ describe('a row confirmed, with nothing left to name it', () => {
         const removed: string[] = [];
         const states: Record<string, MigrationState> = { [NAME]: 'verified' };
         const vault: HostVault = { store: vaultThatMustNotBeAsked.store, compare: async () => 'same' };
-        const outcomes = await migrateSecrets([{ name: NAME, old: { read: async () => ({ kind: 'value', value: 'word' }), remove: async () => { removed.push(NAME); } } }], vault, memoryBook(states));
+        const outcomes = await moveAll([{ name: NAME, old: { read: async () => ({ kind: 'value', value: 'word' }), remove: async () => { removed.push(NAME); } } }], vault, memoryBook(states));
         expect(outcomes).toEqual([{ name: NAME, status: 'moved' }]);
         expect(removed).toEqual([NAME]);
     });
@@ -61,7 +62,7 @@ describe('with the real files', () => {
         const bookFile = join(dir, 'keychain-migration.json');
         writeFileSync(file, JSON.stringify({ version: 1, state: 'signed-in', login: 'vm-person', name: null, source: 'sign-in' }));
         writeFileSync(bookFile, JSON.stringify({ version: 1, secrets: { 'github/access': 'done', [NAME]: 'verified' } }));
-        const launch = async () => migrateSecrets(await githubSealedSources({ file, cipher: { decrypt: () => { throw new Error('nothing is sealed'); } } }), vaultThatMustNotBeAsked, fileMigrationBook(bookFile));
+        const launch = async () => moveAll(await githubSealedSources({ file, cipher: { decrypt: () => { throw new Error('nothing is sealed'); } } }), vaultThatMustNotBeAsked, fileMigrationBook(bookFile));
 
         // CONTROL: this is the state S4 found. Nothing names the row.
         expect(await githubSealedSources({ file, cipher: { decrypt: () => '' } })).toEqual([]);
@@ -96,7 +97,7 @@ describe.each([
     let dir: string;
     let file: string;
     let bookFile: string;
-    const launch = async () => migrateSecrets(await sources(file), vaultThatMustNotBeAsked, fileMigrationBook(bookFile));
+    const launch = async () => moveAll(await sources(file), vaultThatMustNotBeAsked, fileMigrationBook(bookFile));
     const row = () => JSON.parse(readFileSync(bookFile, 'utf8')).secrets[name];
     beforeEach(() => {
         dir = mkdtempSync(join(tmpdir(), 'book-absent-'));
@@ -173,7 +174,7 @@ describe('gathering the sources', () => {
         const sources = await gather(file);
         expect(sources.map(({ name }) => name)).toEqual([file, 'tynn/pairing']);
         const states: Record<string, MigrationState> = {};
-        expect(await migrateSecrets(sources, vault, memoryBook(states))).toEqual([{ name: file, status: 'old-copy-unreadable' }, { name: 'tynn/pairing', status: 'moved' }]);
+        expect(await moveAll(sources, vault, memoryBook(states))).toEqual([{ name: file, status: 'old-copy-unreadable' }, { name: 'tynn/pairing', status: 'moved' }]);
         expect(states['tynn/pairing']).toBe('done');
         expect(states[file]).toBeUndefined();
     });
@@ -183,13 +184,13 @@ describe('gathering the sources', () => {
     });
 
     it('what a failure said goes nowhere near the outcome: the file\'s name and a status', async () => {
-        const outcomes = await migrateSecrets(await gather('agents.json'), vault, memoryBook({}));
+        const outcomes = await moveAll(await gather('agents.json'), vault, memoryBook({}));
         expect(JSON.stringify(outcomes)).not.toContain('secret word');
     });
 
     it('a row it covers stays verified, and one it does not cover finishes', async () => {
         const states: Record<string, MigrationState> = { 'agents.json/one': 'verified', 'github/refresh': 'verified' };
-        await migrateSecrets(await gather('agents.json'), vault, memoryBook(states));
+        await moveAll(await gather('agents.json'), vault, memoryBook(states));
         expect(states['agents.json/one']).toBe('verified');
         expect(states['github/refresh']).toBe('done');
     });
@@ -201,13 +202,13 @@ describe('gathering the sources', () => {
             { file: 'github.json', covers: 'github/', sources: () => githubSealedSources({ file, cipher: { decrypt: () => { throw new Error('Error while decrypting the ciphertext'); } } }) },
             { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => [good] },
         ]);
-        expect(await migrateSecrets(sources, vault, memoryBook({}))).toEqual([{ name: 'github/access', status: 'old-copy-unreadable' }, { name: 'github/refresh', status: 'old-copy-unreadable' }, { name: 'tynn/pairing', status: 'moved' }]);
+        expect(await moveAll(sources, vault, memoryBook({}))).toEqual([{ name: 'github/access', status: 'old-copy-unreadable' }, { name: 'github/refresh', status: 'old-copy-unreadable' }, { name: 'tynn/pairing', status: 'moved' }]);
         expect(JSON.parse(readFileSync(file, 'utf8')).tokenEnc).toBe('YQ==');
     });
 
     it('wired: the window\'s sources and the agents\' go through it', () => {
         expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/gatherSources\(\[/);
-        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/legacySecrets: \(\) => gatherSources\(\[/);
+        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/const unsealer: LegacyUnsealer = legacyUnsealer\(\{\s*sources: \(\) => \{[\s\S]*?return gatherSources\(\[/);
     });
 });
 
@@ -229,7 +230,7 @@ describe('a book that does not parse', () => {
         compare: async (name, value) => { const held = keychain.get(name); return held === undefined ? 'missing' : held === value ? 'same' : 'different'; },
     });
     const sources = () => [{ name: NAMED, old: { read: async () => (seal === null ? { kind: 'none' as const } : { kind: 'value' as const, value: seal }), remove: async () => { seal = null; removed += 1; } } }];
-    const launch = () => migrateSecrets(sources(), vault(), fileMigrationBook(bookFile, { log: (line) => lines.push(line) }));
+    const launch = () => moveAll(sources(), vault(), fileMigrationBook(bookFile, { log: (line) => lines.push(line) }));
     const row = () => JSON.parse(readFileSync(bookFile, 'utf8')).secrets[NAMED];
     const asides = () => readdirSync(dir).filter((name) => name.startsWith('keychain-migration.json.corrupt-'));
     beforeEach(() => {
@@ -324,17 +325,17 @@ describe('a book that may yet say what it says: the safe stop, for this launch',
 
     it('it cannot be read at all (here a folder, standing for a lock or a permission error): nothing touched, nothing set aside, and the next launch can go on', async () => {
         mkdirSync(bookFile);
-        expect(await migrateSecrets(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'book-failed' }]);
+        expect(await moveAll(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'book-failed' }]);
         expect(readdirSync(dir)).toEqual(['keychain-migration.json']);
         rmSync(bookFile, { recursive: true });
         writeFileSync(bookFile, JSON.stringify({ version: 1, secrets: { [NAMED]: 'done' } }));
-        expect(await migrateSecrets(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'already' }]);
+        expect(await moveAll(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'already' }]);
     });
 
     it('it is from a newer Genie: not ours to set aside', async () => {
         const text = JSON.stringify({ version: 2, secrets: { [NAMED]: 'something-new' } });
         writeFileSync(bookFile, text);
-        expect(await migrateSecrets(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'book-failed' }]);
+        expect(await moveAll(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'book-failed' }]);
         expect(readFileSync(bookFile, 'utf8')).toBe(text);
         expect(readdirSync(dir)).toEqual(['keychain-migration.json']);
     });
@@ -343,7 +344,7 @@ describe('a book that may yet say what it says: the safe stop, for this launch',
         const held = new Map([[NAMED as string, 'stale']]);
         const vault: HostVault = { store: async (name, value) => { held.set(name, value); return { ok: true }; }, compare: async (name, value) => (held.get(name) === value ? 'same' : 'different') };
         const sources = [{ name: NAMED, old: { read: async () => ({ kind: 'value' as const, value: 'seal' }), remove: async () => {} } }];
-        expect(await migrateSecrets(sources, vault, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'moved' }]);
+        expect(await moveAll(sources, vault, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'moved' }]);
         expect(held.get(NAMED)).toBe('seal');
         expect(existsSync(bookFile)).toBe(true);
     });

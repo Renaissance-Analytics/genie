@@ -260,3 +260,22 @@ export function fileMigrationBook(file: string, options: { log?: (line: string) 
         },
     };
 }
+
+/** What the host's half needs of a source (Tynn #959, 2g-3b). */
+export interface VerifySource {
+    readonly name: SecretName;
+    readonly old: Pick<OldCopy, 'read'>;
+    readonly covers?: string;
+}
+/** The host's first half (Tynn #959, 2g-3b). */
+export function verifySecrets(_sources: readonly VerifySource[], _vault: HostVault, _book: MigrationBook): Promise<MigrationOutcome[]> {
+    throw new Error('2g-3b: not built yet');
+}
+/** The window's delete (Tynn #959, 2g-3b). */
+export async function removeOldCopies(_sources: readonly MigrationSource[], _outcomes: readonly MigrationOutcome[]): Promise<{ removed: SecretName[]; outcomes: MigrationOutcome[] }> {
+    throw new Error('2g-3b: not built yet');
+}
+/** The host's second half (Tynn #959, 2g-3b). */
+export function finishSecrets(_names: readonly SecretName[], _book: MigrationBook): Promise<MigrationOutcome[]> {
+    throw new Error('2g-3b: not built yet');
+}

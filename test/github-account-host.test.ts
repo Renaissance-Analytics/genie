@@ -8,7 +8,8 @@ import { GithubNotInstalledError } from '../src/core/github.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import { GithubAccount, githubSealedSources, type GithubAccountPorts } from '../src/main/github-account.js';
 import { GithubAccountService, type GithubGitPorts } from '../src/main/github-account-service.js';
-import { migrateSecrets, type HostVault, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import type { HostVault, MigrationBook, MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
@@ -359,7 +360,7 @@ describe('what an older Genie sealed moves to the keychain', () => {
         const k = keychain();
         const account = await GithubAccount.open(portsWith(k, fakeGithub()));
         expect(account.view().status).toBe('expired');
-        const moved = await migrateSecrets(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
         expect(moved).toEqual([{ name: 'github/access', status: 'moved' }, { name: 'github/refresh', status: 'moved' }]);
         expect(k.held.get('github/access')).toBe(TOKEN);
         expect(k.held.get('github/refresh')).toBe(REFRESH);
@@ -374,7 +375,7 @@ describe('what an older Genie sealed moves to the keychain', () => {
     it('a seal that will not open is not moved and not deleted', async () => {
         writeFileSync(file, record({ tokenEnc: Buffer.from('other:x').toString('base64') }));
         const k = keychain();
-        const moved = await migrateSecrets(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
         expect(moved[0]).toEqual({ name: 'github/access', status: 'old-copy-unreadable' });
         expect(JSON.parse(readFileSync(file, 'utf8')).tokenEnc).toBeDefined();
     });
@@ -382,7 +383,7 @@ describe('what an older Genie sealed moves to the keychain', () => {
     it('GENIE 1’S LOGIN carries over the same way, with no file yet: tokens moved, and the record says whose and from where', async () => {
         const v1Settings = () => ({ github_token_enc: seal(TOKEN), github_user: 'ada', github_refresh_enc: seal(REFRESH), github_token_exp_ms: String(NOW + 1000), github_refresh_exp_ms: String(NOW + 9000) });
         const k = keychain();
-        const moved = await migrateSecrets(await githubSealedSources({ file, cipher, v1Settings }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await githubSealedSources({ file, cipher, v1Settings }), vaultOver(k), memoryBook());
         expect(moved.map((m) => m.status)).toEqual(['moved', 'moved']);
         expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ state: 'signed-in', login: 'ada', source: 'genie-1', accessExpiresAt: NOW + 1000, refreshExpiresAt: NOW + 9000 });
         const account = await GithubAccount.open(portsWith(k, fakeGithub()));

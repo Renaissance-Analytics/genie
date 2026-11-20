@@ -35,7 +35,8 @@ describe('the summary carries the role and the Tynn account', () => {
 describe('genie-host says them, as its relay host and its Tynn account change', () => {
     const host = code(src('src/main/genie-host.ts'));
     it('read from its relay host and its account; poked on each of their changes', () => {
-        expect(host).toMatch(/read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\), \{ workstationRole: relayHostService\.role\(\), tynnAccountKey: tynnAccountNow \? accountKeyOf\(tynnAccountNow\.status\(\)\) : null \}\)/);
+        // ...and, since Tynn #959 (2g-3b), whether its keychain can keep secrets and GitHub's block (split-2g3b-adopt-legacy.test.ts).
+        expect(host).toMatch(/read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\), \{ workstationRole: relayHostService\.role\(\), tynnAccountKey: tynnAccountNow \? accountKeyOf\(tynnAccountNow\.status\(\)\) : null, keychainReady: /);
         expect(host).toMatch(/onChange: \(\) => \{ engineRef\?\.relayHostEvent\(relayHostService\.status\(\)\); featureChanged\(\); pokeSummary\(\); \}/);
         expect(host).toMatch(/account\.onChange\(pokeSummary\)/);
     });
@@ -54,10 +55,9 @@ describe('main reads the role and the account from the summary', () => {
         expect(main).not.toMatch(/tynnAccount\.onChange\(\(\) => \{ closeRelayWindowsOfOtherAccounts\(\); \}\)/);
     });
 
-    it('main’s relay replica is kept only for the one-shot registration with Genie 1’s identity (until 2g-3b)', () => {
-        expect(main).not.toMatch(/linkedRelayHost\.(onChange|refresh|role|said|unknownWhy|workstation|relay)\(/);
-        expect((main.match(/linkedRelayHost\.register\(/g) ?? []).length).toBe(1);
-        expect(src('test/split-2e-window-guard.test.ts')).toMatch(/relayHost: '2g'/);
+    it('main holds no relay replica: Genie 1’s identity travels with the legacy secrets and genie-host registers itself (2g-3b, Tynn #959)', () => {
+        expect(main).not.toMatch(/linkedRelayHost/);
+        expect(src('test/split-2e-window-guard.test.ts')).not.toMatch(/relayHost: '2g'/);
     });
 
     it('no account change says the window’s own facts again (pushFeatures is the window’s pane and notice only)', () => {

@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import {
     KEYRING_PACKAGES,
     LinuxKeyring,
@@ -12,8 +10,6 @@ import {
     installArgv,
     installPlan,
     parseSecretServiceListing,
-    takeResumeSignIn,
-    markResumeSignIn,
     type InstallPlan,
     type KeyringFacts,
     type KeyringPorts,
@@ -295,18 +291,13 @@ describe('LinuxKeyring — the card and its flow', () => {
     });
 });
 
-describe('resume the sign-in after the restart (no secret is written)', () => {
-    it('a marker that is taken once', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-keyring-resume-'));
-        try {
-            expect(takeResumeSignIn(dir)).toBeNull();
-            markResumeSignIn(dir, 'tynn');
-            const text = fs.readFileSync(path.join(dir, 'keyring-resume.json'), 'utf8');
-            // Only which sign-in to reopen — never a code or token.
-            expect(JSON.parse(text)).toEqual({ resume: 'tynn' });
-            expect(takeResumeSignIn(dir)).toBe('tynn');
-            expect(takeResumeSignIn(dir)).toBeNull();
-        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+// The card's "Restart Genie" left a note to reopen Tynn's sign-in; nothing has written one since the card asks for no restart
+// (Tynn #594 took the last writer), so the note and its reader went with main's keyring card (Tynn #959, 2g-3b).
+describe('no sign-in waits for a restart', () => {
+    it('nothing writes or reads a resume note', () => {
+        for (const file of ['src/main/linux-keyring.ts', 'src/main/main.ts', 'src/main/genie-host.ts']) {
+            expect(fs.readFileSync(file, 'utf8'), file).not.toMatch(/keyring-resume\.json|ResumeSignIn/);
+        }
     });
 });
 

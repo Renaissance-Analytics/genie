@@ -38,9 +38,12 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
             terminals: [{ workspaceId: 'ws_a', pid: 101 }, { workspaceId: 'ws_b', pid: 202 }],
             armedFlows: ['nightly'],
             scheduledTasks: ['backup'],
-            // Not said here: a drone signed out, fail closed (the role and the account, Tynn #954 2g-3a).
+            // Not said here: a drone signed out, fail closed (the role and the account, Tynn #954 2g-3a), with a keychain that
+            // cannot keep secrets and no GitHub block (Tynn #959, 2g-3b).
             workstationRole: 'drone',
             tynnAccountKey: null,
+            keychainReady: false,
+            githubBlocked: false,
         });
     });
 
@@ -50,7 +53,7 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
     });
 
     it('read from the wire: a malformed summary is the empty one, never a throw', () => {
-        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], workstationRole: 'drone', tynnAccountKey: null });
+        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], workstationRole: 'drone', tynnAccountKey: null, keychainReady: false, githubBlocked: false });
         expect(readHostSummary(null)).toEqual(EMPTY_HOST_SUMMARY);
         expect(readHostSummary({ terminals: 'no', armedFlows: [1], scheduledTasks: null })).toEqual(EMPTY_HOST_SUMMARY);
     });
@@ -129,7 +132,8 @@ describe('genie-host computes it and ends its own terminals at shutdown', () => 
     const host = code(src('src/main/genie-host.ts'));
 
     it('composed over its terminal host, its flows and its process book, said on each of their changes', () => {
-        expect(host).toMatch(/const hostSummary = hostSummaryFeed\(\{\s*read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\)\),/);
+        // ...and the role, the account (2g-3a) and the keychain and GitHub's block (2g-3b) after them.
+        expect(host).toMatch(/const hostSummary = hostSummaryFeed\(\{\s*read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\), \{/);
         expect(host).toMatch(/terminalHost\.onChange\(listener\)/);
         expect(host).toMatch(/hostSummary,/);
     });

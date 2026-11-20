@@ -168,8 +168,10 @@ describe('genie.relay-host in the catalog', () => {
 describe('with genie-host linked, the window runs no relay host (source guards)', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
-    it('main.ts registers through genie-host; genie-host attaches to its own remote host', () => {
-        expect(main).toMatch(/await linkedRelayHost\.register\(/);
+    it('genie-host registers itself, with Genie 1’s record the window hands it; genie-host attaches to its own remote host', () => {
+        // The window unseals Genie 1's record and hands it over (keychain.adoptLegacy, Tynn #959 2g-3b); it registers nothing.
+        expect(main).not.toMatch(/linkedRelayHost|\.relayHost\(\)/);
+        expect(host).toMatch(/relayHostService\.register\(genie1Identity\)/);
         expect(main).not.toMatch(/linkedRemote\.bridge/);
         expect(host).toMatch(/attach: \(transport\) => remoteHub\.add\(transport\)/);
         expect(host).not.toMatch(/RelayBridgeHost/);
