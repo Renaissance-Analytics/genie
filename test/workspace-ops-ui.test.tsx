@@ -50,12 +50,13 @@ describe('the Workspace surface', () => {
         expect(none).not.toContain('data-action="remove-workspace"');
         expect(render(ops())).toContain('data-action="remove-workspace"');
         const awake = render(ops(), 'settings');
-        expect(awake).toContain('data-action="hibernate"');
+        // On its card, not in the bar (the bar shows on every view, so a bare toContain would pass on the old bar too).
+        expect(awake).toMatch(/data-ws-card="hibernate"(?:(?!<\/section>).)*data-action="hibernate"/s);
         expect(awake).not.toContain('data-asleep');
         const asleep = render(ops({ asleep: true }), 'settings');
         expect(asleep).toContain('data-asleep');
         expect(asleep).toMatch(/hibernating/);
-        expect(asleep).toContain('data-action="wake"');
+        expect(asleep).toMatch(/data-ws-card="hibernate"(?:(?!<\/section>).)*data-action="wake"/s);
         expect(asleep).not.toContain('data-action="hibernate"');
     });
 
