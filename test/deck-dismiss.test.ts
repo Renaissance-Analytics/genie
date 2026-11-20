@@ -155,19 +155,20 @@ describe('the feature actions the Deck and the window send', () => {
     });
 });
 
-describe('the window’s Dismiss reaches main', () => {
-    it('the preload invokes question:dismiss WITH the form’s notes, main handles it, and the controller dismisses — once, with them', async () => {
+describe('another machine’s Dismiss reaches main', () => {
+    // This machine's Dismiss is the page's features.act over the one protocol since 2f-1 (Tynn #912; question-bridge.ts).
+    it('the preload sends question:remote WITH the form’s notes, main handles it, and the controller dismisses — once, with them', async () => {
         const { electronQuestionWindow } = await import('../src/main/question-window-electron.js');
         await import('../src/main/question-preload.js');
         const dismissed: unknown[] = [];
         const ctl = { dismiss: async (notes: unknown) => { dismissed.push(notes); return { ok: true }; } } as unknown as QuestionWindow;
-        electronQuestionWindow({ here: '/genie/main', preload: '/genie/main/question-preload.cjs', controller: () => ctl });
-        await ipc.exposed.get('genieQuestion')!.dismiss!(['not now']);
-        expect(ipc.invoked).toEqual([['question:dismiss', ['not now']]]);
-        expect(ipc.handlers.has('question:dismiss')).toBe(true);
-        expect(await ipc.handlers.get('question:dismiss')!({}, ['not now'])).toEqual({ ok: true });
+        electronQuestionWindow({ here: '/genie/main', preload: '/genie/main/question-preload.cjs', controller: () => ctl, owns: () => true });
+        await ipc.exposed.get('genieQuestion')!.remote!({ kind: 'dismiss', id: 'remote:1:q', notes: ['not now'] });
+        expect(ipc.invoked).toEqual([['question:remote', { kind: 'dismiss', id: 'remote:1:q', notes: ['not now'] }]]);
+        expect(ipc.handlers.has('question:remote')).toBe(true);
+        expect(await ipc.handlers.get('question:remote')!({}, { kind: 'dismiss', id: 'remote:1:q', notes: ['not now'] })).toEqual({ ok: true });
         // A note that is not a string is no note — never a crash, never "[object Object]" in the agent's mail.
-        expect(await ipc.handlers.get('question:dismiss')!({}, ['ok', 7])).toEqual({ ok: true });
+        expect(await ipc.handlers.get('question:remote')!({}, { kind: 'dismiss', id: 'remote:1:q', notes: ['ok', 7] })).toEqual({ ok: true });
         // COUNTED: two dismisses reached the controller, each with exactly its notes.
         expect(dismissed).toEqual([['not now'], ['ok', '']]);
     });

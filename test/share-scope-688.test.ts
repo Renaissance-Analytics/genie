@@ -177,6 +177,14 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('files.open', 'allow', ['tynn', 'a.txt'], [['fancy', 'a.txt']]),
         row('files.readMedia', 'allow', ['tynn', 'a.png'], [['fancy', 'a.png']]),
         row('files.upload', 'allow', ['tynn', '', STAGED], [['fancy', '', STAGED]]),
+        // Opened on the host's own screen (Tynn #912, 2f-1): the owner's; a guest never puts anything on it.
+        row('files.openExternal', 'refuse', ['tynn', 'a.txt']),
+        row('files.reveal', 'refuse', ['tynn', 'a.txt']),
+        // A question's named files and visuals (Tynn #912, 2f-1): read by the host from its own Deck, where the question's
+        // workspace is checked against the guest's (host-question-reads.ts; split-2f-question-window.test.ts).
+        row('questions.files', 'allow', ['q_1', ['a.md']]),
+        row('questions.file', 'allow', ['q_1', 'a.md']),
+        row('questions.visuals', 'allow', ['q_1']),
         row('host.listDir', 'allow', ['/w/tynn'], [['/w/fancy'], ['/w'], ['/w/tynn/../fancy']]),
         row('host.home', 'answer'),
         row('host.mkdir', 'refuse', ['/w/tynn', 'x']),

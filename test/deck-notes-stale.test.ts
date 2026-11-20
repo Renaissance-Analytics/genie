@@ -202,10 +202,11 @@ describe('main wires it', () => {
         expect(main.indexOf('askerLivenessKnown = host !== null;')).toBeGreaterThan(main.indexOf('await registry.load('));
     });
     it('the question window’s Dismiss sends the notes on to deck.dismiss', () => {
-        // Another machine's question (Tynn #726) is dismissed on that machine, with the same notes; this machine's as before.
-        expect(main.match(/dismiss:\s*async\s*\(item,\s*notes\)\s*=>\s*\{\s*if\s*\(remoteQuestions\.owns\(item\.id\)\)\s*return remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.dismiss',\s*notes\s*\}\);\s*await questionAction\(\{\s*kind:\s*'deck\.dismiss',\s*item,\s*notes\s*\}\);\s*\}/g) ?? []).toHaveLength(1);
-        // Encoded for the wire like any client's answer (Tynn #861).
-        expect(main).toContain("const reply = await client.call('engine.featureQuestion', [deckActionForWire(action)]);");
-        expect(main).toContain('if (!reply.ok) throw new Error(reply.reason);');
+        // Another machine's question (Tynn #726) is dismissed on that machine, with the same notes. This machine's is the
+        // page's features.act over the one protocol (Tynn #912, 2f-1; question-bridge.ts): main dismisses none itself.
+        expect(main.match(/dismiss:\s*\(item,\s*notes\)\s*=>\s*remoteQuestions\.act\(item,\s*\{\s*kind:\s*'deck\.dismiss',\s*notes\s*\}\)/g) ?? []).toHaveLength(1);
+        expect(main).not.toContain('engine.featureQuestion');
+        const page = readFileSync(new URL('../src/renderer/question-bridge.ts', import.meta.url), 'utf8');
+        expect(page).toMatch(/kind: 'deck\.dismiss', item, notes/);
     });
 });

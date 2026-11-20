@@ -177,3 +177,7 @@ export class RemoteQuestions {
         return true;
     }
 }
+
+export function actOnRemoteQuestion(_raw: unknown, _ports: unknown): Promise<unknown> {
+    throw new Error('2f-1: not built yet');
+}

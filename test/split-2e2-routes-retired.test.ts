@@ -12,7 +12,7 @@ import { SessionEngineServer } from '../src/main/session-engine-server.js';
  * engine.drafts.fileOpen/fileRead/fileClose were left for tests only (the coordinator's decision). What main still sent
  * there goes where it belongs: genie-host keeps the workspace agent files itself (host-workspace-files.ts), and invalidates
  * its features on its own sources (the tunnel's browser op among them), so main's 'invalidate' and its
- * `features.invalidated` event go too. engine.featureQuestion stays until 2f (#912).
+ * `features.invalidated` event go too. engine.featureQuestion went in 2f-1 (#912): the question window's answer is features.act.
  */
 
 const code = (path: string) => readFileSync(path, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
@@ -51,10 +51,11 @@ describe('the engine server\'s feature and draft-file routes are retired (step 2
         expect(stores.draftFileClose).not.toHaveBeenCalled();
     });
 
-    it('CONTROL: the same window\'s question answer still reaches the features (engine.featureQuestion, until 2f)', async () => {
+    it('engine.featureQuestion is retired too (Tynn #912, 2f-1): answered no, and the features are not asked', async () => {
+        expect(ENGINE_METHODS as readonly string[]).not.toContain('engine.featureQuestion');
         const { client, features } = await localWindow();
-        expect(await client.call('engine.featureQuestion', [{ kind: 'deck.dismiss', id: 'q_1' }])).toMatchObject({ ok: true });
-        expect(features.call).toHaveBeenCalledTimes(1);
+        expect(await client.call('engine.featureQuestion' as never, [{ kind: 'deck.dismiss', id: 'q_1' }])).toMatchObject({ ok: false });
+        expect(features.call).not.toHaveBeenCalled();
     });
 
     it('nothing is left behind them: the server, the stores and the features say none of it', () => {

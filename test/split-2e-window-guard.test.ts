@@ -144,8 +144,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // count, the Restart/Shut-down list, the quit plan and quit's closeAll. Those read it synchronously, so they move
         // with the replica in 2g, never as a second copy beside it.
         terminals: '2g',
-        // 2f (#912): the question window's answers, and the device link's frames.
-        'call:engine.featureQuestion': '2f', deviceLink: '2f',
+        // 2f-2 (#941): the device link's frames. The question window's answers moved in 2f-1 (#912).
+        deviceLink: '2f',
         // Re-labelled from 2b by the coordinator (2026-11-19): main's deck liveness until the question window and the tray
         // badge read the host's deck. Take Over moved in 2b-1.
         takeOvers: '2f',
