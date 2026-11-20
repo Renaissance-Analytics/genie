@@ -240,7 +240,7 @@ const MEASURE = `(() => {
   });
   const at = svg.getBoundingClientRect();
   const top = document.elementFromPoint(at.left + 5, at.top + 5);
-  return JSON.stringify({ overlay: true, size: { w: box.width, h: box.height }, z: getComputedStyle(svg).zIndex, pointerEvents: getComputedStyle(svg).pointerEvents, arcs, dimmed: document.querySelectorAll('[data-reveal="dim"]').length, peers: document.querySelectorAll('[data-reveal="peer"]').length });
+  return JSON.stringify({ overlay: true, size: { w: box.width, h: box.height }, z: getComputedStyle(svg).zIndex, pointerEvents: getComputedStyle(svg).pointerEvents, arcs, dimmed: document.querySelectorAll('[data-reveal="dim"]').length, peers: document.querySelectorAll('[data-reveal="peer"]').length, swatches: Object.fromEntries([...document.querySelectorAll('[data-agent]')].map((row) => [row.getAttribute('data-agent'), row.querySelector('[data-column="workspace"] [data-workspace-color]')?.getAttribute('data-workspace-color') ?? null])) });
 })()`;
 
 let failed = false;
@@ -306,6 +306,12 @@ try {
     check('every shadow meets its arc at both contact points (0.5 px), unblurred, never wider than the arc', hover.arcs.every((a) => a.shadowEnds && a.shadowEnds.start < 0.5 && a.shadowEnds.end < 0.5 && !a.shadowEnds.filter && !a.shadowEnds.transform && a.shadowEnds.width <= a.strokeWidth), hover.arcs.map((a) => ({ peer: a.peer, shadow: a.shadowEnds, strokeWidth: a.strokeWidth })));
     // The sender's colour (owner 2026-11-17): each arc in its sender's workspace colour; meridian's and vesper's workspaces differ.
     check('arcs are drawn in the sending workspace colour: two workspaces, two colours', hover.arcs.every((a) => /^#[0-9a-f]{6}$/.test(a.color ?? '') && a.drawn !== '') && new Set(hover.arcs.map((a) => a.drawn)).size >= 2, hover.arcs.map((a) => ({ peer: a.peer, direction: a.direction, color: a.color, drawn: a.drawn })));
+    // Tynn #956: the Dashboard is served by genie-host since beta.65, whose colours were never read: every swatch blank, every arc the
+    // violet fallback. Every row's Workspace swatch is filled, one colour per workspace, three workspaces three colours.
+    const swatchOf = (id) => hover.swatches?.[id] ?? null;
+    check('every Dashboard row shows its workspace colour swatch: three workspaces, three colours', AGENTS.every((a) => /^#[0-9a-f]{6}$/i.test(swatchOf(a.id) ?? '')) && WORKSPACES.every((w) => new Set(AGENTS.filter((a) => a.ws === w.id).map((a) => swatchOf(a.id))).size === 1) && new Set(AGENTS.map((a) => swatchOf(a.id))).size === WORKSPACES.length, hover.swatches);
+    // Each arc is the SENDER's real workspace colour, the one its swatch shows (meridian's on an outgoing arc, the partner's on an incoming one), never the fallback violet.
+    check("each arc carries its sender workspace's real colour (its swatch), never the violet fallback", hover.arcs.length === 6 && hover.arcs.every((a) => { const sender = a.direction === 'out' ? by('meridian').id : a.peer; return a.color !== null && a.color === swatchOf(sender) && a.drawn !== '' && a.drawn.toLowerCase() !== '#a78bfa' && !a.drawn.includes('violet'); }), hover.arcs.map((a) => ({ peer: a.peer, direction: a.direction, color: a.color, drawn: a.drawn, senderSwatch: swatchOf(a.direction === 'out' ? by('meridian').id : a.peer) })));
     check('the other rows dim and the partners are tinted', hover.dimmed > 0 && hover.peers === 6, { dimmed: hover.dimmed, peers: hover.peers });
     holdAt(cell.x, cell.y);
     // No label covers row text or another label, measured in the real layout (getBoundingClientRect of each label and each text leaf).
