@@ -1,6 +1,7 @@
 import { Icon, Kanban, useKanban } from '@particle-academy/react-fancy';
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Flash } from './Flash.js';
+import { LEGACY_STATUS_STATE, SLICE_STATE_LABEL } from '../../core/slice-state.js';
 import {
     applyBoardChanges,
     BoardFollower,
@@ -326,6 +327,10 @@ function CardView({ card, scope, onScope, onAction, claim }: CardProps) {
                     )}
                 </div>
                 <div className="flex items-center gap-1 text-[11px] text-[var(--fg-3)]">
+                    {/* A Slice whose state is not its column's (ready, rejected or failed under Proposed) says which. */}
+                    {card.state !== null && card.state !== LEGACY_STATUS_STATE[card.status]
+                        ? <span data-tynn-card-state={card.state} className="rounded-full bg-[var(--bg-2)] px-1.5 text-[10px] font-medium text-[var(--fg-2)]">{SLICE_STATE_LABEL[card.state]}</span>
+                        : null}
                     {card.progress !== null ? <span data-tynn-progress="">{card.progress}</span> : null}
                     {card.claim !== null ? (
                         <span className="inline-flex items-center gap-0.5">
@@ -495,7 +500,7 @@ function Detail({ detail, op, onClose, onAction, onRetry }: { detail: BoardDetai
                 <IconButton icon="x" label="Close" onClick={onClose} data={{ 'data-tynn-detail-close': '' }} />
             </div>
             <div className="flex items-center gap-2 text-[11px] text-[var(--fg-3)]">
-                <span data-tynn-detail-status={detail.status} className="rounded bg-[var(--bg-2)] px-1.5 py-0.5">{detail.status}</span>
+                <span data-tynn-detail-status={detail.status} data-tynn-detail-state={detail.state ?? undefined} className="rounded bg-[var(--bg-2)] px-1.5 py-0.5">{detail.statusLabel}</span>
                 {detail.parent ? <span className="truncate">{detail.parent.label}</span> : null}
             </div>
             {editOp && editOp.phase === 'done' && !editing ? <OpLine op={editOp} /> : null}

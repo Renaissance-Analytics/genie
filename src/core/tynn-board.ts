@@ -13,6 +13,8 @@
  * is named in BOARD_GAPS with the reason.
  */
 
+import { LEGACY_STATUS_STATE, SLICE_STATE_LABEL, sliceStateOf, type SliceState } from './slice-state.js';
+
 export type BoardLevel = 'versions' | 'stories' | 'tasks';
 export type BoardKind = 'version' | 'story' | 'task';
 /** Where the tab is: a version's stories, a story's tasks, and (as tynn.ai's `?focus=`) the card whose detail is open. */
@@ -158,6 +160,15 @@ export const COLUMN_LABEL: Readonly<Record<string, string>> = {
     backlog: 'Backlog', blocked: 'Blocked', in_progress: 'In progress', doing: 'Doing', qa: 'QA', done: 'Done',
 };
 
+/**
+ * A story is a Slice since Tynn PM-1 (Tynn #933, PM G-0): its column is still keyed by the legacy status the board
+ * answer and the contract carry, and named for the Slice state that status stands for (spec §13.1). Tasks are not Slices.
+ */
+export const STORY_COLUMN_LABEL: Readonly<Record<string, string>> = Object.fromEntries(
+    Object.entries(LEGACY_STATUS_STATE).map(([status, state]) => [status, SLICE_STATE_LABEL[state]]),
+);
+const columnLabel = (level: BoardLevel, status: string): string => (level === 'stories' ? STORY_COLUMN_LABEL[status] : undefined) ?? COLUMN_LABEL[status] ?? status;
+
 /** A step is an icon (named for a screen reader), as tynn.ai's card buttons are. */
 const STEP: Readonly<Record<string, { icon: string; label: string }>> = {
     accept: { icon: 'check', label: 'Accept' },
@@ -170,6 +181,13 @@ const STEP: Readonly<Record<string, { icon: string; label: string }>> = {
     block: { icon: 'ban', label: 'Block' },
 };
 
+/** A story's steps, named for the Slice verbs they now are (spec §7.2: start = run, ready = submit, done = accept); same calls. */
+const STORY_STEP: Readonly<Record<string, { icon: string; label: string }>> = {
+    start: { icon: 'play', label: 'Run' },
+    ready: { icon: 'shield-check', label: 'Submit for review' },
+    done: { icon: 'circle-check', label: 'Accept' },
+};
+
 export interface BoardStep { readonly verb: string; readonly actionId: string; readonly disabled: boolean; readonly icon: string; readonly label: string }
 export interface BoardCard {
     readonly id: string;
@@ -178,6 +196,8 @@ export interface BoardCard {
     readonly number: string | null;
     readonly title: string;
     readonly status: string;
+    /** A story's Slice state: Tynn's `state`, or its legacy status mapped (sliceStateOf); null for versions and tasks. */
+    readonly state: SliceState | null;
     readonly order: number;
     /** `3/5` — done of total, under a version's or story's card. */
     readonly progress: string | null;
@@ -250,7 +270,7 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 function quickStep(kind: BoardKind, status: string, row: Row): BoardStep | null {
     const step = BOARD_QUICK_ACTIONS[kind][status];
     if (!step) return null;
-    const look = STEP[step.verb] ?? { icon: 'arrow-right', label: step.verb };
+    const look = (kind === 'story' ? STORY_STEP[step.verb] : undefined) ?? STEP[step.verb] ?? { icon: 'arrow-right', label: step.verb };
     return { verb: step.verb, actionId: `${kind}.${step.verb}`, disabled: step.guard !== undefined && row[step.guard] !== true, icon: look.icon, label: look.label };
 }
 
@@ -270,6 +290,7 @@ function card(kind: BoardKind, row: Row): BoardCard | null {
         number: n === null ? null : kind === 'version' ? n : `#${n}`,
         title: str(row.title) ?? '',
         status,
+        state: kind === 'story' ? sliceStateOf(row) : null,
         order: num(row.order) ?? 0,
         progress: total !== null && total > 0 ? `${done ?? 0}/${total}` : null,
         claimedBy: claim,
@@ -309,7 +330,7 @@ export function parseBoard(json: unknown): BoardView | null {
 function columnsOf(level: BoardLevel, cards: readonly BoardCard[]): BoardColumnView[] {
     return BOARD_LEVELS[level].columns.map((status) => ({
         status,
-        label: COLUMN_LABEL[status] ?? status,
+        label: columnLabel(level, status),
         cards: cards.filter((c) => c.status === status).sort((a, b) => a.order - b.order),
     }));
 }
@@ -416,6 +437,10 @@ export interface BoardDetail {
     readonly title: string;
     readonly description: string;
     readonly status: string;
+    /** A story's Slice state (sliceStateOf); null for a task. */
+    readonly state: SliceState | null;
+    /** What the flyout calls its status: a story's Slice state label, a task's status label. */
+    readonly statusLabel: string;
     /** A story's acceptance criteria. */
     readonly acceptanceCriteria: readonly string[];
     /** A story's tasks. */
@@ -462,6 +487,7 @@ export function parseDetail(json: unknown): BoardDetail | null {
         const label = kind === 'story' ? (n ?? str(parentRow.title) ?? '') : [hash(n), str(parentRow.title)].filter(Boolean).join(' ');
         parent = { id: str(parentRow.id)!, label };
     }
+    const state = kind === 'story' ? sliceStateOf(json) : null;
     return {
         kind,
         id,
@@ -469,6 +495,8 @@ export function parseDetail(json: unknown): BoardDetail | null {
         title: str(json.title) ?? '',
         description: typeof json.description === 'string' ? json.description : '',
         status,
+        state,
+        statusLabel: state !== null ? SLICE_STATE_LABEL[state] : (COLUMN_LABEL[status] ?? status),
         acceptanceCriteria: strings(json.acceptance_criteria),
         tasks: Array.isArray(json.tasks)
             ? json.tasks.filter(isRow).flatMap((t) => {

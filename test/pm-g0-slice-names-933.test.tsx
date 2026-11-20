@@ -126,9 +126,9 @@ describe('the board shows the Slice names over the same protocol', () => {
 
     it('the story detail names its state; a task\'s keeps its status', () => {
         const s = parseDetail({ kind: 'story', id: 's1', number: 3, title: 'S', status: 'qa' })!;
-        expect(renderToStaticMarkup(<TynnBoardPanel state={{ state: 'ready', view: LEGACY, detail: s }} onScope={noop} onAction={noop} />)).toMatch(/data-tynn-detail-status="awaiting_review"[^>]*>Awaiting review</);
+        expect(renderToStaticMarkup(<TynnBoardPanel state={{ state: 'ready', view: LEGACY, detail: s }} onScope={noop} onAction={noop} />)).toMatch(/data-tynn-detail-status="qa" data-tynn-detail-state="awaiting_review"[^>]*>Awaiting review</);
         const t = parseDetail({ kind: 'task', id: 't1', number: 4, title: 'T', status: 'doing' })!;
-        expect(renderToStaticMarkup(<TynnBoardPanel state={{ state: 'ready', view: LEGACY, detail: t }} onScope={noop} onAction={noop} />)).toMatch(/data-tynn-detail-status="doing"[^>]*>Doing</);
+        expect(renderToStaticMarkup(<TynnBoardPanel state={{ state: 'ready', view: LEGACY, detail: t }} onScope={noop} onAction={noop} />)).toMatch(/data-tynn-detail-status="doing" class[^>]*>Doing</);
     });
 });
 
@@ -143,10 +143,11 @@ describe('WIP and the pages', () => {
 
     it('a story\'s chip is its Slice state; a task\'s chip is its status', () => {
         const html = renderToStaticMarkup(<TynnWipPanel state={{ state: 'ready', view: wip }} onLens={noop} onStory={noop} onAction={noop} />);
-        expect(html).toMatch(/data-wip-status="running"[^>]*>Running</);
-        expect(html).toMatch(/data-wip-status="awaiting_review"[^>]*>Awaiting review</);
-        expect(html).toMatch(/data-wip-status="doing"[^>]*>Doing</);
-        expect(html).not.toMatch(/data-wip-status="in_progress"/);
+        // data-wip-status stays the legacy status (the live tests read it); data-wip-state is the Slice state.
+        expect(html).toMatch(/data-wip-status="in_progress" data-wip-state="running"[^>]*>Running</);
+        expect(html).toMatch(/data-wip-status="qa" data-wip-state="awaiting_review"[^>]*>Awaiting review</);
+        expect(html).toMatch(/data-wip-status="doing" class[^>]*>Doing</);
+        expect(html).not.toMatch(/>In Progress</);
     });
 
     it('the hotfix lane is named Hotfix, not VIP', () => {
