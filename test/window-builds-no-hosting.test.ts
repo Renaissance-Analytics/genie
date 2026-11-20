@@ -33,7 +33,9 @@ describe('source', () => {
     });
 
     it('CONTROL: the patterns read the real sources', () => {
-        expect(main).toMatch(/agentEngineLink\.client\.appInbox\(\)/);
+        // main reads no App Inbox replica since 2g-1 (Tynn #952); the hosting replica is still its own (2g-4).
+        expect(main).toMatch(/agentEngineLink\.client\.hosting\(\)/);
+        expect(main).not.toMatch(/agentEngineLink\.client\.appInbox\(\)/);
         expect(compose).toMatch(/input\.hosting/);
         expect(code('src/main/genie-host.ts')).toMatch(/composeHosting\(/);
     });
