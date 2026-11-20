@@ -80,7 +80,7 @@ describe('genie-host reads a question’s files and visuals from ITS deck and th
     });
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
     const reads = () => hostQuestionReads({
-        deck: () => [question('q_1', 'ws_a'), question('q_os', null), { ...question('n_1', 'ws_a'), source: 'notice' } as DeckItem],
+        deck: () => [question('q_1', 'ws_a'), question('q_os', null), { ...question('n_1', 'ws_a'), source: 'notice' } as unknown as DeckItem],
         workspacePath: (id) => (id === 'ws_a' ? dir : null),
     });
 

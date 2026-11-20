@@ -34,6 +34,8 @@ export function electronQuestionWindow(input: {
     // and visuals, are the page's own calls to genie-host over the one protocol (renderer/question-bridge.ts; Tynn #912).
     let last: QuestionView | null = null;
     const idOf = (raw: unknown): string | undefined => (typeof raw === 'string' && raw.length > 0 ? raw : undefined);
+    // One note per question; anything that is not a string is no note.
+    const notesOf = (raw: unknown): string[] => (Array.isArray(raw) ? raw.map((n) => (typeof n === 'string' ? n : '')) : []);
     /** A question this window holds, by id: never one the page names that it was not shown. */
     const held = (id: string | undefined): DeckItem | null => {
         const queue = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
