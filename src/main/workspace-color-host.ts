@@ -27,6 +27,12 @@ export interface WorkspaceColorsOptions {
     /** Something a window shows changed: the registry re-emits its snapshot. */
     readonly onChanged: () => void;
     readonly log?: (line: string) => void;
+    /**
+     * Whether a pass WRITES the palette colour it gives a workspace without one (default `true`, the window). genie-host's
+     * pass is `false` (Tynn #956): it shows the same colour from memory, and the window stays the one that writes it, before
+     * its agent-config move, so two processes never write one project.json at once. `set` (a person's choice) always writes.
+     */
+    readonly writesAssigned?: boolean;
 }
 
 type Result = { ok: true } | { ok: false; reason: string };
@@ -45,6 +51,7 @@ export class WorkspaceColors {
     readonly #fs: WorkspaceColorFs;
     readonly #onChanged: () => void;
     readonly #log: (line: string) => void;
+    readonly #writesAssigned: boolean;
     /** What each workspace path shows: its project.json's colour, else the one assigned in memory. */
     readonly #colors = new Map<string, string>();
     /** One pass at a time; a call during one runs once more after it, with the latest list. */
@@ -56,6 +63,7 @@ export class WorkspaceColors {
         this.#fs = options.fs;
         this.#onChanged = options.onChanged;
         this.#log = options.log ?? (() => {});
+        this.#writesAssigned = options.writesAssigned ?? true;
     }
 
     colorOf(path: string): string | null {
@@ -92,7 +100,7 @@ export class WorkspaceColors {
             const w = workspaces[i]!;
             if (!this.#mayReadFolder(w.path)) continue;
             let color = assigned[w.id]!;
-            if (own[i] === null) {
+            if (own[i] === null && this.#writesAssigned) {
                 const write = colorWrite(texts[i] ?? null, color);
                 if (write.ok && write.changed) {
                     try {
@@ -104,7 +112,7 @@ export class WorkspaceColors {
                         this.#log(`[workspace-color] ${w.id}: could not write project.json (${error instanceof Error ? error.message : String(error)}); shown, not saved`);
                     }
                 }
-            } else {
+            } else if (own[i] !== null) {
                 color = own[i]!;
             }
             if (this.#colors.get(w.path) !== color) {
@@ -166,15 +174,4 @@ export function followWorkspaceColors<W extends ColoredWorkspace>(registry: Colo
                 .then(() => options.after?.(current));
         }, 0);
     });
-}
-
-/**
- * Reads project.json, never writes it (genie-host, Tynn #956): main is the one writer of a workspace's colour, ordered
- * before its agent-config move so the two never write one file at once. A colour not yet written is shown from memory.
- */
-export function readOnlyColorFs(fs: WorkspaceColorFs): WorkspaceColorFs {
-    return {
-        readText: (path) => fs.readText(path),
-        writeTextAtomic: () => Promise.reject(new Error('read-only: the window writes workspace colours')),
-    };
 }

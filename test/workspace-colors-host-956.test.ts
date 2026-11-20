@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { followWorkspaceColors, readOnlyColorFs, WorkspaceColors, type WorkspaceColorFs } from '../src/main/workspace-color-host.js';
+import { followWorkspaceColors, WorkspaceColors, type WorkspaceColorFs } from '../src/main/workspace-color-host.js';
 
 /**
  * THE DASHBOARD'S WORKSPACE COLOURS, SERVED BY GENIE-HOST (Tynn #956). Since Tynn #898 step 2d-4b (beta.65) this machine's
@@ -10,8 +10,9 @@ import { followWorkspaceColors, readOnlyColorFs, WorkspaceColors, type Workspace
  * Electron proof, scripts/comms-arcs-proof.mjs, measured `color: null` on all six arcs at the comms fix's head).
  *
  * The cure: both processes follow their registry with the SAME pass (`followWorkspaceColors`, rail order, so they assign
- * the same palette colours), and genie-host's reads only (`readOnlyColorFs`): main stays project.json's one writer of
- * colours, ordered before its agent-config move so the two never write one file at once.
+ * the same palette colours), and genie-host's pass does not write the colours it assigns (`writesAssigned: false`): main
+ * writes those, before its agent-config move, so two processes never write one project.json at once. A person's choice
+ * (`set`, workspaces.setColor, which genie-host answers with no window open) is still written by genie-host.
  */
 type Snap = { workspaces?: readonly { id: string; path: string; color?: string | null; governedBy?: string | null }[] | null };
 
@@ -71,32 +72,41 @@ describe('followWorkspaceColors', () => {
     });
 });
 
-describe('readOnlyColorFs (genie-host)', () => {
-    it('shows the assigned colours and writes nothing: main is project.json’s one writer of colours', async () => {
+describe('writesAssigned: false (genie-host)', () => {
+    it('shows the assigned colours and writes none of them; main, with the same pass, writes the same colours (CONTROL)', async () => {
         const reg = fakeRegistry([{ id: 'a', path: '/w/a' }, { id: 'b', path: '/w/b' }]);
         const { fs, writes } = files({ '/w/a/project.json': '{"name":"a"}', '/w/b/project.json': '{"name":"b"}' });
-        const host = new WorkspaceColors({ fs: readOnlyColorFs(fs), onChanged: () => {} });
+        const host = new WorkspaceColors({ fs, writesAssigned: false, onChanged: () => {} });
         followWorkspaceColors(reg, host);
         reg.emit();
         await settle();
         expect(writes).toEqual([]);
         expect(host.colorOf('/w/a')).toMatch(/^#[0-9a-f]{6}$/i);
-        // The SAME colours main assigns (and writes) for the same workspaces in the same order.
-        const { fs: mainFs } = files({ '/w/a/project.json': '{"name":"a"}', '/w/b/project.json': '{"name":"b"}' });
+        const { fs: mainFs, writes: mainWrites } = files({ '/w/a/project.json': '{"name":"a"}', '/w/b/project.json': '{"name":"b"}' });
         const main = new WorkspaceColors({ fs: mainFs, onChanged: () => {} });
         followWorkspaceColors(reg, main);
         reg.emit();
         await settle();
+        expect(mainWrites).toEqual(['/w/a/project.json', '/w/b/project.json']);
         expect([host.colorOf('/w/a'), host.colorOf('/w/b')]).toEqual([main.colorOf('/w/a'), main.colorOf('/w/b')]);
+    });
+
+    it('still writes a person’s choice (`set`: workspaces.setColor, answered by genie-host with no window open)', async () => {
+        const { fs, writes } = files({ '/w/a/project.json': '{"name":"a"}' });
+        const host = new WorkspaceColors({ fs, writesAssigned: false, onChanged: () => {} });
+        expect(await host.set('/w/a', '#abcdef')).toEqual({ ok: true });
+        expect(writes).toContain('/w/a/project.json');
+        expect(host.colorOf('/w/a')).toBe('#abcdef');
     });
 });
 
 describe('the wiring', () => {
     const code = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8').replace(/\r\n/g, '\n')
         .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-    it('genie-host follows its registry with a read-only colour pass', () => {
+    it('genie-host follows its registry with a colour pass that writes no assigned colour', () => {
         const src = code('src/main/genie-host.ts');
-        expect(src).toMatch(/new WorkspaceColors\(\{ fs: readOnlyColorFs\(nodeEnvelopeFs\(\)\)/);
+        expect(src).toMatch(/const workspaceColors = new WorkspaceColors\(\{ fs: nodeEnvelopeFs\(\), writesAssigned: false,/);
+        expect(src).toMatch(/colors: workspaceColors,/);
         expect(src).toMatch(/followWorkspaceColors\(phoneRegistry, workspaceColors\)/);
     });
     it('main follows its registry with the same pass, writing, then moves agent config', () => {

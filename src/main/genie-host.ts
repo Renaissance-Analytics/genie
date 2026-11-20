@@ -78,7 +78,7 @@ import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { terminalWorkspaceOf, workspaceFolders } from './host-share-scope.js';
 import { TakeOverHost } from './take-over-host.js';
-import { followWorkspaceColors, readOnlyColorFs, WorkspaceColors } from './workspace-color-host.js';
+import { followWorkspaceColors, WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { CloneOffersService } from './clone-offers-service.js';
 import { nodeSaveGit, workspaceSaveOps } from './workspace-save-host.js';
@@ -1651,11 +1651,12 @@ async function main(): Promise<void> {
     phoneRegistry.setSafeMode(() => safeMode.view());
     phoneRegistry.setHangNotice(() => crashState.view().notice);
     phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
-    const workspaceColors = new WorkspaceColors({ fs: readOnlyColorFs(nodeEnvelopeFs()), mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
+    const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), writesAssigned: false, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
     phoneRegistry.setWorkspaceColorer((path) => workspaceColors.colorOf(path));
     // THE DASHBOARD'S WORKSPACE COLOURS (Tynn #956): this machine's Dashboard is this registry's since Tynn #898 2d-4b, and no
-    // pass ever ran here: every swatch blank, every comms arc the fallback violet. The window's pass, read-only here: the
-    // window writes project.json, and the same rail order assigns the same colours.
+    // pass ever ran here: every swatch blank, every comms arc the fallback violet. The window's pass, without writing the
+    // colours it assigns (writesAssigned: false): the window writes those, and the same rail order assigns the same ones.
+    // A person's choice (workspaces.setColor, `set`) is still written here.
     followWorkspaceColors(phoneRegistry, workspaceColors);
     const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
     const featureDeckItems = () => assembleDeckItems({
