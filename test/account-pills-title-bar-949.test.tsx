@@ -102,7 +102,7 @@ describe('the Dashboard header has no account pills', () => {
     };
     it('handed the accounts and limits it once drew, the Dashboard draws no pill and no chip', () => {
         const html = renderToStaticMarkup(<Dashboard rows={[row]} workspaces={[{ id: 'w', path: '/w/w' }]} onOpenAgent={() => {}} onAddAgent={() => {}}
-            {...({ rateLimits: LIMITS } as object)} accounts={SNAPSHOT} onSwitchAccount={() => {}} now={NOW} />);
+            {...({ rateLimits: LIMITS, now: NOW } as object)} accounts={SNAPSHOT} onSwitchAccount={() => {}} />);
         expect(html).not.toContain('data-rate-limits');
         expect(html).not.toContain('data-account-chip');
         expect(html).not.toContain('data-rate-limit=');
@@ -122,7 +122,7 @@ describe('the Dashboard header has no account pills', () => {
 
 describe('on every view (the Shell, rendered)', () => {
     const shell = (route: string) => renderToStaticMarkup(
-        <Shell route={route} snapshot={{ ...EMPTY_SNAPSHOT, workspaces: [{ id: 'w', path: '/w/w' }], deckItems: [] }} features={EMPTY_FEATURES}
+        <Shell route={route} snapshot={{ ...EMPTY_SNAPSHOT, workspaces: [{ id: 'w', path: '/w/w', agentsKnown: true }], deckItems: [] }} features={EMPTY_FEATURES}
             servable={['dashboard', 'agent', 'settings', 'knowledge']} agentDetail={null} agentResolved selectedRowId={null} chatThread={null} pinned={null}
             onNavigate={() => {}} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} onOpenPalette={() => {}} onSelectRow={() => {}}
             onSend={() => {}} onCloseChat={() => {}} answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}}
