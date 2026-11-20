@@ -177,12 +177,11 @@ import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
 import { type PanelsHostDeps } from './official-panels-host.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
-import { WorkspaceColors } from './workspace-color-host.js';
+import { followWorkspaceColors, WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nodeSaveGit, workspaceSaveOps, type WorkspaceSaveOps } from './workspace-save-host.js';
 import { elementSourcesFor } from './workspace-save-sources.js';
 import { installContextMenu, type MenuWebContents } from './context-menu.js';
-import { nestGoverned } from '../core/rail-view.js';
 import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
 
 /**
@@ -1238,26 +1237,14 @@ async function boot(): Promise<void> {
         // What a save declares: this workspace's engines, its own settings and its agents' IssueWatch, read when the dialog asks.
         elements: (id) => elementSourcesFor({ services: { list: () => services?.engines.list() ?? [] }, settings: { workspaceValues: (w) => services?.settings.workspaceValues(w) ?? {} }, registry: theRegistry, flows: { list: (w) => services?.flows.list(w) ?? [] }, processes: { kept: () => agentEngineLink?.client.processBook().kept() ?? [] } }, id) });
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
-    let colorPassAt = 0;
-    let colorPassQueued = false;
-    theRegistry.subscribe((snapshot) => {
-        const ws = snapshot.workspaces;
-        if (!ws || colorPassQueued) return;
-        if (ws.every((w) => w.color) && Date.now() - colorPassAt < 5_000) return;
-        colorPassQueued = true;
-        setTimeout(() => {
-            colorPassQueued = false;
-            colorPassAt = Date.now();
-            // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
-            const current = theRegistry.snapshot().workspaces ?? [];
-            const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
-            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path })))
-                .catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`))
-                // AGENT CONFIG INTO project.json (Tynn #694): the first time this Genie reads a workspace, any AGENT.md front
-                // matter is moved into its project.json `agents` and stripped from the file. After the colour pass, so the
-                // two never write one project.json at once; once per folder per run (a later move is a no-op anyway).
-                .then(() => moveAgentConfigs(current.filter((w) => theRegistry.workspaceStates().find((s) => s.path === w.path)?.asleep !== true)));
-        }, 0);
+    // The colour passes (main/workspace-color-host.ts `followWorkspaceColors`, shared with genie-host, Tynn #956): the rail's
+    // order, so the colours beside each other differ; this window is the one that WRITES them.
+    followWorkspaceColors(theRegistry, colors, {
+        log: (line) => console.warn(`[genie] ${line}`),
+        // AGENT CONFIG INTO project.json (Tynn #694): the first time this Genie reads a workspace, any AGENT.md front
+        // matter is moved into its project.json `agents` and stripped from the file. After the colour pass, so the
+        // two never write one project.json at once; once per folder per run (a later move is a no-op anyway).
+        after: (current) => moveAgentConfigs(current.filter((w) => theRegistry.workspaceStates().find((s) => s.path === w.path)?.asleep !== true)),
     });
     // THE PLAN KEEPALIVE runs in genie-host now (main/host-plan-keepalive.ts, Tynn #754): it reads the sessions there.
     /*

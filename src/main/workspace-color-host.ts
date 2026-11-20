@@ -1,4 +1,5 @@
 import { assignWorkspaceColors, colorWrite, manifestColor } from '../core/workspace-color.js';
+import { nestGoverned } from '../core/rail-view.js';
 
 /**
  * WORKSPACE COLOURS IN MAIN (genie#1300) — the half over `core/workspace-color.ts`.
@@ -132,4 +133,48 @@ export class WorkspaceColors {
         }
         return { ok: true };
     }
+}
+
+/** What a colour pass follows: a registry's snapshots (main's Registry, genie-host's phoneRegistry). */
+export interface ColoredRegistry<W extends ColoredWorkspace = ColoredWorkspace> {
+    subscribe(listener: (snapshot: { readonly workspaces?: readonly W[] | null | undefined }) => void): unknown;
+    snapshot(): { readonly workspaces?: readonly W[] | null | undefined };
+}
+export type ColoredWorkspace = { readonly id: string; readonly path: string; readonly color?: string | null | undefined; readonly governedBy?: string | null | undefined };
+
+/**
+ * FOLLOW A REGISTRY WITH COLOUR PASSES (Tynn #956): on a snapshot with a workspace still uncoloured (or at most every 5 s),
+ * one pass in the rail's order (governed workspaces under their governor) so neighbours differ, then `after` with the
+ * workspaces it saw. main and genie-host both follow theirs with this, so they assign the same colours: since Tynn #898
+ * step 2d-4b this machine's Dashboard is genie-host's, and its WorkspaceColors had never run a pass.
+ */
+export function followWorkspaceColors<W extends ColoredWorkspace>(registry: ColoredRegistry<W>, colors: WorkspaceColors, options: { readonly after?: (current: readonly W[]) => unknown; readonly log?: (line: string) => void } = {}): void {
+    let passAt = 0;
+    let queued = false;
+    registry.subscribe((snapshot) => {
+        const ws = snapshot.workspaces;
+        if (!ws || queued) return;
+        if (ws.every((w) => w.color) && Date.now() - passAt < 5_000) return;
+        queued = true;
+        setTimeout(() => {
+            queued = false;
+            passAt = Date.now();
+            const current = registry.snapshot().workspaces ?? [];
+            const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
+            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path })))
+                .catch((error: unknown) => options.log?.(`workspace colours: ${error instanceof Error ? error.message : String(error)}`))
+                .then(() => options.after?.(current));
+        }, 0);
+    });
+}
+
+/**
+ * Reads project.json, never writes it (genie-host, Tynn #956): main is the one writer of a workspace's colour, ordered
+ * before its agent-config move so the two never write one file at once. A colour not yet written is shown from memory.
+ */
+export function readOnlyColorFs(fs: WorkspaceColorFs): WorkspaceColorFs {
+    return {
+        readText: (path) => fs.readText(path),
+        writeTextAtomic: () => Promise.reject(new Error('read-only: the window writes workspace colours')),
+    };
 }
