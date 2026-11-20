@@ -38,6 +38,9 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
             terminals: [{ workspaceId: 'ws_a', pid: 101 }, { workspaceId: 'ws_b', pid: 202 }],
             armedFlows: ['nightly'],
             scheduledTasks: ['backup'],
+            // Not said here: a drone signed out, fail closed (the role and the account, Tynn #954 2g-3a).
+            workstationRole: 'drone',
+            tynnAccountKey: null,
         });
     });
 
@@ -47,7 +50,7 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
     });
 
     it('read from the wire: a malformed summary is the empty one, never a throw', () => {
-        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [] });
+        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], workstationRole: 'drone', tynnAccountKey: null });
         expect(readHostSummary(null)).toEqual(EMPTY_HOST_SUMMARY);
         expect(readHostSummary({ terminals: 'no', armedFlows: [1], scheduledTasks: null })).toEqual(EMPTY_HOST_SUMMARY);
     });
