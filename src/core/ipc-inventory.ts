@@ -156,7 +156,7 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['terminals', 'move:2g'],
     // A window's channels to another machine are its own session's (Tynn #941, 2f-2): main holds no device link.
     // 2g (#913): what the window still composes (composeWindowServices) or reads over genie-host's replicas.
-    ['appInbox', 'move:2g'],
+    // appInbox, tynnPage and workstation left in 2g-1 (#952): main held them and nothing read them.
     ['catalog', 'move:2g'],
     ['flows', 'move:2g'],
     ['github', 'move:2g'],
@@ -170,6 +170,4 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['stores', 'move:2g'],
     ['supervisor', 'move:2g'],
     ['tynn', 'move:2g'],
-    ['tynnPage', 'move:2g'],
-    ['workstation', 'move:2g'],
 ];

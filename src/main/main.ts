@@ -5,8 +5,6 @@ import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
 import { guestAskNotice, newGuestAsks } from '../core/pair-confirm.js';
 import { rosterPruner } from '../core/chat-drafts.js';
-import { type TynnBoardPorts } from './tynn-board-client.js';
-import type { readTynnPage } from './tynn-page-client.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
@@ -19,7 +17,6 @@ import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../cor
 import { takeOverRouteOf } from '../core/take-over-route.js';
 import { browserConnectionFor } from '../core/browser-connection.js';
 import { drivablePages } from './page-navigation-electron.js';
-import { type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
@@ -58,7 +55,6 @@ import { TYNN_HOST } from '../core/tynn.js';
 import { githubSealedSources, GithubAccount } from './github-account.js';
 import type { GithubAccountReplica } from './github-account-replica.js';
 import { readGenie1Identity, workstationSealedSources } from './workstation-identity.js';
-import { type WorkstationPort } from './workstation-service.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import { LinuxKeyring, takeResumeSignIn, unlockKeyringBeforeStores } from './linux-keyring.js';
@@ -69,15 +65,10 @@ import { reportProxyAnswers } from './proxy-report.js';
 import type { SessionEngineClient } from './session-engine-client.js';
 import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { gatherSources } from './keychain-migration.js';
-import type { TynnWorkstationState } from '../renderer/features.js';
 import { outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { actOnConnectLink, connectLinkDecisionOf } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
-import { appInboxCardState, restartAppSource } from './host-owner-ops.js';
-import { machineKeyOf, readMachineId } from './machine-key.js';
 import { mkdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
-import { sacredNameOf } from '../core/agent-adoption.js';
-import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { moveAgentFrontmatter, nodeAgentConfigFs } from './agent-config-host.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
@@ -126,7 +117,7 @@ import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
-import { execFileRunner, execFileText } from './toolchain-runner.js';
+import { execFileRunner } from './toolchain-runner.js';
 import { latestIndex, type CommandRunner } from './toolchain-prober.js';
 import { type Platform } from '../core/toolchain.js';
 import { ensurePhpCaBundle, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths } from './toolchain-ops.js';
@@ -161,7 +152,6 @@ import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
 import { HUMAN } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
-import { remoteAccess } from './remote-access.js';
 import { gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { withActionSignal } from './mcp-signal.js';
 import type { Verification } from './mcp-server.js';
@@ -185,8 +175,6 @@ import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { TERMINAL_NEEDS_YOU } from '../core/terminal-surface.js';
 import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
 import { type PanelsHostDeps } from './official-panels-host.js';
-import type { AppInboxReplica } from './app-inbox-host.js';
-import { type AppSourceKind } from '../core/app-inbox.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import { WorkspaceColors } from './workspace-color-host.js';
@@ -535,23 +523,6 @@ const NO_OFFERS = { ok: false as const, reason: 'Genie’s host is not running, 
  * project.json `tynn.projectId`).
  */
 let issueWatchNow: IssueWatchReplica | null = null;
-/** A workspace's Tynn project, from its project.json `tynn.projectId`; `null` = not linked. */
-/** The Tynn tab's door (genie#1295): the pairing's request, the workspace's own project, nothing else. */
-function tynnBoardPorts(): TynnBoardPorts {
-    return {
-        signedIn: () => tynnAccount?.status().signedIn === true,
-        projectFor: (workspaceId) => tynnProjectFor(workspaceId),
-        request: (path, init) => {
-            if (!tynnAccount) return Promise.reject(new Error('Sign in to Tynn first'));
-            return tynnAccount.request(path, init);
-        },
-    };
-}
-/** The window delegates page reads to genie-host. */
-async function readWorkspaceTynnPage(workspaceId: string, page: unknown, query: unknown): ReturnType<typeof readTynnPage> {
-    if (!agentEngineLink) return { ok: false, state: 'error', reason: 'Genie’s host is not connected' };
-    return agentEngineLink.client.tynnPage(workspaceId, page, query);
-}
 /**
  * THE LIVE BOARD (genie#1295 row B4; the host split, P5c): genie-host follows each open Tynn tab per view — one socket for
  * every board, released with this window's link — and its rings and live state come back for the views watching. Since P4
@@ -583,10 +554,6 @@ function tynnProjectFor(workspaceId: string): string | null {
     if (workspace) { try { manifest = readFileSync(join(workspace.path, 'project.json'), 'utf8'); } catch { manifest = null; } }
     return tynnProjectIdOf(manifest);
 }
-/**
- * THE NEW AGENT FORM ON THIS HOST (main/agent-create-host.ts): the local window's `genie:add-agent` and a remote window's
- * `addAgent` both land here — the AGENT.md written under the workspace, then the agent registered on it.
- */
 /** The workspace folders this run has already moved AGENT.md front matter out of (Tynn #694). */
 const agentConfigsMoved = new Set<string>();
 async function moveAgentConfigs(workspaces: readonly { id: string; path: string }[]): Promise<void> {
@@ -602,22 +569,6 @@ async function moveAgentConfigs(workspaces: readonly { id: string; path: string 
             console.warn(`[genie] agent config for ${w.id}: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
-}
-function agentCreatePorts(): AgentCreatePorts {
-    return {
-        workspace: (id) => registry?.workspace(id) ?? null,
-        agentsOf: (id) => registry?.agentsOf(id) ?? [],
-        exists: async (path) => existsSync(path),
-        mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
-        // project.json (the agent's config, Tynn #694) and AGENT.md (its persona), each written whole: temp + rename.
-        ...nodeAgentConfigFs(),
-        register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
-        sacredName: async (workspaceId) => {
-            const projectId = tynnProjectFor(workspaceId);
-            if (projectId === null || !tynnAccount) return null;
-            return sacredNameOf(await tynnAccount.projects(), projectId);
-        },
-    };
 }
 /** Every workspace's GitHub panel (Tynn #806), as the features snapshot carries it. */
 function issueWatchPanels(): Record<string, IssueWatchPanelView> {
@@ -1100,14 +1051,9 @@ let keyring: LinuxKeyring | KeyringReplica | null = null;
 /** Late-bound: a move of this machine's key that finishes lets it register with what it has. */
 let registerWorkstationNow: (() => Promise<void>) | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
-let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
-/** Re-applies the relay host after the remote-access switch moves (set once the Tynn account is open). */
-/** This Genie on the Tynn relay as a host (Tynn #838): `null` = not started (remote access off, or not registered). */
-let relayStatusNow: RelayHostStatus = { state: 'off' };
-/** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
 const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
 let pendingGenieUrl: string | null = genieUrlIn(process.argv);
@@ -1798,12 +1744,6 @@ async function boot(): Promise<void> {
             openWorkstation: (id, name) => openRemoteWindow(`relay:${id}`, name ?? null),
         });
     });
-    // SHARING THIS MACHINE THROUGH TYNN (Tynn #839; Genie 1's workspace share links), over the session.
-    const ownWorkstation = () => (tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null);
-    const shareRequest = (path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }) => {
-        if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
-        return tynnAccount.request(path, init);
-    };
     // ANOTHER MACHINE (P3.4 cut e, audit M-e; Tynn #552): genie-host dials it, refuses a drone, and holds the token and the
     // grant; a window's channel is its own protocol session's since 2f-2 (Tynn #941, device-link-protocol.ts). main holds none.
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
@@ -1847,11 +1787,7 @@ async function boot(): Promise<void> {
      * composition, so the sites compose starts are handed their own credential at their first start. Its port is
      * remembered (a script outside Genie keeps one address); the keys are app-inbox-keys.ts's.
      */
-    // WITH GENIE-HOST LINKED THE DOOR AND ITS KEYS ARE THE HOST'S (P5a.2 ruling 3): every credential is minted there, window or
-    // no window. This window starts no door and opens no keys (one writer of app-inbox.json); it drives the host's through the
-    // replica — a script key's secret reaches it once, in the answer to its own create (Tynn #584: no door of its own).
-    const linkedAppInbox = agentEngineLink.client.appInbox();
-    const appInboxKeys: Pick<AppInboxReplica, 'createScriptKey' | 'scriptKeys' | 'revokeScriptKey' | 'rotate' | 'revokeSource' | 'allowSource' | 'sources' | 'revokedSources'> = linkedAppInbox;
+    // THE APP INBOX's door and keys are genie-host's (P5a.2 ruling 3; Tynn #584): every window reaches them over the protocol.
     // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
     // replicas of them.
     // SAFE MODE, genie-host's (Tynn #386).
@@ -2080,18 +2016,10 @@ async function boot(): Promise<void> {
     // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
     // sign-in landing during the launch's own check cannot make two workstations.
     const identityCipher = osCipher(safeStorage, process.platform);
-    // THE KEY IS THE HOST'S (P3.4): this window asks it to sign.
-    const machineIdentity: WorkstationPort = agentEngineLink.client.workstation();
     // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
     // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
     // duplicate, on the next registration — once.
     const genie1Identity = async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), identityCipher);
-    // THIS MACHINE'S STABLE KEY (genie#1278 W2): the OS machine id, never sent raw (machine-key.ts).
-    const machineKey = (): Promise<string | null> => readMachineId({
-        platform: process.platform,
-        readFile: (path) => readFile(path, 'utf8'),
-        exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
-    }).then((id) => (id ? machineKeyOf(id) : null));
     // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
     /*
      * THE REGISTRATION, THE ROLE AND THE RELAY LINK ARE GENIE-HOST'S (Tynn #410, P5d.3). This window mirrors them for what it
@@ -2100,10 +2028,9 @@ async function boot(): Promise<void> {
      */
     const linkedRelayHost = agentEngineLink.client.relayHost();
     {
-        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
+        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); pushFeatures(); });
         void linkedRelayHost.refresh().catch((error: unknown) => console.error(`[tynn relay] ${error instanceof Error ? error.message : String(error)}`));
     }
-    const readRole = (): Promise<void> => linkedRelayHost.readRole();
     let registering: Promise<void> | null = null;
     const registerWorkstation = (): Promise<void> => {
         if (registering) return registering;
@@ -2316,10 +2243,7 @@ async function boot(): Promise<void> {
     });
     registry.setRendererNotice(() => rendererNotice);
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
-    // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
-    // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
-    remoteAccessNow = { apply: () => linkedRemote.apply(), restart: () => linkedRemote.restart() };
-    void remoteAccessNow.apply().catch((error: unknown) => { console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`); pushFeatures(); });
+    // Remote access is genie-host's (Tynn #820, #409): it applies the switch at boot and on every change of `remote_access`.
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking (what the GitHub
     // sign-in read from GitHub), the OS agent working.
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })(), githubBlocked: (githubAccount?.view().signal ?? null) !== null }));
@@ -2350,11 +2274,6 @@ async function boot(): Promise<void> {
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     // The same code as genie-host's own answers (host-owner-ops.ts, Tynn #898 step 2d-3b), over this window's replicas.
-    const appInboxState = (workspaceId: string) => appInboxCardState(linkedAppInbox, composed.settings.snapshotFor(workspaceId).app_inbox !== false, workspaceId);
-    const restartSource = (workspaceId: string, kind: AppSourceKind, id: string): Promise<string> => restartAppSource({
-        serviceEnvChanged: (w) => composed.sites.serviceEnvChanged(w),
-        processes: () => (processBook ? { status: (p: string) => composed.supervisor.status(p), restart: (p: string) => processBook!.restart(p) } : null),
-    }, workspaceId, kind, id);
     // ISSUEWATCH AND THE LIVE BOARD (Tynn #806, genie#1295 B4; the host split, P5c): genie-host's. It hears Tynn on its own
     // account and tells the linked workspace's agents through its own wake, window or no window; this window reads the state,
     // plays the sounds the host says to play now, and follows its boards per view.
@@ -2747,7 +2666,6 @@ function recordShutdownNow(): Promise<unknown> {
     });
 }
 
-let remoteAccessNow: ReturnType<typeof remoteAccess> | null = null;
 /** Tailscale on this machine as last read (Tynn #821): at boot and after every Connect or Install. */
 
 app.on('before-quit', (event) => {
