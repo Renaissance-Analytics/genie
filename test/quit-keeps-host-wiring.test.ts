@@ -40,7 +40,8 @@ describe('main.ts', () => {
         expect(quit).not.toMatch(/host\?\.stopAll\(\)/);
         const ports = block(main(), 'const quitPorts: QuitPorts = {', '\n};');
         expect(ports).toMatch(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/);
-        expect(ports).toMatch(/closeTerminals: \(\) => \{ terminals\?\.closeAll\(\); \}/);
+        // genie-host ends its own terminals when it shuts down (Tynn #953, 2g-2): the quit has no terminal step.
+        expect(ports).not.toMatch(/closeTerminals/);
         expect(ports).toMatch(/void services\?\.shutdown\(\);/);
         expect(ports).toMatch(/shutDownHost: \(\) => agentEngineLink\?\.shutdown\(QUIT_WRITES_MS\)/);
     });
@@ -100,10 +101,10 @@ describe('main.ts', () => {
         expect(watch).toMatch(/if \(step\.exit\) \{[\s\S]*?requestQuit\('shut-down'\);/);
     });
 
-    it('the tray and the quit count what waits on the host\u2019s clock, from the host\u2019s own replicas', () => {
+    it('the tray and the quit count what waits on the host\u2019s clock, from genie-host\u2019s summary (Tynn #953, 2g-2)', () => {
         const src = main();
         const now = block(src, 'function onTheClockNow(', '\n}\n');
-        expect(now).toMatch(/onTheClock\(agentEngineLink\.client\.flows\(\)\.list\(\), agentEngineLink\.client\.processBook\(\)\.kept\(\)\)/);
+        expect(now).toMatch(/armedFlows: hostSummaryNow\.armedFlows\.length, scheduledTasks: hostSummaryNow\.scheduledTasks\.length/);
         expect(block(src, 'function hostActivityNow(', '\n}\n')).toMatch(/\.\.\.onTheClockNow\(\)/);
         expect(block(src, "app.on('before-quit'")).toMatch(/\{ keptProcesses: kept, \.\.\.onTheClockNow\(\) \}/);
     });

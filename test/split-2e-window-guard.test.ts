@@ -139,16 +139,13 @@ describe('the window\'s engine link carries only the link, window capabilities, 
 
     /** Frozen (the coordinator, 2026-11-19): each leaves in the PR that moves it, and nothing joins. */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // Re-labelled 2c -> 2g by the coordinator (2026-11-19, 2c-5): the crash report (2c-2) and the scratch terminal (2c-4)
-        // left; what still reads main's `terminals` replica is main's own MCP tool server (genieToolDeps, 2g) and the tray
-        // count, the Restart/Shut-down list, the quit plan and quit's closeAll. Those read it synchronously, so they move
-        // with the replica in 2g, never as a second copy beside it.
-        terminals: '2g',
+        // terminals and processBook left in 2g-2 (#953): the tray, its Restart/Shut-down list and the quit read genie-host's
+        // summary (summary.watch), and main's tool server keeps no host-native deps.
         // 2f is done: the question window's answers moved in 2f-1 (#912); the device link's frames and main's Deck liveness
         // (takeOvers: the question window and the tray read genie-host's Deck) in 2f-2 (#941).
         // 2g (#913): the services the window still composes over genie-host's replicas. appInbox, tynnPage and workstation
         // left in 2g-1 (#952): main held them and nothing read them.
-        catalog: '2g', flows: '2g', github: '2g', hosting: '2g', keyring: '2g', plugins: '2g', processBook: '2g',
+        catalog: '2g', flows: '2g', github: '2g', hosting: '2g', keyring: '2g', plugins: '2g',
         recordsChanged: '2g', relayHost: '2g', remoteAccess: '2g', stores: '2g', supervisor: '2g', tynn: '2g',
     };
     const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[]) => ({

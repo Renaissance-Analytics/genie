@@ -19,24 +19,15 @@ function terminalReads(text: string): Record<string, number> {
     return reads;
 }
 
-describe('main’s terminals replica is step 2g’s', () => {
-    it('the engine row is move:2g', () => {
-        expect(WINDOW_ENGINE_INVENTORY.find(([use]) => use === 'terminals')).toEqual(['terminals', 'move:2g']);
+describe('main’s terminals replica is gone (2g-2, Tynn #953)', () => {
+    it('the engine row has left', () => {
+        expect(WINDOW_ENGINE_INVENTORY.find(([use]) => use === 'terminals')).toBeUndefined();
     });
 
-    it('its readers are only the MCP tool server’s terminal tools and the tray/quit counts, list and closeAll (COUNTED)', () => {
+    it('main reads no terminals replica: the tray and the quit read genie-host’s summary, and its tool server has none (COUNTED)', () => {
         const main = code('src/main/main.ts');
-        expect(terminalReads(main)).toEqual({
-            // The tray's count (hostActivityNow) and the quit plan's.
-            count: 2,
-            // The Restart/Shut-down list (stoppingNow), and the tool server's list.
-            list: 2,
-            // The tool server's terminal tools (genieToolDeps).
-            open: 1, write: 1, scrollback: 1, finished: 1,
-            // Quit: nothing Genie spawned outlives it (§7.1).
-            closeAll: 1,
-        });
-        expect(main).toMatch(/terminals: \{\s*list: \(\) => terminals!\.list\(\),\s*open: \(options\) => terminals!\.open\(options\),/);
+        expect(terminalReads(main)).toEqual({});
+        expect(main).not.toMatch(/client\.terminals\(\)/);
     });
 
     it('CONTROL: the scanner counts a reader, and skips a quoted method name and a member of something else', () => {
