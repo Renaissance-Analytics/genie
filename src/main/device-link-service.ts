@@ -23,6 +23,9 @@ export interface DeviceSocket {
     onerror: ((ev: unknown) => void) | null;
     send(data: string): void;
     close(): void;
+    /** `ws`'s own: the relay's heartbeat pings, and a close with no handshake (relay-wire.ts `RelaySocket`, Tynn #940). */
+    on?(event: 'ping', listener: () => void): unknown;
+    terminate?(): void;
 }
 
 export type DeviceLinkEvent =
