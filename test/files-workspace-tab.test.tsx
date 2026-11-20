@@ -28,7 +28,9 @@ describe('the strip', () => {
         const opened: string[] = [];
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'files' }} canDesign hasSettings onView={(v) => opened.push(v)} onAdd={() => {}} onOpenAgent={() => {}} />);
         expect(control(html, 'data-workspace-tab="files"')).toMatchObject({ tag: 'button', tab: true });
-        expect(control(html, 'data-workspace-tab="files"')!.text).toMatch(/^Files(?![\w])/);
+        // An icon since Tynn #945, named Files for a screen reader and in its tooltip.
+        expect(control(html, 'data-workspace-tab="files"')!.open).toContain('aria-label="Files"');
+        expect(control(html, 'data-workspace-tab="files"')!.text).toBe('');
         expect(control(html, 'data-workspace-tab="files"')!.open).toContain('aria-selected="true"');
         expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-selected="false"');
         // Pressing a tab is react-fancy Tabs' onTabChange with that tab's value; the strip turns it into the view (or the agent).

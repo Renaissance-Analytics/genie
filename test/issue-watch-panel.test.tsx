@@ -59,7 +59,9 @@ describe('where it lives', () => {
         expect(tabStrip({ tabs: [] }, [], { github: false }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'artboard', 'add', 'settings']);
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'github' }} canDesign hasSettings github onView={() => {}} onAdd={() => {}} onOpenAgent={() => {}} />);
         expect(control(html, 'data-workspace-tab="github"')).toMatchObject({ tag: 'button', tab: true });
-        expect(control(html, 'data-workspace-tab="github"')!.text).toMatch(/^GitHub(?![\w])/);
+        // An icon since Tynn #945, named GitHub for a screen reader and in its tooltip.
+        expect(control(html, 'data-workspace-tab="github"')!.open).toContain('aria-label="GitHub"');
+        expect(control(html, 'data-workspace-tab="github"')!.text).toBe('');
         expect(control(html, 'data-workspace-tab="github"')!.open).toContain('aria-selected="true"');
     });
 
