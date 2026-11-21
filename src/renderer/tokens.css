@@ -75,6 +75,11 @@
   --primary:        var(--blue-500);   /* default react-fancy accent */
   --primary-hover:  var(--blue-600);
   --primary-fg:     #ffffff;
+  /* A selected item shown inverted (Tynn #996): the accent, one step darker than --primary so its text reads at AA
+     (white on blue-600 is 5.17:1; on blue-500 it would be 3.68:1). */
+  --selected-bg:       var(--blue-600);
+  --selected-bg-hover: var(--blue-700);
+  --selected-fg:       #ffffff;
 
   --accent:         var(--violet-500); /* brand accent — use sparingly */
   --accent-hover:   var(--violet-600);
@@ -186,6 +191,9 @@
   --primary:        var(--blue-400);
   --primary-hover:  var(--blue-300);
   --primary-fg:     var(--zinc-950);
+  --selected-bg:       var(--blue-400);   /* zinc-950 on blue-400: 7.9:1 */
+  --selected-bg-hover: var(--blue-300);
+  --selected-fg:       var(--zinc-950);
 
   --accent:        var(--violet-400);
   --accent-hover:  var(--violet-300);
