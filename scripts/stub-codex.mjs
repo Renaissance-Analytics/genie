@@ -77,6 +77,21 @@ function measureScript() {
     } catch { return null; }
 }
 /**
+ * PLAN MODE (scripts/plan-popover-cdp.mjs, Tynn #1021): while `<tmpdir>/genie-stub-codex-plan` holds `{ owner, steps }` with a
+ * live owner pid, a turn publishes that plan as Codex does (`turn/plan/updated`, each step `{ step, status }` with status
+ * completed | inProgress | pending) and then streams a tick a second, for ever: an agent mid-turn whose Dashboard row
+ * carries the plan. Without the file nothing below changes.
+ */
+function planScript() {
+    const marker = join(tmpdir(), 'genie-stub-codex-plan');
+    if (!existsSync(marker)) return null;
+    try {
+        const script = JSON.parse(readFileSync(marker, 'utf8'));
+        process.kill(script.owner, 0);
+        return Array.isArray(script.steps) ? script : null;
+    } catch { return null; }
+}
+/**
  * RECORD MODE (scripts/agent-key-no-window-cdp.mjs, genie#1457): while `<tmpdir>/genie-stub-codex-record-servers` exists, a
  * thread's start appends the MCP servers this provider was REALLY given, the bearer read from the variable Genie bound it to.
  * The file exists only in a test VM. Without it nothing below changes. With it a turn also ENDS at once, with no approval to ask: a stub parked on a question nobody
@@ -310,6 +325,15 @@ function handle(frame) {
 
             if (existsSync(RECORD_SERVERS)) {
                 send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
+                return;
+            }
+
+            const planned = planScript();
+            if (planned) {
+                note(`plan: ${planned.steps.length} steps`);
+                send({ jsonrpc: '2.0', method: 'turn/plan/updated', params: { threadId, turnId: TURN_ID, explanation: null, plan: planned.steps } });
+                let tick = 0;
+                setInterval(() => { tick += 1; delta(`plan tick ${tick}\n`); }, 1000);
                 return;
             }
 
