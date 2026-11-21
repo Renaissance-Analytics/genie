@@ -700,6 +700,11 @@ export class SessionHost {
          * (an interrupt the provider did not confirm). The plan keepalive nudges both; a reply is `onAction`'s `replied`.
          */
         onTurnEnd?: (agentId: AgentId, cause: 'interrupted' | 'restarted') => void;
+        /**
+         * WHETHER A THREAD CAN BE RESUMED UNDER AN ACCOUNT (Tynn #1011): prism-acp's `probeSessionStore(threadId, { configDir })`
+         * by default. Asked before an agent is moved to a new active account; anything but `present` keeps it where it is.
+         */
+        threadInAccount?: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -1735,6 +1740,9 @@ export class SessionHost {
      * The run's driver stopped itself and cannot take another prompt (`AgentSession.needsNewDriver`: Claude's cancel state
      * uncertain, prism-acp 0.37.0): the person's next message starts a new one (main/start-on-demand.ts).
      */
+    /** RED stub (Tynn #1011). */
+    accountChanged(_provider: string): void { /* not built */ }
+
     needsNewDriver(agentId: AgentId): boolean {
         return this.#running.get(agentId)?.session.needsNewDriver ?? false;
     }
@@ -2378,4 +2386,9 @@ export interface EngineLiveness {
 
 export function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
     return { collaborators: c?.collaborators ?? null, commsAgeSeconds: c?.commsAgeSeconds ?? null, links: c?.links ?? null };
+}
+
+/** RED stub (Tynn #1011). */
+export function claudeDriverAccountOptions(_account: { readonly legacy: boolean; readonly configDir?: string } | undefined): { configDir?: string | null } {
+    return {};
 }

@@ -17,6 +17,14 @@ export interface AccountRecord {
     readonly legacy: boolean;
     readonly identity: AccountIdentity;
     readonly createdAt: string;
+    /**
+     * A CLAUDE ACCOUNT OF ITS OWN (Tynn #1011, prism-acp claudeAccounts): the configuration directory it signs in to and runs in.
+     * Absent = the CLI's default directory (`configDir: null` to prism-acp), as every account was before. Genie keeps this path,
+     * a label and what the CLI reported (email, organization); never a key, a token or a read of a credential file.
+     */
+    readonly configDir?: string;
+    /** What the person chose to sign in with there: a claude.ai subscription, or a Console login billed per token. */
+    readonly method?: 'subscription' | 'console';
 }
 
 /**

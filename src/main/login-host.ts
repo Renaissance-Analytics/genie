@@ -71,6 +71,8 @@ export interface LoginHostOptions {
     workspaceId?: string | undefined;
     /** The folder a login's throwaway folder is made in: this process's scratch under Genie's root (scratch-area.ts), never the OS temp. */
     scratch: () => string;
+    /** The environment a Claude account's own-directory sign-in is built from (prism-acp strips credentials from it). Default `process.env`. */
+    parentEnv?: Readonly<Record<string, string | undefined>> | undefined;
 }
 
 interface Live {

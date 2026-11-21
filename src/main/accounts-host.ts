@@ -11,6 +11,8 @@ export interface AccountsOptions {
     readonly legacyHomes: Readonly<Record<AcpProvider, string>>;
     readonly now?: () => string;
     readonly mintId?: () => string;
+    /** The ONE session store every Claude account directory links its history to (Tynn #1011): the default home's `projects`. */
+    readonly sharedSessionStore?: string;
 }
 
 const MANAGED_ID = /^account_[0-9a-f]{32}$/;
@@ -116,6 +118,11 @@ export class AccountsHost {
             await this.#write(next, this.#active); this.#accounts = next;
             return detached(account);
         });
+    }
+
+    /** RED stub (Tynn #1011). */
+    addClaude(_input: { method: 'subscription' | 'console'; label?: string }): Promise<AccountRecord> {
+        return Promise.reject(new Error('not built'));
     }
 
     /**
