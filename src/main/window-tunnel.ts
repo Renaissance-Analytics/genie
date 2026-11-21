@@ -85,7 +85,8 @@ export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: Tun
         const c: Carried = { connection, connectionId: null };
         carried.set(tunnel, c);
         const pre = connection.preAuth;
-        if (!link.send('open', tunnel, { window: pre?.kind === 'local' && pre.window === 'remote' ? 'remote' : 'main', label: pre?.label ?? 'this Genie window' })) {
+        // `own` is this DOOR's, set where main tunnels its own client, never read from the connection (a page's door may say anything).
+        if (!link.send('open', tunnel, { window: pre?.kind === 'local' && pre.window === 'remote' ? 'remote' : 'main', label: pre?.label ?? 'this Genie window', ...(options.own === true ? { kind: 'own' } : {}) })) {
             carried.delete(tunnel);
             connection.send(JSON.stringify({ kind: 'refused', reason: STARTING }));
             connection.close();

@@ -111,13 +111,13 @@ export class RelayHostService {
         if (!account.status().signedIn) {
             this.#workstation = { registered: false, reason: 'sign in to Tynn to register this machine', role: null };
         } else {
+            // Kept until a registration WITH it succeeds (the security review of #2120): one that fails tries it again.
             const legacy = this.#legacy;
-            this.#legacy = null;
             const settled = legacy ? await this.#ports.workstation.legacyDone(host).catch(() => null) : null;
             const result = await this.#ports.workstation.ensure({ host, legacy: legacy && legacy.workstationId !== settled ? legacy : null })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
             // Not registered (a key that could not be read, Tynn not reached): tried again by itself, backing off.
-            if (!result.ok) this.#registerLater(); else { this.#registerRetries = 0; }
+            if (!result.ok) this.#registerLater(); else { this.#registerRetries = 0; if (this.#legacy === legacy) this.#legacy = null; }
             this.#workstation = result.ok ? { registered: true, host, workstationId: result.workstationId, role: this.#said } : { registered: false, reason: result.reason, role: this.#said };
         }
         await this.readRole();

@@ -1899,7 +1899,8 @@ async function boot(): Promise<void> {
     });
     // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
     // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
-    tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client));
+    // `own`: genie-host admits this door's connections as main's own client, the only caller keychain.adoptLegacy takes.
+    tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
     // What genie-host runs, as the tray and the quit read it, kept as it changes (Tynn #953, 2g-2).
     // ...and this machine's role and its Tynn account (Tynn #954, 2g-3a): another account (or none) closes the relay windows
     // opened under the last one, which hold its grants (M0 finding 2).

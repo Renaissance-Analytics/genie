@@ -127,12 +127,17 @@ export function hostLegacyAdopt(ports: HostLegacyAdoptPorts): { adopt(raw: unkno
         // An `already` is every launch's word for every secret: not said.
         for (const { name, status } of outcomes) if (status !== 'already') ports.log(`keychain: ${name}: ${status}`);
     };
+    // What THIS host answered `verified` (the security review of #2120): a `removed` finishes only those. A row an earlier host
+    // confirmed is finished by this host's own next `adopt` (verifySecrets), never on a caller's word alone.
+    const answered = new Set<string>();
     return {
         adopt: async (raw) => {
             const request = readAdoptRequest(raw);
             if ('ok' in request) return request;
             if (request.phase === 'removed') {
-                const outcomes = await finishSecrets(request.names as SecretName[], book);
+                const mine = request.names.filter((name) => answered.has(name)) as SecretName[];
+                const finished = mine.length > 0 ? await finishSecrets(mine, book) : [];
+                const outcomes: MigrationOutcome[] = request.names.map((name) => finished.find((f) => f.name === name) ?? { name: name as SecretName, status: 'not-confirmed' as const });
                 say(outcomes);
                 return { outcomes, remove: [] };
             }
@@ -140,7 +145,9 @@ export function hostLegacyAdopt(ports: HostLegacyAdoptPorts): { adopt(raw: unkno
             say(outcomes);
             const secretsMoved = outcomes.some((o) => MOVED.has(o.status));
             if (secretsMoved || request.genie1Identity !== null) ports.moved({ secretsMoved, genie1Identity: request.genie1Identity });
-            return { outcomes, remove: outcomes.filter((o) => o.status === 'verified').map((o) => o.name) };
+            const remove = outcomes.filter((o) => o.status === 'verified').map((o) => o.name);
+            for (const name of remove) answered.add(name);
+            return { outcomes, remove };
         },
     };
 }

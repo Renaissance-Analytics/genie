@@ -28,7 +28,6 @@ import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { invokeLocalFiles, type LocalFilesDeps } from './local-files-api.js';
-import { OWN_CLIENT_LABEL } from './own-protocol-client.js';
 import type { FilesWatchPort } from './local-files-watches.js';
 import { isLocalDraftMethod } from '../core/local-drafts.js';
 import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
@@ -774,10 +773,11 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!deps.deviceLinkProtocol || !context) return { ok: false, reason: 'this Genie connects to no other machines' };
                 return deps.deviceLinkProtocol.call(context.connectionId, method.slice('deviceLink.'.length), args);
             // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b; host-legacy-adopt.ts). `local` keeps every other machine out (RemoteHost's);
-            // of this machine's connections only main's own client hands secrets over, never a page in a window.
+            // of this machine's connections only main's own client hands secrets over, never a page in a window. Its tunnel says so
+            // (CallContext `own`, set by genie-host's tunnel for main's own door); a label is display words any door may say.
             case 'keychain.adoptLegacy':
                 if (!deps.legacySecrets) return { ok: false, reason: 'this host keeps nothing an older Genie sealed' };
-                if (context.label !== OWN_CLIENT_LABEL) return { ok: false, reason: 'what an older Genie sealed is handed over by Genie itself, never by a window' };
+                if (context.own !== true) return { ok: false, reason: 'what an older Genie sealed is handed over by Genie itself, never by a window' };
                 return deps.legacySecrets.adopt(args[0]);
             // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
             case 'tynn.recheck':

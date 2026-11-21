@@ -1182,7 +1182,7 @@ export class RemoteHost {
     #callContext(connection: Connection): CallContext {
         const auth = connection.auth!, pre = connection.socket.preAuth;
         const origin = connection.local ? (pre?.window === 'main' ? 'local-window' : 'remote-window') : pre ? 'relay' : 'device';
-        return { connectionId: connection.id, origin, profile: connection.profile ?? 'desktop', isOwner: auth.isOwner, workspaceId: auth.workspaceId, readonly: auth.readonly, label: auth.label };
+        return { connectionId: connection.id, origin, profile: connection.profile ?? 'desktop', isOwner: auth.isOwner, workspaceId: auth.workspaceId, readonly: auth.readonly, label: auth.label, ...(connection.local && pre?.own === true ? { own: true as const } : {}) };
     }
 
     #content(connection: Connection): LocalFilesContent {

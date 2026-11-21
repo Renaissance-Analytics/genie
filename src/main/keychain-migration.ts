@@ -99,14 +99,16 @@ export interface MigrationOutcome {
 const ask = <T>(work: () => Promise<T>, failed: T): Promise<T> => work().catch(() => failed);
 const booked = (book: MigrationBook, name: SecretName, state: MigrationState): Promise<boolean> => book.write(name, state).then(() => true, () => false);
 
-async function verifyOne(source: VerifySource, vault: HostVault, book: MigrationBook, state: MigrationState | undefined, rebuilt: boolean): Promise<MigrationStatus> {
+async function verifyOne(source: VerifySource, vault: HostVault, book: MigrationBook, state: MigrationState | undefined): Promise<MigrationStatus> {
     const { name, old } = source;
     if (state === 'done') return 'already';
 
     const read = await ask<OldRead>(() => old.read(), { kind: 'unreadable' });
     if (read.kind === 'unreadable' || (read.kind === 'value' && read.value.length === 0)) return 'old-copy-unreadable';
     if (read.kind === 'none') {
-        return (await booked(book, name, 'done')) ? (state === 'verified' ? 'moved' : 'nothing') : 'book-failed';
+        // Finished only once confirmed: a row the book never had is not made up (the security review of #2120).
+        if (state !== 'verified') return 'nothing';
+        return (await booked(book, name, 'done')) ? 'moved' : 'book-failed';
     }
 
     if (state === 'verified') {
@@ -117,13 +119,13 @@ async function verifyOne(source: VerifySource, vault: HostVault, book: Migration
         return 'verified';
     }
 
-    if (rebuilt) {
-        // A rebuilt book has lost what it knew, so the keychain's copy may be a renewed key. It is never overwritten. Same: confirmed. Different: it wins, and the seal stays for someone to look at.
-        const now = await ask<Comparison>(() => vault.compare(name, read.value), 'unavailable');
-        if (now === 'unavailable') return 'keychain-unavailable';
-        if (now === 'different') return 'keychain-differs';
-        if (now === 'same') return (await booked(book, name, 'verified')) ? 'verified' : 'book-failed';
-    }
+    // No row: the keychain's copy, if there is one, may be NEWER than this seal (genie-host signs in, pairs and registers by
+    // itself; a rebuilt book has lost what it knew). It is never overwritten (the security review of #2120). Same: confirmed
+    // without a write. Different: it wins, and the seal stays for someone to look at. Missing: stored below.
+    const now = await ask<Comparison>(() => vault.compare(name, read.value), 'unavailable');
+    if (now === 'unavailable') return 'keychain-unavailable';
+    if (now === 'different') return 'keychain-differs';
+    if (now === 'same') return (await booked(book, name, 'verified')) ? 'verified' : 'book-failed';
 
     // Before the store is asked, so this says what is wrong: a refusal there reads as a keychain that did not answer. Kept where it is, and said on every launch.
     if (read.value.length > MAX_SECRET_CHARS) return 'too-large';
@@ -161,7 +163,7 @@ export function verifySecrets(sources: readonly VerifySource[], vault: HostVault
         const outcomes: MigrationOutcome[] = [];
         for (const source of sources) {
             const state = Object.hasOwn(states, source.name) ? states[source.name] : undefined;
-            outcomes.push({ name: source.name, status: await verifyOne(source, vault, book, state, book.rebuilt?.() === true) });
+            outcomes.push({ name: source.name, status: await verifyOne(source, vault, book, state) });
         }
         // Each source is found by its seal, so a crash just past the delete leaves nothing to name its row. `verified` already means the keychain's copy is the one in use, and the seal is known to be gone.
         const named = new Set<string>(sources.map(({ name }) => name));
