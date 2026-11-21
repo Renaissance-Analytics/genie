@@ -2,7 +2,7 @@ import { remoteOffer } from '../core/protocol-version.js';
 import type { DeckItem } from '../core/deck.js';
 import { readHostSummary, type HostSummary } from '../core/host-summary.js';
 import { readRemoteWatch, type RemoteWatchView } from '../core/remote-watch.js';
-import type { SettingsWatchView } from './settings-watch.js';
+import { readSettingsWatch, type SettingsWatchView } from './settings-watch.js';
 import { LOCAL_EVENTS, inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
 
 /**
@@ -112,7 +112,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
      * ONE CONNECTION HELD OPEN that says `control` once welcomed and hears `channel` (Tynn #941, #953): what it answered and
      * each event's payload reach `onValue`. Opened again whenever it drops, until the returned stop.
      */
-    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
+    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch' | 'settings.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
         let stopped = false;
         let current: ReturnType<typeof inMemoryPair>['client'] | null = null;
         let attempt = 0;
@@ -161,7 +161,8 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
         persistent('summary.watch', LOCAL_EVENTS.summary, (value) => onSummary(readHostSummary(value)), (payload) => onSummary(readHostSummary(payload)));
     const watchRemote = (onView: (view: RemoteWatchView) => void): (() => void) =>
         persistent('remote.watch', LOCAL_EVENTS.remote, (value) => onView(readRemoteWatch(value)), (payload) => onView(readRemoteWatch(payload)));
-    const watchSettings = (_onView: (view: SettingsWatchView) => void): (() => void) => { throw new Error('2g-4b1: not built yet'); };
+    const watchSettings = (onView: (view: SettingsWatchView) => void): (() => void) =>
+        persistent('settings.watch', LOCAL_EVENTS.settings, (value) => onView(readSettingsWatch(value)), (payload) => onView(readSettingsWatch(payload)));
     return { door, call, watchDeck, watchSummary, watchRemote, watchSettings };
 }
 

@@ -151,7 +151,12 @@ describe('main’s settings: read from the watch, written over the protocol', ()
     it('before genie-host says anything every read is its default; then the host’s values, a workspace’s over them', () => {
         const o = own();
         const s = windowSettings(o.client);
+        s.start();
         expect(s.snapshot().do_not_disturb).toBe(false);
+        o.say({ data: DATA, key: null, value: null, workspaceId: null });
+        expect(s.snapshot().do_not_disturb).toBe(true);
+        // Started once, however often asked: one watch.
+        s.start();
         o.say({ data: DATA, key: null, value: null, workspaceId: null });
         expect(s.snapshot().do_not_disturb).toBe(true);
         expect(s.snapshotFor('ws_a').workspace_tabs).toBe('[1]');
@@ -161,6 +166,7 @@ describe('main’s settings: read from the watch, written over the protocol', ()
     it('HOT-SWAP: a change reaches the listener after the data, so it reads the new value; the first view is no change', () => {
         const o = own();
         const s = windowSettings(o.client);
+        s.start();
         const heard: Array<[string, SettingValue, string | undefined, SettingValue]> = [];
         s.onChange((key, value, workspaceId) => heard.push([key, value, workspaceId, s.snapshot().do_not_disturb]));
         o.say({ data: DATA, key: null, value: null, workspaceId: null });
@@ -170,9 +176,30 @@ describe('main’s settings: read from the watch, written over the protocol', ()
         expect(heard).toEqual([['do_not_disturb', false, undefined, false], ['workspace_tabs', '[2]', 'ws_a', false]]);
     });
 
+    it('ready once genie-host has said them, so the boot reads start minimized and the login item as they are, not as defaults; a host that never says is waited for no longer than the deadline', async () => {
+        const o = own();
+        const s = windowSettings(o.client);
+        s.start();
+        let ready = false;
+        void s.ready(1_000).then(() => { ready = true; });
+        await settle();
+        expect(ready).toBe(false);
+        o.say({ data: { ...DATA, values: { start_minimized: true } }, key: null, value: null, workspaceId: null });
+        await settle();
+        expect(ready).toBe(true);
+        expect(s.snapshot().start_minimized).toBe(true);
+        const silent = windowSettings(own().client);
+        silent.start();
+        const at = Date.now();
+        await silent.ready(30);
+        expect(Date.now() - at).toBeLessThan(1_000);
+        expect(silent.snapshot().start_minimized).toBe(false);
+    });
+
     it('writes go to genie-host: a setting by features.act, a workspace’s by workspaces.setSetting; a refusal is said', async () => {
         const o = own();
         const s = windowSettings(o.client);
+        s.start();
         await s.set('tray_notice_shown', true);
         await s.setFor('ws_a', 'workspace_tabs', '[3]');
         expect(o.calls).toEqual([['features.act', [{ kind: 'settings.set', key: 'tray_notice_shown', value: true }]], ['workspaces.setSetting', ['ws_a', 'workspace_tabs', '[3]']]]);
@@ -215,9 +242,12 @@ describe('the window registry’s Deck wiring is dead: main reads only its agent
         // CONTROL: the scan finds the reads that are there.
         expect(reads.length).toBeGreaterThan(5);
         expect([...new Set(reads)].sort()).toEqual(['agents', 'workspaces']);
-        const subscribes = [...main.matchAll(/registry[?!]?\.subscribe\(([^)]*)\)/g)];
+        // Each listener's own parameter list, read up to its arrow; every subscribe found by the plain pattern is one of them.
+        const subscribes = [...main.matchAll(/registry[?!]?\.subscribe\(/g)];
+        const listeners = [...main.matchAll(/registry[?!]?\.subscribe\(\s*(\([^)]*\))\s*=>/g)];
         expect(subscribes.length).toBeGreaterThan(0);
-        for (const s of subscribes) expect(s[1], s[0]).toMatch(/^\(\) =>/);
+        expect(listeners).toHaveLength(subscribes.length);
+        for (const l of listeners) expect(l[1], l[0]).toBe('()');
         // What main hands the registry to reads no snapshot, or only its workspaces.
         expect(code(src('src/main/mcp-callers.ts'))).not.toMatch(/\.snapshot\(\)/);
         expect(code(src('src/main/registry-refresh.ts'))).not.toMatch(/\.snapshot\(\)/);
@@ -241,6 +271,8 @@ describe('wired: main’s settings are the watch’s; genie-host feeds it', () =
     it('main reads and writes its settings through windowSettings over its own client, and leaves the update channel to genie-host', () => {
         const main = code(src('src/main/main.ts'));
         expect(main).toMatch(/const settingsNow = windowSettings\(ownProtocol\);/);
+        expect(main).toMatch(/tunnelDoor\(ownProtocol\.door, tunnelLinkOf\(agentEngineLink\.client\), \{ own: true \}\);\s*settingsNow\.start\(\);/);
+        expect(main.indexOf('await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);')).toBeLessThan(main.indexOf('mountMainWindow(showOnBoot({ startMinimized: settingsNow.snapshot().start_minimized === true'));
         expect(main).not.toMatch(/(services\??|composed)\.settings\b/);
         expect(main).not.toMatch(/update_channel/);
         // CONTROL: genie-host follows the update channel itself.

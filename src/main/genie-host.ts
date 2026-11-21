@@ -113,6 +113,8 @@ import { restrictHostPipe } from './host-pipe-acl.js';
 import { onTheClock } from '../core/tray-only.js';
 import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
 import { remoteWatchFeed, remoteWatchOf } from '../core/remote-watch.js';
+import { settingsWatchFeed } from './settings-watch.js';
+import { mailSignalsOfRead, mailSignalsOfSend } from '../core/mail-actions.js';
 import { hostDraftPrune } from './host-draft-prune.js';
 import { accountKeyOf } from '../core/remote-window-policy.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -1184,6 +1186,8 @@ async function main(): Promise<void> {
      * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
      * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it).
      */
+    // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
+    const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
     const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
@@ -1462,6 +1466,10 @@ async function main(): Promise<void> {
     );
     designAuthNow = designAuth;
     designAuth.onChange(() => { engine.callback({ name: 'toolSignal', signal: { kind: 'accounts-changed' } }); });
+    // MAIL BETWEEN AGENTS ON THE BOARD (genie#1209, Tynn #766 C2a): this host keeps the inbox, so it says each send and read to
+    // every window (Tynn #998, 2g-4b1); main only checks what it is sent.
+    own.inbox.onSend((to, message) => { for (const mail of mailSignalsOfSend(to, message)) engine.callback({ name: 'toolSignal', signal: { kind: 'mail', mail } }); });
+    own.inbox.onRead((reader, ids) => { for (const mail of mailSignalsOfRead(reader, ids ? [...ids] : null)) engine.callback({ name: 'toolSignal', signal: { kind: 'mail', mail } }); });
     accountsChangedNow = () => { engine.callback({ name: 'toolSignal', signal: { kind: 'accounts-changed' } }); };
     // EACH ACCOUNT'S LAST READINGS SURVIVE A RESTART (Tynn #485): how an idle account's room is known. Read here, written as they change.
     const headroomBoardFile = join(home, 'headroom-board.json');
@@ -1930,6 +1938,8 @@ async function main(): Promise<void> {
         hostSummary,
         // Who is at this machine, for this machine's notifications (Tynn #997, 2g-4a).
         remoteWatch,
+        // This host's settings, for what this machine's window reads (Tynn #998, 2g-4b1).
+        settingsWatch,
         // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
         legacySecrets: legacyAdopt,
         // Ask Tynn again whether this host is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
