@@ -14,7 +14,9 @@
 # Each row is a step of a Linux job of the removed .github/workflows/ci.yml, run with the same command and time limit, and
 # it passes or fails on the same thing. One line per row, `ROW <name> PASS|FAIL <seconds>`, then `CI LINUX PASS|FAIL`;
 # the exit status is non-zero when any row failed. A row's whole output is in ci-out/<name>.log, and the end of it is
-# printed when the row fails. A failed row does not stop the run: every later row still reports.
+# printed when the row fails. A failed row does not stop the run: every later row still reports. A TRACKED RED row
+# (TRACKED_RED below, Tynn #967) that is red only for its listed reasons reads `ROW <name> TRACKED <seconds> (known red:
+# ...)` and is not a failure; `TRACKED ROWS: ...` names them at the end.
 #
 # WHERE IT DIFFERS FROM ci.yml, and why:
 #   - The window opens on the Hyprland session, not on Xvfb: that is what the owner's machines run. CI_DISPLAY=xvfb puts
@@ -43,7 +45,22 @@ ROWS=(
     trust-step site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
     flows zip64 host-plain-node mailpit
     package package-fuse
+    toolchain
 )
+
+# TRACKED RED ROWS (Tynn #967). An acceptance row that lands RED ahead of the stories that fix it, with the reasons it
+# may be red for, each with its story. The row prints `TRACK <check> PASS|RED|BLOCKED|FAIL <reason> <what a person
+# sees>` per check, and the loop's tracked_verdict reads those lines. The row reports `ROW <name> TRACKED` (not failed)
+# only when every RED reason is listed here and every listed reason is still RED or BLOCKED. Anything else is a FAIL: a
+# RED reason not listed, a FAIL check, no TRACK line, a timeout, a row that could not run, and (STRICT) a listed reason
+# that no check is red or blocked for any more. The PR that turns a reason green deletes it here; the last one deletes
+# the row's entry.
+declare -A TRACKED_RED=(
+    [toolchain]="pacman:#968 elevation:#973 docker:#970"
+)
+# ROWS THAT CHANGE THE MACHINE, run once even when they fail during a machine stall (Tynn #967): toolchain removes git
+# and docker and moves sudo, so its INFRA rerun met a machine it had already changed and measured nothing.
+ONE_SHOT_ROWS=" toolchain "
 
 only=''
 from=''
@@ -84,6 +101,8 @@ if [ -n "$only$from" ]; then
 fi
 
 failed=()
+tracked=()
+tracked_note=''
 notes=()
 
 # --- what a row needs, prepared once, and only when a selected row needs it -------------------------------------------
@@ -594,6 +613,21 @@ row_package-fuse() {
     grep -q "EnableCookieEncryption is Enabled" "$OUT/fuses.txt"
 }
 
+# THE TOOLCHAIN AS A PERSON GETS IT (Tynn #967): scripts/toolchain-real-cdp.mjs drives the real app and genie-host
+# through Settings → Toolchain with real pacman installs and updates, Docker, and the in-client password prompt, under
+# a real password with NOPASSWD moved aside. It is a TRACKED RED row (TRACKED_RED above) until #968, #970 and #973
+# land. It must meet the machine before this harness changed it, so it refuses once any need_cmd has installed
+# something with pacman, or say_docker has started Docker. The gate runs it alone, as its own shard on its own VM.
+# It removes git and docker and leaves what it installed; a run that wants other rows after it uses a fresh machine.
+row_toolchain() {
+    need_build && need_display || return 1
+    local ran
+    ran="$(cd "$SETUP" && ls pacman-*.log 2>/dev/null | tr '\n' ' ')"
+    if [ -n "$ran" ]; then block "this run already installed with pacman (${ran% }), so the machine is no longer as a person gets it: run linux.sh --only toolchain on a fresh machine"; return 1; fi
+    if [ -n "$docker_state" ]; then block "an earlier row already asked Docker and may have started it ($docker_state): run linux.sh --only toolchain on a fresh machine"; return 1; fi
+    CDP_PORT=9337 timeout 2640 node scripts/toolchain-real-cdp.mjs
+}
+
 # THE MACHINE BEFORE EACH ROW (Tynn #692, omarchy-test run 8): hang and renderer-crash failed where run 3 passed, with
 # genie-host's own clock jumping 9 to 12 s while it used 3 to 38 ms of CPU, and chat-drafts' 100 MiB read took 20.6 s
 # where it took 3.3 s. A process that is not scheduled for 10 s is starved by something: memory (swap), the disk, the
@@ -635,6 +669,7 @@ ceiling() {
         safe-mode|hang) echo 600 ;;
         flows|zip64) echo 1200 ;;
         package) echo 1500 ;;
+        toolchain) echo 2700 ;;
         *) echo 600 ;;
     esac
 }
@@ -728,6 +763,7 @@ run_row() {
             row_verdict=SKIP; row_line="ROW $name SKIP ($skip_reason)"
         else
             row_verdict=PASS; row_line="ROW $name PASS $((SECONDS - started))"
+            is_tracked "$name" && tracked_verdict "$name" 0 "$((SECONDS - started))"
         fi
     elif [ -n "$timed_out" ]; then
         wait "$watch_pid" 2>/dev/null
@@ -754,6 +790,62 @@ run_row() {
         fi
         grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         row_verdict=FAIL; row_line="ROW $name FAIL $((SECONDS - started))"
+        is_tracked "$name" && tracked_verdict "$name" "$row_status" "$((SECONDS - started))"
+    fi
+}
+
+# WHETHER A ROW IS A TRACKED RED ROW (Tynn #967): it has an entry in TRACKED_RED. Asked only when the table is declared.
+is_tracked() {
+    declare -p TRACKED_RED >/dev/null 2>&1 || return 1
+    [ -n "${TRACKED_RED[$1]+x}" ]
+}
+
+# A TRACKED RED ROW'S VERDICT (Tynn #967), from its own TRACK lines, for a row that ran to its end (a timeout or a row
+# an earlier need stopped never gets here: those stay FAIL). Sets row_verdict, row_line and tracked_note.
+tracked_verdict() {
+    local name="$1" status="$2" secs="$3" entry check verdict reason rest r
+    local -A story=() red=() held=()
+    local order=() unlisted=() failed_checks=() gone=() known=()
+    local lines=0
+    for entry in ${TRACKED_RED[$name]}; do story["${entry%%:*}"]="${entry#*:}"; order+=("${entry%%:*}"); done
+    while read -r _ check verdict reason rest; do
+        lines=$((lines + 1))
+        case "$verdict" in
+            RED) red["$reason"]=1 ;;
+            BLOCKED) held["$reason"]=1 ;;
+            FAIL) failed_checks+=("$check") ;;
+        esac
+        if [ "$verdict" = RED ] || [ "$verdict" = BLOCKED ]; then
+            if [ -z "${story[$reason]+x}" ]; then
+                case " ${unlisted[*]} " in *" $reason "*) ;; *) unlisted+=("$reason") ;; esac
+            fi
+        fi
+    done < <(grep -E '^TRACK [^ ]+ (PASS|RED|BLOCKED|FAIL)( |$)' "$OUT/$name.log")
+    for r in "${order[@]}"; do
+        if [ -n "${red[$r]+x}" ]; then known+=("$r ${story[$r]}")
+        elif [ -n "${held[$r]+x}" ]; then known+=("$r ${story[$r]} (blocked)")
+        else gone+=("$r ${story[$r]}")
+        fi
+    done
+    tracked_note=''
+    row_verdict=FAIL
+    if [ "${#failed_checks[@]}" -gt 0 ]; then
+        row_line="ROW $name FAIL $secs (tracked row has a failed check: ${failed_checks[*]})"
+    elif [ "$lines" = 0 ] && [ "$status" != 0 ]; then
+        row_line="ROW $name FAIL $secs (tracked row failed with no TRACK line)"
+    elif [ "${#unlisted[@]}" -gt 0 ]; then
+        row_line="ROW $name FAIL $secs (tracked row red for an unlisted reason: ${unlisted[*]})"
+    elif [ "${#gone[@]}" -gt 0 ]; then
+        local joined
+        joined="$(printf '%s, ' "${gone[@]}")"
+        row_line="ROW $name FAIL $secs (listed red reasons no longer red: ${joined%, }; delete them from TRACKED_RED[$name])"
+    elif [ "$status" = 0 ]; then
+        row_line="ROW $name FAIL $secs (tracked row exited 0 with RED checks)"
+    else
+        tracked_note="$(printf '%s, ' "${known[@]}")"
+        tracked_note="${tracked_note%, }"
+        row_verdict=TRACKED
+        row_line="ROW $name TRACKED $secs (known red: $tracked_note)"
     fi
 }
 
@@ -762,7 +854,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"
@@ -773,7 +865,13 @@ run_rows() {
             stalled=0
             stall="$(machine_stall "$from" "$(now_ms)")" && stalled=1
             echo "$stall"
-            if [ "$stalled" = 1 ]; then
+            if [ "$stalled" = 1 ] && [[ "${ONE_SHOT_ROWS:-}" == *" $name "* ]]; then
+                # A ROW THAT CHANGES THE MACHINE RUNS ONCE (Tynn #967): its rerun would meet the machine it left, not the
+                # one it measures. Said as INFRA, and its own verdict stands.
+                local secs="${row_line#ROW "$name" FAIL }"
+                echo "INFRA $name FAIL ${secs%% *}: the machine stalled during the row ($(head -1 <<<"$stall")); not run again: this row changes the machine, so a rerun would not meet the machine it measures"
+                infra+=("$name (not rerun)")
+            elif [ "$stalled" = 1 ]; then
                 local secs="${row_line#ROW "$name" FAIL }"
                 echo "INFRA $name FAIL ${secs%% *}: the machine stalled during the row ($(head -1 <<<"$stall")); running it once more on this machine"
                 printf '\n=== INFRA: the machine stalled during the run above; the rerun follows\n' >>"$OUT/$name.log"
@@ -782,6 +880,7 @@ run_rows() {
                 if [ "$row_verdict" != FAIL ]; then
                     echo "$row_line (INFRA: the first run failed during a machine stall; the rerun passed)"
                     infra+=("$name (rerun PASS)")
+                    [ "$row_verdict" = TRACKED ] && tracked+=("$name ($tracked_note)")
                 else
                     echo "$row_line (INFRA: the first run failed during a machine stall; the rerun failed too)"
                     infra+=("$name (rerun FAIL)")
@@ -792,12 +891,17 @@ run_rows() {
         fi
         echo "$row_line"
         [ "$row_verdict" = FAIL ] && failed+=("$name")
+        [ "$row_verdict" = TRACKED ] && tracked+=("$name ($tracked_note)")
     done
     return 0
 }
 
 infra_summary() {
     if [ "${#infra[@]}" -gt 0 ]; then echo "INFRA ROWS: ${infra[*]}"; else echo "INFRA ROWS: none"; fi
+}
+# The tracked red rows (Tynn #967), each with its known reasons: red on purpose, and not failed.
+tracked_summary() {
+    if [ "${#tracked[@]}" -gt 0 ]; then echo "TRACKED ROWS: ${tracked[*]}"; else echo "TRACKED ROWS: none"; fi
 }
 # <<< THE ROW LOOP
 
@@ -809,6 +913,7 @@ left_at_end="$(genie_processes | tr '\n' ' ')"
 [ -n "${left_at_end// /}" ] && notes+=("Genie processes still alive at the end of the run: $left_at_end")
 for n in "${notes[@]}"; do echo "NOTE $n"; done
 infra_summary
+tracked_summary
 echo "CLOCK $(awk -v w0="$wall0" -v w1="$(clock_wall)" -v m0="$mono0" -v m1="$(clock_mono)" 'BEGIN { printf "the wall clock advanced %.1f s while %.1f s passed (a difference of %+.1f s)", w1 - w0, m1 - m0, (w1 - w0) - (m1 - m0) }')"
 # TEST FILES THE UNIT SUITE DID NOT RUN HERE, each with its own reason: a file that runs on Windows only carries
 # `// CI: WINDOWS ONLY (<reason>)` (test/ci-windows-only-files.test.ts holds that), and scripts/ci/windows.ps1 runs it.
