@@ -203,6 +203,16 @@ const press = (tool, match) => cdp.evaluate(`(() => {
     b.click();
     return true;
 })()`);
+/**
+ * A tool's SIDE PANEL, opened as a person opens it: by choosing its card (#962's Toolchain: a language's versions, its
+ * default radio and "Install another version" live there, and are on the page only while it is open).
+ */
+const openPanel = async (key) => {
+    const isOpen = () => cdp.evaluate(`Boolean(document.querySelector('[data-toolchain-panel=${JSON.stringify(key)}]'))`);
+    if (await isOpen()) return true;
+    const chose = await until(30_000, () => cdp.evaluate(`(() => { const b = document.querySelector('[data-select-tool=${JSON.stringify(key)}]'); if (!b) return false; b.click(); return true; })()`));
+    return Boolean(chose && (await until(15_000, isOpen)));
+};
 const act = (action) => cdp.evaluate(`(window.genieTest ?? window.genie).features.act(${JSON.stringify(action)}).then(() => true)`);
 const snapshot = (path) => cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((d) => { let v = d; for (const k of ${JSON.stringify(path)}) v = v?.[k]; return v ?? null; })`);
 const recheck = async () => { await act({ kind: 'toolchain.check', force: true }); await sleep(1000); };
@@ -338,7 +348,8 @@ try {
         const rec = () => {
             for (const el of document.querySelectorAll('[data-tool-updating], [data-tool-step], li[data-tool] [aria-busy="true"]')) {
                 const tool = el.getAttribute('data-tool-updating') || el.getAttribute('data-tool-step') || el.closest('li[data-tool]')?.getAttribute('data-tool');
-                const text = el.textContent.trim();
+                // #962's card progress also shows a ticking elapsed time: the step is its words, never the clock.
+                const text = (el.matches('[data-card-progress]') ? (el.querySelector('span.truncate')?.textContent ?? '') : el.textContent).trim();
                 if (!tool || !text) continue;
                 const a = (window.__tc967.steps[tool] ??= []);
                 if (a[a.length - 1] !== text) a.push(text);
@@ -372,6 +383,7 @@ try {
         if (!before) {
             // No card and no install command anywhere: a language whose section offers only Genie's own builds. A person
             // has no way to get the system's package from here.
+            await openPanel(tool);
             const words = await cdp.evaluate(`[...document.querySelectorAll('[data-${tool}-versions] [data-${tool}-system], [data-${tool}-versions] [data-${tool}-install-refused]')].map((e) => e.textContent.trim()).join(' / ')`);
             track(`${tool}-install`, 'RED', 'pacman', `no card offers to install ${pkg} with the system's package manager${words ? `; the ${tool} section says: "${words}"` : ''}`);
             track(`${tool}-elevation`, 'BLOCKED', 'elevation', 'not reached: nothing to install with');
@@ -511,23 +523,27 @@ try {
 
     // 12. A GENIE-MANAGED LANGUAGE AND ITS DEFAULT (Node): works today, and must keep working.
     {
-        const nodeView = await snapshot(['toolchain', 'node']);
-        const pick = (nodeView?.available ?? []).find((a) => !a.installed)?.version ?? null;
-        if (!pick) track('node-install', 'FAIL', 'none', `no Node version to install is offered (${JSON.stringify(nodeView)?.slice(0, 200)})`);
+        // As a person does it in #962's Toolchain: choose the Node card, which opens its side panel; press the Install
+        // that "Install another version" offers (the version its picker shows, the newest by default); then that
+        // version's default radio. Each is a button the person presses. One that is not there is a FAIL saying so, never
+        // an action the row takes in their place (that fallback is what read the 2026-11-21 break as "did not install").
+        const sel = (s) => JSON.stringify(s);
+        const clickThe = (s) => cdp.evaluate(`(() => { const b = document.querySelector(${sel(s)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
+        const opened = await openPanel('node');
+        const pick = opened ? await cdp.evaluate(`document.querySelector('[data-install-another="node"] [data-node-install]')?.getAttribute('data-node-install') ?? null`) : null;
+        if (!opened) track('node-install', 'FAIL', 'none', 'choosing the Node card did not open its panel');
+        else if (!pick) track('node-install', 'FAIL', 'none', `the Node panel offers no "Install another version": "${(await cdp.evaluate(`document.querySelector('[data-toolchain-panel="node"]')?.innerText ?? ''`)).replace(/\s+/g, ' ').slice(0, 200)}"`);
         else {
-            // Node has its own section (no Toolchain card): its Install chip, then its row, then its Default mark.
-            const sel = (s) => JSON.stringify(s);
-            const clickNode = (s) => cdp.evaluate(`(() => { const b = document.querySelector(${sel(s)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
-            const pressed = await until(30_000, () => clickNode(`[data-node-install="${pick}"]`));
-            if (!pressed) await act({ kind: 'toolchain.installNode', version: pick, consent: true });
-            const row = await until(600_000, () => cdp.evaluate(`Boolean(document.querySelector(${sel(`li[data-node-version="${pick}"]`)}))`), 1000);
-            track('node-install', row ? 'PASS' : 'FAIL', 'none', row ? `Node ${pick} has its row in the Node section${pressed ? '' : ' (its Install chip was not there to press; installed through the same action)'}` : `Node ${pick} did not install: ${JSON.stringify(await snapshot(['toolchain', 'refusals']))?.slice(0, 200)}`);
+            const pressed = await clickThe(`[data-install-another="node"] [data-node-install="${pick}"]`);
+            const row = pressed && (await until(600_000, async () => { await openPanel('node'); return cdp.evaluate(`Boolean(document.querySelector(${sel(`[data-toolchain-panel="node"] li[data-node-version="${pick}"]`)}))`); }, 1000));
+            const onCard = await cdp.evaluate(`Boolean(document.querySelector(${sel(`[data-version-chip="node:${pick}"]`)}))`);
+            track('node-install', row ? 'PASS' : 'FAIL', 'none', !pressed ? `the Install for Node ${pick} could not be pressed (disabled)` : row ? `Node ${pick} has its row in the Node panel${onCard ? ', and a chip on the Node card' : ''}` : `Node ${pick} did not install: ${JSON.stringify(await snapshot(['toolchain', 'refusals']))?.slice(0, 200)}`);
             if (row) {
-                const made = await until(30_000, () => clickNode(`[data-make-default="node:${pick}"]`));
-                if (!made) await act({ kind: 'toolchain.setDefault', lang: 'node', version: pick });
-                const isDefault = await until(120_000, () => cdp.evaluate(`Boolean(document.querySelector(${sel(`li[data-node-version="${pick}"][data-default="true"] [data-is-default="node:${pick}"]`)}))`), 1000);
+                await openPanel('node');
+                const made = await until(30_000, () => clickThe(`[data-toolchain-panel="node"] [data-make-default="node:${pick}"]`));
+                const isDefault = made && (await until(120_000, async () => { await openPanel('node'); return cdp.evaluate(`Boolean(document.querySelector(${sel(`li[data-node-version="${pick}"][data-default="true"] [data-is-default="node:${pick}"]`)}))`); }, 1000));
                 const nodeNow = answersInSession('bash', '-lc', 'node --version').stdout?.trim() ?? '';
-                track('node-default', isDefault ? 'PASS' : 'FAIL', 'none', isDefault ? `Node ${pick} reads Default in its row${made ? '' : ' (its Make default button was not there to press)'}; a login shell's node: ${nodeNow || 'none'}` : `Node ${pick}'s row does not read Default; ${JSON.stringify(await snapshot(['toolchain', 'defaults']))?.slice(0, 160)}`);
+                track('node-default', isDefault ? 'PASS' : 'FAIL', 'none', !made ? `Node ${pick}'s default radio could not be pressed` : isDefault ? `Node ${pick}'s radio reads the default in its row; a login shell's node: ${nodeNow || 'none'}` : `Node ${pick}'s row does not read the default; ${JSON.stringify(await snapshot(['toolchain', 'defaults']))?.slice(0, 160)}`);
             }
         }
     }
