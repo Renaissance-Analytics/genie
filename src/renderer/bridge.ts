@@ -622,7 +622,7 @@ export interface GenieBridge {
      * click) and the ArtBoard. Absent on a bridge with no host (a window driving another machine): the panels say so.
      */
     repo?: {
-        call(op: 'list' | 'status' | 'diff' | 'stage' | 'unstage' | 'commit' | 'branch' | 'push' | 'pull', workspaceId: string, rel: string, a?: unknown, b?: unknown): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>;
+        call(op: 'list' | 'status' | 'diff' | 'stage' | 'unstage' | 'commit' | 'branch' | 'push' | 'pull' | 'tagOptions' | 'tag', workspaceId: string, rel: string, a?: unknown, b?: unknown): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>;
     } | undefined;
     artboard?: {
         read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
