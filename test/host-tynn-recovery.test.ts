@@ -512,8 +512,10 @@ describe('where it is wired', () => {
         expect(host).toMatch(/hostTynnRecovery\(/);
         expect(host).toMatch(/\.onChange\(\(\) => [^\n]*recover/);
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        // Only that its one-time move of the secrets finished (Tynn #896, 2b-3): it restarts nothing itself.
-        expect(main).toMatch(/tynn\(\)\.recovery\(\{ secretsMoved: true \}\)/);
+        // The one-time move is genie-host's own since Tynn #959 (2g-3b): it recovers after a move by itself, and the window
+        // tells it nothing (it once said its move finished, Tynn #896 2b-3). The window restarts nothing either.
+        expect(host).toMatch(/if \(secretsMoved\) void tynnRecovery\?\.recover\(\{ secretsMoved: true \}\);/);
+        expect(main).not.toMatch(/tynn\(\)\.recovery\(/);
         expect(main).not.toMatch(/restartForMcp/);
     });
 });

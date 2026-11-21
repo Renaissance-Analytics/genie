@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
-import { migrateSecrets, type HostVault, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import type { HostVault, MigrationBook, MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { buildTicketHostHello, hostHelloSigningString } from '../src/main/relay-wire.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
@@ -300,7 +301,7 @@ describe('what an older Genie sealed moves to the keychain', () => {
         const pair = generateHostKeypair();
         writeFileSync(file, JSON.stringify({ [HOST]: { workstationId: 'ws_1', keyEnc: seal(pair.privateKeyPem), legacyDone: 'ws_old' } }));
         const k = keychain();
-        const moved = await migrateSecrets(await workstationSealedSources({ file, cipher }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await workstationSealedSources({ file, cipher }), vaultOver(k), memoryBook());
         expect(moved).toEqual([{ name: ENTRY, status: 'moved' }]);
         expect(rows()[HOST]).toEqual({ workstationId: 'ws_1', legacyDone: 'ws_old' });
         const store = workstationKeyStore(file, k);
