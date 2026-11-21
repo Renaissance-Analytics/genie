@@ -15,7 +15,10 @@ describe('main wires the CA', () => {
         expect(main.match(/v1CaDirs:\s*\[\.\.\.new Set\(\[join\(app\.getPath\('userData'\), 'host-gen'\)/g) ?? []).toHaveLength(1);
     });
 
-    it('a front-door change refreshes the Deck (the Trust item) — once', () => {
-        expect(main.match(/composed\.onFrontDoorChange\(\(\)\s*=>\s*registry\?\.touch\(\)\)/g) ?? []).toHaveLength(1);
+    // The window registry's Deck, which a front-door change used to refresh here, was read by nothing (Tynn #998, 2g-4b1: the
+    // proof is in test/split-2g4b1-settings-watch.test.ts). The person's Deck, with its Trust item, is genie-host's.
+    it('main refreshes no Deck of its own on a front-door change; genie-host’s Deck carries the Trust item', () => {
+        expect(main).not.toMatch(/composed\.onFrontDoorChange\(\(\)\s*=>\s*registry\?\.touch\(\)\)/);
+        expect(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8')).toMatch(/trust: hostingStack\?\.trustDeckItems\(\) \?\? \[\],/);
     });
 });
