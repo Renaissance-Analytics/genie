@@ -145,7 +145,6 @@ export const ENGINE_METHODS = [
     'engine.cloneOffers',
     // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
     // Their state is sent as `plugins.event` before `engine.ready` and again on every change.
-    'engine.plugins',
     // Anonymous Marketplace reads and reviewed installs: local window only, with connection-owned review tokens.
     'engine.marketplace',
     // The GApp book (GApps v2 V7, Tynn #572): `[operation, args]`, a local window's store actions (main/gapps-api.ts).
@@ -154,8 +153,6 @@ export const ENGINE_METHODS = [
     // the `catalog.snapshot` event before `engine.ready`; every change is pushed as `catalog.changed` (upserts and
     // removals from a base revision; a window that missed one asks for the snapshot again). `catalog.docs [kind, id]`
     // answers one element's definition, or null.
-    'catalog.snapshot',
-    'catalog.docs',
     // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
     'engine.browser',
     'engine.flows',
@@ -180,24 +177,17 @@ export const ENGINE_METHODS = [
     // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
     'engine.remoteAccess',
     // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
-    'engine.relayHost',
     // Take over (Tynn #553, P5d.5c): genie-host owns who has a TUI open; a window starts, ends and reads them here.
     'engine.takeOver',
     // A workspace's agent config: the host writes it, under the lock its agent preparation holds.
     'engine.configSync',
     // The keyring card, as the host found it: `[method, args]`.
-    'engine.keyring',
     // The host's GitHub account, and the authenticated git it runs (P3.4 cut c): `[method, args]`.
-    'engine.github',
     // What the OS said about proxies, handed over by a window: `[{ origin: answer }]`.
     'engine.proxyRemember',
     // The host's Tynn account, as a window asks it (P3.4 cut c): `[method, args]`.
-    'engine.tynn',
     // The host's keychain, from the window (P3.4): an agent's key only, by name. What an older Genie sealed goes on the
     // protocol's keychain.adoptLegacy instead (Tynn #959, 2g-3b).
-    'engine.secretProbe',
-    'engine.secretRead',
-    'engine.secretStore',
     // Host → window.
     // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.
     'client.toolCall',

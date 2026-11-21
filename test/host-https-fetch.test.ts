@@ -394,7 +394,7 @@ describe('the host’s account over it, against a real TLS server', () => {
 
     it('the host’s account has one 404 rule: it is TynnAccount’s, not a copy', () => {
         const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-        for (const file of ['src/main/host-tynn-account.ts', 'src/main/host-https-fetch.ts', 'src/main/tynn-account-service.ts', 'src/main/tynn-account-replica.ts']) {
+        for (const file of ['src/main/host-tynn-account.ts', 'src/main/host-https-fetch.ts', 'src/main/tynn-account-service.ts']) {
             expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/\b404\b/);
         }
     });

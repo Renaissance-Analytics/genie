@@ -8,8 +8,8 @@ import type { MigrationSource, OldRead } from './keychain-migration.js';
 import { preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
 
 /**
- * WHERE AN AGENT'S KEY IS HELD: the host's keychain (P3.4, genie#1457). The window reaches it over the link
- * (agent-secrets.ts) and the host directly (`Keychain` is this port). Named by the key's public id, which is no secret.
+ * WHERE AN AGENT'S KEY IS HELD: the host's keychain (P3.4, genie#1457). Only the host reaches it (`Keychain` is this port);
+ * since Tynn #961 no window does. Named by the key's public id, which is no secret.
  */
 export interface AgentSecrets {
     probe(): Promise<KeychainResult>;

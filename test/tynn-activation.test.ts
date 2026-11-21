@@ -8,6 +8,8 @@ import { OS_WORKSPACE } from '../src/core/os-agent.js';
 import type { SyncResult } from '../src/core/integrations.js';
 import { composeServices } from './helpers/compose-alone.js';
 import { type ComposedServices } from '../src/main/compose.js';
+import { agentTynnPrep } from '../src/main/agent-tynn-prep.js';
+import { configWriter } from '../src/main/workspace-config-sync.js';
 import type { WorkspaceConfigRequest } from '../src/main/workspace-config-sync.js';
 import { SessionHost } from '../src/main/session-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -61,20 +63,27 @@ async function fixture(extra: { hostConfigSync?: () => { configSync(request: Wor
     const held = new Map<string, string>();
     const input = { ...extra, userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
         mcpEndpoint: () => ({ url: 'http://127.0.0.1:1/mcp', token: 'synthetic-genie' }),
-        workspaces: () => [{ id: 'workspace', path: workspace }], tynn: () => { if (state.accountLate) { state.accountLate = false; return null; } return account; },
-        tynnSecrets: { probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(state.encryption) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(state.encryption)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
+        workspaces: () => [{ id: 'workspace', path: workspace }] };
+    /*
+     * An agent's private Tynn preparation (agent-tynn-prep.ts), as genie-host builds it (host-agent-keys.ts): since Tynn #961
+     * (2g-3c) the window's composition has none, and its agents are genie-host's. Same vault, same account, same keychain.
+     */
+    const prepPorts = { tynn: () => { if (state.accountLate) { state.accountLate = false; return null; } return account; },
+        secrets: { probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(state.encryption) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(state.encryption)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
     };
+    const prepOf = () => agentTynnPrep({ vaultFile: join(input.userData, 'agent-credentials', 'agents.json'), secrets: prepPorts.secrets, tynn: prepPorts.tynn, workspaces: input.workspaces, withConfig: configWriter() });
     // The boot's first trust pass is not awaited by compose: the files are seeded only once it has read the workspace, so
     // what it records is the seed's settled state or nothing — never a read taken while the seed was being written.
     const boot = async () => {
         await services?.shutdown(); const composed = await composeServices(input); services = composed;
         for (let i = 0; i < 200 && composed.workspaceTrust.view('workspace') === null; i += 1) await new Promise((r) => setTimeout(r, 10));
-        return composed as Activated;
+        const prep = prepOf();
+        return Object.assign(composed, { prepareAgentMcp: prep.prepare, tynnNote: prep.note, tynnRecovery: prep.recovery }) as Activated;
     };
     const s = await boot();
     const agent = (provider: 'claude' | 'codex' = 'codex') => agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider, name: `agent-${rows.length}-${provider}` });
     const prepare = (a: AgentRecord, signal = new AbortController().signal) => {
-        expect(typeof s.prepareAgentMcp, 'production composition must expose private preparation').toBe('function');
+        expect(typeof s.prepareAgentMcp, 'the host’s preparation is built').toBe('function');
         const pending = s.prepareAgentMcp(a, signal);
         void pending.catch(requestEntered.reject);
         return pending;
@@ -301,13 +310,17 @@ it('genie-host recovers the Tynn agents when the account changes; the window onl
     expect(/tynnRecovery\?\.recover\(\{ secretsMoved: true \}\)/.test(host), 'genie-host recovers after a move by itself').toBe(true);
     expect(/tynn\(\)\.recovery\(/.test(main), 'the window tells the host nothing about its move').toBe(false);
     expect(/tynnAccount\.onChange\(\(\) => recoverTynnAgents\(\)\)|restartForMcp/.test(main), 'the window restarts no agent itself').toBe(false);
-    expect(/prepareAgentMcp\(record,\s*signal\)[\s\S]*?tynnNote\(record\.id\)[\s\S]*?notice\(/.test(main), 'the note reaches the chat').toBe(true);
+    // genie-host prepares each agent itself, and its note reaches the chat (session-engine-server.ts hostOptions; Tynn #961).
+    const server = await readFile('src/main/session-engine-server.ts', 'utf8');
+    expect(/const held = await this\.#options\.agentKeys\?\.\(record, cwd, signal\);\s*if \(held\?\.note\) this\.#host\?\.notice\(record\.id, held\.note\);/.test(server), 'the note reaches the chat').toBe(true);
 });
 
-it('production main wires preparation for both providers and safeStorage without the on-disk fallback', async () => {
+it('production: genie-host prepares both providers’ sessions, main none, and main unseals with safeStorage without the on-disk fallback', async () => {
     const main = await readFile('src/main/main.ts', 'utf8');
     expect(main.includes('tynnMcpServersOnDisk')).toBe(false);
-    expect(/prepareMcpServers:\s*async[\s\S]*?prepareAgentMcp\(record,\s*signal\)/.test(main), 'main must prepare each session').toBe(true);
+    // Since Tynn #961 (2g-3c) the window prepares no session: its agents are genie-host's (host-agent-keys.ts).
+    expect(/prepareMcpServers|prepareAgentMcp/.test(main), 'main prepares no session').toBe(false);
+    expect(/agentKeys,/.test(await readFile('src/main/genie-host.ts', 'utf8')), 'genie-host hands its engine the preparation').toBe(true);
     // safeStorage through the one gate (os-cipher.ts): no keyring, no secret; basic_text is never a keyring (2026-11-01). Only the
     // unsealer opens an older Genie's seals with it now (Tynn #959, 2g-3b).
     expect(/const cipher = osCipher\(safeStorage, process\.platform\);/.test(main), 'production unsealing must use safeStorage through osCipher').toBe(true);

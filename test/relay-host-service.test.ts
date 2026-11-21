@@ -1,12 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
-import type { ClientTransport } from '../src/core/remote-protocol.js';
 import { genieCatalog, RELAY_HOST_ELEMENT } from '../src/main/genie-catalog.js';
 import { RelayHostService, type RelayHostServicePorts } from '../src/main/relay-host-service.js';
-import { RelayHostReplica } from '../src/main/relay-host-replica.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import type { RelayHostStatus } from '../src/main/tynn-network.js';
 import { mayBrowse } from '../src/core/workstation-role.js';
 
@@ -119,47 +114,10 @@ describe('the relay host, in genie-host, with no window', () => {
     });
 });
 
-describe('the window\'s replica, over the real engine link', () => {
-    async function link(local: boolean, service: RelayHostService) {
-        const server = new SessionEngineServer({ token: 't', build: 'b', relayHost: service });
-        const [h, raw] = memoryPair();
-        server.accept(h, { local });
-        const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-        const client = new SessionEngineClient({});
-        expect(await client.connect(t, 't')).toMatchObject({ ok: true });
-        return { client, server };
-    }
-
-    it('is driven from a local window only, before any agent engine is up (control: a local window reads it)', async () => {
-        const remote = await link(false, rig().service);
-        await expect(remote.client.call('engine.relayHost', ['status', []])).resolves.toEqual({ ok: false, reason: 'The relay host is driven from a local window only.' });
-        const local = await link(true, rig().service);
-        await expect(local.client.call('engine.relayHost', ['status', []])).resolves.toMatchObject({ ok: true });
-    });
-
-    it('reads the host\'s state, fails closed until it has, and hands over Genie 1\'s record', async () => {
-        const calls: Array<[string, readonly unknown[]]> = [];
-        const replica = new RelayHostReplica(async (method, args) => {
-            calls.push([method, args]);
-            return { workstation: { registered: true, host: TYNN, workstationId: 'ws_me', role: 'pilot' }, role: 'pilot', relay: { state: 'connected' } };
-        });
-        expect(replica.role()).toBe('drone');
-        expect(replica.workstation()).toBeNull();
-        let changed = 0;
-        replica.onChange(() => { changed += 1; });
-        await replica.refresh();
-        expect(replica.role()).toBe('pilot');
-        expect(replica.relay()).toEqual({ state: 'connected' });
-        expect(changed).toBe(1);
-        await replica.register(LEGACY);
-        expect(calls.at(-1)).toEqual(['register', [LEGACY]]);
-    });
-});
-
 describe('genie.relay-host in the catalog', () => {
-    it('is a host-service on both sides, linked by engine.relayHost and its event', () => {
+    it('is a host-service on both sides; its window side follows the host summary (Tynn #961: no engine route of its own)', () => {
         expect(genieCatalog().list('host-service').find((d) => d.id === 'genie.relay-host')).toMatchObject({
-            reach: { side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.relayHost'], events: ['relayHost.event'] } },
+            reach: { side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['summary.watch'], events: ['local-summary'] } },
             payload: { start: 'relayHost.start', stop: 'relayHost.stop', health: 'relayHost.health', settingsSection: 'workstation' },
         });
         expect(RELAY_HOST_ELEMENT.id).toBe('genie.relay-host');
@@ -226,12 +184,5 @@ describe('the role a window shows is Tynn\'s answer; failing closed stays where 
         await r.service.register();
         expect(r.service.status().workstation?.role).toBe('drone');
         expect(mayBrowse(r.service.status().workstation?.role ?? null)).toBe(false);
-    });
-
-    it('before genie-host has answered, the window\'s replica shows no role, so the picker is there from the start', () => {
-        const replica = new RelayHostReplica(async () => null);
-        expect(replica.workstation()?.role ?? null).toBeNull();
-        expect(mayBrowse(replica.workstation()?.role ?? null)).toBe(true);
-        expect(replica.role()).toBe('drone');
     });
 });

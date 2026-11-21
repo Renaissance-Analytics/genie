@@ -1,13 +1,9 @@
 import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
-import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
-import type { KeyringService } from './keyring-service.js';
 import type { WorkstationService } from './workstation-service.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
-import type { TynnAccountService } from './tynn-account-service.js';
-import type { AgentSecrets } from './tynn-agent-identities.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -79,15 +75,6 @@ function timingLabel(method: EngineMethod, args: readonly unknown[]): string {
     return `engine.stores store=${store ?? '?'} method=${operation ?? '?'}`;
 }
 
-/**
- * What a window may ask the keychain for: an agent's key, by name. The accounts' tokens never cross this link: what an older
- * Genie sealed reaches genie-host on the protocol's keychain.adoptLegacy (Tynn #959, 2g-3b; host-legacy-adopt.ts).
- */
-function agentKeyName(name: string): `tynn/agent/${string}` {
-    if (!/^tynn\/agent\/[0-9A-HJKMNP-TV-Z]{26}$/i.test(name)) throw new Error('A window can ask only for an agent\'s key.');
-    return name as `tynn/agent/${string}`;
-}
-
 /** What the session host is built with, from this server: its owner's half of the options. */
 export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
@@ -100,21 +87,11 @@ export interface EngineServerOptions {
     readonly workstation?: WorkstationService;
     /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
     readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown };
-    /** The Tynn relay host's registration, role and link (Tynn #410): read and driven from a LOCAL window only. */
-    readonly relayHost?: { call(method: string, args: unknown[]): unknown };
     readonly takeOver?: { call(method: string, args: unknown[]): unknown };
     /** A workspace's agent config (P3.4): one writer, here. */
     readonly configSync?: (asked: WorkspaceConfigRequest) => Promise<readonly SyncResult[]>;
-    /** The keyring card, as the host found it (P3.4 cut c). */
-    readonly keyring?: KeyringService;
-    /** The host's GitHub account (P3.4 cut c). */
-    readonly github?: GithubAccountService;
     /** What the OS said about proxies, as a window hands it over. */
     readonly proxy?: { remember(answers: Record<string, string>): Promise<void> };
-    /** The host's Tynn account (P3.4 cut c). */
-    readonly tynn?: TynnAccountService;
-    /** The host's keychain (P3.4), which a window reaches for an agent's key. Absent = refused, which a window reads as unavailable. */
-    readonly keychain?: AgentSecrets;
     /** An agent's Tynn key with no window connected (genie#1457: host-agent-keys.ts). */
     readonly agentKeys?: HostAgentKeys;
     /** The token a window must say in `hello` (constant-time compared). */
@@ -186,10 +163,6 @@ export interface EngineServerOptions {
     readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
     readonly flows?: FlowsService;
-    /** The host's catalog (ADF A4: catalog-host.ts). Absent = `catalog.*` is refused and no window is sent one. */
-    readonly catalog?: Pick<import('./catalog-host.js').CatalogService, 'snapshot' | 'docs' | 'onEvent'>;
-    /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
-    readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
     readonly marketplace?: MarketplaceApi | undefined;
     /** The GApp book's actions (GApps v2 V7). Absent = the book could not open, and the store says so. */
     readonly gapps?: GAppBookApi | undefined;
@@ -292,20 +265,6 @@ export class SessionEngineServer {
         this.#options = options;
         this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
         // Every change to the stores agents write to, to every window's replicas (P3.1).
-        options.keyring?.onEvent((dump) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'keyring.event', dump);
-        });
-        options.github?.onEvent((dump) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'github.event', dump);
-        });
-        // A page for the person, and it opens once: on the newest window.
-        options.github?.onOpen((url) => {
-            const conn = [...this.#connections].filter((c) => c.authed).at(-1);
-            if (conn) this.#event(conn, 'github.open', { url });
-        });
-        options.tynn?.onEvent((dump) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'tynn.event', dump);
-        });
         options.stores?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'stores.event', event);
         });
@@ -322,14 +281,8 @@ export class SessionEngineServer {
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
         });
-        options.catalog?.onEvent((change) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'catalog.changed', change);
-        });
         options.gappsChanged?.(() => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'gapps.changed', null);
-        });
-        options.plugins?.onEvent((dump) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'plugins.event', dump);
         });
         options.browser?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'browser.event', event);
@@ -410,11 +363,6 @@ export class SessionEngineServer {
     /** Remote access's status (to every local window) or a bridged connection's frame (to the window that owns it). */
     remoteAccessEvent(owner: string | null, event: unknown): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && (owner === null || conn.id === owner)) this.#event(conn, 'remoteAccess.event', event);
-    }
-
-    /** The relay host's state, to every local window (Tynn #410). */
-    relayHostEvent(view: unknown): void {
-        for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'relayHost.event', view);
     }
 
     /** Who has a TUI open, to every local window (Tynn #553). */
@@ -540,10 +488,6 @@ export class SessionEngineServer {
         const host = this.#host;
         if (host) for (const id of host.startedIds()) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
         this.#sendGlobal(conn);
-        // Who is signed in BEFORE ready: a window never reads signed out when it is not.
-        if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());
-        if (this.#options.github) this.#event(conn, 'github.event', this.#options.github.dump());
-        if (this.#options.keyring) this.#event(conn, 'keyring.event', this.#options.keyring.dump());
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
@@ -558,10 +502,6 @@ export class SessionEngineServer {
         }
         if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
-        // The catalog BEFORE ready (ADF A4): a window has the snapshot it follows changes from as soon as it connects.
-        if (this.#options.catalog) this.#event(conn, 'catalog.snapshot', this.#options.catalog.snapshot());
-        // The plugins BEFORE ready (ADF A3): a window lists them and routes files to their editors as soon as it connects.
-        if (this.#options.plugins) this.#event(conn, 'plugins.event', this.#options.plugins.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
         // Safe mode BEFORE ready: the window's own boot restore holds on it (relaunch-restore.ts).
@@ -648,16 +588,6 @@ export class SessionEngineServer {
             if (!this.#options.takeOver) throw new Error('This host runs no take-over host.');
             if (!conn.local) throw new Error('Take over is driven from a local window only.');
             return this.#options.takeOver.call(typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
-        }
-        if (method === 'engine.relayHost') {
-            if (!this.#options.relayHost) throw new Error('This host runs no relay host.');
-            if (!conn.local) throw new Error('The relay host is driven from a local window only.');
-            return this.#options.relayHost.call(typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
-        }
-        // The catalog is the host's own, ready before any agent engine is (ADF A4): answered here.
-        if (method === 'catalog.snapshot' || method === 'catalog.docs') {
-            if (!this.#options.catalog) throw new Error('This host keeps no catalog.');
-            return method === 'catalog.snapshot' ? this.#options.catalog.snapshot() : this.#options.catalog.docs(String(args[0] ?? '') as never, String(args[1] ?? ''));
         }
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
@@ -819,10 +749,6 @@ export class SessionEngineServer {
             case 'engine.cloneOffers':
                 if (!this.#options.cloneOffers) throw new Error('This host does not watch a workspace’s repo.');
                 return this.#options.cloneOffers.call(str(0), Array.isArray(args[1]) ? args[1] : []);
-            case 'engine.plugins':
-                if (!this.#options.plugins) throw new Error('This host keeps no plugins.');
-                if (!conn.local) throw new Error('Genie’s plugins are changed from a local window only.');
-                return this.#options.plugins.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.appInbox':
                 if (!this.#options.appInbox) throw new Error('This host runs no app door.');
                 if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');
@@ -890,24 +816,9 @@ export class SessionEngineServer {
             case 'engine.workstation':
                 if (!this.#options.workstation) throw new Error('This host keeps no workstation identity.');
                 return this.#options.workstation.call(str(0), Array.isArray(args[1]) ? args[1] : []);
-            case 'engine.keyring':
-                if (!this.#options.keyring) throw new Error('This host keeps no keyring card.');
-                return this.#options.keyring.call(str(0), Array.isArray(args[1]) ? args[1] : []);
-            case 'engine.github':
-                if (!this.#options.github) throw new Error('This host keeps no GitHub account.');
-                return this.#options.github.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.proxyRemember':
                 if (!this.#options.proxy) throw new Error('This host keeps no proxy answers.');
                 return this.#options.proxy.remember((args[0] ?? {}) as Record<string, string>);
-            case 'engine.tynn':
-                if (!this.#options.tynn) throw new Error('This host keeps no Tynn account.');
-                return this.#options.tynn.call(str(0), Array.isArray(args[1]) ? args[1] : []);
-            case 'engine.secretProbe':
-                return this.#keychain().probe();
-            case 'engine.secretRead':
-                return this.#keychain().get(agentKeyName(str(0)));
-            case 'engine.secretStore':
-                return this.#keychain().set(agentKeyName(str(0)), str(1));
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
         }
@@ -925,11 +836,6 @@ export class SessionEngineServer {
             return updates.helperLinked(conn.id, pid, (event) => this.#event(conn, 'updater.event', event));
         }
         return updates.helperCall(name, rest, conn.id);
-    }
-
-    #keychain(): AgentSecrets {
-        if (!this.#options.keychain) throw new Error('This host keeps no keychain.');
-        return this.#options.keychain;
     }
 
     /** A call to the WINDOW (the newest one, never the browser's link): what only it has. Refused when no window is connected. */

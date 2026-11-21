@@ -5,19 +5,11 @@ import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { hostname } from 'node:os';
 import { RemoteAccessReplica } from './remote-access-replica.js';
-import { RelayHostReplica } from './relay-host-replica.js';
 import { TakeOverReplica } from './take-over-replica.js';
 import type { TakeOverView } from './take-over-service.js';
-import type { RelayHostView } from './relay-host-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
-import { KeyringReplica } from './keyring-replica.js';
-import type { KeyringDump } from './keyring-service.js';
-import { GithubAccountReplica } from './github-account-replica.js';
-import type { GithubAccountDump } from './github-account-service.js';
-import { TynnAccountReplica } from './tynn-account-replica.js';
-import type { TynnAccountDump } from './tynn-account-service.js';
 import type { McpServer, SessionModelState } from '@particle-academy/prism-acp';
 import type { RowsPatch } from '../core/agent-push-wire.js';
 import type { AgentActionKind } from '../core/agent-actions.js';
@@ -58,12 +50,8 @@ import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { PhpCgiResolution } from './site-manager.js';
 import type { CloneApplyReply, CloneOffersReply } from './clone-offers-service.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
-import type { PluginsDump } from './plugins-host.js';
-import { PluginsReplica } from './plugins-replica.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
 import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
-import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
-import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
@@ -112,7 +100,6 @@ export interface EngineClientOptions {
     readonly onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
     readonly onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
-    readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
     /** What this link says it is in its hello: a window (the default), or the Genie browser's process (BROWSER_LINK_LABEL). */
     readonly label?: string;
     /** A window tool's call, forwarded by the host's MCP server (P3.1): run it, answer its result. */
@@ -195,19 +182,13 @@ export class SessionEngineClient {
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #cloneOffers: { list(workspaceId: string): Promise<CloneOffersReply>; apply(workspaceId: string, offerId: string): Promise<CloneApplyReply> } | null = null;
-    #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
     #gapps: GAppBookApi | null = null;
     readonly #gappsChanged = new Set<() => void>();
-    #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
-    #tynn: TynnAccountReplica | null = null;
-    #github: GithubAccountReplica | null = null;
-    #keyring: KeyringReplica | null = null;
     #workstation: WorkstationReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
-    #relayHost: RelayHostReplica | null = null;
     #takeOvers: TakeOverReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
@@ -404,17 +385,8 @@ export class SessionEngineClient {
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
                 return;
-            case 'catalog.snapshot':
-                this.catalog().rebase(payload as CatalogSnapshot);
-                return;
-            case 'catalog.changed':
-                void this.catalog().apply(payload as CatalogChange).catch(() => {});
-                return;
             case 'gapps.changed':
                 for (const listener of [...this.#gappsChanged]) listener();
-                return;
-            case 'plugins.event':
-                this.plugins().rebase(payload as PluginsDump);
                 return;
             case 'appInbox.dump':
                 this.appInbox().rebase(payload as AppInboxDump);
@@ -455,23 +427,8 @@ export class SessionEngineClient {
             case 'stores.event':
                 this.stores().apply(payload as StoresEvent);
                 return;
-            case 'keyring.event':
-                this.keyring().rebase(payload as KeyringDump);
-                return;
-            case 'github.event':
-                this.github().rebase(payload as GithubAccountDump);
-                return;
-            case 'github.open':
-                this.github().openFromHost(String((payload as { url?: unknown } | null)?.url ?? ''));
-                return;
-            case 'tynn.event':
-                this.tynn().rebase(payload as TynnAccountDump);
-                return;
             case 'takeOver.event':
                 this.takeOvers().deliver(payload as TakeOverView);
-                return;
-            case 'relayHost.event':
-                this.relayHost().deliver(payload as RelayHostView);
                 return;
             case 'remoteAccess.event':
                 this.remoteAccess().deliver(payload as RemoteAccessEvent);
@@ -768,15 +725,6 @@ export class SessionEngineClient {
         return this.#takeOvers;
     }
 
-    relayHost(): RelayHostReplica {
-        this.#relayHost ??= new RelayHostReplica(async (method, args) => {
-            const reply = await this.call('engine.relayHost', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#relayHost;
-    }
-
     /** This machine as a workstation: genie-host holds the key and signs (P3.4). */
     workstation(): WorkstationReplica {
         this.#workstation ??= new WorkstationReplica(async (method, args) => {
@@ -785,38 +733,6 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#workstation;
-    }
-
-    /** The keyring card, as genie-host found it (P3.4 cut c). */
-    keyring(): KeyringReplica {
-        this.#keyring ??= new KeyringReplica(async (method, args) => {
-            const reply = await this.call('engine.keyring', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#keyring;
-    }
-
-    /** genie-host's GitHub account (P3.4 cut c). */
-    github(options?: { openExternal?: (url: string) => Promise<void> }): GithubAccountReplica {
-        this.#github ??= new GithubAccountReplica(async (method, args) => {
-            const reply = await this.call('engine.github', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        if (options?.openExternal) this.#github.useBrowser(options.openExternal);
-        return this.#github;
-    }
-
-    /** genie-host's Tynn account, as this window reads and asks it (P3.4 cut c). */
-    tynn(options?: { openExternal?: (url: string) => Promise<void> }): TynnAccountReplica {
-        this.#tynn ??= new TynnAccountReplica(async (method, args) => {
-            const reply = await this.call('engine.tynn', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        if (options?.openExternal) this.#tynn.useBrowser(options.openExternal);
-        return this.#tynn;
     }
 
     /** genie-host's flows, as this window reads, edits, arms and runs them (P3.3d). */
@@ -839,23 +755,6 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#flows;
-    }
-
-    /** genie-host's catalog, as this window follows it (ADF A4, Tynn #448): a missed change asks for the snapshot again. */
-    catalog(): CatalogReplica {
-        this.#catalog ??= new CatalogReplica(async () => {
-            const reply = await this.call('catalog.snapshot', []);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value as CatalogSnapshot;
-        });
-        return this.#catalog;
-    }
-
-    /** One element's definition from the host's catalog, by kind and id; `null` when it has none. */
-    async catalogDocs(kind: CatalogKind, id: string): Promise<ElementDefinition | null> {
-        const reply = await this.call('catalog.docs', [kind, id]);
-        if (!reply.ok) throw new Error(reply.reason);
-        return reply.value as ElementDefinition | null;
     }
 
     /** The local window's Marketplace actions. Only the host downloads, verifies and activates packages. */
@@ -905,16 +804,6 @@ export class SessionEngineClient {
         const answer = await this.call('engine.gapps', [operation, args]);
         if (!answer.ok) throw new Error(answer.reason);
         return answer.value as T;
-    }
-
-    /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */
-    plugins(): PluginsReplica {
-        this.#plugins ??= new PluginsReplica(async (method, args) => {
-            const reply = await this.call('engine.plugins', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#plugins;
     }
 
     /** genie-host's process book and scheduler, as this window lists and manages them (P3.3c). */

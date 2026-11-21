@@ -37,7 +37,7 @@ describe('genie-host says them, as its relay host and its Tynn account change', 
     it('read from its relay host and its account; poked on each of their changes', () => {
         // ...and, since Tynn #959 (2g-3b), whether its keychain can keep secrets and GitHub's block (split-2g3b-adopt-legacy.test.ts).
         expect(host).toMatch(/read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\), \{ workstationRole: relayHostService\.role\(\), tynnAccountKey: tynnAccountNow \? accountKeyOf\(tynnAccountNow\.status\(\)\) : null, keychainReady: /);
-        expect(host).toMatch(/onChange: \(\) => \{ engineRef\?\.relayHostEvent\(relayHostService\.status\(\)\); featureChanged\(\); pokeSummary\(\); \}/);
+        expect(host).toMatch(/onChange: \(\) => \{ featureChanged\(\); pokeSummary\(\); \}/);
         expect(host).toMatch(/account\.onChange\(pokeSummary\)/);
     });
 });

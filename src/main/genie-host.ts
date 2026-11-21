@@ -1103,7 +1103,7 @@ async function main(): Promise<void> {
             log: (message) => say(`tynn relay: ${message}`),
             ...(hostingStack ? { site: { dial: (name: string) => dialFrontDoor(hostingStack.frontDoorPort, name), ca: () => hostingStack.browserTrust().caPem } } : {}),
         }),
-        onChange: () => { engineRef?.relayHostEvent(relayHostService.status()); featureChanged(); pokeSummary(); },
+        onChange: () => { featureChanged(); pokeSummary(); },
     });
     /*
      * WHAT THIS HOST RUNS, AS THIS MACHINE'S TRAY AND QUIT READ IT (Tynn #953, 2g-2): its live terminals, armed flows and
@@ -1331,28 +1331,19 @@ async function main(): Promise<void> {
         appInbox: appInboxDoor,
         processes: processesService,
         cloneOffers: cloneOffersService,
-        plugins: pluginsService,
         marketplace: marketplaceHost,
         ...(gappBook ? { gapps: gappsApi(gappBook, gappAsk, gappPreviews ?? undefined), gappsChanged: (listener) => gappBook!.onChange(listener) } : {}),
         ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer, gappPreviews ? { previews: gappPreviews, ask: gappAsk } : undefined) } : {}),
-        catalog: catalogService,
         flows: flowsService,
         browser: browserService,
         updates: updatesService,
         remoteAccess: remoteAccessService,
         stores,
-        keychain,
-        // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
-        tynn: featureTynn,
-        github: featureGithub,
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
         // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
         configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
         workstation: workstationService,
-        relayHost: relayHostService,
         takeOver: takeOverService,
-        // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
-        keyring: featureKeyring,
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
         proxy: {
             remember: async (answers) => {

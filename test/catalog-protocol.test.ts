@@ -2,11 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Catalog, type ElementDefinition } from '../src/core/catalog.js';
 import { adapterFor, CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../src/core/catalog-sync.js';
 import { ENGINE_METHODS, ENGINE_PROTOCOL } from '../src/core/engine-protocol.js';
-import { memoryPair } from '../src/core/line-transport.js';
 import { CatalogService } from '../src/main/catalog-host.js';
 import { genieCatalog, pluginPackage } from '../src/main/genie-catalog.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
 
 /**
  * ADF A4 (Tynn #448; spec .ai/plans/specs/adf-sdk.md, story A4): THE CATALOG CROSSES THE ENGINE CONNECTION. Engine protocol
@@ -84,26 +81,10 @@ describe('a replica that misses a revision resnapshots and ends equal to the hos
 });
 
 describe('over the engine connection (protocol 4)', () => {
-    it('ENGINE_PROTOCOL is 4 (the window tunnel, Tynn #910), and catalog.snapshot and catalog.docs are on the allowlist', () => {
+    it('ENGINE_PROTOCOL is 4 (the window tunnel, Tynn #910); the catalog is not on the engine link (Tynn #961: the window reads none, genie-host draws it)', () => {
         expect(ENGINE_PROTOCOL).toBe(4);
-        expect(ENGINE_METHODS as readonly string[]).toEqual(expect.arrayContaining(['catalog.snapshot', 'catalog.docs']));
-    });
-
-    it('a window connects with the snapshot; the host’s change reaches it; it asks docs; it ends equal to the host', async () => {
-        const h = host();
-        const server = new SessionEngineServer({ token: 'T'.repeat(32), build: 'test', catalog: h.service });
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, 'T'.repeat(32));
-        const replica = client.catalog();
-        expect(replica.revision).toBe(h.service.snapshot().revision);
-        expect(ids(replica.list())).toEqual(ids(h.service.snapshot().definitions));
-        h.install(lint('1.0.0', ['lint']));
-        await new Promise((r) => setTimeout(r, 20));
-        expect(replica.get('acme.lint.lint')?.version).toBe('1.0.0');
-        expect(replica.revision).toBe(h.service.snapshot().revision);
-        expect(await client.catalogDocs('tool', 'acme.lint.lint')).toMatchObject({ id: 'acme.lint.lint', kind: 'tool' });
+        expect(ENGINE_METHODS as readonly string[]).not.toContain('catalog.snapshot');
+        expect(ENGINE_METHODS as readonly string[]).not.toContain('catalog.docs');
     });
 });
 

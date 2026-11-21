@@ -145,9 +145,7 @@ import { FilesHost } from './files-host.js';
 import { type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
 import { FilesTreeKeeper } from './files-tree-keeper.js';
 import { fileExporter } from './file-export.js';
-import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
-import { HUMAN } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { withActionSignal } from './mcp-signal.js';
@@ -171,7 +169,6 @@ import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { TERMINAL_NEEDS_YOU } from '../core/terminal-surface.js';
 import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
-import { type PanelsHostDeps } from './official-panels-host.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import { followWorkspaceColors, WorkspaceColors } from './workspace-color-host.js';
@@ -1118,11 +1115,6 @@ function cwdFor(record: AgentRecord): string {
 }
 
 let services: WindowServices | null = null;
-/** Settles when the services are composed: an agent's launch asks them about its workspace first. */
-let servicesComposed: (value: WindowServices) => void = () => {};
-const composedServices = new Promise<WindowServices>((resolve) => { servicesComposed = resolve; });
-/** The same, for what must answer at once. Until then nothing is trusted. */
-let composedNow: WindowServices | null = null;
 // What the boot probe of genie-host's MCP server said (§6.4 "native transport verified at boot").
 let mcpVerified: Verification | null = null;
 /** Genie's MCP endpoint: genie-host serves it (P3.1). */
@@ -1339,17 +1331,6 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'accounts-changed') broadcast('genie:action', { agentId: null, kind: 'accounts-changed' });
             else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
-        },
-        // Both providers wait for their own private Tynn identity. Workspace/cwd config never supplies a fallback key.
-        prepareMcpServers: async (record: AgentRecord, _cwd: string, signal: AbortSignal) => {
-            if (!services) throw new Error('Agent services are not ready. Restart the agent after startup completes.');
-            const privateServers = await services.prepareAgentMcp(record, signal);
-            // Without its Tynn server it still starts (genie#1234): the reason is a note in its chat, never Broken.
-            const tynnNote = services?.tynnNote(record.id) ?? null;
-            if (tynnNote) void host?.notice(record.id, tynnNote);
-            // The Genie entry is the HOST's (P3.1: it owns the MCP server and the caller keys); only the agent's private
-            // servers are this window's to prepare.
-            return [...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId: AgentId, since: number) => dashboardComms.read(agentId, since, Date.now()),
@@ -1675,15 +1656,6 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:files-export', (event, workspaceId: unknown, path: unknown) =>
         typeof workspaceId === 'string' && typeof path === 'string' ? exporter.export(workspaceId, path, BrowserWindow.fromWebContents(event.sender)) : { ok: false, reason: 'bad arguments' });
-    // A PLUGIN EDITOR'S BYTES (beta.33 item 14): through the plugin gate — an enabled plugin's own claimed and declared types only.
-    const editorBytesDeps = (): EditorBytesDeps | null => (filesHost && services ? { gate: (pluginId, path) => services!.plugins.editorBytes(pluginId, path), files: filesHost } : null);
-    // THE OFFICIAL PANELS (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace (official-panels-host.ts).
-    const panelsHost = (): PanelsHostDeps => ({
-        workspacePath: (id) => registry?.workspace(id)?.path ?? null,
-        // An ArtBoard verdict reaches the agent that posted, as an AgentInbox message from you.
-        send: async (agentId, text) => { if (services) await services.inbox.send({ from: HUMAN, to: agentId as AgentId, text }); },
-        now: () => new Date().toISOString(),
-    });
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
     // WHICH BROWSER is decided by the window that asked (core/browser-connection.ts): this machine's sites, or — for a window
     // driving a Tynn workstation — that workstation's, over that window's own relay channel. Never by what it says.
@@ -1816,9 +1788,6 @@ async function boot(): Promise<void> {
         // FLOWS ARE GENIE-HOST'S (P3.3d): an armed flow fires on its clock with no window; this window edits, arms and runs
         // them through the replica.
         flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() },
-        // The plugins are genie-host's (ADF A3, Tynn #447): this window reads them through the replica.
-        plugins: agentEngineLink.client.plugins(),
-        catalog: agentEngineLink.client.catalog(),
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -1879,8 +1848,6 @@ async function boot(): Promise<void> {
     services = composed;
     // Settings → Remote access reads genie-host's status through the replica, from the first draw.
     void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
-    composedNow = composed;
-    servicesComposed(composed);
     /*
      * THIS WINDOW IS SERVED BY GENIE-HOST (Tynn #898 step 2d-4b): each connection the door admits rides the engine link
      * to genie-host's RemoteHost, admitted there as this machine's window. main serves none of it; the window's browser

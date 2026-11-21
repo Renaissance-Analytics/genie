@@ -11,16 +11,12 @@ import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
 import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
-import type { McpServer } from '@particle-academy/prism-acp';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { inboxNotices } from './inbox-notices.js';
 import type { NoticeMail } from '../core/stream-event.js';
 import type { AppEnvSource } from './app-inbox-service.js';
 import { configSync, type SyncResult } from '../core/integrations.js';
 import { AgentFilesHealth, type AgentFilesReport, type SyncSource } from '../core/agent-files-health.js';
-import type { TynnSessionPort } from './tynn-agent-token.js';
-import { agentTynnPrep } from './agent-tynn-prep.js';
-import type { AgentSecrets } from './tynn-agent-identities.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginsReplica, type PluginsApi } from './plugins-replica.js';
 import { hostCatalog } from './genie-catalog.js';
@@ -123,10 +119,6 @@ export interface ComposeInput extends HostingOptions {
     readonly buildOwnHosting?: (input: HostingComposeInput) => Promise<HostingStack>;
     /** The same for what genie-host owns besides (Tynn #594): only a test that composes alone sets this. */
     readonly alone?: ComposeAlone;
-    /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
-    readonly plugins?: PluginsApi;
-    /** genie-host's catalog, through this window's replica (ADF A4/A5). Absent = this window builds its own from its plugins. */
-    readonly catalog?: { list(): ElementDefinition[] };
     /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
     readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
     /**
@@ -161,14 +153,6 @@ export interface ComposeInput extends HostingOptions {
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
     /** With a host, a workspace's agent config is the host's to write. */
     readonly hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null;
-    /**
-     * The scoped Tynn account, for private agent preparation (agent-tynn-prep.ts) when this composition runs agents itself:
-     * a test that composes alone. The app's window passes none (Tynn #959, 2g-3b): its agents are genie-host's, which
-     * prepares them (host-agent-keys.ts); this goes with the compose retirement (2g-4).
-     */
-    readonly tynn?: () => TynnSessionPort | null;
-    /** Where agents' keys are held for that preparation. The app's window passes none (Tynn #959, 2g-3b). */
-    readonly tynnSecrets?: AgentSecrets;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -233,15 +217,6 @@ export interface ComposeAlone {
 type OwnStores = Awaited<ReturnType<typeof openAgentStores>>;
 
 export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites' | 'trust'> {
-    /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
-    prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
-    /** Why this agent's last start went without its Tynn server, for a note in its chat; `null` when it has it (genie#1234). */
-    tynnNote(agentId: string): string | null;
-    /**
-     * Signed in to Tynn: the agents to restart so they get their Tynn server — those that started without it because of
-     * the account (signed out, unreachable), and those whose unverified stored key Tynn now refuses (genie#1234).
-     */
-    tynnRecovery(asked?: { readonly secretsMoved?: boolean }): Promise<string[]>;
     readonly inbox: S['inbox'];
     readonly attention: S['attention'];
     readonly knowledge: S['knowledge'];
@@ -341,7 +316,9 @@ export async function composeWindowServices(input: ComposeInput & { readonly age
 export async function composeWith(input: ComposeInput): Promise<WindowServices> {
     if (!input.agentStores?.settings && !input.alone) throw new Error("compose was given no settings: they are genie-host's");
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
-    const workTracking = (): WorkTracking => (input.tynn?.()?.status().signedIn === true ? 'tynn' : 'files');
+    // The window holds no Tynn account (Tynn #959) and writes no agent's docs: genie-host decides it from its own account
+    // (genie-host.ts featureWorkspaceFiles). What the window composes alone is a test's, and says the fallback (Tynn #961).
+    const workTracking = (): WorkTracking => 'files';
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
@@ -425,7 +402,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
     // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
     const pluginsDir = join(input.userData, 'plugins');
-    const plugins: PluginsApi = input.plugins ?? new PluginsReplica(async () => false);
+    // genie-host's plugins and catalog are read in genie-host (feature-machine.ts runs there): the window keeps an empty stand-in (Tynn #961).
+    const plugins: PluginsApi = new PluginsReplica(async () => false);
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
     // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA.
     stage?.begin('hosting');
@@ -449,25 +427,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
-    const tynnVaultFile = join(input.userData, 'agent-credentials', 'agents.json');
-    const tynnSecretsPort: AgentSecrets = input.tynnSecrets ?? {
-        probe: async () => ({ ok: false, reason: 'no keychain' }),
-        get: async () => ({ kind: 'unavailable', reason: 'no keychain' }),
-        set: async () => ({ ok: false, reason: 'no keychain' }),
-    };
     // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
     const withConfig = configWriter();
-    // A window running its own engine prepares its agents here (agent-tynn-prep.ts). With a host, the host does, and this goes unused.
-    const tynnPrep = agentTynnPrep({
-        vaultFile: tynnVaultFile,
-        secrets: tynnSecretsPort,
-        tynn: () => input.tynn?.() ?? null,
-        workspaces: () => input.workspaces?.() ?? [],
-        withConfig,
-    });
-    const prepareAgentMcp = tynnPrep.prepare;
-    const tynnNote = tynnPrep.note;
-    const tynnRecovery = tynnPrep.recovery;
     // FLOWS RUN (P4): the scheduler fires an armed flow through the runner (flow-runner.ts) — a command as a supervised
     // process whose log is kept like any background process's, a prompt to a live agent (held back while it is mid-turn),
     // a knowledge write — and every run's outcome is recorded on the flow. Planned here, after every await that could
@@ -525,9 +486,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
         ownFlows,
         inbox,
-        prepareAgentMcp,
-        tynnNote,
-        tynnRecovery,
         attention,
         knowledge,
         flows,
@@ -609,7 +567,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             };
         },
         plugins,
-        catalogDefinitions: () => (input.catalog ? input.catalog.list() : hostCatalog({ tools: () => [] }).list()),
+        catalogDefinitions: () => hostCatalog({ tools: () => [] }).list(),
         pluginsDir,
         pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {

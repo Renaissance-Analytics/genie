@@ -147,7 +147,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // left in 2g-1 (#952): main held them and nothing read them.
         // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
         // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy).
-        catalog: '2g', flows: '2g', hosting: '2g', plugins: '2g',
+        // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
+        flows: '2g', hosting: '2g',
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
         remoteAccess: '2g', stores: '2g', supervisor: '2g',
     };

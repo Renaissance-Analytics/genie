@@ -344,14 +344,6 @@ probe "migration-host-compares-for-real" src/main/keychain-migration.ts \
     test/keychain-migration.test.ts "compare answers same, different"
 
 
-# P3.4 cut d: an agent's key is the host's (genie#1457).
-probe "a-window-asks-only-for-agent-keys" src/main/session-engine-server.ts \
-    "                return this.#keychain().get(agentKeyName(str(0)));" "                return this.#keychain().get(str(0) as never);" \
-    test/host-agent-keys.test.ts "nothing but an agent"
-
-probe "a-dead-link-is-not-a-missing-key" src/main/agent-secrets.ts \
-    "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'unavailable', reason: reply.reason };" "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'missing' };" \
-    test/host-agent-keys.test.ts "a dead link is not a signed-out agent"
 
 probe "a-sealed-key-must-match-its-record" src/main/tynn-agent-identities.ts \
     "? { kind: 'value', value: token } : { kind: 'unreadable' };" "? { kind: 'value', value: token } : { kind: 'value', value: token };" \
@@ -375,9 +367,6 @@ probe "only-a-real-pairing-token-moves" src/main/tynn-account.ts \
     "                    if (tokenValid(token)) return { kind: 'value', value: token };" "                    if (token) return { kind: 'value', value: token };" \
     test/tynn-account-host.test.ts "is not a pairing token"
 
-probe "a-window-reads-signed-in-at-once" src/main/session-engine-server.ts \
-    "        if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());" "" \
-    test/tynn-account-host.test.ts "reads signed in at once"
 
 probe "the-cookie-is-sent-on-the-exchange" src/main/host-tynn-account.ts \
     "const cookies = init.credentials === 'include' ? jar.get(new URL(url).origin) : undefined;" "const cookies = undefined as Map<string, string> | undefined;" \
@@ -490,15 +479,9 @@ probe "git-carries-the-credential-in-the-host" src/main/github-account-service.t
 probe "no-method-hands-out-a-credential" src/main/github-account-service.ts \
     "            case 'startSignIn': return account.startSignIn();" "            case 'startSignIn': return account.startSignIn();
             case 'cloneAuth': return account.cloneAuth(String(args[0] ?? ''));" \
-    test/github-account-host.test.ts "no method a window can ask for returns a credential"
+    test/github-account-host.test.ts "no method it answers returns a credential"
 
-probe "a-window-opens-only-githubs-pages" src/main/github-account-replica.ts \
-    "        if (!/^https:\\/\\/github\\.com\\//.test(url)) return;" "" \
-    test/github-account-host.test.ts "opens only GitHub"
 
-probe "typed-errors-survive-the-link" src/main/github-account-replica.ts \
-    "        if (carried.error) throw rebuilt(carried.error);" "        if (carried.error) throw new Error(carried.error.message);" \
-    test/github-account-host.test.ts "survives the link as that type"
 
 probe "the-seal-is-left-until-it-opens" src/main/github-account.ts \
     "        } catch { return { kind: 'unreadable' }; }" "        } catch { return { kind: 'none' }; }" \
@@ -514,9 +497,6 @@ probe "a-redirect-loop-stops" src/main/host-https-fetch.ts \
     "        if (hops >= REDIRECT_LIMIT) throw" "        if (hops >= 1000) throw" \
     test/host-https-fetch.test.ts "a loop stops at the limit"
 
-probe "the-card-is-there-as-a-window-connects" src/main/session-engine-server.ts \
-    "        if (this.#options.keyring) this.#event(conn, 'keyring.event', this.#options.keyring.dump());" "" \
-    test/keyring-host.test.ts "the card is there as the window connects"
 
 probe "the-keychain-coming-back-wakes-the-readers" src/main/keyring-service.ts \
     "                if (now && !ready) options.onReady?.();" "" \

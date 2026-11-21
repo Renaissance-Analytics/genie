@@ -122,9 +122,11 @@ describe('the wiring: composed in genie-host, not in the window', () => {
         expect(host).toMatch(/plugins: hostPluginTools\(/);
     });
 
-    it('the window’s compose opens no plugin host: it reads the replica (Tynn #415)', () => {
-        expect(code('src/main/compose.ts')).not.toMatch(/PluginHost\.open\(/);
-        expect(code('src/main/main.ts')).toMatch(/plugins: agentEngineLink\.client\.plugins\(\)/);
+    it('the window’s compose opens no plugin host, and since Tynn #961 reads no replica either: the feature machine runs in genie-host', () => {
+        expect(code('src/main/compose.ts')).not.toMatch(/PluginHost\.open\(|PluginsService\.open\(/);
+        expect(code('src/main/main.ts')).not.toMatch(/client\.plugins\(\)/);
+        // CONTROL: genie-host does open its plugins.
+        expect(code('src/main/genie-host.ts')).toMatch(/const pluginsService = marketplacePlugins\.plugins/);
     });
 
     it('the host’s MCP server starts without waiting for a window; the window no longer sends plugin tools', () => {

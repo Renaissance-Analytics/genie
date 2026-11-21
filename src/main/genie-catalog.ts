@@ -102,7 +102,8 @@ export const RELAY_MEMBER_ELEMENT: ElementDefinition = {
 /**
  * THIS MACHINE ON THE TYNN RELAY, AS A HOST (Tynn #410, host split P5d.3). A host-service on BOTH sides: genie-host registers
  * the machine with Tynn, reads its role and runs the relay link, window or not; this machine's window shows them in
- * Settings → Workstation and hands over Genie 1's record. `engine.relayHost` and its event are the only channel between them.
+ * Settings → Workstation and hands over Genie 1's record. The window follows it through the host summary (summary.watch: its role and Tynn account) and Settings draws it
+ * from genie-host's features: the engine link carries none of it (Tynn #961).
  */
 export const RELAY_HOST_ELEMENT: ElementDefinition = {
     id: 'genie.relay-host',
@@ -111,7 +112,7 @@ export const RELAY_HOST_ELEMENT: ElementDefinition = {
     packageId: BUILTIN_PACKAGE_ID,
     source: 'builtin',
     docs: { name: 'Reachable through Tynn', description: 'While remote access is on, this machine stays reachable over the Tynn relay for its owner\'s other workstations and for share links, with every Genie window closed.' },
-    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.relayHost'], events: ['relayHost.event'] } },
+    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['summary.watch'], events: ['local-summary'] } },
     permissions: { capabilities: [], network: [] },
     payload: { start: 'relayHost.start', stop: 'relayHost.stop', health: 'relayHost.health', settingsSection: 'workstation' },
 };

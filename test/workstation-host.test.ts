@@ -255,22 +255,24 @@ describe('a window asks the host to sign, and never holds the key', () => {
         expect(JSON.stringify(asked)).not.toContain('PRIVATE KEY');
     });
 
-    // What an older Genie sealed reaches genie-host on the protocol's keychain.adoptLegacy (Tynn #959, 2g-3b): the engine link
-    // carries an agent's key and nothing else, either way.
-    it('over the keychain link too: a window can neither hand this machine’s key over, nor compare or read one', async () => {
+    // What an older Genie sealed reaches genie-host on the protocol's keychain.adoptLegacy (Tynn #959, 2g-3b), and since Tynn #961
+    // (2g-3c) the engine link carries no key at all, an agent's included: genie-host prepares its agents itself.
+    it('over the engine link: a window can neither hand this machine’s key over, nor compare, read or store any key', async () => {
         const { k } = await enrolled();
-        const server = new SessionEngineServer({ token: TOKEN, build: 'test', keychain: k });
+        const server = new SessionEngineServer({ token: TOKEN, build: 'test' });
         const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
         server.attach(host);
         const [hostSide, windowSide] = memoryPair();
         server.accept(hostSide);
         const client = new SessionEngineClient();
         await client.connect(windowSide, TOKEN);
-        expect(await client.call('engine.secretStore', [ENTRY, 'a-key'])).toMatchObject({ ok: false });
+        expect(await client.call('engine.secretStore' as never, [ENTRY, 'a-key'])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
         expect((await client.call('engine.secretCompare' as never, [ENTRY, 'nope'])).ok).toBe(false);
-        expect((await client.call('engine.secretRead', [ENTRY])).ok).toBe(false);
-        // CONTROL: the link is up and an agent's key still goes over it.
-        expect(await client.call('engine.secretStore', ['tynn/agent/01ARZ3NDEKTSV4RRFFQ69G5FAV', 'rpk_x'])).toMatchObject({ ok: true });
+        expect(await client.call('engine.secretRead' as never, [ENTRY])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
+        expect(await client.call('engine.secretStore' as never, ['tynn/agent/01ARZ3NDEKTSV4RRFFQ69G5FAV', 'rpk_x'])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
+        expect(JSON.stringify(await k.get(ENTRY))).toContain('PRIVATE KEY');
+        // CONTROL: the link is up, and answers a method it carries.
+        expect(await client.call('engine.proxyRemember', [{}])).toMatchObject({ ok: false, reason: 'This host keeps no proxy answers.' });
     });
 
     it('with no link it refuses, and never reads as not registered', async () => {
