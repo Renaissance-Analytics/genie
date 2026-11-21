@@ -23,15 +23,15 @@ const show = (rows: readonly { name: string; required: boolean; on: boolean }[])
 
 describe('what is listed', () => {
     it('Genie’s own first and required; then every server a session reported, by name', () => {
-        expect(show(mcpRows({ mcpSeen: ['slack', 'claude.ai Drive', 'genie', 'tynn', 'github'] }))).toEqual(['genie:required', 'tynn:required', 'claude.ai Drive:on', 'github:on', 'slack:on']);
+        expect(show(mcpRows({ mcpSeen: ['slack', 'claude.ai Drive', 'genie', 'tynn', 'github'] }))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on', 'claude.ai Drive:on', 'github:on', 'slack:on']);
     });
 
     it('a server switched off stays listed, off, so it can be switched back on; even one no longer reported', () => {
-        expect(show(mcpRows({ mcpSeen: ['github'], mcpOff: ['slack'] }))).toEqual(['genie:required', 'tynn:required', 'github:on', 'slack:off']);
+        expect(show(mcpRows({ mcpSeen: ['github'], mcpOff: ['slack'] }))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on', 'github:on', 'slack:off']);
     });
 
-    it('an agent with no session yet has Genie’s own alone', () => {
-        expect(show(mcpRows({}))).toEqual(['genie:required', 'tynn:required']);
+    it('an agent with no session yet has Genie’s own and the one it provides (Tynn #1017)', () => {
+        expect(show(mcpRows({}))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on']);
     });
 
     it('what a session reports is added to what was seen; nothing new is no change', () => {
@@ -134,7 +134,7 @@ describe('the page', () => {
     });
 
     it('says where the list comes from, and that a server never reported cannot be listed yet', () => {
-        expect(draw()).toContain('This list is Genie’s own servers and every server one of atlas’s sessions reported when it started. A server that no session has reported yet is not listed, and cannot be switched off here until it is.');
+        expect(draw()).toContain('This list is Genie’s own servers, the ones it provides, and every server one of atlas’s sessions reported when it started. A server that no session has reported yet is not listed, and cannot be switched off here until it is.');
     });
 
     it('a change says when it applies; a failure is said in its words; a change under way shows progress', () => {

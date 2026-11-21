@@ -30,6 +30,7 @@ export function McpServerSwitches({ rows, agentName, workspace = false, onSet, i
                 {rows.map((row) => (
                     <li key={row.name} data-mcp-server={row.name} data-mcp-state={row.required ? 'required' : row.on ? 'on' : 'off'} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--border-1)]/50 py-1.5 text-[12px]">
                         <span className="min-w-0 break-all font-mono text-[var(--fg-1)]">{row.name}</span>
+                        {row.builtIn ? <span data-mcp-built-in="" className="shrink-0 text-[11px] text-[var(--fg-3)]">{MCP_WORDS.builtIn}</span> : null}
                         {row.required ? (
                             <span data-mcp-required="" className="shrink-0 text-[11px] text-[var(--fg-3)]">{MCP_WORDS.required}</span>
                         ) : onSet ? (
