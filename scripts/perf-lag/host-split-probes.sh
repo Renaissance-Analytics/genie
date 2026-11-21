@@ -479,7 +479,7 @@ probe "git-carries-the-credential-in-the-host" src/main/github-account-service.t
 probe "no-method-hands-out-a-credential" src/main/github-account-service.ts \
     "            case 'startSignIn': return account.startSignIn();" "            case 'startSignIn': return account.startSignIn();
             case 'cloneAuth': return account.cloneAuth(String(args[0] ?? ''));" \
-    test/github-account-host.test.ts "no method a window can ask for returns a credential"
+    test/github-account-host.test.ts "no method it answers returns a credential"
 
 
 

@@ -8,9 +8,10 @@ if os.environ.get('GENIE_TEST_VM') != '1':
     raise SystemExit('Run in a test VM, as one of the coordinator\'s jobs.')
 
 controls = [
-    ('main connection', 'src/main/main.ts',
-     'const privateServers = await services.prepareAgentMcp(record, signal);', 'const privateServers = [];',
-     'test/tynn-activation.test.ts', 'production main wires', 'main must prepare each session'),
+    # Since Tynn #961 (2g-3c) main prepares no session: genie-host's engine hands each one the host-prepared servers.
+    ('host connection', 'src/main/session-engine-server.ts',
+     'return [...own, ...(held?.servers ?? [])];', 'return own;',
+     'test/host-prepares-agents.test.ts', 'minted by the host, held in the keychain', 'AssertionError'),
     ('legacy cleanup', 'src/main/workspace-config-sync.ts',
      'await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });', 'void workspacePath;',
      'test/tynn-activation.test.ts', 'config sync removes the legacy shared credential', '.mcp.json must not contain'),

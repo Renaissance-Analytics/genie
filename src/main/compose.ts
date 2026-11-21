@@ -316,7 +316,9 @@ export async function composeWindowServices(input: ComposeInput & { readonly age
 export async function composeWith(input: ComposeInput): Promise<WindowServices> {
     if (!input.agentStores?.settings && !input.alone) throw new Error("compose was given no settings: they are genie-host's");
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
-    const workTracking = (): WorkTracking => (input.tynn?.()?.status().signedIn === true ? 'tynn' : 'files');
+    // The window holds no Tynn account (Tynn #959) and writes no agent's docs: genie-host decides it from its own account
+    // (genie-host.ts featureWorkspaceFiles). What the window composes alone is a test's, and says the fallback (Tynn #961).
+    const workTracking = (): WorkTracking => 'files';
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();

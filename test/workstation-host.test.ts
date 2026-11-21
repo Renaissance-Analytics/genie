@@ -266,10 +266,10 @@ describe('a window asks the host to sign, and never holds the key', () => {
         server.accept(hostSide);
         const client = new SessionEngineClient();
         await client.connect(windowSide, TOKEN);
-        expect(await client.call('engine.secretStore' as never, [ENTRY, 'a-key'])).toMatchObject({ ok: false, code: 'unsupported' });
+        expect(await client.call('engine.secretStore' as never, [ENTRY, 'a-key'])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
         expect((await client.call('engine.secretCompare' as never, [ENTRY, 'nope'])).ok).toBe(false);
-        expect(await client.call('engine.secretRead' as never, [ENTRY])).toMatchObject({ ok: false, code: 'unsupported' });
-        expect(await client.call('engine.secretStore' as never, ['tynn/agent/01ARZ3NDEKTSV4RRFFQ69G5FAV', 'rpk_x'])).toMatchObject({ ok: false, code: 'unsupported' });
+        expect(await client.call('engine.secretRead' as never, [ENTRY])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
+        expect(await client.call('engine.secretStore' as never, ['tynn/agent/01ARZ3NDEKTSV4RRFFQ69G5FAV', 'rpk_x'])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
         expect(JSON.stringify(await k.get(ENTRY))).toContain('PRIVATE KEY');
         // CONTROL: the link is up, and answers a method it carries.
         expect(await client.call('engine.proxyRemember', [{}])).toMatchObject({ ok: false, reason: 'This host keeps no proxy answers.' });

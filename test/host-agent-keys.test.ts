@@ -98,7 +98,6 @@ describe('THE BUG: the window process is killed, the host starts an agent, the a
             token: TOKEN, build: 'test',
             mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null, runNative: async () => null } as never,
             ...(agentKeys ? { agentKeys: keys() } : {}),
-            keychain: lib.keychain,
         });
         const host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree, ...server.hostOptions() });
         server.attach(host);
@@ -248,7 +247,7 @@ describe('the host holds, and what a window can ask of it', () => {
         lib.held.set('tynn/pairing', 'the-pairing');
         for (const [method, args] of [['engine.secretRead', [ENTRY]], ['engine.secretRead', ['tynn/pairing']], ['engine.secretStore', [ENTRY, 'other']], ['engine.secretProbe', []]] as const) {
             const answer = await client.call(method as never, [...args]);
-            expect(answer, method).toMatchObject({ ok: false, code: 'unsupported' });
+            expect(answer, method).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
             expect(JSON.stringify(answer)).not.toContain(KEY);
             expect(JSON.stringify(answer)).not.toContain('the-pairing');
         }
