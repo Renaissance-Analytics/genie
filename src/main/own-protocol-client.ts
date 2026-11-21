@@ -46,7 +46,7 @@ export function callRefusal(answer: OwnCallAnswer): string | null {
 }
 
 const NOT_READY ='Genie is still starting; try again in a moment';
-const PRE_AUTH: PreAuth = { kind: 'local', label: OWN_CLIENT_LABEL, isOwner: true, workspaceId: null, readonly: false, window: 'main' };
+const PRE_AUTH: PreAuth = { kind: 'local', label: OWN_CLIENT_LABEL, isOwner: true, workspaceId: null, readonly: false, window: 'main', own: true };
 
 export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProtocolClient {
     const timeoutMs = options.timeoutMs ?? 30_000;

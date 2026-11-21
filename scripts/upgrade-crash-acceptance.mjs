@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A CRASH AT EACH STEP OF THE MOVE LEAVES A WORKING COPY (plan §13, S4). A real window is killed with SIGKILL at each hold of the test build (src/main/migration-holds.ts), and the next launch, with
+ * A CRASH AT EACH STEP OF THE MOVE LEAVES A WORKING COPY (plan §13, S4). The real window and genie-host are killed with SIGKILL at each hold of the test build (src/main/migration-holds.ts), and the next launch, with
  * no hold, finishes. What is read after each is the real keychain and the real files. On omarchy-test, with tynn.ai aliased to tynn.gen. Refuses anywhere else.
  *
  *   bash vm-tynn-alias-linux.sh <dir>            # the alias: nothing here may reach production
@@ -11,7 +11,9 @@
  * it could not open would read `old-copy-unreadable` and never reach a hold, so reaching one is the control. Beta.56's own seals are upgrade-acceptance-cdp.mjs's job; what is measured here is the order
  * of the steps. The hold is on the SECOND secret, so each case also shows a secret that already finished is not disturbed.
  *
- * Only the window is killed: the host stays up, as it does when a window crashes.
+ * BOTH ARE KILLED (Tynn #959, 2g-3b): the move spans two processes now. The window unseals and deletes (legacy-unsealer.ts: the
+ * `after-book` hold); genie-host writes its keychain and its book (host-legacy-adopt.ts: the other four). A process held at a hold
+ * never returns, so a host left up would hold the book's turn for the next launch: a crash here is a crash of the machine's Genie.
  *
  * ON WINDOWS (scripts/vm-acceptance-windows.sh in the envelope; plan §13): the same, in the logged-on session, because over SSH Credential Manager answers ERROR_NO_SUCH_LOGON_SESSION. @napi-rs/keyring is the reader
  * there too. safeStorage's key is in userData's Local State on Windows, so the sealer runs in the real userData rather than its own.
@@ -150,12 +152,15 @@ const opens = (sealed, expected, data = null) => {
 };
 
 /** What each hold must find. The keychain's copy and the sealed one: at every step at least one is there, which is the whole of S4. */
+// The secret BEFORE the held one (`access*`): genie-host confirms every secret before it answers, the window deletes what it
+// was told, and `done` comes once the window says so (Tynn #959, 2g-3b). So the first one is confirmed with the batch, its
+// seal goes with the window's deletes, and its `done` with genie-host's second half; at every hold it keeps a working copy.
 const CASES = [
-    { step: 'before-write', keychain: false, sealed: true, book: undefined },
-    { step: 'after-write', keychain: true, sealed: true, book: undefined },
-    { step: 'after-read-back', keychain: true, sealed: true, book: undefined },
-    { step: 'after-book', keychain: true, sealed: true, book: 'verified' },
-    { step: 'after-delete', keychain: true, sealed: false, book: 'verified' },
+    { step: 'before-write', keychain: false, sealed: true, book: undefined, accessBook: 'verified', accessSealed: true },
+    { step: 'after-write', keychain: true, sealed: true, book: undefined, accessBook: 'verified', accessSealed: true },
+    { step: 'after-read-back', keychain: true, sealed: true, book: undefined, accessBook: 'verified', accessSealed: true },
+    { step: 'after-book', keychain: true, sealed: true, book: 'verified', accessBook: 'verified', accessSealed: false },
+    { step: 'after-delete', keychain: true, sealed: false, book: 'verified', accessBook: 'done', accessSealed: false },
 ];
 
 try {
@@ -190,8 +195,8 @@ try {
     check(opened.ok, '2a-a-new-process-opens-the-seal', opened.why);
     if (!opened.ok) throw new Error('the seal cannot be opened, so no window could reach a hold');
 
-    for (const { step, keychain, sealed, book } of CASES) {
-        say(`S4 ${step}: a fresh profile, the test build, the window killed where it stops`);
+    for (const { step, keychain, sealed, book, accessBook, accessSealed } of CASES) {
+        say(`S4 ${step}: a fresh profile, the test build, the window and its host killed where it stops`);
         await stopApp();
         say('clearing the keychain');
         await forget(ACCESS);
@@ -209,10 +214,10 @@ try {
             if (WINDOWS) say(`the key now: ${keyOnDisk(realUserData()) ?? 'none'}`);
             continue;
         }
-        const killed = window.pid;
-        process.kill(killed, 'SIGKILL');
+        const killed = [window.pid, hostPid()].filter(Boolean);
+        for (const pid of killed) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
         window = null;
-        await until('the window to die', 10_000, () => !alive(killed));
+        await until('the window and its host to die', 10_000, () => killed.every((pid) => !alive(pid)));
 
         const inKeychain = await held(REFRESH);
         const row = fileOf();
@@ -220,11 +225,11 @@ try {
         check((row.refreshEnc === refreshEnc) === sealed, `S4.${step}.2-the-seal-as-it-should-be`, sealed ? 'still there' : 'gone');
         check(bookOf()[REFRESH] === book, `S4.${step}.3-the-book-as-it-should-be`, String(book ?? 'no row'));
         check(inKeychain === refresh || row.refreshEnc === refreshEnc, `S4.${step}.4-a-working-copy-is-left`);
-        check(bookOf()[ACCESS] === 'done' && (await held(ACCESS)) === access && row.tokenEnc === undefined, `S4.${step}.5-the-secret-before-it-is-undisturbed`);
+        check(bookOf()[ACCESS] === accessBook && (await held(ACCESS)) === access && (row.tokenEnc === tokenEnc) === accessSealed, `S4.${step}.5-the-secret-before-it-keeps-a-working-copy`, `${accessBook}, seal ${accessSealed ? 'still there' : 'gone'}`);
 
         say(`S4 ${step}: the next launch, no hold`);
         launch({});
-        const finished = await until('the move to finish', 120_000, () => bookOf()[REFRESH] === 'done');
+        const finished = await until('the move to finish', 120_000, () => bookOf()[REFRESH] === 'done' && bookOf()[ACCESS] === 'done');
         check(Boolean(finished), `S4.${step}.6-the-next-launch-finishes`, JSON.stringify(bookOf()));
         check((await held(REFRESH)) === refresh && (await held(ACCESS)) === access, `S4.${step}.7-both-are-in-the-keychain-byte-for-byte`);
         const after = fileOf();

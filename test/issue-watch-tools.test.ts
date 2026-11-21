@@ -132,8 +132,9 @@ describe('genie-host keeps the latest entry per project (P5c); main answers for 
     it('the client reports every entry; the tools are given the summary for a workspace', () => {
         expect(host).toMatch(/onEntry: \(entry\) => \{\s*this\.#latest\.set\(entry\.projectId, entry\);\s*this\.#delivered\.set\(entry\.projectId, this\.#now\(\)\);[\s\S]*?this\.#changed\(\);\s*\}/);
         expect(src).toMatch(/return issueWatchNow\?\.summaryFor\(projectId\) \?\? \{ state: 'stopped', linked: projectId !== null \};/);
-        // Extended 2026-10-21: an agent that finds IssueWatch signed out has Genie ask Tynn again (main/tynn-account.ts recheck).
-        expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\), refresh: \(workspaceId\) => issueWatchRefreshFor\(workspaceId\), recheckSignIn: \(\) => \{ void tynnAccount\?\.recheck\(\); \} \}/);
+        // Extended 2026-10-21: an agent that finds IssueWatch signed out has Genie ask Tynn again; genie-host's account since
+        // Tynn #959 (2g-3b), over main's own protocol client (tynn.recheck).
+        expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\), refresh: \(workspaceId\) => issueWatchRefreshFor\(workspaceId\), recheckSignIn: \(\) => \{ void ownProtocol\.call\('tynn\.recheck', \[\]\); \} \}/);
     });
     it('a refresh goes to the workspace’s Tynn project through the host’s client; unlinked or not running says so', () => {
         expect(src).toMatch(/async function issueWatchRefreshFor\(workspaceId: string\): Promise<IssueWatchRefreshAnswer> \{/);

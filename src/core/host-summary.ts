@@ -17,16 +17,31 @@ export interface HostSummary {
     readonly workstationRole: WorkstationRole | null;
     /** The Tynn account genie-host is signed in to (remote-window-policy.ts accountKeyOf); `null` = signed out. */
     readonly tynnAccountKey: string | null;
+    /**
+     * genie-host's keychain answers and can keep secrets (Tynn #959, 2g-3b): when this turns true, main's one-time unsealer
+     * (legacy-unsealer.ts) hands over what an older Genie sealed. Not heard yet = `false` (fail closed).
+     */
+    readonly keychainReady: boolean;
+    /** GitHub blocks features, as genie-host's GitHub account read GitHub (github-account.ts `signal`): the Deck's strip. */
+    readonly githubBlocked: boolean;
 }
 
-export const EMPTY_HOST_SUMMARY: HostSummary = { terminals: [], armedFlows: [], scheduledTasks: [], workstationRole: 'drone', tynnAccountKey: null };
+export const EMPTY_HOST_SUMMARY: HostSummary = { terminals: [], armedFlows: [], scheduledTasks: [], workstationRole: 'drone', tynnAccountKey: null, keychainReady: false, githubBlocked: false };
+
+/** What the host's accounts and keychain say, beside its lists. Absent members read fail closed. */
+export interface HostSummaryAccount {
+    readonly workstationRole: WorkstationRole | null;
+    readonly tynnAccountKey: string | null;
+    readonly keychainReady?: boolean;
+    readonly githubBlocked?: boolean;
+}
 
 /** The summary of the host's own lists, by the same rule as core/tray-only.ts `onTheClock`. */
 export function hostSummaryOf(
     terminals: ReadonlyArray<{ readonly workspaceId: string; readonly pid?: number | null | undefined }>,
     flows: ReadonlyArray<{ readonly name: string; readonly armed: boolean }>,
     kept: ReadonlyArray<{ readonly name: string; readonly wanted: boolean; readonly schedule?: unknown }>,
-    account: { readonly workstationRole: WorkstationRole | null; readonly tynnAccountKey: string | null } = { workstationRole: 'drone', tynnAccountKey: null },
+    account: HostSummaryAccount = { workstationRole: 'drone', tynnAccountKey: null },
 ): HostSummary {
     return {
         terminals: terminals.map((t) => ({ workspaceId: t.workspaceId, pid: typeof t.pid === 'number' ? t.pid : null })),
@@ -34,6 +49,8 @@ export function hostSummaryOf(
         scheduledTasks: kept.filter((p) => p.wanted && p.schedule).map((p) => p.name),
         workstationRole: account.workstationRole,
         tynnAccountKey: account.tynnAccountKey,
+        keychainReady: account.keychainReady === true,
+        githubBlocked: account.githubBlocked === true,
     };
 }
 
@@ -44,7 +61,7 @@ const names = (raw: unknown): string[] | null => (Array.isArray(raw) && raw.ever
 
 /** A summary as it came over the wire; anything malformed is the empty one, never a throw. */
 export function readHostSummary(raw: unknown): HostSummary {
-    const r = raw as { terminals?: unknown; armedFlows?: unknown; scheduledTasks?: unknown; workstationRole?: unknown; tynnAccountKey?: unknown } | null;
+    const r = raw as { terminals?: unknown; armedFlows?: unknown; scheduledTasks?: unknown; workstationRole?: unknown; tynnAccountKey?: unknown; keychainReady?: unknown; githubBlocked?: unknown } | null;
     if (!r || typeof r !== 'object' || !Array.isArray(r.terminals)) return EMPTY_HOST_SUMMARY;
     const armedFlows = names(r.armedFlows);
     const scheduledTasks = names(r.scheduledTasks);
@@ -55,7 +72,17 @@ export function readHostSummary(raw: unknown): HostSummary {
         if (!v || typeof v.workspaceId !== 'string') return EMPTY_HOST_SUMMARY;
         terminals.push({ workspaceId: v.workspaceId, pid: typeof v.pid === 'number' ? v.pid : null });
     }
-    return { terminals, armedFlows, scheduledTasks, workstationRole: roleOf(r.workstationRole), tynnAccountKey: typeof r.tynnAccountKey === 'string' ? r.tynnAccountKey : null };
+    return {
+        terminals, armedFlows, scheduledTasks, workstationRole: roleOf(r.workstationRole), tynnAccountKey: typeof r.tynnAccountKey === 'string' ? r.tynnAccountKey : null,
+        // Only a literal `true` is ready: anything else (absent, an older host) is not (fail closed).
+        keychainReady: r.keychainReady === true,
+        githubBlocked: r.githubBlocked === true,
+    };
+}
+
+/** The keychain became able to keep secrets between two summaries: what runs main's unsealer again (Tynn #959). */
+export function keychainBecameReady(before: HostSummary, after: HostSummary): boolean {
+    return after.keychainReady && !before.keychainReady;
 }
 
 /** The summary as it is now, said to its listeners only when it changed. */

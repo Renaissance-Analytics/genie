@@ -63,7 +63,7 @@ async function fixture(extra: { hostConfigSync?: () => { configSync(request: Wor
         mcpEndpoint: () => ({ url: 'http://127.0.0.1:1/mcp', token: 'synthetic-genie' }),
         workspaces: () => [{ id: 'workspace', path: workspace }], tynn: () => { if (state.accountLate) { state.accountLate = false; return null; } return account; },
         tynnSecrets: { probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(state.encryption) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(state.encryption)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
-        tynnCipher: { isAvailable: () => state.encryption, encrypt: (s: string) => Buffer.from([...Buffer.from(s)].map((b) => b ^ 0x5a)), decrypt: (b: Buffer) => Buffer.from([...b].map((v) => v ^ 0x5a)).toString() } };
+    };
     // The boot's first trust pass is not awaited by compose: the files are seeded only once it has read the workspace, so
     // what it records is the seed's settled state or nothing — never a read taken while the seed was being written.
     const boot = async () => {
@@ -297,7 +297,9 @@ it('genie-host recovers the Tynn agents when the account changes; the window onl
     const main = await readFile('src/main/main.ts', 'utf8');
     const host = await readFile('src/main/genie-host.ts', 'utf8');
     expect(/account\.onChange\(\(\) => \{ void tynnRecovery\?\.recover\(\); \}\)/.test(host), 'an account change asks the host’s recovery').toBe(true);
-    expect(/tynn\(\)\.recovery\(\{ secretsMoved: true \}\)/.test(main), 'the window says its one-time move finished (Tynn #896, 2b-3)').toBe(true);
+    // The one-time move is genie-host's own since Tynn #959 (2g-3b): it recovers its agents itself once something moved.
+    expect(/tynnRecovery\?\.recover\(\{ secretsMoved: true \}\)/.test(host), 'genie-host recovers after a move by itself').toBe(true);
+    expect(/tynn\(\)\.recovery\(/.test(main), 'the window tells the host nothing about its move').toBe(false);
     expect(/tynnAccount\.onChange\(\(\) => recoverTynnAgents\(\)\)|restartForMcp/.test(main), 'the window restarts no agent itself').toBe(false);
     expect(/prepareAgentMcp\(record,\s*signal\)[\s\S]*?tynnNote\(record\.id\)[\s\S]*?notice\(/.test(main), 'the note reaches the chat').toBe(true);
 });
@@ -306,6 +308,7 @@ it('production main wires preparation for both providers and safeStorage without
     const main = await readFile('src/main/main.ts', 'utf8');
     expect(main.includes('tynnMcpServersOnDisk')).toBe(false);
     expect(/prepareMcpServers:\s*async[\s\S]*?prepareAgentMcp\(record,\s*signal\)/.test(main), 'main must prepare each session').toBe(true);
-    // safeStorage through the one gate (os-cipher.ts): no keyring, no secret; basic_text is never a keyring (2026-11-01).
-    expect(/tynnCipher:\s*osCipher\(safeStorage, process\.platform\)/.test(main), 'production encryption must use safeStorage through osCipher').toBe(true);
+    // safeStorage through the one gate (os-cipher.ts): no keyring, no secret; basic_text is never a keyring (2026-11-01). Only the
+    // unsealer opens an older Genie's seals with it now (Tynn #959, 2g-3b).
+    expect(/const cipher = osCipher\(safeStorage, process\.platform\);/.test(main), 'production unsealing must use safeStorage through osCipher').toBe(true);
 });

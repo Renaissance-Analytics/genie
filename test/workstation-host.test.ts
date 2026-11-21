@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
-import { migrateSecrets, type HostVault, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import type { HostVault, MigrationBook, MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { buildTicketHostHello, hostHelloSigningString } from '../src/main/relay-wire.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
@@ -254,7 +255,9 @@ describe('a window asks the host to sign, and never holds the key', () => {
         expect(JSON.stringify(asked)).not.toContain('PRIVATE KEY');
     });
 
-    it('over the keychain link too: a window can hand a key over in the move, and cannot read one back', async () => {
+    // What an older Genie sealed reaches genie-host on the protocol's keychain.adoptLegacy (Tynn #959, 2g-3b): the engine link
+    // carries an agent's key and nothing else, either way.
+    it('over the keychain link too: a window can neither hand this machine’s key over, nor compare or read one', async () => {
         const { k } = await enrolled();
         const server = new SessionEngineServer({ token: TOKEN, build: 'test', keychain: k });
         const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
@@ -263,8 +266,11 @@ describe('a window asks the host to sign, and never holds the key', () => {
         server.accept(hostSide);
         const client = new SessionEngineClient();
         await client.connect(windowSide, TOKEN);
-        expect(await client.call('engine.secretCompare', [ENTRY, 'nope'])).toMatchObject({ ok: true, value: 'different' });
+        expect(await client.call('engine.secretStore', [ENTRY, 'a-key'])).toMatchObject({ ok: false });
+        expect((await client.call('engine.secretCompare' as never, [ENTRY, 'nope'])).ok).toBe(false);
         expect((await client.call('engine.secretRead', [ENTRY])).ok).toBe(false);
+        // CONTROL: the link is up and an agent's key still goes over it.
+        expect(await client.call('engine.secretStore', ['tynn/agent/01ARZ3NDEKTSV4RRFFQ69G5FAV', 'rpk_x'])).toMatchObject({ ok: true });
     });
 
     it('with no link it refuses, and never reads as not registered', async () => {
@@ -289,13 +295,13 @@ describe('what an older Genie sealed moves to the keychain', () => {
     const cipher = { decrypt: (bytes: Buffer) => { const text = bytes.toString(); if (!text.startsWith('sealed:')) throw new Error('another OS user'); return text.slice('sealed:'.length); } };
     const seal = (text: string) => Buffer.from(`sealed:${text}`).toString('base64');
     const memoryBook = (): MigrationBook => { const states: Record<string, MigrationState> = {}; return { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } }; };
-    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (k.held.get(name) === value ? 'same' : 'different') });
+    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (!k.held.has(name) ? 'missing' : k.held.get(name) === value ? 'same' : 'different') });
 
     it('each host’s key moves; the row keeps its id and what is settled; and the store reads it with no enrolling', async () => {
         const pair = generateHostKeypair();
         writeFileSync(file, JSON.stringify({ [HOST]: { workstationId: 'ws_1', keyEnc: seal(pair.privateKeyPem), legacyDone: 'ws_old' } }));
         const k = keychain();
-        const moved = await migrateSecrets(await workstationSealedSources({ file, cipher }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await workstationSealedSources({ file, cipher }), vaultOver(k), memoryBook());
         expect(moved).toEqual([{ name: ENTRY, status: 'moved' }]);
         expect(rows()[HOST]).toEqual({ workstationId: 'ws_1', legacyDone: 'ws_old' });
         const store = workstationKeyStore(file, k);

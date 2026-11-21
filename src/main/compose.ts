@@ -18,11 +18,9 @@ import type { NoticeMail } from '../core/stream-event.js';
 import type { AppEnvSource } from './app-inbox-service.js';
 import { configSync, type SyncResult } from '../core/integrations.js';
 import { AgentFilesHealth, type AgentFilesReport, type SyncSource } from '../core/agent-files-health.js';
-import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
+import type { TynnSessionPort } from './tynn-agent-token.js';
 import { agentTynnPrep } from './agent-tynn-prep.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
-import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type HostVault, type MigrationSource } from './keychain-migration.js';
-import { holdMigration, portsOf } from './migration-holds.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginsReplica, type PluginsApi } from './plugins-replica.js';
 import { hostCatalog } from './genie-catalog.js';
@@ -164,21 +162,13 @@ export interface ComposeInput extends HostingOptions {
     /** With a host, a workspace's agent config is the host's to write. */
     readonly hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null;
     /**
-     * The scoped Tynn account, late-bound because it opens after composition. Used only during private agent preparation.
+     * The scoped Tynn account, for private agent preparation (agent-tynn-prep.ts) when this composition runs agents itself:
+     * a test that composes alone. The app's window passes none (Tynn #959, 2g-3b): its agents are genie-host's, which
+     * prepares them (host-agent-keys.ts); this goes with the compose retirement (2g-4).
      */
     readonly tynn?: () => TynnSessionPort | null;
-    /** OS encryption from Electron; the vault's path is fixed under Genie's own userData, never an envelope path. */
-    /** Where agents' keys are held: the host's keychain, over the link (agent-secrets.ts). */
+    /** Where agents' keys are held for that preparation. The app's window passes none (Tynn #959, 2g-3b). */
     readonly tynnSecrets?: AgentSecrets;
-    /** The one-time move of keys an older Genie sealed: the window opens them, the host keeps and reads back. */
-    readonly tynnCipher?: { decrypt(bytes: Buffer): string };
-    readonly tynnVault?: HostVault;
-    /** What else an older Genie sealed, moved the same way: each joins this with its reader (the Tynn pairing, cut c). */
-    readonly legacySecrets?: () => Promise<readonly MigrationSource[]>;
-    /** Where a secret that did not move is said, as well as the console: the lifecycle log, which someone can read afterwards. Names and states, never a value. */
-    readonly secretsLog?: (line: string) => void;
-    /** Something moved: whoever reads it reads again. */
-    readonly onSecretsMoved?: () => void;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -252,8 +242,6 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
      * the account (signed out, unreachable), and those whose unverified stored key Tynn now refuses (genie#1234).
      */
     tynnRecovery(asked?: { readonly secretsMoved?: boolean }): Promise<string[]>;
-    /** The keychain answers now: the one-time move tries what it could not do before. */
-    moveSecretsAgain(): Promise<void>;
     readonly inbox: S['inbox'];
     readonly attention: S['attention'];
     readonly knowledge: S['knowledge'];
@@ -467,33 +455,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         get: async () => ({ kind: 'unavailable', reason: 'no keychain' }),
         set: async () => ({ ok: false, reason: 'no keychain' }),
     };
-    const tynnTokens = tynnAgentTokens({ file: tynnVaultFile, secrets: tynnSecretsPort });
-    /**
-     * THE KEYS AN OLDER GENIE SEALED MOVE TO THE KEYCHAIN (P3.4 cut b's engine, switched on with this reader). At boot, so a host
-     * that loses this window still has them; and awaited before a key is read. What could not move is tried again next time.
-     */
-    let keysMoved: Promise<void> | null = null;
-    const stuckSaid = new Set<string>();
-    const moveAgentKeys = (): Promise<void> => keysMoved ??= (async () => {
-        const { tynnCipher, tynnVault } = input;
-        if (!tynnCipher || !tynnVault) return;
-        const sources = await gatherSources([
-            { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnTokens.legacyKeys(tynnCipher) },
-            { file: 'legacy secrets', covers: '', sources: async () => (await input.legacySecrets?.()) ?? [] },
-        ]);
-        const outcomes = await migrateSecrets(...portsOf(holdMigration({ sources, vault: tynnVault, book: migrationBook })));
-        if (outcomes.some((o) => o.status === 'moved')) input.onSecretsMoved?.();
-        const stuck = outcomes.some((o) => !['moved', 'nothing', 'already'].includes(o.status));
-        for (const line of stuckLines(outcomes, stuckSaid)) { console.error(line); input.secretsLog?.(line); }
-        if (stuck) keysMoved = null;
-    })().catch((error: unknown) => {
-        keysMoved = null;
-        const line = `[keychain] secrets could not be moved: ${error instanceof Error ? error.message : String(error)}`;
-        console.error(line);
-        input.secretsLog?.(line);
-    });
-    const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'), { log: (line) => { console.error(line); input.secretsLog?.(line); } });
-    void moveAgentKeys();
     // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
     const withConfig = configWriter();
     // A window running its own engine prepares its agents here (agent-tynn-prep.ts). With a host, the host does, and this goes unused.
@@ -503,7 +464,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         tynn: () => input.tynn?.() ?? null,
         workspaces: () => input.workspaces?.() ?? [],
         withConfig,
-        ready: () => moveAgentKeys(),
     });
     const prepareAgentMcp = tynnPrep.prepare;
     const tynnNote = tynnPrep.note;
@@ -568,7 +528,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         prepareAgentMcp,
         tynnNote,
         tynnRecovery,
-        moveSecretsAgain: moveAgentKeys,
         attention,
         knowledge,
         flows,

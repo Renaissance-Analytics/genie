@@ -179,8 +179,10 @@ describe('main keeps no duplicate of the host’s agent operations (source guard
         expect(main).toMatch(/onAccountRetry:[\s\S]{0,300}ownProtocol\.call\('accountRetry'/);
     });
 
-    it('main asks the host for its Tynn recovery after secrets move, and restarts nothing itself', () => {
-        expect(main).toMatch(/tynn\(\)\.recovery\(\{ secretsMoved: true \}\)/);
+    // genie-host recovers after the one-time move by itself since Tynn #959 (2g-3b): main asks it nothing.
+    it('main asks the host for no Tynn recovery: genie-host recovers after a move itself; main restarts nothing', () => {
+        expect(main).not.toMatch(/tynn\(\)\.recovery\(/);
+        expect(code(src('src/main/genie-host.ts'))).toMatch(/if \(secretsMoved\) void tynnRecovery\?\.recover\(\{ secretsMoved: true \}\);/);
     });
 });
 

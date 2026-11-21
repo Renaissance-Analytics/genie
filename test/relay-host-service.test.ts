@@ -96,6 +96,17 @@ describe('the relay host, in genie-host, with no window', () => {
         expect(settled.service.status().workstation).toMatchObject({ registered: true });
     });
 
+    it('Genie 1’s record is kept until a registration WITH it succeeds: one that fails tries it again (the security review of #2120)', async () => {
+        let fail = true;
+        const ensured: unknown[] = [];
+        const r = rig({ workstation: { identity: async () => ({ workstationId: 'ws_me', fingerprint: 'fp' }), legacyDone: async () => null, ensure: async (options) => { ensured.push(options); return (fail ? { ok: false, reason: 'Tynn did not answer' } : { ok: true, workstationId: 'ws_me' }) as never; } } });
+        await r.service.register(LEGACY);
+        fail = false;
+        await r.service.register();
+        await r.service.register();
+        expect(ensured).toEqual([{ host: TYNN, legacy: LEGACY }, { host: TYNN, legacy: LEGACY }, { host: TYNN, legacy: null }]);
+    });
+
     it('tells its windows when anything changes, the link\'s status included; a revoke re-checks the live sessions', async () => {
         const r = rig();
         await r.service.register();
@@ -168,8 +179,10 @@ describe('genie.relay-host in the catalog', () => {
 describe('with genie-host linked, the window runs no relay host (source guards)', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
-    it('main.ts registers through genie-host; genie-host attaches to its own remote host', () => {
-        expect(main).toMatch(/await linkedRelayHost\.register\(/);
+    it('genie-host registers itself, with Genie 1’s record the window hands it; genie-host attaches to its own remote host', () => {
+        // The window unseals Genie 1's record and hands it over (keychain.adoptLegacy, Tynn #959 2g-3b); it registers nothing.
+        expect(main).not.toMatch(/linkedRelayHost|\.relayHost\(\)/);
+        expect(host).toMatch(/relayHostService\.register\(genie1Identity\)/);
         expect(main).not.toMatch(/linkedRemote\.bridge/);
         expect(host).toMatch(/attach: \(transport\) => remoteHub\.add\(transport\)/);
         expect(host).not.toMatch(/RelayBridgeHost/);

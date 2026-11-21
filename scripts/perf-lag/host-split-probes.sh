@@ -320,7 +320,7 @@ probe "migration-read-back-gates-the-delete" src/main/keychain-migration.ts \
     test/keychain-migration.test.ts "kept, not confirmed, and said"
 
 probe "migration-book-before-the-delete" src/main/keychain-migration.ts \
-    "    if (!(await book.write(name, 'verified').then(() => true, () => false))) return 'book-failed';" "" \
+    "    return (await booked(book, name, 'verified')) ? 'verified' : 'book-failed';" "    return 'verified';" \
     test/keychain-migration.test.ts "each crash really stopped the run where it says"
 
 probe "migration-never-runs-twice" src/main/keychain-migration.ts \
@@ -709,7 +709,7 @@ probe "one-source-failing-stops-only-itself" src/main/keychain-migration.ts \
 
 # A book that does not parse
 probe "a-rebuilt-book-does-not-overwrite" src/main/keychain-migration.ts \
-    "        if (now === 'different') return 'keychain-differs';" "" \
+    "    if (now === 'different') return 'keychain-differs';" "" \
     test/keychain-migration-finishes.test.ts "the keychain wins, the seal stays"
 
 probe "the-bad-book-is-kept" src/main/keychain-migration.ts \
@@ -723,7 +723,7 @@ probe "a-book-that-cannot-be-read-stops" src/main/keychain-migration.ts \
 
 # S4's holds: only in a test build
 probe "the-holds-need-the-flag" src/main/migration-holds.ts \
-    "    if (typeof __GENIE_TEST_HOLDS__ === 'undefined' || !__GENIE_TEST_HOLDS__) return ports;" "" \
+    "    if (typeof __GENIE_TEST_HOLDS__ === 'undefined' || !__GENIE_TEST_HOLDS__) return null;" "" \
     test/migration-holds.test.ts "the ports as they were, whatever the environment says"
 
 

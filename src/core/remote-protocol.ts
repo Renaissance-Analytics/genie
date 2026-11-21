@@ -202,6 +202,11 @@ export const REMOTE_METHODS = [
     'deviceLink.send',
     'deviceLink.close',
     'deviceLink.openBrowser',
+    // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): main's one-time unsealer hands each old copy to genie-host, which keeps
+    // it in its own keychain (`phase: 'adopt'`), and is told which old copies main then deleted (`phase: 'removed'`).
+    'keychain.adoptLegacy',
+    // genie-host asks Tynn again whether it is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
+    'tynn.recheck',
     ...LOCAL_FILES_METHODS,
     ...LOCAL_DRAFT_METHODS,
     ...LOCAL_ARTBOARD_METHODS,
@@ -414,6 +419,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.send': 'local',
     'deviceLink.close': 'local',
     'deviceLink.openBrowser': 'local',
+    'keychain.adoptLegacy': 'local',
+    'tynn.recheck': 'local',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
@@ -470,6 +477,12 @@ export interface PreAuth {
     /** Omitted by existing relay transports. Only the local window door issues `local`. */
     readonly kind?: 'relay' | 'local';
     readonly label: string;
+    /**
+     * MAIN'S OWN PROTOCOL CLIENT, never a page (Tynn #959, the security review of #2120). Set only by genie-host's tunnel for a
+     * door main opened as its own (window-tunnel.ts `own`), or by that client itself in-process. A label is display words any
+     * door can say; this is not one.
+     */
+    readonly own?: true;
     readonly isOwner: boolean;
     /** The one workspace a guest may reach; `null` = the whole host. */
     readonly workspaceId: string | null;
@@ -493,6 +506,8 @@ export interface CallContext {
     readonly workspaceId: string | null;
     readonly readonly: boolean;
     readonly label: string;
+    /** This machine's own Genie client itself (PreAuth `own`), never a page in its window; absent for everyone else. */
+    readonly own?: true;
 }
 
 /** A call nobody vouched for: no owner, reads only, and a workspace id no workspace has (`null` would be the whole host). */

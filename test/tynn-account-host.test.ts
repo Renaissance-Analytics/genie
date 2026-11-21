@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
-import { fileMigrationBook, gatherSources, migrateSecrets, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import { fileMigrationBook, gatherSources, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
 import { hostTynnPorts } from '../src/main/host-tynn-account.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
@@ -342,14 +343,14 @@ describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.jso
         writeFileSync(legacyFile(), record(OLD_TOKEN));
         const k = keychainFake();
         const source = tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore });
-        expect(await migrateSecrets([source], vaultOver(k) as never, memoryBook())).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
+        expect(await moveAll([source], vaultOver(k) as never, memoryBook())).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
         expect(k.held.get('tynn/pairing')).toBe(TOKEN);
     });
 
     it('and then no seal is left anywhere: not the current one, not the older one', async () => {
         writeFileSync(file, record(TOKEN));
         writeFileSync(legacyFile(), record(OLD_TOKEN));
-        await migrateSecrets([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vaultOver(keychainFake()) as never, memoryBook());
+        await moveAll([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vaultOver(keychainFake()) as never, memoryBook());
         expect(hasToken(file)).toBe(false);
         expect(existsSync(legacyFile())).toBe(false);
         expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ state: 'signed-in', userId: USER.id });
@@ -359,7 +360,7 @@ describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.jso
         writeFileSync(file, record(TOKEN));
         writeFileSync(legacyFile(), record(OLD_TOKEN));
         const vault = { store: async () => ({ ok: true as const }), compare: async () => 'different' as const };
-        await migrateSecrets([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vault as never, memoryBook());
+        await moveAll([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vault as never, memoryBook());
         expect(hasToken(file)).toBe(true);
         expect(existsSync(legacyFile())).toBe(true);
     });
@@ -390,7 +391,7 @@ describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.jso
             { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnAgentIdentities({ file: agents, secrets: k as never }).legacyKeys(cipher) },
             { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => [tynnPairingSource({ file, cipher, store: strictStore })] },
         ]);
-        expect(await migrateSecrets(sources, vaultOver(k) as never, memoryBook())).toEqual([{ name: 'agents.json', status: 'old-copy-unreadable' }, { name: 'tynn/pairing', status: 'moved' }]);
+        expect(await moveAll(sources, vaultOver(k) as never, memoryBook())).toEqual([{ name: 'agents.json', status: 'old-copy-unreadable' }, { name: 'tynn/pairing', status: 'moved' }]);
         expect(k.held.get('tynn/pairing')).toBe(TOKEN);
         expect(readFileSync(agents, 'utf8')).toBe('{ not json');
         // It survives: the real account, opened over what is left.
@@ -403,7 +404,7 @@ describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.jso
         const bookFile = join(dirname(file), 'keychain-migration.json');
         writeFileSync(bookFile, '{ not json');
         const k = keychainFake();
-        expect(await migrateSecrets([tynnPairingSource({ file, cipher, store: strictStore })], vaultOver(k) as never, fileMigrationBook(bookFile))).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
+        expect(await moveAll([tynnPairingSource({ file, cipher, store: strictStore })], vaultOver(k) as never, fileMigrationBook(bookFile))).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
         expect(k.held.get('tynn/pairing')).toBe(TOKEN);
         expect((await open(k, tynnFake())).status()).toMatchObject({ signedIn: true });
     });
@@ -411,7 +412,7 @@ describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.jso
     it('CONTROL: only the older file: it still comes across, as it always did', async () => {
         writeFileSync(legacyFile(), record(TOKEN));
         const k = keychainFake();
-        await migrateSecrets([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vaultOver(k) as never, memoryBook());
+        await moveAll([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vaultOver(k) as never, memoryBook());
         expect(k.held.get('tynn/pairing')).toBe(TOKEN);
         expect(existsSync(legacyFile())).toBe(false);
     });
@@ -451,8 +452,9 @@ describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.jso
     it('wired: main settles the stale file first, and what stays where it was reaches a log someone can read', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         expect(main).toMatch(/await settleStaleLegacyPairing\(/);
-        expect(main).toMatch(/secretsLog:/);
-        expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/input\.secretsLog/);
+        // The unsealer's words go to the lifecycle log (keychainLog); what stayed is said there, by name (Tynn #959, 2g-3b).
+        expect(main).toMatch(/log: \(line\) => keychainLog\(/);
+        expect(readFileSync('src/main/legacy-unsealer.ts', 'utf8')).toMatch(/for \(const line of stuckLines\(final, said\)\) ports\.log\(line\);/);
     });
 });
 
@@ -462,7 +464,7 @@ describe('the pairing an older Genie sealed moves to the keychain', () => {
     const memoryBook = (): MigrationBook => { const states: Record<string, MigrationState> = {}; return { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } }; };
 
     function vaultOver(k: ReturnType<typeof keychainFake>) {
-        return { store: (name: string, value: string) => k.set(name, value), compare: async (name: string, value: string) => (k.held.get(name) === value ? 'same' as const : 'different' as const) };
+        return { store: (name: string, value: string) => k.set(name, value), compare: async (name: string, value: string) => (!k.held.has(name) ? 'missing' as const : k.held.get(name) === value ? 'same' as const : 'different' as const) };
     }
 
     it('it moves, the file keeps everything but the token, and a reload signs in', async () => {
@@ -471,7 +473,7 @@ describe('the pairing an older Genie sealed moves to the keychain', () => {
         const account = await open(k, tynnFake());
         expect(account.status().signedIn).toBe(false);
         const source = tynnPairingSource({ file, cipher, store: plainStore });
-        expect(await migrateSecrets([source], vaultOver(k) as never, memoryBook())).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
+        expect(await moveAll([source], vaultOver(k) as never, memoryBook())).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
         expect(k.held.get('tynn/pairing')).toBe(TOKEN);
         expect(disk().tokenEnc).toBeUndefined();
         expect(disk()).toMatchObject({ state: 'signed-in', userId: USER.id, usedCodes: ['abc'] });

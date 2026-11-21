@@ -50,21 +50,19 @@ import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type Launc
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
-import { settleStaleLegacyPairing, tynnPairingSource, TynnAccount } from './tynn-account.js';
+import { settleStaleLegacyPairing, tynnPairingSource } from './tynn-account.js';
 import { TYNN_HOST } from '../core/tynn.js';
-import { githubSealedSources, GithubAccount } from './github-account.js';
-import type { GithubAccountReplica } from './github-account-replica.js';
+import { githubSealedSources } from './github-account.js';
 import { readGenie1Identity, workstationSealedSources } from './workstation-identity.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
-import { LinuxKeyring, takeResumeSignIn, unlockKeyringBeforeStores } from './linux-keyring.js';
-import type { KeyringReplica } from './keyring-replica.js';
+import { unlockKeyringBeforeStores } from './linux-keyring.js';
 import { osCipher } from './os-cipher.js';
-import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
 import { reportProxyAnswers } from './proxy-report.js';
 import type { SessionEngineClient } from './session-engine-client.js';
-import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { gatherSources } from './keychain-migration.js';
+import { tynnAgentIdentities, type AgentSecrets } from './tynn-agent-identities.js';
+import { legacyUnsealer, type LegacyUnsealer } from './legacy-unsealer.js';
 import { outboundDialRefusal } from '../core/workstation-role.js';
 import { actOnConnectLink, connectLinkDecisionOf } from '../core/connect-link.js';
 import { remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
@@ -472,20 +470,6 @@ function watchTrayOnly(): void {
         leftRunning.set(false);
         requestQuit('shut-down');
     }
-}
-
-/**
- * TYNN IS BACK (genie#1234) is genie-host's: it hears the account itself and restarts its own agents, window or no window
- * (host-tynn-recovery.ts). All it cannot hear is that this window's one-time move of the secrets has finished, so the
- * window says so, once per move (Tynn #896, 2b-3).
- */
-let tynnRecovering = false;
-function recoverTynnAgents(): void {
-    if (tynnRecovering || !services || !agentEngineLink) return;
-    tynnRecovering = true;
-    void agentEngineLink.client.tynn().recovery({ secretsMoved: true }).catch((error: unknown) => {
-        console.error(`[tynn] agents could not be brought back to Tynn: ${error instanceof Error ? error.message : String(error)}`);
-    }).finally(() => { tynnRecovering = false; });
 }
 
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
@@ -1044,16 +1028,47 @@ function attractMainWindow(reason: string): void {
  * browser's genie://oauth/callback?token=… arrives as a second launch's argv (Windows, Linux), as `open-url` (macOS), or
  * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
  */
-let tynnAccount: TynnAccount | TynnAccountReplica | null = null;
-/** This Genie's GitHub sign-in (main/github-account.ts, beta.33 item 25): Genie 1's carried over, or the device flow. */
-let githubAccount: GithubAccount | GithubAccountReplica | null = null;
-/** Linux: the keyring card (linux-keyring.ts) — null off Linux. Opened before the Tynn account, which refuses without it. */
-let keyring: LinuxKeyring | KeyringReplica | null = null;
-/** Late-bound: a move of this machine's key that finishes lets it register with what it has. */
-let registerWorkstationNow: (() => Promise<void>) | null = null;
+/** The Tynn and GitHub accounts, the keyring card and this machine's registration are genie-host's (Tynn #959, 2g-3b): main holds none. */
+/** Late-bound: main's own protocol client is tunnelled to genie-host. genie:// links wait for it (it reaches genie-host's account). */
+let ownProtocolTunnelled = false;
 /** What Tynn says this machine is (genie#1278 W5) is genie-host's, in its summary (hostSummaryNow, Tynn #954): a drone until said. */
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
 const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
+/** agents.json is read here for its seals only: no key is asked of a keychain from this process. */
+const NO_KEYCHAIN_HERE: AgentSecrets = {
+    probe: async () => ({ ok: false, reason: 'this window keeps no keychain' }),
+    get: async () => ({ kind: 'unavailable', reason: 'this window keeps no keychain' }),
+    set: async () => ({ ok: false, reason: 'this window keeps no keychain' }),
+};
+/**
+ * WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b; legacy-unsealer.ts): the agents' keys in agents.json, the Tynn pairing,
+ * GitHub's tokens and this machine's workstation key, and Genie 1's record of this machine. Only this process has
+ * Electron's safeStorage (os-cipher.ts: no keyring, no secret; basic_text is never a keyring), so it opens them once and
+ * hands them to genie-host, which keeps them in its own keychain. Per the owner's split ruling ("Electron pieces live in
+ * the launcher"), this moves to the launcher in split step 6.
+ */
+const unsealer: LegacyUnsealer = legacyUnsealer({
+    sources: () => {
+        const cipher = osCipher(safeStorage, process.platform);
+        const tynnFile = join(genieRoot(), 'credentials', 'tynn.json');
+        const tynnLegacyFile = join(genieRoot(), 'tynn.json');
+        return gatherSources([
+            { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnAgentIdentities({ file: join(genieRoot(), 'agent-credentials', 'agents.json'), secrets: NO_KEYCHAIN_HERE }).legacyKeys(cipher) },
+            { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => {
+                await settleStaleLegacyPairing({ file: tynnFile, legacyFile: tynnLegacyFile, log: (line) => keychainLog(line) }).catch(() => {});
+                return [tynnPairingSource({ file: tynnFile, legacyFile: tynnLegacyFile, cipher, log: (line) => keychainLog(line) })];
+            } },
+            { file: 'github.json', covers: 'github/', sources: () => githubSealedSources({ file: join(genieRoot(), 'github.json'), cipher, v1Settings: () => readV1Settings(v1DatabaseFile()) }) },
+            { file: 'workstation.json', covers: 'workstation/', sources: () => workstationSealedSources({ file: join(genieRoot(), 'workstation.json'), cipher }) },
+        ]);
+    },
+    // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
+    // decrypted with this Genie's safeStorage (same userData, same OS key). genie-host registers with it once.
+    genie1Identity: async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), osCipher(safeStorage, process.platform)),
+    call: (method, args) => ownProtocol.call(method, args),
+    // Its lines already say [keychain]; the log says it once.
+    log: (line) => keychainLog(line.startsWith('[keychain] ') ? line.slice('[keychain] '.length) : line),
+});
 let pendingGenieUrl: string | null = genieUrlIn(process.argv);
 
 function registerGenieProtocol(): void {
@@ -1066,16 +1081,24 @@ function registerGenieProtocol(): void {
 }
 
 function openGenieUrl(url: string): void {
-    if (!tynnAccount) { pendingGenieUrl = url; return; }
+    if (!ownProtocolTunnelled) { pendingGenieUrl = url; return; }
     // A Tynn share link, opened (Tynn #839): Tynn's page opens genie://workstation/open?id=… — its window, over the relay.
     const workstation = workstationOpenFrom(url);
     if (workstation) { openRemoteWindow(`relay:${workstation.id}`, workstation.name); return; }
-    if (signInCodeFrom(url) === null) { console.log('[genie] a genie:// URL Genie does not handle was ignored'); return; }
+    const code = signInCodeFrom(url);
+    if (code === null) { console.log('[genie] a genie:// URL Genie does not handle was ignored'); return; }
     revealMainWindow('genie:// sign-in link');
-    void tynnAccount.signIn(url).then((r) => {
-        if (!r.ok) console.warn(`[tynn] ${r.reason}`);
+    // The code goes to genie-host's Tynn account, the way Settings' code box sends it (feature-machine.ts integrations.tynnCode).
+    void ownProtocol.call('features.act', [{ kind: 'integrations.tynnCode', code }]).then((answer) => {
+        const why = callRefusal(answer) ?? (answer.ok ? tynnMessageOf(answer.value) : null);
+        if (why) console.warn(`[tynn] ${why}`);
     });
 }
+/** What genie-host's Tynn account said about a sign-in it did not complete (Settings shows the same words). */
+const tynnMessageOf = (data: unknown): string | null => {
+    const message = (data as { integrations?: { tynn?: { message?: unknown } } | null } | null)?.integrations?.tynn?.message;
+    return typeof message === 'string' && message !== '' ? message : null;
+};
 
 /** The OS side of "launch at sign-in" (main/tray-residence.ts holds the decisions). */
 const loginItemPort: LoginItemPort = {
@@ -1829,27 +1852,6 @@ async function boot(): Promise<void> {
         frontDoorPort: 0,
         mcpEndpoint: () => mcpEndpointNow(),
         hostConfigSync: () => agentEngineLink?.client ?? null,
-        // The account is opened after compose; private credentials are requested only when an agent starts.
-        tynn: () => tynnAccount,
-        // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
-        tynnCipher: osCipher(safeStorage, process.platform),
-        secretsLog: (line) => keychainLog(line),
-        legacySecrets: () => gatherSources([
-            { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => {
-                await settleStaleLegacyPairing({ file: join(genieRoot(), 'credentials', 'tynn.json'), legacyFile: join(genieRoot(), 'tynn.json'), log: (line) => keychainLog(line) }).catch(() => {});
-                return [tynnPairingSource({ file: join(genieRoot(), 'credentials', 'tynn.json'), legacyFile: join(genieRoot(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) })];
-            } },
-            { file: 'github.json', covers: 'github/', sources: () => githubSealedSources({ file: join(genieRoot(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }) },
-            { file: 'workstation.json', covers: 'workstation/', sources: () => workstationSealedSources({ file: join(genieRoot(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }) },
-        ]),
-        onSecretsMoved: () => {
-            void githubAccount?.reload().catch(() => {});
-            void registerWorkstationNow?.();
-            void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents());
-        },
-        // An agent's key is the host's (genie#1457).
-        tynnSecrets: linkedAgentSecrets(agentEngineLink.client),
-        tynnVault: linkedVault(agentEngineLink.client),
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
@@ -1897,15 +1899,30 @@ async function boot(): Promise<void> {
     });
     // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
     // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
-    tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client));
+    // `own`: genie-host admits this door's connections as main's own client, the only caller keychain.adoptLegacy takes.
+    tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
     // What genie-host runs, as the tray and the quit read it, kept as it changes (Tynn #953, 2g-2).
     // ...and this machine's role and its Tynn account (Tynn #954, 2g-3a): another account (or none) closes the relay windows
     // opened under the last one, which hold its grants (M0 finding 2).
     ownProtocol.watchSummary((summary) => {
+        const before = hostSummaryNow;
         if (summary.tynnAccountKey !== hostSummaryNow.tynnAccountKey) { hostSummaryNow = summary; closeRelayWindowsOfOtherAccounts(); }
         hostSummaryNow = summary;
         refreshTray();
+        // genie-host's keychain can keep secrets now (Tynn #959): what an older Genie sealed is handed over again.
+        unsealer.summary(before, summary);
+        if (summary.githubBlocked !== before.githubBlocked) registry?.touch();
     });
+    /*
+     * WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b; legacy-unsealer.ts): only this process has Electron's safeStorage, so it
+     * unseals each old copy once, hands it to genie-host over its own protocol client, and deletes the copies genie-host
+     * names. It keeps no secret. Per the owner's split ruling ("Electron pieces live in the launcher"), this moves to the
+     * launcher in split step 6.
+     */
+    void unsealer.run();
+    // A sign-in that came back before main's own client could reach genie-host's account (this launch's argv, an early second launch).
+    ownProtocolTunnelled = true;
+    if (pendingGenieUrl !== null) { const url = pendingGenieUrl; pendingGenieUrl = null; openGenieUrl(url); }
     windowTunnelNow = windowTunnel;
     // Browser/UI facts this window owns: its pane and its notice are said down the tunnel, where genie-host reads its
     // features again (genie-host's own sources invalidate them too: its Tynn and GitHub accounts, its relay role, …).
@@ -1953,72 +1970,10 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
 
 
-    // LINUX WITH NO KEYRING (linux-keyring.ts; the owner, 2026-11-01): what the session's keyring is, the card Settings
-    // shows when there is none, and its one button — install (pkexec), start, Restart Genie. Never fatal to boot.
-    if (process.platform === 'linux') {
-        try {
-            // With a host, the card is the host's: the secrets are in its keychain, and Chromium's store says nothing about them. Only a window running its own engine reads that store for it.
-            keyring = agentEngineLink.client.keyring();
-        } catch (error) {
-            console.warn('[genie] the keyring check failed', error);
-        }
-        keyring?.onChange(() => {
-            if (keyring?.canKeepSecrets()) void services?.moveSecretsAgain();
-        });
-        console.log(`[genie] keyring: ${keyring?.canKeepSecrets() ? 'can keep secrets' : 'cannot keep secrets'} (backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'})`);
-    }
-    // The scoped desktop credential stays encrypted in the main process. This isolated cookie jar is used only for
-    // the one-time pairing exchange; ordinary API requests explicitly omit it.
-    const tynnSession = session.fromPartition('persist:tynn');
-    // THE ACCOUNT IS THE HOST'S (P3.4 cut c); this window reads a replica.
-    tynnAccount = agentEngineLink.client.tynn({ openExternal: (url) => shell.openExternal(url) });
-    // A move of an older Genie's pairing that finished before this line had nobody to tell.
-    void tynnAccount.reload().catch(() => {});
-
-    // A SIGN-IN THAT WAITED FOR THE KEYRING (linux-keyring.ts): the card's Restart Genie left a note (which sign-in, never
-    // a code); with the keyring working now, Tynn's sign-in opens again by itself, so the person is not left to find it.
-    if (takeResumeSignIn(genieRoot()) === 'tynn' && (keyring?.canKeepSecrets() ?? true) && !tynnAccount.status().signedIn) {
-        void tynnAccount.startSignIn().catch(() => { /* the person signs in by hand */ });
-    }
-    // GITHUB (beta.33 item 25; Genie 1's main/github/*): Genie 1's sign-in carried over — read from its genie.db, decrypted
-    // with this Genie's safeStorage (the same userData, so the same key: measured) and kept encrypted in ~/.genie — or the
-    // device flow. Every change reaches Settings and the Deck's signal at once; GitHub is read once now, and again on
-    // Check again or after a sign-in (no polling of the API).
-    // THE ACCOUNT AND ITS TOKENS ARE THE HOST'S (P3.4 cut c): this window reads a replica and asks the host to act.
-    githubAccount = agentEngineLink.client.github({ openExternal: (url) => shell.openExternal(url) });
-    githubAccount.onChange(() => { registry?.touch(); });
-    // A move of an older Genie's sign-in that finished before this line had nobody to tell.
-    void githubAccount.reload().catch(() => {});
-    void githubAccount.refresh();
-    // THIS MACHINE ON THE TYNN NETWORK (Tynn #836; Genie 1's ensureLocalWorkstation): signed in, it registers with that
-    // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
-    // sign-in landing during the launch's own check cannot make two workstations.
-    const identityCipher = osCipher(safeStorage, process.platform);
-    // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
-    // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
-    // duplicate, on the next registration — once.
-    const genie1Identity = async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), identityCipher);
-    // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
-    /*
-     * THE REGISTRATION, THE ROLE AND THE RELAY LINK ARE GENIE-HOST'S (Tynn #410, P5d.3). This window mirrors them for what it
-     * reads synchronously (fail closed: a drone until the host has answered) and hands over Genie 1's record, which only it
-     * can open.
-     */
-    // Only for the one registration that hands over Genie 1's record (until 2g-3b, Tynn #954: it travels with the legacy
-    // secrets and genie-host registers itself). The role and the account are the summary's (watchSummary).
-    const linkedRelayHost = agentEngineLink.client.relayHost();
-    let registering: Promise<void> | null = null;
-    const registerWorkstation = (): Promise<void> => {
-        if (registering) return registering;
-        if (!tynnAccount) return Promise.resolve();
-        registering = (async () => { await linkedRelayHost.register(await genie1Identity().catch(() => null)); })().finally(() => { registering = null; });
-        return registering;
-    };
-    registerWorkstationNow = registerWorkstation;
-    tynnAccount.onChange(() => { void registerWorkstation(); });
-    void registerWorkstation();
-    // A sign-in that came back before the account was open (this launch's own argv, or an early second launch).
-    if (pendingGenieUrl !== null) { const url = pendingGenieUrl; pendingGenieUrl = null; openGenieUrl(url); }
+    // THE KEYRING CARD, THE TYNN AND GITHUB ACCOUNTS AND THIS MACHINE'S REGISTRATION ARE GENIE-HOST'S (Tynn #959, 2g-3b): it
+    // rechecks them itself when its keychain comes back (keyring-service.ts onReady) and registers with Genie 1's record
+    // when the unsealer hands it over. What only Electron knows is said here once, for the log.
+    if (process.platform === 'linux') console.log(`[genie] this window's password store: backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'}`);
     // What agents run, each change with its own sound row (Tynn #766 C2b, core/thing-sounds.ts): a process exiting (a
     // site's own server is the site's), a site up or down, a service started, a flow run finished.
     const things = new ThingSounds();
@@ -2096,7 +2051,7 @@ async function boot(): Promise<void> {
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
             thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
-            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId), recheckSignIn: () => { void tynnAccount?.recheck(); } },
+            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId), recheckSignIn: () => { void ownProtocol.call('tynn.recheck', []); } },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
             openFile: async ({ workspaceId, path, line }) => { attractMainWindow('openFileForUser'); showToPerson({ activation: 'background', workspaceId, file: path, line, reason: 'openFileForUser' }); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
@@ -2205,7 +2160,7 @@ async function boot(): Promise<void> {
     // Remote access is genie-host's (Tynn #820, #409): it applies the switch at boot and on every change of `remote_access`.
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking (what the GitHub
     // sign-in read from GitHub), the OS agent working.
-    registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })(), githubBlocked: (githubAccount?.view().signal ?? null) !== null }));
+    registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })(), githubBlocked: hostSummaryNow.githubBlocked }));
     // The header's flow pills (Tynn #707): a flow starting, ending or failing changes the signals, so the windows are told.
     composed.flows.onChange(() => registry?.touch());
     // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
@@ -2753,7 +2708,7 @@ app.on('window-all-closed', () => { /* Genie stays in the tray */ });
 
 // macOS and Linux announce a shutdown, restart or sign-out: delay it, quit without a question nothing could answer.
 // Waking from sleep: a Genie that shows signed out to Tynn asks again (the network is often what was missing).
-powerMonitor.on('resume', () => { void handProxyAnswers?.(); if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
+powerMonitor.on('resume', () => { void handProxyAnswers?.(); if (ownProtocolTunnelled) void ownProtocol.call('tynn.recheck', []); });
 powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
     event?.preventDefault();
     quit.force();

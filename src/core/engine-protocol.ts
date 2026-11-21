@@ -193,11 +193,11 @@ export const ENGINE_METHODS = [
     'engine.proxyRemember',
     // The host's Tynn account, as a window asks it (P3.4 cut c): `[method, args]`.
     'engine.tynn',
-    // The host's keychain, from the window (P3.4): an agent's key only, by name; compare answers same-or-not.
+    // The host's keychain, from the window (P3.4): an agent's key only, by name. What an older Genie sealed goes on the
+    // protocol's keychain.adoptLegacy instead (Tynn #959, 2g-3b).
     'engine.secretProbe',
     'engine.secretRead',
     'engine.secretStore',
-    'engine.secretCompare',
     // Host → window.
     // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.
     'client.toolCall',

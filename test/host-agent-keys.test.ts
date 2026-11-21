@@ -10,7 +10,8 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import type { SessionDriverFactory } from '../src/core/session.js';
 import { hostAgentKeys } from '../src/main/host-agent-keys.js';
 import { Keychain, type KeyringModule } from '../src/main/keychain.js';
-import { migrateSecrets, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import type { MigrationBook, MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
@@ -280,9 +281,9 @@ describe('the host holds, and what a window can ask of it', () => {
         const cipher = { decrypt: (bytes: Buffer) => bytes.toString().replace(/^sealed:/, '') };
         const states: Record<string, MigrationState> = {};
         const book: MigrationBook = { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } };
-        const moved = await migrateSecrets(await vault.legacyKeys(cipher), {
+        const moved = await moveAll(await vault.legacyKeys(cipher), {
             store: async (name, value) => port.set(name, value),
-            compare: async (name, value) => (port.held.get(name) === value ? 'same' : 'different'),
+            compare: async (name, value) => (!port.held.has(name) ? 'missing' : port.held.get(name) === value ? 'same' : 'different'),
         }, book);
         expect(moved).toEqual([{ name: ENTRY, status: 'moved' }]);
         expect(port.held.get(ENTRY)).toBe(KEY);
