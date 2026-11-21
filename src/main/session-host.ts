@@ -23,6 +23,7 @@ import { deferredDriverFactory } from './deferred-driver.js';
 import { mcpOffFor } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
 import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
+import { accountSwitchNote } from '../core/account-switch.js';
 
 /**
  * Whether an agent can ask for approval — the DRIVER's published claim (`permissionRequests`), read from prism-acp's
@@ -1469,6 +1470,31 @@ export class SessionHost {
      */
     accountChanged(provider: string): void {
         for (const [id, entry] of this.#running) if (entry.provider === provider) this.#scheduleMove(id);
+    }
+
+    /**
+     * A SWITCH TELLS EVERY AGENT ITS NEW ROOM (Tynn #1011; the owner: "whenever we have an account switch make sure to post the
+     * updated rate limit status so agents know it is reset"). At once: the new account's last reading is published as the
+     * provider's headroom (fresh: no earlier window carried over), the provider is asked for a live one where it can answer,
+     * the new account's hold opens unless its own reading says it is spent, and every running agent of the provider has its
+     * headroom replaced (no stale "N% until you hit your rate limit"), a line naming the account and its room ahead of its next
+     * turn, and any limit hold lifted.
+     */
+    accountSwitched(provider: string, input: { readonly account: AccountRecord; readonly headroom: Headroom | null }): void {
+        const now = this.#clock();
+        const note = accountSwitchNote(input.account.label, input.headroom, now);
+        if (input.headroom) this.#onHeadroom?.(provider, input.headroom, { accountId: input.account.id, runId: 'account-switch', fresh: true });
+        const login = this.#loginOf(provider, input.account.id);
+        if (!this.#gate.limitedByReading(login, now)) this.#gate.resumeNow(login);
+        let reader: Running | null = null;
+        for (const [id, entry] of this.#running) {
+            if (entry.provider !== provider) continue;
+            entry.session.accountSwitched(note, input.headroom);
+            if (reader === null && entry.session.canReadRateLimits) reader = entry;
+            this.#emit(id);
+        }
+        reader?.session.readRateLimits()?.catch(() => { /* no reading: the published one stands */ });
+        this.#wake();
     }
 
     /**

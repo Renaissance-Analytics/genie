@@ -1236,6 +1236,14 @@ async function main(): Promise<void> {
         changed: () => { accountsChangedNow?.(); },
     });
     void claudeLive.refresh();
+    // EVERY SWITCH TELLS THE AGENTS THEIR NEW ROOM (Tynn #1011, the owner's requirement): the new account's last reading,
+    // published at once and put ahead of each running agent's next turn; its limit holds lifted.
+    const announceSwitch = (provider: string, accountId: string): void => {
+        const account = accounts.get(accountId);
+        if (!account) return;
+        const reading = headroomFeedNow?.accounts().find((r) => r.provider === provider && r.accountId === accountId);
+        host.accountSwitched(provider, { account, headroom: reading?.room ?? null });
+    };
     const accountsAct = async (action: AccountsAction): Promise<AccountsActResult> => {
         try {
             if (action.kind === 'rename') await accounts.rename(action.id, action.label);
@@ -1247,6 +1255,7 @@ async function main(): Promise<void> {
                 if (!target) throw new Error('Genie does not know that account.');
                 await accounts.setActive(target.provider, target.id);
                 readingAttribution.signedIn(target.provider);
+                announceSwitch(target.provider, target.id);
                 host.accountChanged(target.provider);
                 void providerHealth.refresh(target.provider);
                 void claudeLive.refresh();
@@ -1713,7 +1722,11 @@ async function main(): Promise<void> {
         login: switchLogin,
         active: (provider) => { const a = isAcpProvider(provider) ? accounts.activeFor(provider) : null; return a ? { id: a.id, label: a.label } : { id: '', label: provider }; },
         readIdentity: (provider) => { if (!isAcpProvider(provider)) return Promise.resolve(); readingAttribution.signedIn(provider); return accountIdentity.refreshProvider(provider); },
-        emit: (outcome) => { engine.callback({ name: 'toolSignal', signal: accountSwitchSignal(outcome) }); },
+        emit: (outcome) => {
+            // A switch by signing in again (Tynn #753) is a switch too: the agents are told their new room (Tynn #1011).
+            if (outcome.kind === 'switched') announceSwitch(outcome.provider, outcome.accountId);
+            engine.callback({ name: 'toolSignal', signal: accountSwitchSignal(outcome) });
+        },
     });
     const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
