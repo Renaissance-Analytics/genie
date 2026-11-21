@@ -855,7 +855,8 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
     let defaults = 0;
     if (prior?.defaultsApplied !== true && catalog !== null) {
         for (const [workspaceId, agentId] of Object.entries(v1DefaultAgents(catalog.agents, theRegistry.listAgents()))) {
-            if (theRegistry.defaultAgentOf(workspaceId) !== null) continue;
+            // Only where nobody CHOSE one: the first agent the import registered is the default automatically (Tynn #1015).
+            if (theRegistry.chosenDefaultAgentOf(workspaceId) !== null) continue;
             if ((await theRegistry.setDefaultAgent(workspaceId, agentId)).ok) defaults += 1;
         }
     }
@@ -1990,7 +1991,7 @@ async function boot(): Promise<void> {
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
             refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
             resolveCaller,
-            // createAgent: the workspace's default agent asks, the person approves in the Deck, the registry registers.
+            // createAgent: any agent asks, the person approves in the Deck, the registry registers (genie-host's own since Tynn #1015).
             agents: {
                 defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
                 register: (input) => registry!.register(input),
@@ -2033,7 +2034,7 @@ async function boot(): Promise<void> {
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
         const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
-        mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? ''));
+        mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
         if (engineLink) {

@@ -1677,6 +1677,7 @@ async function main(): Promise<void> {
     });
     const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
+    await phoneRegistry.assignMissingDefaults();
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     // The Dashboard's comms (Tynn #956): this machine's window has been served from this registry since Tynn #898 2d-4b, and
     // the SessionHost's probe carries none, so the rows take them from the host's own inbox (main/dashboard-comms.ts).
@@ -2254,7 +2255,7 @@ async function main(): Promise<void> {
             files: nodeCloneFiles(),
             registry: {
                 agentsOf: (id) => hostRegistry.listAgents().filter((a) => a.workspaceId === id),
-                defaultAgentOf: (id) => hostRegistry.defaultAgentOf(id),
+                chosenDefaultAgentOf: (id) => hostRegistry.chosenDefaultAgentOf(id),
                 setDefaultAgent: (id, agentId) => phoneRegistry.setDefaultAgent(id, agentId),
                 listWorkspaces: () => hostRegistry.listWorkspaces(),
                 setWorkspaceEnvFile: (id, file) => phoneRegistry.setWorkspaceEnvFile(id, file),
@@ -2311,6 +2312,8 @@ async function main(): Promise<void> {
         settings,
         records: () => hostRegistry.listAgents(),
         registry: hostRegistry,
+        // createAgent, once the person approved (Tynn #1015): this host's registry, the one writer, with or without a window.
+        registerAgent: (input) => phoneRegistry.register(input),
         probe: (id) => host.probe(id),
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
         reportPlan: (id, steps) => host.reportPlan(id, steps),

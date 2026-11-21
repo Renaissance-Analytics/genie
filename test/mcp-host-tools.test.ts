@@ -107,9 +107,10 @@ describe('openFileForUser with no window', () => {
  * forwarded, run or kept for later. The host's own tools are unchanged.
  */
 describe('window tools on a host with no window and no browser', () => {
-    // Every tool genie-host forwards to a window whole: the window's tools (checkIssues, workspaceTabs, createAgent,
-    // openFileForUser), pages, and a plugin's tool. `sites open` and `services exec` are pinned below.
-    const WINDOW_TOOLS = ['checkIssues', 'workspaceTabs', 'createAgent', 'openFileForUser', 'ai.genie.spreadsheet.createWorkbook'];
+    // Every tool genie-host forwards to a window whole: the window's tools (checkIssues, workspaceTabs, openFileForUser),
+    // pages, and a plugin's tool. `sites open` and `services exec` are pinned below. createAgent is the host's own since
+    // Tynn #1015 (test/create-agent-every-agent-1015.test.ts).
+    const WINDOW_TOOLS = ['checkIssues', 'workspaceTabs', 'openFileForUser', 'ai.genie.spreadsheet.createWorkbook'];
     const rigHere = (connected: boolean, capabilities?: { window: boolean; browser: boolean }) => {
         const ran: string[] = [];
         const forwarded: ForwardedToolCall[] = [];

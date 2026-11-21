@@ -149,7 +149,6 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
         ...(p.agents ? {
             agents: {
                 resolveCaller: p.resolveCaller,
-                defaultAgentOf: (ws: string) => p.agents!.defaultAgentOf(ws),
                 roster: p.roster,
                 approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
                 register: p.agents.register,

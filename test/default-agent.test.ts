@@ -56,15 +56,20 @@ describe('the registry’s default agent', () => {
         expect(await registry.setDefaultAgent('moic', atlas.id)).toEqual({ ok: false, reason: 'no workspace moic' });
     });
 
-    it('null clears it; forgetting the default agent clears it too — never a designation pointing at nothing', async () => {
+    it('null is no choice: back to the FIRST agent, automatically (Tynn #1015); forgetting the last agent leaves none', async () => {
         const atlas = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
-        await registry.setDefaultAgent('tynn', atlas.id);
+        const wren = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'wren' });
+        await registry.setDefaultAgent('tynn', wren.id);
         expect(await registry.setDefaultAgent('tynn', null)).toEqual({ ok: true });
-        expect(registry.defaultAgentOf('tynn')).toBeNull();
+        expect(registry.defaultAgentOf('tynn')).toBe(atlas.id);
+        expect(registry.chosenDefaultAgentOf('tynn')).toBeNull();
+        expect(registry.workspace('tynn')?.defaultAgentId).toBe(atlas.id);
 
+        await registry.forget(wren.id);
         await registry.setDefaultAgent('tynn', atlas.id);
         await registry.forget(atlas.id);
         expect(registry.defaultAgentOf('tynn')).toBeNull();
+        expect(registry.workspace('tynn')?.defaultAgentId).toBeNull();
     });
 });
 

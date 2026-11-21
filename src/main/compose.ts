@@ -566,7 +566,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         }),
         integrations: () => {
             return {
-                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description)) },
+                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description, (t as { someAgents?: boolean }).someAgents === true)) },
                 agentFiles: agentFiles.list(),
             };
         },

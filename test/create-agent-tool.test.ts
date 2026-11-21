@@ -21,13 +21,12 @@ const CALLERS: Record<string, Caller> = {
     'k-wren': { agentId: 'a2', agentName: 'wren', workspaceId: 'tynn', workspacePath: '/w/tynn' } as Caller,
 };
 
-function harness(over: { verdict?: 'allowed' | 'denied'; defaultAgent?: string | null } = {}) {
+function harness(over: { verdict?: 'allowed' | 'denied' } = {}) {
     const roster = [rec('a1', 'atlas'), rec('a2', 'wren')];
     const asked: Array<{ caller: string; action: string; detail: string }> = [];
     const registered: Array<{ workspaceId: string; provider: string; name: string; instructions: string | null }> = [];
     const deps: AgentToolsDeps = {
         resolveCaller: (key) => CALLERS[key] ?? null,
-        defaultAgentOf: (ws) => (ws === 'tynn' ? (over.defaultAgent === undefined ? 'a1' : over.defaultAgent) : null),
         roster: () => roster,
         approve: async (caller, action, detail) => { asked.push({ caller: caller.agentName, action, detail }); return over.verdict ?? 'allowed'; },
         register: async (input) => { registered.push({ ...input, instructions: input.instructions ?? null }); const r = rec(`new-${registered.length}`, input.name, input.workspaceId); roster.push(r); return r; },
@@ -70,12 +69,10 @@ describe('what createAgent does', () => {
         expect(h.registered).toEqual([]);
     });
 
-    it('a NON-default agent asks the person the same way; with none designated at all, too', async () => {
+    it('any agent asks the person the same way: the tool knows nothing of a default agent', async () => {
         const h = harness();
         expect(parse(await h.call('k-wren', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: true, name: 'scout' });
         expect(h.asked).toEqual([{ caller: 'wren', action: 'agents.create', detail: 'Create a new agent “scout” (codex) in tynn' }]);
-        const none = harness({ defaultAgent: null });
-        expect(parse(await none.call('k-atlas', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: true });
     });
 
     it('CONTROL: a session Genie does not know is refused, asks nobody, makes nothing', async () => {

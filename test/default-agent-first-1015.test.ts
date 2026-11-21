@@ -8,6 +8,7 @@ import { adoptAgent } from '../src/main/agent-adoption-host.js';
 import { HostRegistry } from '../src/main/host-registry.js';
 import { cloneRestorePorts } from '../src/main/workspace-clone-ports.js';
 import { restoreWorkspaceSettings } from '../src/main/workspace-restore-host.js';
+import { elementSourcesFor } from '../src/main/workspace-save-sources.js';
 import { Registry } from '../src/main/registry.js';
 import { Store } from '../src/main/store.js';
 
@@ -159,6 +160,17 @@ describe('a default someone CHOSE replaces an automatic one (adopt, restore)', (
         await registry.setDefaultAgent('tynn', scout.id);
         expect(await restoreWorkspaceSettings(JSON.parse(manifest), 'tynn', ports)).toMatchObject({ kept: ['defaultAgent'] });
         expect(registry.defaultAgentOf('tynn')).toBe(scout.id);
+    });
+});
+
+describe('Save to repo writes only a CHOSEN default', () => {
+    const save = (id: string) => elementSourcesFor({ services: { list: () => [] }, settings: { workspaceValues: () => ({}) }, registry }, id).workspace.defaultAgent;
+    it('the automatic first agent is not written into project.json; the person’s choice is', async () => {
+        await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        const wren = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'wren' });
+        expect(save('tynn')).toBeNull();
+        await registry.setDefaultAgent('tynn', wren.id);
+        expect(save('tynn')).toBe('wren');
     });
 });
 
