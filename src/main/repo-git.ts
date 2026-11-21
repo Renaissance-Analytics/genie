@@ -94,7 +94,8 @@ export async function repoHead(root: string, repoRel: string): Promise<RepoResul
  * TAG RELEASE (PM G-4, Tynn #937): an annotated tag on HEAD, pushed to the remote — that one tag, never `--tags`. The
  * commit is read FIRST, as a full SHA, and that SHA is what the gate is asked about and what is tagged: HEAD moving while
  * Tynn is asked cannot put the tag on a commit nobody signed. A linked workspace's gate is Tynn's release decision
- * (release-tag-gate.ts); an unlinked workspace has none and tags as any git does. A refused push takes the local tag back,
+ * (release-tag-gate.ts), which lets it through unsigned only where Tynn says none is required; an unlinked workspace has
+ * none and tags as any git does. A refused push takes the local tag back,
  * so the next try is clean and no unpushed release tag waits to ride out on someone's `git push --tags`.
  */
 export async function repoTagRelease(root: string, repoRel: string, tag: string, opts: { remote?: string; gate?: (commit: string) => Promise<ReleaseGate> }): Promise<RepoResult<{ tag: string; commit: string }>> {
@@ -110,8 +111,11 @@ export async function repoTagRelease(root: string, repoRel: string, tag: string,
     if (opts.gate) {
         const gate = await opts.gate(commit);
         if (!gate.ok) return fail(gate.reason);
+        const version = gate.versionNumber ?? '(unnumbered)';
         const who = gate.signedBy ? `, signed by ${gate.signedBy}` : '';
-        message += `\n\nTynn release decision ${gate.recordId ?? '(unnamed)'} for version ${gate.versionNumber ?? '(unnumbered)'}${who}.`;
+        message += gate.required
+            ? `\n\nTynn release decision ${gate.recordId ?? '(unnamed)'} for version ${version}${who}.`
+            : `\n\nTynn required no release decision for version ${version}: its repository has not opted into the release rules.`;
     }
     const made = await inRepo(root, repoRel, ['tag', '-a', '-m', message, name, commit]);
     if (!made.ok) return made;

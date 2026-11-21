@@ -2,17 +2,19 @@
  * PM G-4 (Tynn #937; spec pm-model.md row G-4, §17 answer 2): THE TAG STEP'S RELEASE DECISION. For a workspace linked to
  * Tynn, the Repository panel's Tag release asks Tynn's read-only door (PM-3, tynn#929)
  *   GET /api/v1/projects/{projectId}/versions/{versionId}/release-decision?commit={sha}
- * and tags only when the answer is a decision that is SIGNED, still VALID, not already USED by a release, for the version
- * that was asked about, and signed for the EXACT commit being tagged. Anything else is a refusal in words, Tynn's own where
- * Tynn gave them. Strict on purpose: the spec asks for "a valid signed release decision matching the version and the exact
- * commit", so Tynn's `required: false` (its rules off for that repository) does not open the tag step.
+ * and follows Tynn's `required`. Where Tynn requires a decision, it tags only under one that is SIGNED, still VALID, not
+ * already USED by a release, for the version that was asked about, and signed for the EXACT commit being tagged. Where
+ * Tynn says `required: false` (the repository has not opted into the release rules, the owner's per-repo opt-in ruling,
+ * spec §17 answer 5), it tags as an unlinked workspace would, and the tag says no decision was required. An answer that
+ * says neither, or none at all, is a refusal: linked work fails closed. Refusals are in words, Tynn's own where it gave them.
  *
  * Genie compares the commit itself as well as reading Tynn's `commit_matches`: a tag is only ever made on a commit Genie
  * has seen named in the signed decision. Pure: main/release-tag-gate.ts asks Tynn, main/repo-git.ts makes the tag.
  */
 
 export type ReleaseGate =
-    | { readonly ok: true; readonly versionNumber: string | null; readonly recordId: string | null; readonly signedBy: string | null }
+    /** `required: false` = Tynn asked for no decision (recordId and signedBy null); true = the signed one it was made under. */
+    | { readonly ok: true; readonly required: boolean; readonly versionNumber: string | null; readonly recordId: string | null; readonly signedBy: string | null }
     | { readonly ok: false; readonly reason: string };
 
 /** A Tynn version the panel offers to tag against. */
@@ -53,10 +55,13 @@ const NOT_A_DECISION: ReleaseGate = { ok: false, reason: 'Tynn answered with som
 export function judgeReleaseDecision(answer: unknown, ask: { versionId: string; commit: string }): ReleaseGate {
     const top = record(answer);
     const version = record(top?.version);
-    const d = record(top?.decision);
-    if (!top || !version || !d) return NOT_A_DECISION;
+    if (!top || !version) return NOT_A_DECISION;
     if (version.id !== ask.versionId) return { ok: false, reason: 'Tynn answered about a different version than the one chosen, so Genie will not tag.' };
     const number = str(version.number);
+    // Tynn's own word that this version needs no decision; anything other than an explicit false is not that word.
+    if (top.required === false) return { ok: true, required: false, versionNumber: number, recordId: null, signedBy: null };
+    const d = record(top.decision);
+    if (top.required !== true || !d) return NOT_A_DECISION;
     const named = number ?? str(version.title) ?? ask.versionId;
     if (d.signed !== true) {
         return { ok: false, reason: `Tynn has no signed release decision for version ${named}. The release signer signs it on Tynn's Releases page; then tag again.` };
@@ -72,7 +77,7 @@ export function judgeReleaseDecision(answer: unknown, ask: { versionId: string; 
             ? `Tynn's release decision for version ${named} was signed for commit ${short(signedFor)}, not ${short(ask.commit)} (HEAD). Tag the signed commit, or have the decision signed for this one.`
             : `Tynn's release decision for version ${named} names no commit, so it cannot be matched to ${short(ask.commit)} (HEAD).` };
     }
-    return { ok: true, versionNumber: number, recordId: str(d.record_id), signedBy: str(record(d.signed_by)?.name) };
+    return { ok: true, required: true, versionNumber: number, recordId: str(d.record_id), signedBy: str(record(d.signed_by)?.name) };
 }
 
 /** The tag a version is offered under: its number, with git's usual `v`. */

@@ -141,7 +141,7 @@ export function TagReleaseForm({ options, busy, onTag, onCancel }: { options: Ta
             <Button size="sm" variant="ghost" data-action="repo-tag-cancel" disabled={busy} onClick={onCancel}>Cancel</Button>
             <Button size="sm" data-action="repo-tag-submit" disabled={!canTag} onClick={submit} title="Make an annotated tag on this commit and push it">Tag and push</Button>
             {options === null ? <p className="basis-full text-xs text-[var(--fg-3)]">Reading the release…</p> : null}
-            {linked ? <p data-tag-note="" className="basis-full text-xs text-[var(--fg-3)]">{options?.reason ?? `Tynn must hold a signed release decision for this version, signed for ${head ?? 'this commit'}.`}</p> : null}
+            {linked ? <p data-tag-note="" className="basis-full text-xs text-[var(--fg-3)]">{options?.reason ?? `Tynn checks this version first: where its release rules are on, it needs a signed release decision for ${head ?? 'this commit'}.`}</p> : null}
         </div>
     );
 }
