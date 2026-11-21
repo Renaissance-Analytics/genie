@@ -132,6 +132,7 @@ import { agentCapFrom, HUMAN } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
+import { createThroughAddAgent } from './mcp-tools-agents.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
@@ -2312,8 +2313,9 @@ async function main(): Promise<void> {
         settings,
         records: () => hostRegistry.listAgents(),
         registry: hostRegistry,
-        // createAgent, once the person approved (Tynn #1015): this host's registry, the one writer, with or without a window.
-        registerAgent: (input) => phoneRegistry.register(input),
+        // createAgent, once the person approved (Tynn #1015): this host's own Add agent (project.json, AGENT.md, its registry),
+        // with or without a window.
+        createAgent: createThroughAddAgent((method, args) => (phoneApi ? phoneApi.invoke(method, args) : Promise.resolve({ ok: false, reason: 'Genie’s agents are still starting' })), (id) => phoneRegistry.find(id as AgentId)),
         probe: (id) => host.probe(id),
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
         reportPlan: (id, steps) => host.reportPlan(id, steps),

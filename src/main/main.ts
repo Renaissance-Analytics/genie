@@ -34,6 +34,7 @@ import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AgentId, type AgentRecord } from '../core/identity.js';
+import { createThroughAddAgent } from './mcp-tools-agents.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
@@ -1994,7 +1995,8 @@ async function boot(): Promise<void> {
             // createAgent: any agent asks, the person approves in the Deck, the registry registers (genie-host's own since Tynn #1015).
             agents: {
                 defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
-                register: (input) => registry!.register(input),
+                // genie-host's Add agent, as the form calls it (the window's registry is its replica).
+                create: createThroughAddAgent(async (method, args) => { const answer = await ownProtocol.call(method, args); return answer.ok ? answer.value : answer; }, (id) => registry?.find(id as AgentId) ?? null),
             },
             // workspaceTabs (beta.35 item 36): the workspace's tabs setting (every window reloads it), and its sites' hosts.
             workspaceTabs: {

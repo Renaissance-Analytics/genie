@@ -37,14 +37,14 @@ describe('allGenieTools', () => {
     });
 
     it('with the agents part (normal Genie, not doctor): createAgent after processes — for every caller (Tynn #1015)', () => {
-        const withAgents: AllToolsDeps = { ...deps(), agents: { resolveCaller: () => null, roster: () => [], approve: async () => 'denied', register: (() => { throw new Error('x'); }) as never, addressOf: () => '' } };
+        const withAgents: AllToolsDeps = { ...deps(), agents: { resolveCaller: () => null, roster: () => [], approve: async () => 'denied', create: (() => { throw new Error('x'); }) as never, addressOf: () => '' } };
         const regs = allGenieTools(withAgents);
         expect(regs.map((r) => r.definition.name)).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'flows', 'mail', 'createAgent']);
         expect(regs.filter((r) => r.visible !== undefined).map((r) => r.definition.name)).toEqual([]);
     });
 
     it('with the workspace-tabs part (beta.35 item 36): workspaceTabs after createAgent — the one tool not for every caller', () => {
-        const agents = { resolveCaller: () => null, roster: () => [], approve: async () => 'denied' as const, register: (() => { throw new Error('x'); }) as never, addressOf: () => '' };
+        const agents = { resolveCaller: () => null, roster: () => [], approve: async () => 'denied' as const, create: (() => { throw new Error('x'); }) as never, addressOf: () => '' };
         const workspaceTabs = { resolveCaller: () => null, defaultAgentOf: () => null, roster: () => [], readTabs: () => '{"tabs":[]}', writeTabs: () => {}, sites: () => [], approve: async () => 'denied' as const };
         const regs = allGenieTools({ ...deps(), agents, workspaceTabs });
         expect(regs.map((r) => r.definition.name).slice(-2)).toEqual(['createAgent', 'workspaceTabs']);

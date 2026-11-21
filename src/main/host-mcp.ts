@@ -50,10 +50,10 @@ export interface HostMcpPorts {
     readonly settings: Pick<import('./settings-store.js').SettingsStore, 'snapshot' | 'snapshotFor'>;
     readonly records: () => readonly AgentRecord[];
     /**
-     * createAgent's registration, after the person approved (Tynn #1015): genie-host's registry, the one writer of the
-     * agents (genie-host.ts wires `phoneRegistry.register`). Absent = this host cannot register one, and the tool says so.
+     * createAgent's create, after the person approved (Tynn #1015): genie-host's own Add agent (`addAgent`: project.json,
+     * AGENT.md, its registry — genie-host.ts wires createThroughAddAgent). Absent = this host cannot, and the tool says so.
      */
-    readonly registerAgent?: import('./mcp-tools-agents.js').AgentToolsDeps['register'];
+    readonly createAgent?: import('./mcp-tools-agents.js').AgentToolsDeps['create'];
     /** The host's own registry (P3.2): a workspace's path, its default agent, the address slugs. */
     readonly registry: Pick<import('./host-registry.js').HostRegistry, 'workspace' | 'workspaceSlugs' | 'defaultAgentOf' | 'setNames'> & Partial<Pick<import('./host-registry.js').HostRegistry, 'mailRefusal'>>;
     readonly probe: (agentId: AgentId) => Parameters<typeof livenessOf>[0];
@@ -129,7 +129,7 @@ export interface HostMcp {
 }
 
 const unavailable = (what: string) => (): never => { throw new Error(`${what} runs in Genie's window; this call was forwarded there`); };
-const noRegistry = (): never => { throw new Error('this Genie host cannot register agents'); };
+const noCreate = async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'this Genie host cannot create agents' });
 
 export function startHostMcp(ports: HostMcpPorts): HostMcp {
     const book = new CallerBook();
@@ -194,8 +194,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
             ...(ports.workspaceTrusted ? { workspaceTrusted: ports.workspaceTrusted } : {}),
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
-            // createAgent runs HERE (Tynn #1015): the person approves in the host's queue, the host's registry registers.
-            agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: ports.registerAgent ?? noRegistry },
+            // createAgent runs HERE (Tynn #1015): the person approves in the host's queue, the host's Add agent makes it.
+            agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), create: ports.createAgent ?? noCreate },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));
