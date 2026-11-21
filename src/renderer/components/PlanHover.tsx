@@ -6,7 +6,17 @@ import type { ChatPlanView } from '../../core/chat-plan.js';
  * THE WHOLE PLAN, LISTED (Tynn #918): every step in order with its status, the current one marked and bold, done ones
  * dimmed with a check. Hook-free, so a test can render it.
  */
-export function PlanHoverList({ plan }: { plan: ChatPlanView }) {
+/** RED STUB (Tynn #1021): no cap yet. */
+export function planListMaxHeight(_anchor: { top: number; bottom: number }, viewportHeight: number): number {
+    return viewportHeight;
+}
+
+/** RED STUB (Tynn #1021): scrolls nothing yet. */
+export function revealCurrentStep(box: { scrollTop: number }): number {
+    return box.scrollTop;
+}
+
+export function PlanHoverList({ plan }: { plan: ChatPlanView; maxHeight?: number }) {
     return (
         <div data-plan-full="" className="flex max-w-sm flex-col gap-1.5 text-xs">
             <p className="font-mono text-[11px] text-[var(--fg-4)]">{plan.done}/{plan.of}</p>
