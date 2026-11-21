@@ -6,14 +6,13 @@ import { genieMcpServer, type GenieMcpServer } from '../src/main/mcp-server.js';
 import type { Caller } from '../src/main/mcp-tools.js';
 
 /**
- * THE DEFAULT AGENT MAY ASK TO CREATE A WORKSPACE AGENT — AND ONLY IT SEES THE TOOL (the owner, 2026-10-19, FTQ q_09d1f4a0:
- * "an agent can ask to create a new agent … waits in the Deck until you approve"; "If an agent is not the default workspace
- * agent then it cannot create new agents and shouldn't even have the tool in its catalog").
+ * ANY AGENT MAY ASK TO CREATE A WORKSPACE AGENT; THE PERSON DECIDES (the owner, 2026-10-19, FTQ q_09d1f4a0: "an agent can ask
+ * to create a new agent … waits in the Deck until you approve"). Tynn #1015 (2026-11-21) retired the default-agent-only
+ * catalog: the only agent of a workspace whose default was never recorded had no createAgent, while Genie's instructions
+ * promised it to every agent. The person's approval was always the gate, so the tool is in every agent's list.
  *
- * `createAgent {name, provider, instructions?}`: registered with prism-mcp-server 0.3.0's per-request `visible` — true only
- * for the session of its workspace's DEFAULT agent; to anyone else it is absent from tools/list and a call fails exactly as
- * an unknown tool's. The default agent's call waits for the PERSON's approval (never auto-approved, whatever the agent's
- * autonomy), then registers the agent in the caller's workspace.
+ * `createAgent {name, provider, instructions?}`: the call waits for the PERSON's approval (never auto-approved, whatever the
+ * agent's autonomy), then registers the agent in the caller's workspace. A caller Genie does not know is refused.
  */
 
 const rec = (id: string, name: string, workspaceId = 'tynn'): AgentRecord => ({ id, name, workspaceId, provider: 'claude', instructions: null, threadId: null, createdAt: '2026-10-19T00:00:00Z', lastUsedAt: null, mode: 'manual', accessScope: 'self' } as AgentRecord);
@@ -41,14 +40,10 @@ function harness(over: { verdict?: 'allowed' | 'denied'; defaultAgent?: string |
 const parse = (r: { text: string }) => JSON.parse(r.text) as Record<string, unknown>;
 
 describe('who sees createAgent', () => {
-    it('only the session of its workspace’s DEFAULT agent; a helper, an unknown session, or none designated: no', async () => {
+    it('every agent: no per-request gate (a terminal agent, known by its terminalId, sees it too)', () => {
         const h = harness();
         expect(h.tool.definition.name).toBe('createAgent');
-        expect(await h.tool.visible!({ headers: { 'mcp-param-genie-session': 'k-atlas' } })).toBe(true);
-        expect(await h.tool.visible!({ headers: { 'mcp-param-genie-session': 'k-wren' } })).toBe(false);
-        expect(await h.tool.visible!({ headers: { 'mcp-param-genie-session': 'k-nobody' } })).toBe(false);
-        expect(await h.tool.visible!({ headers: {} })).toBe(false);
-        expect(await harness({ defaultAgent: null }).tool.visible!({ headers: { 'mcp-param-genie-session': 'k-atlas' } })).toBe(false);
+        expect(h.tool.visible).toBeUndefined();
     });
 });
 
@@ -75,9 +70,17 @@ describe('what createAgent does', () => {
         expect(h.registered).toEqual([]);
     });
 
-    it('CONTROL: a non-default agent that calls it anyway (the handler’s own check) is refused, asks nobody, makes nothing', async () => {
+    it('a NON-default agent asks the person the same way; with none designated at all, too', async () => {
         const h = harness();
-        expect(parse(await h.call('k-wren', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: false });
+        expect(parse(await h.call('k-wren', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: true, name: 'scout' });
+        expect(h.asked).toEqual([{ caller: 'wren', action: 'agents.create', detail: 'Create a new agent “scout” (codex) in tynn' }]);
+        const none = harness({ defaultAgent: null });
+        expect(parse(await none.call('k-atlas', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: true });
+    });
+
+    it('CONTROL: a session Genie does not know is refused, asks nobody, makes nothing', async () => {
+        const h = harness();
+        expect(parse(await h.call('k-nobody', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: false });
         expect(h.asked).toEqual([]);
         expect(h.registered).toEqual([]);
     });
@@ -101,7 +104,7 @@ describe('over the real server (prism-mcp-server 0.3.0)', () => {
     afterEach(async () => { await server?.stop(); server = null; });
     const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
 
-    it('tools/list as the default agent names createAgent; as a helper it is absent (COUNTED)', async () => {
+    it('tools/list names createAgent for the default agent AND a helper (COUNTED)', async () => {
         const h = harness();
         server = genieMcpServer({ registrations: agentTools(h.deps), port: 0 });
         const { url, token } = await server.start();
@@ -110,6 +113,6 @@ describe('over the real server (prism-mcp-server 0.3.0)', () => {
             return ((await res.json()) as { result: { tools: Array<{ name: string }> } }).result.tools.map((t) => t.name);
         };
         expect(await list('k-atlas')).toEqual(['createAgent']);
-        expect(await list('k-wren')).toEqual([]);
+        expect(await list('k-wren')).toEqual(['createAgent']);
     });
 });

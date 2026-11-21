@@ -32,13 +32,15 @@ afterEach(async () => {
 });
 
 describe('the registry’s default agent', () => {
-    it('none designated is the normal state; designating one of the workspace’s agents sticks, across a restart', async () => {
+    it('the first agent is the default automatically (Tynn #1015); designating another sticks, across a restart', async () => {
         const atlas = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
-        expect(registry.defaultAgentOf('tynn')).toBeNull();
-
-        expect(await registry.setDefaultAgent('tynn', atlas.id)).toEqual({ ok: true });
         expect(registry.defaultAgentOf('tynn')).toBe(atlas.id);
-        expect(registry.workspace('tynn')?.defaultAgentId).toBe(atlas.id);
+        const wren = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'wren' });
+
+        expect(await registry.setDefaultAgent('tynn', wren.id)).toEqual({ ok: true });
+        expect(registry.defaultAgentOf('tynn')).toBe(wren.id);
+        expect(registry.workspace('tynn')?.defaultAgentId).toBe(wren.id);
+        await registry.setDefaultAgent('tynn', atlas.id);
 
         const reopened = new Registry(new Store(dir));
         await reopened.load({ name: 'alphar', healthy: true });
