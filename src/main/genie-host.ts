@@ -98,6 +98,7 @@ import { REMOTE_PORT } from '../core/tailscale.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
+import { PasskeyLock, tailnetLockClient, unverifiableLockClient } from './passkey-lock.js';
 import { staticServer } from './static-page.js';
 import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
 import { RelayHostService } from './relay-host-service.js';
@@ -957,11 +958,19 @@ async function main(): Promise<void> {
     /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
     let phoneApi: HostApi | null = null;
     bootStep('marketplace and gapps', stepAt);
+    // THE PASSKEY LOCK (Tynn #677): off until the owner enrolls a device. Its judge is here, for every client: a phone on
+    // the tailnet's HTTPS page (its MagicDNS name), a Pilot over the relay (no ceremony yet: locked while the lock is on),
+    // and each local window over the engine link.
+    const passkeyLock = await PasskeyLock.open({ file: join(runtime, 'passkey-lock.json') });
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
         transport: remoteHub,
         build,
+        passkeyLock: {
+            gate: passkeyLock,
+            client: (c) => (c.relay ? unverifiableLockClient(c.label) : tailnetLockClient(() => remoteListen.transport.address(), c.label)),
+        },
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
@@ -1002,6 +1011,7 @@ async function main(): Promise<void> {
         for (const health of all) if (health?.fault) console.warn(`[provider-health] ${health.provider}: ${health.fault}: ${health.words}`);
     });
     const engine = new SessionEngineServer({
+        passkeyLock,
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
         token,
         build,

@@ -165,6 +165,9 @@ export const ENGINE_METHODS = [
     'engine.deviceLink',
     // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
     'engine.remoteAccess',
+    // The passkey lock (Tynn #677): this window's lock, judged by the host: `[method, args]`; `window` says the origin its
+    // pages load from (Tynn #683). Its changes come as `passkeyLock.event`.
+    'engine.passkeyLock',
     // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
     'engine.relayHost',
     // Take over (Tynn #553, P5d.5c): genie-host owns who has a TUI open; a window starts, ends and reads them here.

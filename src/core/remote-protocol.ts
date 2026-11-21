@@ -3,6 +3,7 @@ import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-termin
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
 import { FILES_WATCH_METHODS } from './local-files-watch.js';
 import { TYNN_WATCH_METHODS } from './local-tynn-watch.js';
+import { PASSKEY_LOCK_METHODS } from './passkey-lock.js';
 import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
 import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
 import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboard.js';
@@ -166,7 +167,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS, ...PASSKEY_LOCK_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -426,7 +427,8 @@ export type WireMessage =
     | { kind: 'pairing'; host: string; expiresAt: number }
     | { kind: 'call'; id: number; method: RemoteMethod | ControlMethod; args: unknown[] }
     | { kind: 'result'; id: number; ok: true; value: unknown }
-    | { kind: 'result'; id: number; ok: false; reason: string }
+    /** `code: 'locked'` (Tynn #677): refused because the passkey lock holds this client; absent for every other refusal. */
+    | { kind: 'result'; id: number; ok: false; reason: string; code?: 'locked' }
     | { kind: 'event'; channel: string; payload: unknown };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -480,7 +482,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
         case 'result': {
             if (typeof raw.id !== 'number' || typeof raw.ok !== 'boolean') return { ok: false, reason: 'a result needs a numeric id and ok' };
             if (raw.ok) return { ok: true, message: { kind: 'result', id: raw.id, ok: true, value: raw.value } };
-            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
+            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'locked' ? { code: 'locked' as const } : {}) } };
         }
         case 'event':
             if (typeof raw.channel !== 'string') return { ok: false, reason: 'an event needs a channel' };

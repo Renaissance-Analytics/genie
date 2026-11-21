@@ -48,6 +48,10 @@ import type { MarketplaceApi } from '../core/marketplace.js';
 import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
 import { dispatchGapps, GAppSessionOwner } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
+import { windowLockClient, type PasskeyLockGate } from './passkey-lock.js';
+
+/** A local window connection, as the passkey lock knows it (Tynn #677). */
+const windowLockId = (connectionId: string): string => `window:${connectionId}`;
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -101,6 +105,8 @@ export interface EngineServerOptions {
     readonly deviceLink?: DeviceLinkService;
     /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
     readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown };
+    /** The passkey lock (Tynn #677): each LOCAL window connection is one of its clients, `window:<connection id>`. */
+    readonly passkeyLock?: PasskeyLockGate;
     /** The Tynn relay host's registration, role and link (Tynn #410): read and driven from a LOCAL window only. */
     readonly relayHost?: { call(method: string, args: unknown[]): unknown };
     readonly takeOver?: { call(method: string, args: unknown[]): unknown };
@@ -282,6 +288,10 @@ export class SessionEngineServer {
 
     constructor(options: EngineServerOptions) {
         this.#options = options;
+        // A window's lock changed: that window is told (Tynn #677).
+        options.passkeyLock?.onChange((ids) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local && ids.includes(windowLockId(conn.id))) this.#event(conn, 'passkeyLock.event', options.passkeyLock!.status(windowLockId(conn.id)));
+        });
         this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
         // Every change to the stores agents write to, to every window's replicas (P3.1).
         options.keyring?.onEvent((dump) => {
@@ -464,6 +474,7 @@ export class SessionEngineServer {
             }
             const was = conn.authed;
             this.#connections.delete(conn);
+            this.#options.passkeyLock?.detach(windowLockId(conn.id));
             this.#gappSessionOwners.get(conn)?.closeAll();
             const reviews = this.#marketplaceReviews.get(conn);
             if (reviews) {
@@ -618,6 +629,21 @@ export class SessionEngineServer {
             if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
             if (!conn.local) throw new Error('Remote access is driven from a local window only.');
             return this.#options.remoteAccess.call(conn.id, typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
+        }
+        if (method === 'engine.passkeyLock') {
+            const lock = this.#options.passkeyLock;
+            if (!lock) throw new Error('This host runs no passkey lock.');
+            if (!conn.local) throw new Error('The passkey lock is reached from a local window only.');
+            const what = typeof args[0] === 'string' ? args[0] : '';
+            const rest = Array.isArray(args[1]) ? args[1] : [];
+            if (what === 'window') {
+                // The origin this window's pages load from, said once by the window process; only a Genie window origin is one.
+                const origin = rest[0];
+                if (typeof origin !== 'string' || !/^http:\/\/genie\.localhost:\d{1,5}$/.test(origin)) throw new Error('A window origin is http://genie.localhost:<port>.');
+                lock.attach(windowLockId(conn.id), windowLockClient(() => origin, 'this desktop'));
+                return true;
+            }
+            return lock.call(windowLockId(conn.id), what, rest);
         }
         if (method === 'engine.takeOver') {
             if (!this.#options.takeOver) throw new Error('This host runs no take-over host.');

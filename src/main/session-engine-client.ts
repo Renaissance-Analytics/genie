@@ -12,6 +12,7 @@ import { TakeOverReplica } from './take-over-replica.js';
 import type { TakeOverView } from './take-over-service.js';
 import type { RelayHostView } from './relay-host-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
+import type { PasskeyLockStatus } from '../core/passkey-lock.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { DeviceLinkEvent } from './device-link-service.js';
@@ -204,6 +205,8 @@ export class SessionEngineClient {
     #workstation: WorkstationReplica | null = null;
     #deviceLink: DeviceLinkReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
+    /** This window's passkey lock status, as genie-host pushes it (Tynn #677). */
+    readonly #passkeyLockListeners = new Set<(status: PasskeyLockStatus) => void>();
     #relayHost: RelayHostReplica | null = null;
     #takeOvers: TakeOverReplica | null = null;
     #terminals: TerminalsReplica | null = null;
@@ -458,6 +461,9 @@ export class SessionEngineClient {
                 return;
             case 'relayHost.event':
                 this.relayHost().deliver(payload as RelayHostView);
+                return;
+            case 'passkeyLock.event':
+                for (const l of [...this.#passkeyLockListeners]) l(payload as PasskeyLockStatus);
                 return;
             case 'remoteAccess.event':
                 this.remoteAccess().deliver(payload as RemoteAccessEvent);
@@ -728,6 +734,12 @@ export class SessionEngineClient {
         const reply = await this.call('engine.configSync', [request]);
         if (!reply.ok) throw new Error(reply.reason);
         return reply.value as SyncResult[];
+    }
+
+    /** This window's passkey lock changed (Tynn #677): genie-host judged it. */
+    onPasskeyLock(listener: (status: PasskeyLockStatus) => void): () => void {
+        this.#passkeyLockListeners.add(listener);
+        return () => { this.#passkeyLockListeners.delete(listener); };
     }
 
     /** Remote access (Tynn #409, P5d.1): genie-host listens, pairs and holds the baton; this window reads and drives it. */

@@ -48,6 +48,8 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
+import { LOCKED_CODE, PASSKEY_LOCK_EVENT, isPasskeyLockMethod, mayCallWhileLocked } from '../core/passkey-lock.js';
+import { PasskeyLockError, type LockClient, type PasskeyLockGate } from './passkey-lock.js';
 
 /**
  * The most one kept image's reply may be, as JSON, for another device (Tynn #642): 512 KB, so it fits one frame. This
@@ -66,6 +68,12 @@ const REMOTE_ATTACHMENT_MAX_BYTES = 512 * 1024;
  * where to do it. Events reach every connection; a guest's are filtered to its workspace. The
  * transport is a port — fancy-ws on a real socket, an in-memory pair in tests.
  */
+
+/** The passkey lock as a RemoteHost uses it (Tynn #677): the judge, and who each connection is to it. */
+export interface RemotePasskeyLock {
+    readonly gate: PasskeyLockGate;
+    client(connection: { connectionId: string; local: boolean; profile: 'mobile' | null; label: string; relay: boolean }): LockClient;
+}
 
 export interface HostApi {
     readonly marketplace?: () => MarketplaceApi | null;
@@ -241,6 +249,8 @@ export class RemoteHost {
     #next = 0;
     #tynnWatchSeq = 0;
     #locked = false;
+    /** The passkey lock (Tynn #677): genie-host's judge of whether each connection is locked. Absent = no lock here. */
+    readonly #lock: RemotePasskeyLock | null;
     /**
      * The host API's events, listened to ONLY while an authenticated connection exists (genie#1200). Listening builds an
      * agent's whole detail on every update of every agent (host-api.ts), and with no one connected #broadcast sent it to
@@ -255,7 +265,7 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void; passkeyLock?: RemotePasskeyLock }) {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
@@ -270,6 +280,14 @@ export class RemoteHost {
         this.#createLocalUploads = deps.createLocalUploads;
         this.#staging = new UploadStaging({ now: this.#now });
         this.#schedule = deps.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); });
+        this.#lock = deps.passkeyLock ?? null;
+        // A client's lock changed (it unlocked, locked, or the lock was turned on or off): it is told, whatever its state.
+        this.#lock?.gate.onChange((ids) => {
+            for (const id of ids) {
+                const c = this.#connections.get(id);
+                if (c && c.auth !== null) this.#send(c, { kind: 'event', channel: PASSKEY_LOCK_EVENT, payload: this.#lock!.gate.status(id) });
+            }
+        });
         deps.transport.onConnection((socket) => this.#accept(socket));
     }
 
@@ -321,6 +339,7 @@ export class RemoteHost {
             this.#confirm.cancel(connection.pendingPair);
             connection.pendingPair = null;
         }
+        this.#lock?.gate.detach(connection.id);
         const was = this.#connections.delete(connection.id);
         if (was && connection.auth !== null && !connection.local) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
@@ -511,6 +530,8 @@ export class RemoteHost {
     }
 
     #send(connection: Connection, message: WireMessage): void {
+        // A LOCKED CLIENT HEARS NOTHING but its own lock's status (Tynn #677): every live push stops here, whoever sent it.
+        if (message.kind === 'event' && message.channel !== PASSKEY_LOCK_EVENT && this.#lock?.gate.isLocked(connection.id)) return;
         connection.socket.send(JSON.stringify(message));
     }
 
@@ -540,6 +561,24 @@ export class RemoteHost {
         if (message.kind === 'hello') return this.#refuse(connection, 'this connection has already said hello', false);
         if (message.kind !== 'call') return; // A client sends calls; anything else is noise, not an error worth a frame.
         this.#send(connection, await this.#call(connection, message.id, message.method, message.args));
+    }
+
+    /**
+     * A passkey lock call. What a locked client may call is the judge's table; turning the lock on or off, enrolling and
+     * managing devices is the OWNER's, writing, never a guest's or a read-only link's (a guest could otherwise lock the
+     * owner out with a passkey of its own).
+     */
+    async #passkeyLockCall(connection: Connection, id: number, method: string, args: unknown[]): Promise<WireMessage> {
+        const lock = this.#lock;
+        if (!lock) return { kind: 'result', id, ok: false, reason: `${this.#hostName} has no passkey lock` };
+        const auth = connection.auth!;
+        if (!mayCallWhileLocked(method) && (!auth.isOwner || auth.readonly)) return { kind: 'result', id, ok: false, reason: `${method} is the owner's: it changes how ${this.#hostName} is locked` };
+        try {
+            return { kind: 'result', id, ok: true, value: await lock.gate.call(connection.id, method, args) };
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            return error instanceof PasskeyLockError && error.code === 'locked' ? { kind: 'result', id, ok: false, reason, code: LOCKED_CODE } : { kind: 'result', id, ok: false, reason };
+        }
     }
 
     async #hello(connection: Connection, message: Extract<WireMessage, { kind: 'hello' }>): Promise<void> {
@@ -600,6 +639,8 @@ export class RemoteHost {
             const refused = connection.local ? TICKET_FOREIGN : this.#redeem(connection, message.companion);
             if (refused !== null) { connection.auth = null; connection.deviceId = null; return this.#refuse(connection, refused, true); }
         }
+        // Known to the lock before it can call anything: while the lock is on, it starts locked.
+        this.#lock?.gate.attach(connection.id, this.#lock.client({ connectionId: connection.id, local: connection.local, profile: connection.profile, label: connection.auth.label, relay: pre !== undefined && pre.kind !== 'local' }));
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -621,6 +662,11 @@ export class RemoteHost {
         const auth = connection.auth!;
         const ok = (value: unknown): WireMessage => ({ kind: 'result', id, ok: true, value });
         const refuse = (reason: string): WireMessage => ({ kind: 'result', id, ok: false, reason });
+
+        // THE PASSKEY LOCK FIRST (Tynn #677): its own methods go to the judge; a locked client is refused everything else,
+        // typed, before any other rule or the host API is asked anything.
+        if (isPasskeyLockMethod(method)) return this.#passkeyLockCall(connection, id, method, args);
+        if (this.#lock?.gate.isLocked(connection.id)) return { kind: 'result', id, ok: false, reason: `${this.#hostName} is locked: unlock it with a passkey`, code: LOCKED_CODE };
 
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
         // A local window takes over through its own window opener (genie:take-over), never this door.

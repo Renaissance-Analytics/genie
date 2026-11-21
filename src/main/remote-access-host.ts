@@ -3,7 +3,7 @@ import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import { Baton, PairingPins } from '../core/remote.js';
 import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
-import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
+import { RemoteHost, type EventWants, type HostApi, type RemotePasskeyLock } from './remote-host.js';
 import { HOST_ALONE_METHODS } from './host-alone-api.js';
 
 /**
@@ -85,6 +85,8 @@ export interface RemoteAccessHostOptions {
     readonly now?: () => number;
     readonly confirm?: PairConfirm & Pick<PairApprovals, 'requests' | 'answer' | 'onChange'>;
     readonly build?: string;
+    /** The passkey lock (Tynn #677): every connection here is one of its clients. */
+    readonly passkeyLock?: RemotePasskeyLock;
 }
 
 export class RemoteAccessHost {
@@ -113,6 +115,7 @@ export class RemoteAccessHost {
             transport: options.transport,
             now,
             ...(options.build ? { build: options.build } : {}),
+            ...(options.passkeyLock ? { passkeyLock: options.passkeyLock } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }

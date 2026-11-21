@@ -334,7 +334,9 @@ describe('connection controls for a workspace principal', () => {
 
     it('every control is classified: local ones are refused to all relay principals', async () => {
         const handled = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'];
-        expect(CONTROL_METHODS.filter((m) => !handled.includes(m) && !LOCAL_CONTROLS.includes(m))).toEqual([]);
+        // The passkey lock's methods (Tynn #677) are classified in test/remote-host-passkey-lock.test.ts: a guest may unlock
+        // its own connection, never manage the lock.
+        expect(CONTROL_METHODS.filter((m) => !handled.includes(m) && !LOCAL_CONTROLS.includes(m) && !m.startsWith('passkeyLock.'))).toEqual([]);
         for (const who of [WORKSPACE_GUEST, READONLY_GUEST, OWNER]) {
             const { c } = await admitted(who, false);
             for (const m of LOCAL_CONTROLS) expect(await c.call(m, 'v1'), m).toMatchObject({ ok: false });
