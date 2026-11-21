@@ -273,11 +273,11 @@ describe('a book that does not parse', () => {
         expect(stuckLines([{ name: NAMED, status: 'keychain-differs' }] as never, new Set())).toEqual(['[keychain] github/access stays where it was: keychain-differs']);
     });
 
-    it('no seal, and a value in the keychain: done, and the value stays', async () => {
+    it('no seal, and a value in the keychain: no row made up, and the value stays (the security review of #2120)', async () => {
         seal = null;
         keychain.set(NAMED, 'the-value');
         await launch();
-        expect(row()).toBe('done');
+        expect(row()).toBeUndefined();
         expect(keychain.get(NAMED)).toBe('the-value');
         expect(stores).toBe(0);
     });

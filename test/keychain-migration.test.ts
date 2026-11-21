@@ -129,12 +129,12 @@ describe('a clean run', () => {
         expect(world.states[NAME]).toBe('done');
     });
 
-    it('nothing to move: no write, no delete, and it is never asked again', async () => {
+    it('nothing to move: no write, no delete, and no row made up (a row is finished only once confirmed; the security review of #2120)', async () => {
         const world = new World();
         world.old = null;
         expect(await world.run()).toEqual([{ name: NAME, status: 'nothing' }]);
         expect([world.writes, world.deletes]).toEqual([0, 0]);
-        expect(world.states[NAME]).toBe('done');
+        expect(world.states[NAME]).toBeUndefined();
     });
 });
 

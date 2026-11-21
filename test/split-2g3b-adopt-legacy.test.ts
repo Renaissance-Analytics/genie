@@ -17,6 +17,8 @@ import { legacyUnsealer } from '../src/main/legacy-unsealer.js';
 import { OWN_CLIENT_LABEL, ownProtocolClient, type OwnCallAnswer } from '../src/main/own-protocol-client.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
+import { ProtocolTunnels } from '../src/main/protocol-tunnels.js';
+import { tunnelDoor, type TunnelLink } from '../src/main/window-tunnel.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /*
@@ -168,9 +170,16 @@ describe('genie-host’s two phases: the crash-safe move on its own keychain and
         expect(a.k.state.writes).toBe(0);
     });
 
-    it('none: nothing to move, booked done', async () => {
+    it('none, and no row: nothing to move, and nothing booked (the security review of #2120)', async () => {
         const a = adopter();
         expect(await a.adopt.adopt(adopt([{ name: 'tynn/pairing', read: { kind: 'none' } }]))).toEqual({ outcomes: [{ name: 'tynn/pairing', status: 'nothing' }], remove: [] });
+        await expect(readFile(bookFile, 'utf8')).rejects.toThrow();
+    });
+
+    it('none, with a confirmed row: the old copy went after it was confirmed, so the row is finished', async () => {
+        const a = adopter();
+        await fileMigrationBook(bookFile).write('tynn/pairing', 'verified');
+        expect(await a.adopt.adopt(adopt([{ name: 'tynn/pairing', read: { kind: 'none' } }]))).toEqual({ outcomes: [{ name: 'tynn/pairing', status: 'moved' }], remove: [] });
         expect(await bookNow()).toEqual({ 'tynn/pairing': 'done' });
     });
 
@@ -361,6 +370,124 @@ describe('main’s one-shot unsealer', () => {
             expect(JSON.parse(await readFile(bookFile, 'utf8')).secrets).toEqual({ 'github/access': 'done' });
             expect(k.held.get('github/access')).toBe(SECRET);
         } finally { await rm(dir, { recursive: true, force: true }); }
+    });
+});
+
+/*
+ * THE SECURITY REVIEW OF #2120 (the coordinator, before merge). genie-host now signs in and registers by itself, so its
+ * keychain may hold a NEWER value than an old seal: with no row in the book, a seal is compared, never written over it.
+ * The hand-over is gated on main's own client by an explicit tunnel kind, not by the label any door may say. A `removed`
+ * finishes only what this host answered `verified` itself.
+ */
+describe('the security review of #2120: a newer value is never overwritten, and only main’s own client hands over', () => {
+    let dir: string;
+    let bookFile: string;
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-2g3b-review-')); bookFile = join(dir, 'keychain-migration.json'); });
+    afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+    const adopt = (secrets: unknown[]) => ({ phase: 'adopt', secrets, genie1Identity: null });
+    const adopterOver = (k = fakeKeychain(), file = bookFile) => ({ k, adopt: hostLegacyAdopt({ vault: k.vault, book: fileMigrationBook(file), log: () => {}, moved: () => {} }) });
+
+    it('no row, and the keychain already holds a DIFFERENT value: `keychain-differs`, nothing written, nothing to delete, no row', async () => {
+        const a = adopterOver();
+        a.k.held.set('github/access', 'gho_NEWER-signed-in-by-genie-host');
+        expect(await a.adopt.adopt(adopt([{ name: 'github/access', read: { kind: 'value', value: SECRET } }]))).toEqual({ outcomes: [{ name: 'github/access', status: 'keychain-differs' }], remove: [] });
+        expect(a.k.held.get('github/access')).toBe('gho_NEWER-signed-in-by-genie-host');
+        expect(a.k.state.writes).toBe(0);
+        await expect(readFile(bookFile, 'utf8')).rejects.toThrow();
+    });
+
+    it('no row, and the keychain holds the SAME value: confirmed without a write, and the old copy may go', async () => {
+        const a = adopterOver();
+        a.k.held.set('tynn/pairing', SECRET);
+        expect(await a.adopt.adopt(adopt([{ name: 'tynn/pairing', read: { kind: 'value', value: SECRET } }]))).toEqual({ outcomes: [{ name: 'tynn/pairing', status: 'verified' }], remove: ['tynn/pairing'] });
+        expect(a.k.state.writes).toBe(0);
+    });
+
+    it('CONTROL: no row and nothing in the keychain: stored, read back, the old copy may go', async () => {
+        const a = adopterOver();
+        expect(await a.adopt.adopt(adopt([{ name: 'workstation/key', read: { kind: 'value', value: PEM } }]))).toEqual({ outcomes: [{ name: 'workstation/key', status: 'verified' }], remove: ['workstation/key'] });
+        expect(a.k.held.get('workstation/key')).toBe(PEM);
+    });
+
+    it('end to end: the unsealer keeps the seal whose value the keychain overrode', async () => {
+        const k = fakeKeychain();
+        k.held.set('github/access', 'gho_NEWER');
+        const a = adopterOver(k);
+        const removed: string[] = [];
+        const sources: MigrationSource[] = [{ name: 'github/access' as SecretName, old: { read: async (): Promise<OldRead> => ({ kind: 'value', value: SECRET }), remove: async () => { removed.push('github/access'); } } }];
+        const unsealer = legacyUnsealer({
+            sources: async () => sources,
+            genie1Identity: async () => null,
+            call: async (_method, args): Promise<OwnCallAnswer> => ({ ok: true, value: await a.adopt.adopt(args[0]) }),
+            log: () => {},
+        });
+        await unsealer.run();
+        expect(removed).toEqual([]);
+        expect(k.held.get('github/access')).toBe('gho_NEWER');
+    });
+
+    it('`removed` finishes only what THIS host answered `verified`: a row an earlier host confirmed is not finished by it', async () => {
+        const first = adopterOver();
+        await first.adopt.adopt(adopt([{ name: 'github/access', read: { kind: 'value', value: SECRET } }]));
+        // A new genie-host over the same book, told of a removal it never answered:
+        const next = adopterOver(first.k);
+        expect(await next.adopt.adopt({ phase: 'removed', names: ['github/access'] })).toEqual({ outcomes: [{ name: 'github/access', status: 'not-confirmed' }], remove: [] });
+        expect(JSON.parse(await readFile(bookFile, 'utf8')).secrets).toEqual({ 'github/access': 'verified' });
+        // CONTROL: the host that answered it finishes it.
+        expect(await first.adopt.adopt({ phase: 'removed', names: ['github/access'] })).toEqual({ outcomes: [{ name: 'github/access', status: 'moved' }], remove: [] });
+        expect(JSON.parse(await readFile(bookFile, 'utf8')).secrets).toEqual({ 'github/access': 'done' });
+    });
+
+    function fakeLink() {
+        const sent: Array<{ op: string; tunnel: string; payload: unknown }> = [];
+        const link: TunnelLink = { live: () => true, send: (op, tunnel, payload) => { sent.push({ op, tunnel, payload }); return true; }, onFrame: () => () => {}, onDown: () => () => {} };
+        return { sent, link };
+    }
+    function inMemoryDoor() {
+        let accept: (c: ReturnType<typeof inMemoryPair>['server']) => void = () => {};
+        const transport: ServerTransport = { onConnection: (l) => { accept = l; return () => {}; } };
+        return { transport, open: (preAuth: Record<string, unknown>) => { const pair = inMemoryPair(); accept({ ...pair.server, preAuth: preAuth as never }); return pair; } };
+    }
+
+    it('the tunnel: only a door main opened as its own opens `own`; a page’s door claiming it, labelled Genie’s tray, does not', () => {
+        const page = fakeLink();
+        const pageDoor = inMemoryDoor();
+        tunnelDoor(pageDoor.transport, page.link);
+        pageDoor.open({ kind: 'local', label: OWN_CLIENT_LABEL, isOwner: true, workspaceId: null, readonly: false, window: 'main', own: true });
+        expect(page.sent.map((s) => s.op)).toEqual(['open']);
+        expect((page.sent[0]!.payload as { kind?: unknown }).kind).toBeUndefined();
+        const mine = fakeLink();
+        const ownDoor = inMemoryDoor();
+        tunnelDoor(ownDoor.transport, mine.link, { own: true });
+        ownDoor.open({ kind: 'local', label: OWN_CLIENT_LABEL, isOwner: true, workspaceId: null, readonly: false, window: 'main' });
+        expect((mine.sent[0]!.payload as { kind?: unknown }).kind).toBe('own');
+    });
+
+    it('genie-host: a tunnel opened `own` is admitted as main’s own client; one only LABELLED Genie’s tray is not', () => {
+        const tunnels = new ProtocolTunnels();
+        const seen: Array<{ own?: unknown }> = [];
+        tunnels.onConnection((c) => { seen.push((c.preAuth ?? {}) as { own?: unknown }); });
+        tunnels.receive('engine-1', 'open', 't1', { window: 'main', label: OWN_CLIENT_LABEL }, () => {});
+        tunnels.receive('engine-1', 'open', 't2', { window: 'main', label: OWN_CLIENT_LABEL, kind: 'own' }, () => {});
+        tunnels.receive('engine-1', 'open', 't3', { window: 'main', label: 'this Genie window', own: true }, () => {});
+        expect(seen.map((p) => p.own === true)).toEqual([false, true, false]);
+    });
+
+    it('the host API: Genie’s tray as a label is refused, and the adopter is never asked; main’s own client is let through', async () => {
+        const adoptFn = vi.fn(async () => ({ outcomes: [], remove: [] }));
+        const inner = buildHostApi({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, legacySecrets: { adopt: adoptFn } } as unknown as HostApiDeps);
+        const base = { connectionId: 'c1', origin: 'local-window', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: OWN_CLIENT_LABEL } as const;
+        const request = { phase: 'adopt', secrets: [{ name: 'tynn/pairing', read: { kind: 'value', value: SECRET } }], genie1Identity: null };
+        expect(await inner.invoke(ADOPT, [request], base)).toMatchObject({ ok: false, reason: expect.stringMatching(/never by a window/) });
+        expect(adoptFn).not.toHaveBeenCalled();
+        expect(await inner.invoke(ADOPT, [request], { ...base, own: true })).toEqual({ outcomes: [], remove: [] });
+        expect(adoptFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('wired: main tunnels its own client’s door as `own`, and its window’s door not', () => {
+        const main = code(src('src/main/main.ts'));
+        expect(main).toMatch(/tunnelDoor\(ownProtocol\.door, tunnelLinkOf\(agentEngineLink\.client\), \{ own: true \}\)/);
+        expect(main.match(/own: true/g) ?? []).toHaveLength(1);
     });
 });
 

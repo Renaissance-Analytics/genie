@@ -29,6 +29,8 @@ export interface TunnelDoorOptions {
     /** A window's "the page came back" notice, by the RemoteHost connection its welcome said; null = none (or not this window). */
     readonly notice?: (connectionId: string) => RendererNotice | null;
     readonly newId?: () => string;
+    /** This door is main's own protocol client (own-protocol-client.ts), never a page's: its tunnels open as `own`. */
+    readonly own?: boolean;
 }
 
 const STARTING = 'Genie is still starting; this window connects again in a moment';

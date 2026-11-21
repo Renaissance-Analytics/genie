@@ -96,6 +96,17 @@ describe('the relay host, in genie-host, with no window', () => {
         expect(settled.service.status().workstation).toMatchObject({ registered: true });
     });
 
+    it('Genie 1’s record is kept until a registration WITH it succeeds: one that fails tries it again (the security review of #2120)', async () => {
+        let fail = true;
+        const ensured: unknown[] = [];
+        const r = rig({ workstation: { identity: async () => ({ workstationId: 'ws_me', fingerprint: 'fp' }), legacyDone: async () => null, ensure: async (options) => { ensured.push(options); return (fail ? { ok: false, reason: 'Tynn did not answer' } : { ok: true, workstationId: 'ws_me' }) as never; } } });
+        await r.service.register(LEGACY);
+        fail = false;
+        await r.service.register();
+        await r.service.register();
+        expect(ensured).toEqual([{ host: TYNN, legacy: LEGACY }, { host: TYNN, legacy: LEGACY }, { host: TYNN, legacy: null }]);
+    });
+
     it('tells its windows when anything changes, the link\'s status included; a revoke re-checks the live sessions', async () => {
         const r = rig();
         await r.service.register();

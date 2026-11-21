@@ -477,6 +477,12 @@ export interface PreAuth {
     /** Omitted by existing relay transports. Only the local window door issues `local`. */
     readonly kind?: 'relay' | 'local';
     readonly label: string;
+    /**
+     * MAIN'S OWN PROTOCOL CLIENT, never a page (Tynn #959, the security review of #2120). Set only by genie-host's tunnel for a
+     * door main opened as its own (window-tunnel.ts `own`), or by that client itself in-process. A label is display words any
+     * door can say; this is not one.
+     */
+    readonly own?: true;
     readonly isOwner: boolean;
     /** The one workspace a guest may reach; `null` = the whole host. */
     readonly workspaceId: string | null;
@@ -500,6 +506,8 @@ export interface CallContext {
     readonly workspaceId: string | null;
     readonly readonly: boolean;
     readonly label: string;
+    /** This machine's own Genie client itself (PreAuth `own`), never a page in its window; absent for everyone else. */
+    readonly own?: true;
 }
 
 /** A call nobody vouched for: no owner, reads only, and a workspace id no workspace has (`null` would be the whole host). */
