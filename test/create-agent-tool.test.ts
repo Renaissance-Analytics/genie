@@ -21,15 +21,21 @@ const CALLERS: Record<string, Caller> = {
     'k-wren': { agentId: 'a2', agentName: 'wren', workspaceId: 'tynn', workspacePath: '/w/tynn' } as Caller,
 };
 
-function harness(over: { verdict?: 'allowed' | 'denied' } = {}) {
+function harness(over: { verdict?: 'allowed' | 'denied'; refuse?: string } = {}) {
     const roster = [rec('a1', 'atlas'), rec('a2', 'wren')];
     const asked: Array<{ caller: string; action: string; detail: string }> = [];
-    const registered: Array<{ workspaceId: string; provider: string; name: string; instructions: string | null }> = [];
+    const registered: Array<{ workspaceId: string; provider: string; name: string; purpose: string }> = [];
     const deps: AgentToolsDeps = {
         resolveCaller: (key) => CALLERS[key] ?? null,
         roster: () => roster,
         approve: async (caller, action, detail) => { asked.push({ caller: caller.agentName, action, detail }); return over.verdict ?? 'allowed'; },
-        register: async (input) => { registered.push({ ...input, instructions: input.instructions ?? null }); const r = rec(`new-${registered.length}`, input.name, input.workspaceId); roster.push(r); return r; },
+        // The UI's Add agent (genie-host's addAgent): a complete agent, or its refusal in words.
+        create: async (input) => {
+            if (over.refuse) return { ok: false, reason: over.refuse };
+            registered.push({ ...input });
+            const r = rec(`new-${registered.length}`, input.name, input.workspaceId); roster.push(r);
+            return { ok: true, record: r };
+        },
         addressOf: (r) => `${r.workspaceId}:${r.provider}:${r.name}`,
     };
     const [tool] = agentTools(deps);
@@ -47,37 +53,54 @@ describe('who sees createAgent', () => {
 });
 
 describe('what createAgent does', () => {
-    it('asks the PERSON (action agents.create, saying who, what and where), then registers it in the caller’s workspace', async () => {
+    it('asks the PERSON (action agents.create, saying who, what and where), then creates it with its instructions as the PURPOSE', async () => {
         const h = harness();
         const out = parse(await h.call('k-atlas', { name: 'scout', provider: 'codex', instructions: 'Review PRs.' }));
         expect(h.asked).toEqual([{ caller: 'atlas', action: 'agents.create', detail: 'Create a new agent “scout” (codex) in tynn — instructions: Review PRs.' }]);
-        expect(h.registered).toEqual([{ workspaceId: 'tynn', provider: 'codex', name: 'scout', instructions: 'Review PRs.' }]);
+        expect(h.registered).toEqual([{ workspaceId: 'tynn', provider: 'codex', name: 'scout', purpose: 'Review PRs.' }]);
         expect(out).toMatchObject({ ok: true, name: 'scout', address: 'tynn:claude:scout' });
+    });
+
+    it('no instructions (or only spaces): refused with “give the agent a purpose” BEFORE the person is asked', async () => {
+        const h = harness();
+        for (const args of [{ name: 'scout', provider: 'codex' }, { name: 'scout', provider: 'codex', instructions: '   ' }]) {
+            const out = await h.call('k-atlas', args);
+            expect(out.isError).toBe(true);
+            expect(String(parse(out).error)).toMatch(/give the agent a purpose/);
+        }
+        expect(h.asked).toEqual([]);
+        expect(h.registered).toEqual([]);
+    });
+
+    it('the person approves but the create refuses (a reserved name, a project.json Genie may not write): the agent is told why', async () => {
+        const h = harness({ refuse: '“tynn” is a reserved name' });
+        expect(parse(await h.call('k-atlas', { name: 'scout', provider: 'codex', instructions: 'Review PRs.' }))).toEqual({ ok: false, error: '“tynn” is a reserved name' });
+        expect(h.registered).toEqual([]);
     });
 
     it('the person declines: nothing is created, and the agent is told', async () => {
         const h = harness({ verdict: 'denied' });
-        expect(parse(await h.call('k-atlas', { name: 'scout', provider: 'codex' }))).toEqual({ ok: false, error: 'The person declined: no agent was created.' });
+        expect(parse(await h.call('k-atlas', { name: 'scout', provider: 'codex', instructions: 'Review PRs.' }))).toEqual({ ok: false, error: 'The person declined: no agent was created.' });
         expect(h.registered).toEqual([]);
     });
 
     it('a name already in the workspace is refused BEFORE the person is asked; a bad provider too', async () => {
         const h = harness();
-        expect(parse(await h.call('k-atlas', { name: 'wren', provider: 'codex' }))).toMatchObject({ ok: false });
-        expect(parse(await h.call('k-atlas', { name: 'scout', provider: 'gpt' }))).toMatchObject({ ok: false });
+        expect(parse(await h.call('k-atlas', { name: 'wren', provider: 'codex', instructions: 'Review PRs.' }))).toMatchObject({ ok: false });
+        expect(parse(await h.call('k-atlas', { name: 'scout', provider: 'gpt', instructions: 'Review PRs.' }))).toMatchObject({ ok: false });
         expect(h.asked).toEqual([]);
         expect(h.registered).toEqual([]);
     });
 
     it('any agent asks the person the same way: the tool knows nothing of a default agent', async () => {
         const h = harness();
-        expect(parse(await h.call('k-wren', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: true, name: 'scout' });
-        expect(h.asked).toEqual([{ caller: 'wren', action: 'agents.create', detail: 'Create a new agent “scout” (codex) in tynn' }]);
+        expect(parse(await h.call('k-wren', { name: 'scout', provider: 'codex', instructions: 'Review PRs.' }))).toMatchObject({ ok: true, name: 'scout' });
+        expect(h.asked).toEqual([{ caller: 'wren', action: 'agents.create', detail: 'Create a new agent “scout” (codex) in tynn — instructions: Review PRs.' }]);
     });
 
     it('CONTROL: a session Genie does not know is refused, asks nobody, makes nothing', async () => {
         const h = harness();
-        expect(parse(await h.call('k-nobody', { name: 'scout', provider: 'codex' }))).toMatchObject({ ok: false });
+        expect(parse(await h.call('k-nobody', { name: 'scout', provider: 'codex', instructions: 'Review PRs.' }))).toMatchObject({ ok: false });
         expect(h.asked).toEqual([]);
         expect(h.registered).toEqual([]);
     });

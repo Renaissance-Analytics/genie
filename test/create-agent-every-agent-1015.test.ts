@@ -1,11 +1,18 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sharedProtocol } from '../src/core/genie-protocol.js';
-import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
+import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
+import { SCHEMA_REVISION } from '../src/core/workspace-model.js';
+import { nodeAgentConfigFs } from '../src/main/agent-config-host.js';
+import { createAgent } from '../src/main/agent-create-host.js';
+import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
 import { HostRegistry } from '../src/main/host-registry.js';
 import { startHostMcp, type HostMcp, type HostMcpPorts } from '../src/main/host-mcp.js';
+import { createThroughAddAgent } from '../src/main/mcp-tools-agents.js';
+import { Registry } from '../src/main/registry.js';
 import { Store, type WorkspaceRecord } from '../src/main/store.js';
 
 /**
@@ -34,10 +41,32 @@ async function host(workspaces: WorkspaceRecord[], agents: AgentRecord[], opts: 
     const store = new Store(join(dir, 'home'));
     await store.writeWorkspaces(workspaces);
     await store.writeAgents(agents);
+    for (const w of workspaces) {
+        await mkdir(w.path, { recursive: true });
+        await writeFile(join(w.path, 'project.json'), `${JSON.stringify({ $schema: `https://raw.githubusercontent.com/Civicognita/shared-schemas/v${SCHEMA_REVISION}/schemas/workspace/project.schema.json`, name: w.id }, null, 2)}\n`);
+    }
     const registry = new HostRegistry(store);
     await registry.refresh();
-    const asked: string[] = [];
+    // genie-host's phoneRegistry (the one writer's logic) and its host API, as genie-host builds them.
+    const phone = new Registry(store);
+    await phone.load({ name: 'fixture', healthy: true });
     const registered: Array<{ workspaceId: string; name: string; provider: string }> = [];
+    const api = buildHostApi({
+        registerAgent: (workspaceId, input) => createAgent({
+            workspace: (id) => phone.workspace(id),
+            agentsOf: (id) => phone.agentsOf(id),
+            exists: async (path) => existsSync(path),
+            mkdirp: async (d) => { await mkdir(d, { recursive: true }); },
+            ...nodeAgentConfigFs(),
+            register: async (input) => {
+                registered.push({ workspaceId: input.workspaceId, name: input.name, provider: input.provider });
+                const r = await phone.register(input);
+                await registry.refresh();
+                return { id: r.id, name: r.name };
+            },
+        }, workspaceId, input),
+    } as HostApiDeps);
+    const asked: string[] = [];
     const never = () => { throw new Error('not exercised'); };
     const ports: HostMcpPorts = {
         stores: { inbox: never, attention: never, knowledge: never, approvals: { gate: async (_c: unknown, action: string) => { asked.push(action); return opts.verdict ?? 'allowed'; } } } as never,
@@ -54,14 +83,8 @@ async function host(workspaces: WorkspaceRecord[], agents: AgentRecord[], opts: 
         endpointFile: join(dir, 'mcp-endpoint.json'),
         osaDir: join(dir, 'osa'),
         log: () => {},
-        // The host's registry registers the agent (genie-host wires phoneRegistry.register, the one writer's).
-        registerAgent: async (input) => {
-            registered.push({ workspaceId: input.workspaceId, name: input.name, provider: input.provider });
-            const record = rec(input.workspaceId, input.name);
-            await store.writeAgents([...(await store.readAgents()), record]);
-            await registry.refresh();
-            return record;
-        },
+        // genie-host's own Add agent (`addAgent`, the UI's): project.json + AGENT.md, then the host's registry registers it.
+        createAgent: createThroughAddAgent((method, args) => api.invoke(method, args), (id) => phone.find(id as AgentId)),
     };
     mcp = startHostMcp(ports);
     await mcp.ready();
@@ -94,24 +117,43 @@ describe('createAgent is in every agent’s tool list (genie-host session, as th
 });
 
 describe('a createAgent call from a genie-host session runs in the host, with no window', () => {
-    it('the person approves: the host’s registry registers it in the caller’s workspace', async () => {
+    it('the person approves: a COMPLETE agent, as Add agent makes one — project.json entry, AGENT.md, registered', async () => {
         const wren = rec('tynn', 'wren');
         const atlas = rec('tynn', 'atlas');
-        const h = await host([{ id: 'tynn', path: join(dir, 'tynn'), defaultAgentId: atlas.id }], [atlas, wren]);
-        const out = await h.call(wren, 'createAgent', { name: 'scout', provider: 'codex' });
+        const ws = join(dir, 'tynn');
+        const h = await host([{ id: 'tynn', path: ws, defaultAgentId: atlas.id }], [atlas, wren]);
+        const out = await h.call(wren, 'createAgent', { name: 'xader', provider: 'codex', instructions: 'Reviews the beachhead’s pull requests.' });
         expect(out?.isError).toBe(false);
-        expect(JSON.parse(out!.content![0]!.text)).toMatchObject({ ok: true, name: 'scout' });
+        expect(JSON.parse(out!.content![0]!.text)).toMatchObject({ ok: true, name: 'xader' });
         expect(h.asked).toEqual(['agents.create']);
-        expect(h.registered).toEqual([{ workspaceId: 'tynn', name: 'scout', provider: 'codex' }]);
+        expect(h.registered).toEqual([{ workspaceId: 'tynn', name: 'xader', provider: 'codex' }]);
+        // Real on disk: the persona file and the workspace's config, with its instructions as the purpose.
+        expect(readFileSync(join(ws, '.agents', 'xader', 'AGENT.md'), 'utf8')).toContain('Reviews the beachhead’s pull requests.');
+        expect(JSON.parse(readFileSync(join(ws, 'project.json'), 'utf8')).agents.xader).toMatchObject({ purpose: 'Reviews the beachhead’s pull requests.', provider: 'codex' });
+        expect(h.registry.listAgents().find((a) => a.name === 'xader')?.instructions).toBe('.agents/xader/AGENT.md');
     });
 
-    it('CONTROL: the person declines: nothing is registered (the gate is unchanged)', async () => {
+    it('no instructions: refused with “give the agent a purpose”; the person is not asked, nothing is written', async () => {
         const wren = rec('tynn', 'wren');
-        const h = await host([{ id: 'tynn', path: join(dir, 'tynn') }], [wren], { verdict: 'denied' });
-        const out = await h.call(wren, 'createAgent', { name: 'scout', provider: 'codex' });
+        const ws = join(dir, 'tynn');
+        const h = await host([{ id: 'tynn', path: ws }], [wren]);
+        const out = await h.call(wren, 'createAgent', { name: 'xader', provider: 'codex' });
+        expect(out?.isError).toBe(true);
+        expect(out!.content![0]!.text).toMatch(/give the agent a purpose/);
+        expect(h.asked).toEqual([]);
+        expect(h.registered).toEqual([]);
+        expect(existsSync(join(ws, '.agents', 'xader'))).toBe(false);
+    });
+
+    it('CONTROL: the person declines: nothing is registered or written (the gate is unchanged)', async () => {
+        const wren = rec('tynn', 'wren');
+        const ws = join(dir, 'tynn');
+        const h = await host([{ id: 'tynn', path: ws }], [wren], { verdict: 'denied' });
+        const out = await h.call(wren, 'createAgent', { name: 'xader', provider: 'codex', instructions: 'Reviews PRs.' });
         expect(out?.isError).toBe(true);
         expect(h.asked).toEqual(['agents.create']);
         expect(h.registered).toEqual([]);
+        expect(existsSync(join(ws, '.agents', 'xader'))).toBe(false);
     });
 });
 
