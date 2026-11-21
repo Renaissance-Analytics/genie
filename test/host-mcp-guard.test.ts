@@ -44,7 +44,7 @@ describe('the settings and the chat drafts are genie-host\'s (P3.2)', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/await SettingsStore\.open\(home\)/);
         expect(host).toMatch(/await ChatDraftStore\.open\(home\)/);
-        expect(code('src/main/main.ts')).toMatch(/const drafts = agentEngineLink\.client\.stores\(\)\.drafts;/);
+        expect(code('src/main/main.ts')).not.toMatch(/stores\(\)\.drafts/);
     });
 });
 
