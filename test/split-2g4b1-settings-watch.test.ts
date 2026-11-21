@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { HUMAN } from '../src/core/inbox.js';
-import { mailSignalsOfRead, mailSignalsOfSend, readMailSignal } from '../src/core/mail-signals.js';
+import { mailSignalsOfRead, mailSignalsOfSend, readMailSignal } from '../src/core/mail-actions.js';
 import { Baton, PairingPins } from '../src/core/remote.js';
 import { CONTROL_METHODS, LOCAL_EVENTS, inMemoryPair, parseMessage, type RemoteMethod, type ServerTransport, type WireMessage } from '../src/core/remote-protocol.js';
 import { OWN_CLIENT_LABEL, type OwnCallAnswer } from '../src/main/own-protocol-client.js';
