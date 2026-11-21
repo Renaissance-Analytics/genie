@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeckItem } from '../src/core/deck.js';
 import { questionWindowAction } from '../src/core/keys.js';
@@ -112,7 +113,6 @@ describe('the question window', () => {
         expect(b!.getAttribute('title')).toBe('Maximize');
         expect(b!.getAttribute('aria-label')).toBe('Maximize');
         expect(b!.querySelector('svg')).not.toBeNull();
-        expect(b!.style.getPropertyValue('-webkit-app-region') || (b!.getAttribute('style') ?? '')).toMatch(/no-drag/);
         expect(host.querySelector('[data-question-window]')!.getAttribute('data-question-maximized')).toBe('off');
 
         act(() => b!.click());
@@ -131,6 +131,14 @@ describe('the question window', () => {
 
         esc();
         expect(onLater).toHaveBeenCalledTimes(1);
+    });
+
+    it('in the drag strip, the button is exempt from the drag (no-drag on the button itself), as the strip’s rule says', () => {
+        // Server markup, as the window's other app-region tests read it: the style attribute is written out whole.
+        const html = renderToStaticMarkup(<QuestionApp view={{ item, waiting: 0 }} sending={false} refusal={null} onAnswer={() => {}} onLater={() => {}} onDismiss={() => {}} onMaximize={() => {}} />);
+        const tag = html.match(/<button[^>]*data-action="question-maximize"[^>]*>/)?.[0] ?? '';
+        expect(tag).not.toBe('');
+        expect(tag).toMatch(/style="[^"]*-webkit-app-region:[ ]*no-drag/);
     });
 
     it('the button restores too', () => {
