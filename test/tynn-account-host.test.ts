@@ -464,7 +464,7 @@ describe('the pairing an older Genie sealed moves to the keychain', () => {
     const memoryBook = (): MigrationBook => { const states: Record<string, MigrationState> = {}; return { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } }; };
 
     function vaultOver(k: ReturnType<typeof keychainFake>) {
-        return { store: (name: string, value: string) => k.set(name, value), compare: async (name: string, value: string) => (k.held.get(name) === value ? 'same' as const : 'different' as const) };
+        return { store: (name: string, value: string) => k.set(name, value), compare: async (name: string, value: string) => (!k.held.has(name) ? 'missing' as const : k.held.get(name) === value ? 'same' as const : 'different' as const) };
     }
 
     it('it moves, the file keeps everything but the token, and a reload signs in', async () => {

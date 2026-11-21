@@ -709,7 +709,7 @@ probe "one-source-failing-stops-only-itself" src/main/keychain-migration.ts \
 
 # A book that does not parse
 probe "a-rebuilt-book-does-not-overwrite" src/main/keychain-migration.ts \
-    "        if (now === 'different') return 'keychain-differs';" "" \
+    "    if (now === 'different') return 'keychain-differs';" "" \
     test/keychain-migration-finishes.test.ts "the keychain wins, the seal stays"
 
 probe "the-bad-book-is-kept" src/main/keychain-migration.ts \

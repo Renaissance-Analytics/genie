@@ -342,10 +342,14 @@ describe('a book that may yet say what it says: the safe stop, for this launch',
         expect(readdirSync(dir)).toEqual(['keychain-migration.json']);
     });
 
-    it('CONTROL: with no book at all, the old copy is the truth, as it always was: a stale entry is replaced', async () => {
-        const held = new Map([[NAMED as string, 'stale']]);
-        const vault: HostVault = { store: async (name, value) => { held.set(name, value); return { ok: true }; }, compare: async (name, value) => (held.get(name) === value ? 'same' : 'different') };
+    it('CONTROL: with no book at all, as with a rebuilt one, a value already in the keychain is never overwritten; with none, the seal moves (the coordinator’s ruling on #2120)', async () => {
+        const held = new Map([[NAMED as string, 'newer']]);
+        const vault: HostVault = { store: async (name, value) => { held.set(name, value); return { ok: true }; }, compare: async (name, value) => (!held.has(name) ? 'missing' : held.get(name) === value ? 'same' : 'different') };
         const sources = [{ name: NAMED, old: { read: async () => ({ kind: 'value' as const, value: 'seal' }), remove: async () => {} } }];
+        expect(await moveAll(sources, vault, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'keychain-differs' }]);
+        expect(held.get(NAMED)).toBe('newer');
+        expect(existsSync(bookFile)).toBe(false);
+        held.delete(NAMED);
         expect(await moveAll(sources, vault, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'moved' }]);
         expect(held.get(NAMED)).toBe('seal');
         expect(existsSync(bookFile)).toBe(true);

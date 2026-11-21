@@ -353,7 +353,7 @@ describe('what an older Genie sealed moves to the keychain', () => {
     const cipher = { decrypt: (bytes: Buffer) => { const text = bytes.toString(); if (!text.startsWith('sealed:')) throw new Error('another OS user'); return text.slice('sealed:'.length); } };
     const seal = (text: string) => Buffer.from(`sealed:${text}`).toString('base64');
     const memoryBook = (): MigrationBook => { const states: Record<string, MigrationState> = {}; return { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } }; };
-    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (k.held.get(name) === value ? 'same' : 'different') });
+    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (!k.held.has(name) ? 'missing' : k.held.get(name) === value ? 'same' : 'different') });
 
     it('both tokens move; the file keeps who it is and the expiries; a reload signs in', async () => {
         writeFileSync(file, record({ tokenEnc: seal(TOKEN), refreshEnc: seal(REFRESH), accessExpiresAt: NOW + 1000 }));

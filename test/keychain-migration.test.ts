@@ -88,7 +88,8 @@ class World {
                 return { ok: true };
             },
             compare: async (name, value) => {
-                await this.#before('read-back');
+                // The read-back is the compare past a write: with no row the move compares once before it writes.
+                if (this.writes > 0) await this.#before('read-back');
                 if (!this.available) return 'unavailable';
                 const held = this.keychain.get(name);
                 return held === undefined ? 'missing' : held === value ? 'same' : 'different';
@@ -262,20 +263,26 @@ describe('the old copy is never deleted until the read-back matches, byte for by
         expect(world.old).toBe(SECRET);
     });
 
-    it('a bad read-back is tried again at the next launch, and a good one finishes', async () => {
+    it('a bad read-back is not written over at the next launch: with no row, what the keychain holds is never overwritten, and the old copy stays (the coordinator’s ruling on #2120)', async () => {
         const world = new World();
         world.stores = (value) => value.slice(0, 16);
-        await world.run();
+        expect(await world.run()).toEqual([{ name: NAME, status: 'read-back-differs' }]);
         world.stores = (value) => value;
-        expect(await world.run()).toEqual([{ name: NAME, status: 'moved' }]);
-        expect(world.keychain.get(NAME)).toBe(SECRET);
+        const writes = world.writes;
+        expect(await world.run()).toEqual([{ name: NAME, status: 'keychain-differs' }]);
+        expect(world.writes).toBe(writes);
+        expect(world.old).toBe(SECRET);
+        expect(world.states[NAME]).toBeUndefined();
     });
 
-    it('before it is confirmed the old copy is the truth: a stale keychain entry from an earlier install is replaced, never believed', async () => {
+    it('with no row, a value already in the keychain wins over the old copy: never overwritten, the old copy kept for someone to look at (the coordinator’s ruling on #2120)', async () => {
         const world = new World();
-        world.keychain.set(NAME, 'left-by-an-earlier-install');
-        await world.run();
-        expect(world.keychain.get(NAME)).toBe(SECRET);
+        world.keychain.set(NAME, 'written-since-by-genie-host');
+        expect(await world.run()).toEqual([{ name: NAME, status: 'keychain-differs' }]);
+        expect(world.keychain.get(NAME)).toBe('written-since-by-genie-host');
+        expect(world.writes).toBe(0);
+        expect(world.old).toBe(SECRET);
+        expect(world.states[NAME]).toBeUndefined();
     });
 });
 
@@ -476,7 +483,8 @@ describe('each half runs where it belongs', () => {
             expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/verifySecrets|finishSecrets|removeOldCopies|migrateSecrets/);
         }
         const host = strip(readFileSync('src/main/host-legacy-adopt.ts', 'utf8'));
-        expect(host).toMatch(/await finishSecrets\(request\.names as SecretName\[\], book\)/);
+        expect(host).toMatch(/await finishSecrets\(mine, book\)/);
+        expect(host).toMatch(/request\.names\.filter\(\(name\) => answered\.has\(name\)\)/);
         expect(host).toMatch(/await verifySecrets\(request\.secrets\.map\(sourceOf\), vault, book\)/);
         expect(host).not.toMatch(/removeOldCopies|\.remove\(\)/);
         const window = strip(readFileSync('src/main/legacy-unsealer.ts', 'utf8'));

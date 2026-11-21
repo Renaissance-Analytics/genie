@@ -54,10 +54,13 @@ export interface HostMigrationPorts {
 export function holdHostPorts(ports: HostMigrationPorts, env: Readonly<Record<string, string | undefined>> = process.env): HostMigrationPorts {
     const at = holdPoint(env);
     if (!at) return ports;
+    // `after-write` is the read-back, so only a compare past a write of that secret holds there: with no row the move compares
+    // once BEFORE it writes (the security review of #2120), and that compare is not past anything.
+    const written = new Set<string>();
     return {
         vault: {
-            store: async (secret, value) => { await at('before-write', secret); return ports.vault.store(secret, value); },
-            compare: async (secret, value) => { await at('after-write', secret); return ports.vault.compare(secret, value); },
+            store: async (secret, value) => { await at('before-write', secret); const r = await ports.vault.store(secret, value); written.add(secret); return r; },
+            compare: async (secret, value) => { if (written.has(secret)) await at('after-write', secret); return ports.vault.compare(secret, value); },
         },
         book: {
             ...ports.book,

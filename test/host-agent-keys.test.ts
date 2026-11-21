@@ -283,7 +283,7 @@ describe('the host holds, and what a window can ask of it', () => {
         const book: MigrationBook = { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } };
         const moved = await moveAll(await vault.legacyKeys(cipher), {
             store: async (name, value) => port.set(name, value),
-            compare: async (name, value) => (port.held.get(name) === value ? 'same' : 'different'),
+            compare: async (name, value) => (!port.held.has(name) ? 'missing' : port.held.get(name) === value ? 'same' : 'different'),
         }, book);
         expect(moved).toEqual([{ name: ENTRY, status: 'moved' }]);
         expect(port.held.get(ENTRY)).toBe(KEY);

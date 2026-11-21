@@ -94,12 +94,13 @@ describe('in a test build', () => {
         const atWrite = new World();
         void moveAll(...held(atWrite, spec('after-write', FIRST)));
         await until(() => existsSync(marker));
-        expect(atWrite.compares).toBe(0);
+        // The one compare before the write (no row: the security review of #2120), and no read-back yet.
+        expect(atWrite.compares).toBe(1);
         rmSync(marker);
         const atBack = new World();
         void moveAll(...held(atBack, spec('after-read-back', FIRST)));
         await until(() => existsSync(marker));
-        expect(atBack.compares).toBe(1);
+        expect(atBack.compares).toBe(2);
     });
 
     it('only the named secret is held: with a name nothing has, all of it moves', async () => {
