@@ -150,7 +150,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
         flows: '2g', hosting: '2g',
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
-        remoteAccess: '2g', stores: '2g', supervisor: '2g',
+        // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch.
+        stores: '2g', supervisor: '2g',
     };
     const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[]) => ({
         joined: rows.filter(([u, d]) => d.startsWith('move:') && STILL_TO_MOVE[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),

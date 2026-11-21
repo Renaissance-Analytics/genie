@@ -112,6 +112,8 @@ import { fts5Refusal } from './fts5-check.js';
 import { restrictHostPipe } from './host-pipe-acl.js';
 import { onTheClock } from '../core/tray-only.js';
 import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
+import { remoteWatchFeed, remoteWatchOf } from '../core/remote-watch.js';
+import { hostDraftPrune } from './host-draft-prune.js';
 import { accountKeyOf } from '../core/remote-window-policy.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
@@ -471,6 +473,14 @@ async function main(): Promise<void> {
     // The agent's calls while a window runs them (P3.1): a window tool's approval in this queue ends with its call (genie#1360).
     const forwardedCalls = new Map<string, import('./mcp-tools.js').McpCall>();
     const stores = new AgentStoresService({ ...own, approvals, settings, drafts, registry: { store: registryStore, model: hostRegistry } }, { forwardedCall: (id) => forwardedCalls.get(id) });
+    // EVERY CHAT'S UNSENT DRAFT GOES WITH ITS AGENT (genie#1261; Tynn #997, 2g-4a): pruned here, over the roster loaded above, then
+    // on each registry write whose roster changed. Sent when the roster changes, never on every snapshot.
+    await hostDraftPrune({
+        agents: () => hostRegistry.listAgents().map((a) => a.id),
+        drafts,
+        onRegistryWritten: (listener) => stores.onEvent((event) => { if (event.store === 'registry') listener(); }),
+        log: say,
+    });
     let mcp: HostMcp | null = null;
     let v1Done = false;
     /** Genie 1's database, as the window located it (Electron's userData; v1Import below): its record of this machine. */
@@ -1170,6 +1180,11 @@ async function main(): Promise<void> {
     // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.
     let remoteAccessService: RemoteAccessService | null = null;
     const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => { remoteAccessService?.pushStatus(); void relayHostService.apply(); } });
+    /*
+     * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
+     * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it).
+     */
+    const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
@@ -1913,6 +1928,8 @@ async function main(): Promise<void> {
         deviceLinkProtocol: deviceProtocol,
         // What this host runs, for this machine's tray and quit (Tynn #953, 2g-2).
         hostSummary,
+        // Who is at this machine, for this machine's notifications (Tynn #997, 2g-4a).
+        remoteWatch,
         // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
         legacySecrets: legacyAdopt,
         // Ask Tynn again whether this host is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).

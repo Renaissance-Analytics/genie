@@ -147,6 +147,7 @@ export interface HostAlonePorts {
     readonly deviceLinkProtocol?: HostApiDeps['deviceLinkProtocol'];
     /** What this host runs, for this machine's tray and quit (Tynn #953, 2g-2). Absent = nothing said. */
     readonly hostSummary?: HostApiDeps['hostSummary'];
+    readonly remoteWatch?: HostApiDeps['remoteWatch'];
     /** What an older Genie sealed, adopted into this host's keychain (Tynn #959, 2g-3b). Absent = refused. */
     readonly legacySecrets?: HostApiDeps['legacySecrets'];
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
@@ -300,6 +301,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.hostShell ? { hostShell: ports.hostShell } : {}),
         ...(ports.deviceLinkProtocol ? { deviceLinkProtocol: ports.deviceLinkProtocol } : {}),
         ...(ports.hostSummary ? { hostSummary: ports.hostSummary } : {}),
+        ...(ports.remoteWatch ? { remoteWatch: ports.remoteWatch } : {}),
         ...(ports.legacySecrets ? { legacySecrets: ports.legacySecrets } : {}),
         ...(ports.tynnRecheck ? { tynnRecheck: ports.tynnRecheck } : {}),
         startForYourMessage: (record) => startForYourMessage({

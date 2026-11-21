@@ -4,7 +4,6 @@ import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
 import { guestAskNotice, newGuestAsks } from '../core/pair-confirm.js';
-import { rosterPruner } from '../core/chat-drafts.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
@@ -1484,20 +1483,8 @@ async function boot(): Promise<void> {
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
     // The agent host reads each agent's record per call (genie#1188) from its own registry (Tynn #954): nothing is pushed.
-    /*
-     * EVERY CHAT'S UNSENT DRAFT (genie#1261, main/chat-draft-store.ts), kept here so it survives a restart and a reload —
-     * Genie 1 kept its part-typed answers in main the same way (v0.7.0-beta.342 main/ask/force-question.ts:1118, 1181-1217).
-     * Opened only once the roster is in, so a prune never reads a registry not loaded yet as "every agent deleted"; then a
-     * deleted agent's draft and files go on the change that removes it. Answered before any window exists.
-     */
-    // genie-host's (P3.2): one writer for the drafts file.
-    const drafts = agentEngineLink.client.stores().drafts;
-    const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
-    const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
-    // Sent when the roster changes, not on every snapshot: a streaming agent touches the registry ~20 times a second.
-    const draftPruner = rosterPruner({ ids: draftAgents, prune: (ids) => drafts.prune(ids), failed: pruneFailed });
-    await draftPruner.start();
-    registry.subscribe(() => draftPruner.changed());
+    // EVERY CHAT'S UNSENT DRAFT (genie#1261) is genie-host's, and so is pruning it when its agent goes (Tynn #997, 2g-4a:
+    // host-draft-prune.ts): main prunes nothing.
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
     await writeOsaHome({
         dir: osaHomeDir(genieRoot()),
@@ -1739,10 +1726,9 @@ async function boot(): Promise<void> {
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     /*
      * REMOTE ACCESS IS GENIE-HOST'S (Tynn #409, host split P5d.1): with genie-host linked, IT listens on the tailnet, pairs,
-     * and holds the baton and the lock; this window starts no listener, opens no device store, and drives it through the
-     * replica. It serves no protocol of its own: its door tunnels to genie-host's RemoteHost (Tynn #898 step 2d-4b).
+     * and holds the baton and the lock; this window starts no listener, opens no device store, and keeps no replica of it
+     * (Tynn #997, 2g-4a): Settings draws it from genie-host's features, and the notifications below read remote.watch.
      */
-    const linkedRemote = agentEngineLink.client.remoteAccess();
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
@@ -1842,12 +1828,8 @@ async function boot(): Promise<void> {
         workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
-        // Remote access is genie-host’s (Tynn #409); this window drives it through the replica and serves no protocol itself.
-        remoteAccess: linkedRemote,
     });
     services = composed;
-    // Settings → Remote access reads genie-host's status through the replica, from the first draw.
-    void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
     /*
      * THIS WINDOW IS SERVED BY GENIE-HOST (Tynn #898 step 2d-4b): each connection the door admits rides the engine link
      * to genie-host's RemoteHost, admitted there as this machine's window. main serves none of it; the window's browser
@@ -1902,32 +1884,38 @@ async function boot(): Promise<void> {
 
     // A share-link guest waiting to be let in (Tynn #731) also gets a desktop notification, once: the window may be hidden
     // in the tray, and the ask lapses in two minutes.
-    const guestAsksSeen = new Set<string>();
-    composed.pairing.onChange(() => {
-        pushFeatures();
-        const requests = composed.pairing.requests();
-        const fresh = newGuestAsks(guestAsksSeen, requests);
-        if (requests.length === 0) return;
-        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
-        if (!Notification.isSupported()) return;
-        for (const request of fresh) {
-            const notice = guestAskNotice(request);
-            const n = new Notification({ title: notice.title, body: notice.body });
-            n.on('click', () => { revealMainWindow('notification click: guest asks'); });
-            n.show();
-        }
-    });
     // SOMEONE CONNECTED TO THIS MACHINE (Tynn #726, consent): a desktop notice for each arrival, whether or not a window
     // is open (the windows carry the banner while anyone stays). A Pilot over the relay is never asked to pair, so
     // without this the person at this machine was never told.
+    // Both read genie-host's remote.watch on main's own client (Tynn #997, 2g-4a): who is here and who asks, as it changes.
+    const guestAsksSeen = new Set<string>();
+    let pairRequestsSaid = '';
     const arrivals = new ConnectWatch();
-    composed.remote.onChange(() => {
-        const arrived = arrivals.next(composed.remote.connections());
+    const flashWindows = (): void => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true); };
+    ownProtocol.watchRemote((view) => {
+        const requestsKey = JSON.stringify(view.pairRequests);
+        if (requestsKey !== pairRequestsSaid) {
+            pairRequestsSaid = requestsKey;
+            pushFeatures();
+            const fresh = newGuestAsks(guestAsksSeen, view.pairRequests);
+            if (view.pairRequests.length > 0) {
+                flashWindows();
+                if (Notification.isSupported()) {
+                    for (const request of fresh) {
+                        const notice = guestAskNotice(request);
+                        const n = new Notification({ title: notice.title, body: notice.body });
+                        n.on('click', () => { revealMainWindow('notification click: guest asks'); });
+                        n.show();
+                    }
+                }
+            }
+        }
+        const arrived = arrivals.next(view.connections);
         if (arrived.length === 0) return;
-        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
+        flashWindows();
         if (!Notification.isSupported()) return;
         for (const label of arrived) {
-            const notice = connectNotice(label, composed.remote.hostName);
+            const notice = connectNotice(label, view.hostName);
             const n = new Notification({ title: notice.title, body: notice.body });
             n.on('click', () => { revealMainWindow('notification click: connected'); });
             n.show();
