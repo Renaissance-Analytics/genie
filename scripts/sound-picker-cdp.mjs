@@ -126,10 +126,24 @@ async function waitFor(cdp, expression, ms = 30_000) {
     }
     return false;
 }
-/** A real click, as a person's: the mouse pressed and released at the middle of what the selector finds. */
+/**
+ * A real click, as a person's: the mouse pressed and released at the middle of what the selector finds. The Settings page
+ * can be a narrow pane whose controls sit in its sideways overflow (measured on the test VM: the sound button was under
+ * the chat pane), so it is scrolled into the middle both ways first, as a person would, and the click is refused unless
+ * the mouse there reaches the element itself.
+ */
 async function click(cdp, selector) {
-    const at = await cdp.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    const at = await cdp.evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        return { x, y, reaches: Boolean(hit && (hit === el || el.contains(hit))), under: hit ? hit.outerHTML.slice(0, 120) : null };
+    })()`);
     if (!at) return false;
+    if (!at.reaches) { console.log(`  the mouse at ${selector} would reach: ${at.under}`); return false; }
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
         await cdp.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
     }
