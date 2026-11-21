@@ -140,10 +140,10 @@ async function click(cdp, selector) {
         const r = el.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
         const hit = document.elementFromPoint(x, y);
-        return { x, y, reaches: Boolean(hit && (hit === el || el.contains(hit))), under: hit ? hit.outerHTML.slice(0, 120) : null };
+        return { x, y, rect: [r.left, r.top, r.width, r.height].map(Math.round), reaches: Boolean(hit && (hit === el || el.contains(hit))), under: hit ? hit.outerHTML.slice(0, 120) : null };
     })()`);
     if (!at) return false;
-    if (!at.reaches) { console.log(`  the mouse at ${selector} would reach: ${at.under}`); return false; }
+    if (!at.reaches) { console.log(`  the mouse at ${selector} (rect ${JSON.stringify(at.rect)}) would reach: ${at.under}`); return false; }
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
         await cdp.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
     }
@@ -229,6 +229,14 @@ try {
     const before = await cdp.evaluate(`document.querySelector(${JSON.stringify(TRIGGER)})?.textContent ?? ''`);
     check(await click(cdp, TRIGGER), '4. the sound button takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-sound-popover] [data-sound-row]'))`, 5_000), '5. the popover opens, with its rows');
+    await sleep(400);
+    // Where everything is, as drawn: the popover and its first rows' parts (a squeezed name button shows here first).
+    console.log(`  drawn: ${await cdp.evaluate(`JSON.stringify((() => {
+        const b = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); };
+        const pop = document.querySelector('[data-sound-popover]');
+        return { viewport: [innerWidth, innerHeight], pop: b(pop), rows: [...pop.querySelectorAll('[data-sound-row]')].slice(0, 3).map((row) => ({ v: row.getAttribute('data-sound-row'), row: b(row), name: b(row.querySelector('[data-sound-name]')), label: b(row.querySelector('[data-react-fancy-button-label]')), play: b(row.querySelector('[data-sound-play]')), nameClass: row.querySelector('[data-sound-name]')?.className })) };
+    })())`)}`);
+    await shot(cdp, 'sound-picker-996-open.png');
     // Choose a sound that is not the current one, by its name, with the mouse.
     const chosen = await cdp.evaluate(`(() => { const cur = document.querySelector('[data-sound-popover] [data-sound-row][data-selected="true"]')?.getAttribute('data-sound-row'); const c = [...document.querySelectorAll('[data-sound-popover] [data-sound-row]')].map((e) => e.getAttribute('data-sound-row')).find((v) => v !== cur && v !== 'off' && v !== 'custom'); return c ?? null; })()`);
     check(Boolean(chosen), '6. there is another sound to choose', String(chosen));
