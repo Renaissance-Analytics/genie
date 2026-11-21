@@ -61,6 +61,19 @@ describe('the popover: live state, one-click switch, sign in, add', () => {
         expect(left.textContent).toContain('Example Org');
     });
 
+    it('the left pane IS the active account: with a live state, one pill (Signed in), never "Active" beside it', () => {
+        const left = open().querySelector('[data-accounts-pane="active"]')!;
+        expect(left.querySelectorAll('[data-account-live]')).toHaveLength(1);
+        expect(left.querySelector('[data-account-active]')).toBeNull();
+        expect(left.textContent).not.toMatch(/\bActive\b/);
+    });
+
+    it('the footer\'s three rows (Add subscription, Add Console, Use another account) line up from the left edge', () => {
+        const pop = open();
+        const rows = ['account-add-subscription', 'account-add-console', 'account-use-another'].map((a) => pop.querySelector(`[data-action="${a}"]`)!);
+        for (const row of rows) { expect(row).not.toBeNull(); expect(row.className).toContain('justify-start'); expect(row.className).toContain('w-full'); }
+    });
+
     it('a mismatch is a badge saying which typed difference it is', () => {
         const row = open().querySelector(`[data-account="${C}"]`)!;
         const badge = row.querySelector('[data-account-live="mismatch"]')!;

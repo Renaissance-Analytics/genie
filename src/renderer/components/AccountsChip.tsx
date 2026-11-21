@@ -35,7 +35,10 @@ export interface AccountsChipProps {
     readonly onSignIn?: ((accountId: string) => void) | undefined;
 }
 
-const LEVEL_TEXT: Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
+/** The footer's rows (Add subscription, Add Console, Use another account): full width, icon and words from the left edge. */
+const FOOTER_ROW = 'w-full justify-start';
+
+const LEVEL_TEXT:Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
 const LEVEL_COLOR: Readonly<Record<LimitLevel, 'green' | 'amber' | 'red'>> = { ok: 'green', warning: 'amber', danger: 'red' };
 
 /** Initials for the account's avatar: the label's first letter (an email's, before the @). */
@@ -143,12 +146,12 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                         {/* ADD AN ACCOUNT OF ITS OWN (Tynn #1011): a directory of its own; the person then signs in with Claude Code's
                             own login (a claude.ai plan, or a Console account billed per token). */}
                         {provider === 'claude' && onAccountsAct ? (
-                            <div data-accounts-add="" className="flex flex-wrap gap-1">
-                                <Button type="button" size="xs" variant="ghost" icon="plus" data-action="account-add-subscription" onClick={() => { void onAccountsAct({ kind: 'add-claude', method: 'subscription' }); }}>Add subscription</Button>
-                                <Button type="button" size="xs" variant="ghost" icon="plus" data-action="account-add-console" onClick={() => { void onAccountsAct({ kind: 'add-claude', method: 'console' }); }}>Add Console (API)</Button>
+                            <div data-accounts-add="" className="flex flex-col gap-1">
+                                <Button type="button" size="xs" variant="ghost" icon="plus" data-action="account-add-subscription" className={FOOTER_ROW} onClick={() => { void onAccountsAct({ kind: 'add-claude', method: 'subscription' }); }}>Add subscription</Button>
+                                <Button type="button" size="xs" variant="ghost" icon="plus" data-action="account-add-console" className={FOOTER_ROW} onClick={() => { void onAccountsAct({ kind: 'add-claude', method: 'console' }); }}>Add Console (API)</Button>
                             </div>
                         ) : null}
-                        <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" onClick={() => switchTo()}>Use another account</Button>
+                        <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" className={FOOTER_ROW} onClick={() => switchTo()}>Use another account</Button>
                     </div>
                 </div>
                 </div>
@@ -173,10 +176,13 @@ function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: 
                     {account.email && account.email !== account.label ? <span data-account-email="" className="truncate text-[var(--fg-3)]">{account.email}</span> : null}
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                         <PlanChip plan={account.plan} />
-                        {account.active
-                            ? <Badge size="sm" variant="outline" color="green" dot data-account-active="">{account.live ? 'Active' : 'Signed in'}</Badge>
-                            : <Badge size="sm" variant="outline" color="zinc" data-account-active-unknown="">Not signed in</Badge>}
-                        {account.live ? <LiveBadge live={account.live} /> : null}
+                        {/* With a live state (Tynn #1011) that is the one pill: this pane IS the active account, so "Active" beside
+                            "Signed in" said the same thing twice. Without one, the book's own state stands. */}
+                        {account.live
+                            ? <LiveBadge live={account.live} />
+                            : account.active
+                                ? <Badge size="sm" variant="outline" color="green" dot data-account-active="">Signed in</Badge>
+                                : <Badge size="sm" variant="outline" color="zinc" data-account-active-unknown="">Not signed in</Badge>}
                         {account.live ? <BillingChip live={account.live} /> : null}
                     </div>
                     {account.live?.org ? <span data-account-org="" className="truncate text-[var(--fg-3)]">{account.live.org}</span> : null}
