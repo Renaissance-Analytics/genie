@@ -42,7 +42,7 @@ ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag
-    trust-step accounts-popover sound-picker site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
+    trust-step accounts-popover sound-picker question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
     flows zip64 host-plain-node mailpit
     package package-fuse
     toolchain
@@ -527,6 +527,8 @@ row_ui-lag() { need_app && timeout 420 node scripts/ui-lag-cdp.mjs --budget; }
 row_trust-step() { need_build && need_display && on_display timeout 300 node scripts/trust-step-cdp.mjs; }
 row_accounts-popover() { need_build && need_display && on_display timeout 240 node scripts/accounts-popover-cdp.mjs; }
 row_sound-picker() { need_build && need_display && on_display timeout 240 node scripts/sound-picker-cdp.mjs; }
+# The whole question window maximized and restored, screenshots of both (Tynn #1019).
+row_question-maximize() { need_build && need_display && on_display timeout 240 node scripts/question-maximize-cdp.mjs; }
 row_site-panel() { need_app && need_keyring && timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs; }
 row_site-panel-locked() { need_app && SITE_PANEL_LOCKED=1 CDP_PORT=9336 timeout 120 node scripts/site-panel-cdp.mjs; }
 row_browser-process() { need_app && need_keyring && timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs; }
@@ -662,7 +664,7 @@ ceiling() {
         seed) echo 300 ;;
         no-pty|smoke|layout|local-door-break|local-door|gapp-open|trust-step) echo 360 ;;
         accounts-popover) echo 300 ;;
-        sound-picker) echo 300 ;;
+        sound-picker|question-maximize) echo 300 ;;
         files-watch) echo 240 ;;
         chat-drafts|artboard) echo 420 ;;
         ui-lag|renderer-crash) echo 480 ;;
@@ -858,7 +860,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step accounts-popover sound-picker site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step accounts-popover sound-picker question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"
