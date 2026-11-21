@@ -209,7 +209,8 @@ describe('the Deck', () => {
         expect(b().getAttribute('title')).toBe('Restore (Esc)');
         expect(frame().querySelector('[data-deck-form]')).toBe(form);
 
-        act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
+        // A key goes to what has focus (the body here) and bubbles up to the window, as in the app.
+        act(() => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
         expect(frame().getAttribute('data-maximized')).toBe('off');
         // Esc restored it, and nothing else in the window saw that Esc.
         expect(onEsc).not.toHaveBeenCalled();
