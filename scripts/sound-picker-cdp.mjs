@@ -130,18 +130,27 @@ async function waitFor(cdp, expression, ms = 30_000) {
  * A real click, as a person's: the mouse pressed and released at the middle of what the selector finds. The Settings page
  * can be a narrow pane whose controls sit in its sideways overflow (measured on the test VM: the sound button was under
  * the chat pane), so it is scrolled into the middle both ways first, as a person would, and the click is refused unless
- * the mouse there reaches the element itself.
+ * the mouse there reaches the element itself. A fresh home can raise a modal at any moment of the first minute (measured:
+ * one covered the Settings nav after the start-up Escape): a person closes it with Escape and clicks again; so does this.
  */
 async function click(cdp, selector) {
-    const at = await cdp.evaluate(`(() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        el.scrollIntoView({ block: 'center', inline: 'center' });
-        const r = el.getBoundingClientRect();
-        const x = r.left + r.width / 2, y = r.top + r.height / 2;
-        const hit = document.elementFromPoint(x, y);
-        return { x, y, rect: [r.left, r.top, r.width, r.height].map(Math.round), reaches: Boolean(hit && (hit === el || el.contains(hit))), under: hit ? hit.outerHTML.slice(0, 120) : null };
-    })()`);
+    let at = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+        at = await cdp.evaluate(`(() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return null;
+            el.scrollIntoView({ block: 'center', inline: 'center' });
+            const r = el.getBoundingClientRect();
+            const x = r.left + r.width / 2, y = r.top + r.height / 2;
+            const hit = document.elementFromPoint(x, y);
+            const modal = hit && !el.closest('[role="dialog"], [aria-modal="true"]') ? hit.closest('[aria-modal="true"], [role="dialog"]:not([data-sound-popover]), [data-react-fancy-modal-header]')?.closest('[role="dialog"], [aria-modal="true"]') ?? hit.closest('[data-react-fancy-modal-header]')?.parentElement : null;
+            return { x, y, rect: [r.left, r.top, r.width, r.height].map(Math.round), reaches: Boolean(hit && (hit === el || el.contains(hit))), under: hit ? hit.outerHTML.slice(0, 120) : null, modal: modal ? modal.innerText.replace(/\\s+/g, ' ').slice(0, 160) : null };
+        })()`);
+        if (!at || at.reaches || !at.modal) break;
+        console.log(`  a modal covers ${selector}: "${at.modal}"; pressing Escape`);
+        for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+        await sleep(600);
+    }
     if (!at) return false;
     if (!at.reaches) { console.log(`  the mouse at ${selector} (rect ${JSON.stringify(at.rect)}) would reach: ${at.under}`); return false; }
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
@@ -234,6 +243,7 @@ try {
     console.log(`  drawn: ${await cdp.evaluate(`JSON.stringify((() => {
         const b = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); };
         const pop = document.querySelector('[data-sound-popover]');
+        if (!pop) return null;
         return { viewport: [innerWidth, innerHeight], pop: b(pop), rows: [...pop.querySelectorAll('[data-sound-row]')].slice(0, 3).map((row) => ({ v: row.getAttribute('data-sound-row'), row: b(row), name: b(row.querySelector('[data-sound-name]')), label: b(row.querySelector('[data-react-fancy-button-label]')), play: b(row.querySelector('[data-sound-play]')), nameClass: row.querySelector('[data-sound-name]')?.className })) };
     })())`)}`);
     await shot(cdp, 'sound-picker-996-open.png');
