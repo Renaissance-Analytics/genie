@@ -85,18 +85,24 @@ export function PlanHoverList({ plan, maxHeight }: { plan: ChatPlanView; maxHeig
     );
 }
 
-/** The popover's body: the list, capped to the room beside the trigger, measured when it opens and when the window resizes. */
+/**
+ * The popover's body: the list, capped to the room beside the trigger. Measured as it opens, in its first render (the
+ * trigger is on the page before the popover can open), so the list reveals its current step once, at its final height;
+ * measured again when the window resizes.
+ */
 function PlanHoverBody({ plan }: { plan: ChatPlanView }) {
     const { anchorRef } = usePopover();
-    const [maxHeight, setMaxHeight] = useState<number | undefined>(undefined);
+    const room = () => {
+        const anchor = anchorRef.current;
+        return anchor ? planListMaxHeight(anchor.getBoundingClientRect(), window.innerHeight) : undefined;
+    };
+    const [maxHeight, setMaxHeight] = useState<number | undefined>(room);
     useLayoutEffect(() => {
-        const measure = () => {
-            const anchor = anchorRef.current;
-            if (anchor) setMaxHeight(planListMaxHeight(anchor.getBoundingClientRect(), window.innerHeight));
-        };
-        measure();
+        const measure = () => setMaxHeight(room());
         window.addEventListener('resize', measure);
         return () => window.removeEventListener('resize', measure);
+        // `room` reads the ref at call time; the listener is set once per open.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [anchorRef]);
     return <PlanHoverList plan={plan} maxHeight={maxHeight} />;
 }
