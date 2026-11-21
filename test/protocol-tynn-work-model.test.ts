@@ -4,10 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { featureWorkspaceFiles } from '../src/main/feature-workspace-files.js';
 import { AgentFilesHealth } from '../src/core/agent-files-health.js';
-import { type ComposedServices } from '../src/main/compose.js';
 import { writeAgentProtocol, type SyncFs } from '../src/main/config-sync-targets.js';
 import { writeGenieInstructions } from '../src/main/genie-instructions.js';
-import type { PtyPort } from '../src/main/terminal-host.js';
 import type { TynnSessionPort } from '../src/main/tynn-agent-token.js';
 
 /**
@@ -98,10 +96,6 @@ describe('the protocol Genie writes', () => {
 });
 
 describe('the workspace sync takes the sign-in from Genie\'s Tynn account', () => {
-    const pty: PtyPort = {
-        open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }),
-        write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {},
-    };
     const account = (signedIn: boolean): TynnSessionPort => ({ status: () => ({ signedIn }), request: async () => ({ ok: false, status: 404, json: async () => null }) });
     const opened: string[] = [];
     afterEach(async () => {
