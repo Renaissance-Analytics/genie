@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
-import type { ClientTransport } from '../src/core/remote-protocol.js';
-import { RelayHostReplica } from '../src/main/relay-host-replica.js';
 import { RelayHostService, type RelayHostServicePorts, type RelayHostView } from '../src/main/relay-host-service.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { startRelayHost, type RelayHostHandle, type RelayHostStatus } from '../src/main/tynn-network.js';
 
 /*
@@ -14,25 +9,14 @@ import { startRelayHost, type RelayHostHandle, type RelayHostStatus } from '../s
  * event followed a moment later. A socket hands both frames over in one read; the event was applied at once, the reply
  * only after the read (its promise settles on a later turn) — so the older reply overwrote the newer event, and nothing
  * changed again to correct it.
+ *
+ * Since Tynn #961 (2g-3c) the window keeps no replica of it and the engine link carries none of it: Settings reads genie-host's
+ * relay host whole, from the features genie-host draws (features.snapshot), and its role from the host summary. What is left to
+ * hold is genie-host's own reading, which is what every window now shows.
  */
 
 const TYNN = 'https://tynn.test';
 const REASON = 'Tynn could not be reached (fetch failed)';
-
-/** The window's end of the link: frames pass as they come, or are held and then handed over in ONE read, as a socket does. */
-function socketLike(raw: ClientTransport) {
-    const listeners = new Set<(text: string) => void>();
-    const held: string[] = [];
-    let holding = false;
-    raw.onMessage((text) => { if (holding) held.push(text); else for (const l of [...listeners]) l(text); });
-    return {
-        transport: { send: (m: string) => raw.send(m), onMessage: (l: (t: string) => void) => { listeners.add(l); return () => listeners.delete(l); }, onClose: (l: () => void) => raw.onClose(l), close: () => raw.close() } as ClientTransport,
-        hold: () => { holding = true; },
-        held: () => held.map((t) => JSON.parse(t) as { kind: string; channel?: string; payload?: RelayHostView; value?: RelayHostView }),
-        /** Every held frame in one read: synchronously, in order. */
-        release: () => { holding = false; const frames = held.splice(0, held.length); for (const text of frames) for (const l of [...listeners]) l(text); },
-    };
-}
 
 async function until(cond: () => boolean, ms = 2_000): Promise<void> {
     const end = Date.now() + ms;
@@ -43,9 +27,8 @@ async function until(cond: () => boolean, ms = 2_000): Promise<void> {
 }
 const settle = () => new Promise((r) => setTimeout(r, 10));
 
-/** genie-host's relay host, its engine and a window's replica over the real link; `start` is the link genie-host would run. */
-async function rig(start: RelayHostServicePorts['start']) {
-    let server: SessionEngineServer | null = null;
+/** genie-host's relay host; `start` is the link genie-host would run. */
+function rig(start: RelayHostServicePorts['start']) {
     const service: RelayHostService = new RelayHostService({
         account: () => ({ host: () => TYNN, status: () => ({ signedIn: true }), request: async () => ({ ok: true, status: 200, json: async () => ({}) }) as never }),
         workstation: {
@@ -56,16 +39,9 @@ async function rig(start: RelayHostServicePorts['start']) {
         enabled: () => true,
         readRole: async () => 'drone',
         start,
-        // As genie-host wires it: every change to every local window.
-        onChange: () => server?.relayHostEvent(service.status()),
+        onChange: () => {},
     });
-    server = new SessionEngineServer({ token: 't', build: 'b', relayHost: service });
-    const [h, raw] = memoryPair();
-    server.accept(h, { local: true });
-    const wire = socketLike(raw);
-    const client = new SessionEngineClient({});
-    expect(await client.connect(wire.transport, 't')).toMatchObject({ ok: true });
-    return { service, wire, replica: client.relayHost() };
+    return { service };
 }
 
 /** The real link (startRelayHost) with a first ticket that settles only after the register reply has gone out. */
@@ -86,79 +62,41 @@ function realLink(ticket: () => Promise<{ ticket: string; relayEndpoint: string 
     };
 }
 
-describe('the window\'s relay status follows genie-host\'s (Tynn #656)', () => {
-    it('a first ticket that fails: the window shows "unavailable" with the host\'s reason, never "connecting"', async () => {
+describe('genie-host\'s relay status, which every window shows (Tynn #656)', () => {
+    it('a first ticket that fails: "unavailable" with the reason, never "connecting"', async () => {
         const handles: RelayHostHandle[] = [];
-        const r = await rig(realLink(() => new Promise((_, reject) => setTimeout(() => reject(new Error(REASON)), 5)), handles));
-        r.wire.hold();
-        const registered = r.replica.register(null);
-        await until(() => r.wire.held().some((f) => f.kind === 'event' && f.channel === 'relayHost.event' && f.payload?.relay.state === 'unavailable'));
-        // The gauge: the race is really here — the reply says "connecting" and the failure's event comes after it.
-        const frames = r.wire.held();
-        const reply = frames.findIndex((f) => f.kind === 'result' && f.value?.relay !== undefined);
-        const failed = frames.findIndex((f) => f.kind === 'event' && f.payload?.relay.state === 'unavailable');
-        expect(reply).toBeGreaterThanOrEqual(0);
-        expect(frames[reply]!.value!.relay).toEqual({ state: 'connecting' });
-        expect(failed).toBeGreaterThan(reply);
-        r.wire.release();
-        await registered;
+        const r = rig(realLink(() => new Promise((_, reject) => setTimeout(() => reject(new Error(REASON)), 5)), handles));
+        await r.service.register(null);
+        await until(() => r.service.status().relay.state === 'unavailable');
         await settle();
         expect(r.service.status().relay).toEqual({ state: 'unavailable', reason: REASON });
-        expect(r.replica.relay()).toEqual({ state: 'unavailable', reason: REASON });
         handles.forEach((h) => h.stop());
     });
 
-    it('CONTROL: a link still asking for its first ticket shows "connecting" in the window, as on the host', async () => {
+    it('CONTROL: a link still asking for its first ticket is "connecting"', async () => {
         const handles: RelayHostHandle[] = [];
-        const r = await rig(realLink(() => new Promise(() => {}), handles));
-        r.wire.hold();
-        const registered = r.replica.register(null);
-        await until(() => r.wire.held().some((f) => f.kind === 'result' && f.value?.relay !== undefined));
-        r.wire.release();
-        await registered;
+        const r = rig(realLink(() => new Promise(() => {}), handles));
+        await r.service.register(null);
         await settle();
         expect(r.service.status().relay).toEqual({ state: 'connecting' });
-        expect(r.replica.relay()).toEqual({ state: 'connecting' });
         handles.forEach((h) => h.stop());
     });
 
-    it('CONTROL: a link that comes up shows "reachable" through that relay in the window', async () => {
+    it('CONTROL: a link that comes up is "reachable" through that relay', async () => {
         let onStatus: ((s: RelayHostStatus) => void) | null = null;
-        const r = await rig((input) => {
+        const r = rig((input) => {
             onStatus = input.onStatus;
             input.onStatus({ state: 'connecting' });
             return { status: () => ({ state: 'connecting' }), stop: () => {}, revalidate: async () => {} };
         });
-        await r.replica.register(null);
-        await settle();
-        expect(r.replica.relay()).toEqual({ state: 'connecting' });
+        await r.service.register(null);
+        expect(r.service.status().relay).toEqual({ state: 'connecting' });
         onStatus!({ state: 'reachable', relay: 'wss://relay.test' });
-        await settle();
-        expect(r.replica.relay()).toEqual({ state: 'reachable', relay: 'wss://relay.test' });
+        expect(r.service.status().relay).toEqual({ state: 'reachable', relay: 'wss://relay.test' });
     });
 });
 
-describe('the window\'s replica keeps the newest of genie-host\'s views', () => {
-    const view = (epoch: string, rev: number, relay: RelayHostStatus): RelayHostView => ({ workstation: null, role: 'drone', relay, epoch, rev });
-
-    it('an older view of the same host, arriving last, does not replace a newer one', () => {
-        const replica = new RelayHostReplica(async () => null);
-        replica.deliver(view('h1', 3, { state: 'unavailable', reason: REASON }));
-        replica.deliver(view('h1', 2, { state: 'connecting' }));
-        expect(replica.relay()).toEqual({ state: 'unavailable', reason: REASON });
-    });
-
-    it('CONTROL: a view as new or newer replaces it; a restarted genie-host (a new epoch) starts over', () => {
-        const replica = new RelayHostReplica(async () => null);
-        replica.deliver(view('h1', 3, { state: 'connecting' }));
-        replica.deliver(view('h1', 3, { state: 'unavailable', reason: REASON }));
-        expect(replica.relay()).toEqual({ state: 'unavailable', reason: REASON });
-        replica.deliver(view('h1', 4, { state: 'reachable', relay: 'wss://relay.test' }));
-        expect(replica.relay()).toEqual({ state: 'reachable', relay: 'wss://relay.test' });
-        replica.deliver(view('h2', 0, { state: 'connecting' }));
-        expect(replica.relay()).toEqual({ state: 'connecting' });
-    });
-
+describe('genie-host numbers its relay host\'s views', () => {
     it('genie-host numbers every change, so a reply taken before a change is older than that change\'s event', async () => {
         let onStatus: ((s: RelayHostStatus) => void) | null = null;
         const events: RelayHostView[] = [];

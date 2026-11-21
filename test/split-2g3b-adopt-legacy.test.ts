@@ -619,11 +619,11 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
         expect(main).toMatch(/if \(summary\.githubBlocked !== before\.githubBlocked\) registry\?\.touch\(\);/);
     });
 
-    it('the window’s keychain door is an agent’s key only: no account token goes over the engine link either way', () => {
+    it('no token goes over the engine link either way: since Tynn #961 (2g-3c) it has no keychain door at all', () => {
         const server = code(src('src/main/session-engine-server.ts'));
-        expect(server).not.toMatch(/secretCompare|movableName/);
-        expect(server).toMatch(/case 'engine\.secretStore':\s*return this\.#keychain\(\)\.set\(agentKeyName\(str\(0\)\), str\(1\)\);/);
-        expect(src('src/core/engine-protocol.ts')).not.toMatch(/'engine\.secretCompare'/);
-        expect(src('src/main/agent-secrets.ts')).not.toMatch(/linkedVault/);
+        expect(server).not.toMatch(/secretCompare|movableName|secretStore|secretRead|#keychain\(/);
+        expect(src('src/core/engine-protocol.ts')).not.toMatch(/'engine\.secret[A-Za-z]*'/);
+        // CONTROL: the same scan finds a route the server still has.
+        expect(server).toMatch(/case 'engine\.proxyRemember':/);
     });
 });

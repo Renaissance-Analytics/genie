@@ -1,14 +1,7 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
 import { openHostKeychain } from '../src/main/host-keychain.js';
 import { Keychain, type KeyringModule } from '../src/main/keychain.js';
 import { KeyringService } from '../src/main/keyring-service.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
 
 /**
  * A KEYRING THAT GOES AWAY WHILE GENIE RUNS IS SAID, WITH NO RESTART. The host read the session's keyring at launch and when the card's button was pressed, and at no other
@@ -203,32 +196,18 @@ describe('the keyring goes away while Genie runs', () => {
         expect(o.service.dump().view).toBeNull();
     });
 
-    it('a window linked at the time sees the card arrive', async () => {
+    it('genie-host’s service says the card as it arrives (what Settings draws; no window replica since Tynn #961)', async () => {
         const o = await opened();
-        const dir = await mkdtemp(join(tmpdir(), 'keyring-away-'));
-        try {
-            const TOKEN = 'a'.repeat(64);
-            const server = new SessionEngineServer({ token: TOKEN, build: 'test', keyring: o.service });
-            const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-            server.attach(host);
-            const [hostSide, windowSide] = memoryPair();
-            server.accept(hostSide);
-            const client = new SessionEngineClient();
-            await client.connect(windowSide, TOKEN);
-            const replica = client.keyring();
-            let changes = 0;
-            replica.onChange(() => { changes += 1; });
-            await settle();
-            expect(replica.view()).toBeNull();
-            o.w.answers = false;
-            o.w.listing = '';
-            await o.keychain.get(NAME);
-            await settle();
-            expect(replica.view()).toMatchObject({ state: 'not-running' });
-            expect(changes).toBeGreaterThan(0);
-        } finally {
-            await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
-        }
+        let changes = 0;
+        o.service.onEvent(() => { changes += 1; });
+        await settle();
+        expect(o.service.dump().view).toBeNull();
+        o.w.answers = false;
+        o.w.listing = '';
+        await o.keychain.get(NAME);
+        await settle();
+        expect(o.service.dump().view).toMatchObject({ state: 'not-running' });
+        expect(changes).toBeGreaterThan(0);
     });
 
     it('off Linux there is no card to raise, and the state follows the answer', async () => {

@@ -46,11 +46,12 @@ describe('the engine link carries no account, keyring, registration, secret, plu
         expect(client).toMatch(/^\s{4}stores\(/m);
     });
 
-    it('their window-side files are gone: the replicas and linkedAgentSecrets', () => {
-        for (const file of ['src/main/tynn-account-replica.ts', 'src/main/github-account-replica.ts', 'src/main/keyring-replica.ts', 'src/main/relay-host-replica.ts']) {
+    it('their window-side files are gone: the replicas and linkedAgentSecrets (its file held nothing else)', () => {
+        for (const file of ['src/main/tynn-account-replica.ts', 'src/main/github-account-replica.ts', 'src/main/keyring-replica.ts', 'src/main/relay-host-replica.ts', 'src/main/agent-secrets.ts']) {
             expect(existsSync(resolve(root, file)), file).toBe(false);
         }
-        expect(code(src('src/main/agent-secrets.ts'))).not.toMatch(/linkedAgentSecrets/);
+        // CONTROL: the check finds a file that is there.
+        expect(existsSync(resolve(root, 'src/main/plugins-replica.ts'))).toBe(true);
     });
 
     it('main prepares no agent’s MCP servers and hands compose no plugin or catalog replica; compose takes no Tynn account or secrets', () => {

@@ -3,14 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
 import { fileMigrationBook, gatherSources, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
 import { moveAll } from './helpers/move-secrets.js';
 import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
 import { hostTynnPorts } from '../src/main/host-tynn-account.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
 import { settleStaleLegacyPairing, TynnAccount, tynnPairingSource, type TynnAccountPorts } from '../src/main/tynn-account.js';
 import { TynnAccountService } from '../src/main/tynn-account-service.js';
 import type { PrivateCredentialStore } from '../src/main/private-credentials.js';
@@ -219,102 +215,30 @@ describe('the host does the exchange, with no Electron session', () => {
     });
 });
 
-describe('a window reads a replica, and never holds the token', () => {
-    async function linked(k = keychainFake(), tynn = tynnFake()) {
+// Since Tynn #961 (2g-3c) no window reads a replica of the account: Settings draws it from genie-host's features, a window
+// hears its key from the host summary (tynnAccountKey), and the engine link carries none of it. What genie-host's own service
+// says still holds no token.
+describe('genie-host’s service of the account never says the token', () => {
+    async function served(k = keychainFake(), tynn = tynnFake()) {
         const account = await open(k, tynn);
-        const service = new TynnAccountService(account);
-        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', tynn: service });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const seen: string[] = [];
-        windowSide.onMessage((line: string) => seen.push(line));
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, 'a'.repeat(64));
-        return { k, tynn, account, service, client, replica: client.tynn(), seen };
+        return { account, service: new TynnAccountService(account) };
     }
 
-    it('a window that connects to a signed-in host reads signed in at once', async () => {
-        const k = keychainFake();
-        const tynn = tynnFake();
-        await (await open(k, tynn)).signIn(CODE);
-        const { replica } = await linked(k, tynn);
-        expect(replica.status()).toMatchObject({ signedIn: true, user: { name: USER.name } });
-        expect(replica.userId()).toBe(USER.id);
-        expect(replica.host()).toBe(HOST);
+    it('not the dump, not an event, not a request’s answer; and CONTROL, the gauge reads what it says', async () => {
+        const { service } = await served();
+        const said: string[] = [];
+        service.onEvent((dump) => said.push(JSON.stringify(dump)));
+        await service.call('signIn', [CODE]);
+        said.push(JSON.stringify(service.dump()));
+        said.push(JSON.stringify(await service.call('request', ['/api/v1/me', { method: 'GET' }])));
+        const text = said.join('\n');
+        expect(text).toContain(USER.id);
+        expect(text).not.toMatch(TOKEN_FREE);
     });
 
-    it('a sign-in through it reaches the host, and it hears the change', async () => {
-        const { replica, account } = await linked();
-        let changes = 0;
-        replica.onChange(() => { changes += 1; });
-        expect(await replica.signIn(CODE)).toMatchObject({ ok: true });
-        expect(account.status().signedIn).toBe(true);
-        for (let i = 0; i < 20 && !replica.status().signedIn; i += 1) await new Promise((r) => setTimeout(r, 5));
-        expect(replica.status().signedIn).toBe(true);
-        expect(changes).toBeGreaterThan(0);
-    });
-
-    it('a request answers as the account does, with the same status and body', async () => {
-        const { replica } = await linked();
-        await replica.signIn(CODE);
-        const res = await replica.request('/api/v1/me', { method: 'GET' });
-        expect([res.ok, res.status]).toEqual([true, 200]);
-        expect(await res.json()).toMatchObject({ id: USER.id });
-    });
-
-    it('a 404 stays a 404 across the link, and is not an error', async () => {
-        const tynn = tynnFake();
-        const { replica } = await linked(keychainFake(), tynn);
-        await replica.signIn(CODE);
-        tynn.fetch = async () => new Response('{}', { status: 404 });
-        const res = await replica.request('/api/v1/nothing', { method: 'GET' });
-        expect([res.ok, res.status]).toEqual([false, 404]);
-    });
-
-    it('signed out, a request is refused in the account’s own words', async () => {
-        const { replica } = await linked();
-        await expect(replica.request('/api/v1/me', { method: 'GET' })).rejects.toThrow('Sign in to Tynn first');
-    });
-
-    it('an aborted request rejects at once, in the window', async () => {
-        const { replica } = await linked();
-        await replica.signIn(CODE);
-        const controller = new AbortController();
-        controller.abort();
-        await expect(replica.request('/api/v1/me', { method: 'GET', signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
-    });
-
-    it('it opens the browser in the window; the host has nothing to open it with', async () => {
-        const { client } = await linked();
-        const opened: string[] = [];
-        const { url } = await client.tynn({ openExternal: async (link) => { opened.push(link); } }).startSignIn();
-        expect(url).toContain(HOST);
-        expect(opened).toEqual([url]);
-    });
-
-    it('nothing the link carries holds the token: not the dump, not an event, not any answer', async () => {
-        const { replica, service, client, seen } = await linked();
-        await replica.signIn(CODE);
-        expect(JSON.stringify(service.dump())).not.toMatch(TOKEN_FREE);
-        const asked = await client.call('engine.tynn', ['request', ['/api/v1/me', { method: 'GET' }]]);
-        expect(JSON.stringify(asked)).not.toMatch(TOKEN_FREE);
-        // CONTROL: this is the wire, and the gauge reads it: the state did cross, with the account's id in it.
-        expect(seen.join('\n')).toContain(USER.id);
-        expect(seen.join('\n')).not.toMatch(TOKEN_FREE);
-    });
-
-    it('only what a window needs can be asked for', async () => {
-        const { client } = await linked();
-        const asked = await client.call('engine.tynn', ['credential', []]);
-        expect(asked.ok).toBe(false);
-    });
-
-    it('a window with no link answers signed out, and refuses a request', async () => {
-        const replica = new SessionEngineClient().tynn();
-        expect(replica.status().signedIn).toBe(false);
-        await expect(replica.request('/api/v1/me', { method: 'GET' })).rejects.toThrow();
+    it('only what Settings needs can be asked for: no credential', async () => {
+        const { service } = await served();
+        await expect(service.call('credential', [])).rejects.toThrow();
     });
 });
 

@@ -12,12 +12,10 @@ import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
 import { gitAddSubmodule, gitClone, gitPushMain, gitSetOrigin } from './git-ports.js';
 import type { GithubAccount } from './github-account.js';
-import type { GithubAccountReplica } from './github-account-replica.js';
 import type { HostApiDeps } from './host-api.js';
 import type { Registry } from './registry.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import type { TynnAccount } from './tynn-account.js';
-import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { addWorkspace, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, createWorkspace, hibernateWorkspace, listTynnOwners, listTynnProjects, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { repoOpsPorts } from './workspace-reads-api.js';
@@ -38,8 +36,8 @@ export interface WorkspaceLifecycleWiring {
     readonly engines: () => NonNullable<WorkspaceOpsPorts['engines']> | null;
     /** A fresh trust verdict before a workspace wakes: throws when there is no way to get one. */
     readonly reverifyTrust: (workspaceId: string) => Promise<void>;
-    readonly github: () => GithubAccount | GithubAccountReplica | null;
-    readonly tynn: () => TynnAccount | TynnAccountReplica | null;
+    readonly github: () => GithubAccount | null;
+    readonly tynn: () => TynnAccount | null;
     readonly defaultEnvFile: () => string;
     readonly stagingDirectory: () => string;
 }
@@ -53,7 +51,7 @@ export interface WorkspaceLifecycle {
 
 export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceLifecycle {
     const registry = () => w.registry()!;
-    const account = (): TynnAccount | TynnAccountReplica => { const a = w.tynn(); if (!a) throw new Error('this Genie has no Tynn account'); return a; };
+    const account = (): TynnAccount => { const a = w.tynn(); if (!a) throw new Error('this Genie has no Tynn account'); return a; };
     const signedInGithub = () => { const g = w.github(); return g && g.view().status === 'signed-in' ? g : null; };
     const workspaceOps: WorkspaceOpsPorts = {
         reverifyTrustBeforeRedock: w.reverifyTrust,
