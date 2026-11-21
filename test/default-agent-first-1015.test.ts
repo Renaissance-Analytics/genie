@@ -88,9 +88,11 @@ describe('an existing workspace with agents and no default (the owner’s six)',
         await r.load({ name: 'alphar', healthy: true });
         expect(await r.assignMissingDefaults()).toEqual(['beach']);
         expect(r.defaultAgentOf('beach')).toBe(records[0]!.id);
-        const file = await readFile(join(dir, 'workspaces.json'), 'utf8');
+        const path = new Store(dir).workspacesFile;
+        const file = await readFile(path, 'utf8');
+        expect(file).toMatch(/"defaultAgentAuto":\s*true/);
         expect(await r.assignMissingDefaults()).toEqual([]);
-        expect(await readFile(join(dir, 'workspaces.json'), 'utf8')).toBe(file);
+        expect(await readFile(path, 'utf8')).toBe(file);
         // CONTROL: recorded on disk, not only in memory.
         const reopened = new Registry(new Store(dir));
         await reopened.load({ name: 'alphar', healthy: true });
