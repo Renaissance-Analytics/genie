@@ -5,8 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountRecord } from '../src/core/accounts.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
-import type { DriverEvents, SessionDriver, TurnOutcomeLike } from '../src/core/session.js';
-import { visibleRows } from '../src/core/stream-view.js';
+import { COOLING_MS, type DriverEvents, type SessionDriver, type TurnOutcomeLike } from '../src/core/session.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -81,6 +80,8 @@ describe('SessionHost: the active Claude account changes under a running agent',
         const w = world();
         expect(w.host.start(w.record, dir)).toEqual({ ok: true });
         expect(w.drivers[0]!.account?.id).toBe(A.id);
+        // The gauge can see a run row: a resumed start shows one.
+        await vi.waitFor(() => expect(w.host.ledgerFor(w.record.id).filter((r) => r.event.kind === 'run')).toHaveLength(1));
         w.actions.length = 0;
         w.switchTo(B);
         await vi.waitFor(() => expect(w.drivers).toHaveLength(2));
@@ -90,40 +91,57 @@ describe('SessionHost: the active Claude account changes under a running agent',
         // It looked for the thread under B's directory before it stopped anything.
         expect(w.probed).toEqual([{ threadId: THREAD, configDir: B.configDir }]);
         expect(w.actions).not.toContain('started');
-        // The new run's marker says it is quiet (the positive control), and the stream does not show it.
-        const isQuiet = (r: { event: { kind: string } }) => r.event.kind === 'run' && (r.event as { quiet?: boolean }).quiet === true;
-        await vi.waitFor(() => expect(w.host.ledgerFor(w.record.id).some(isQuiet)).toBe(true));
-        expect(visibleRows(w.host.ledgerFor(w.record.id), null).filter(isQuiet)).toEqual([]);
+        // No "Run started" row for the move. The positive control is the test above it: the run it moved from showed one.
+        await vi.waitFor(() => expect(w.host.historyPending(w.record.id)).toBe(false));
+        expect(w.host.ledgerFor(w.record.id).filter((r) => r.event.kind === 'run')).toEqual([]);
         expect(w.notices()).toEqual([]);
     });
 
-    it('a BUSY agent finishes its turn on the old account and is moved only once that turn has ended', async () => {
-        const w = world();
-        w.host.start(w.record, dir);
-        expect(w.host.prompt(w.record.id, 'work', 'you')).toBe(true);
-        w.switchTo(B);
-        await new Promise((r) => setTimeout(r, 20));
-        expect(w.drivers).toHaveLength(1);
-        expect(w.drivers[0]!.killed).toBe(false);
-        w.drivers[0]!.events.onTurnEnd?.(REPLIED);
-        await vi.waitFor(() => expect(w.drivers).toHaveLength(2));
-        expect(w.drivers[1]!.account?.id).toBe(B.id);
-        expect(w.drivers[1]!.resume).toBe(THREAD);
+    /** Steps the faked clock until `done`, letting what each timer starts run (the move awaits a stop, then starts). */
+    const stepUntil = async (done: () => boolean, maxMs: number) => { for (let t = 0; t < maxMs && !done(); t += 50) await vi.advanceTimersByTimeAsync(50); };
+
+    it('a BUSY agent finishes its turn on the old account, and moves only once it is quiet (its turn and Cooling over)', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const w = world();
+            w.host.start(w.record, dir);
+            expect(w.host.prompt(w.record.id, 'work', 'you')).toBe(true);
+            w.switchTo(B);
+            await vi.advanceTimersByTimeAsync(100);
+            expect(w.drivers).toHaveLength(1);
+            expect(w.drivers[0]!.killed).toBe(false);
+            w.drivers[0]!.events.onTurnEnd?.(REPLIED);
+            // COOLING: Claude may still open a turn for a prompt it took mid-turn. Nothing moves in it.
+            await vi.advanceTimersByTimeAsync(COOLING_MS - 1_000);
+            expect(w.drivers).toHaveLength(1);
+            expect(w.drivers[0]!.killed).toBe(false);
+            await stepUntil(() => w.drivers.length === 2, 5_000);
+            expect(w.drivers).toHaveLength(2);
+            expect(w.drivers[1]!.account?.id).toBe(B.id);
+            expect(w.drivers[1]!.resume).toBe(THREAD);
+        } finally { vi.useRealTimers(); }
     });
 
-    it('a message queued behind the turn is kept: it runs on the old account first, then the agent moves', async () => {
-        const w = world();
-        w.host.start(w.record, dir);
-        w.host.prompt(w.record.id, 'work', 'you');
-        w.host.prompt(w.record.id, 'and then this', 'you');
-        w.switchTo(B);
-        w.drivers[0]!.events.onTurnEnd?.(REPLIED);
-        await new Promise((r) => setTimeout(r, 20));
-        // The queued message went to the running process: nothing dropped, nothing moved yet.
-        expect(w.drivers).toHaveLength(1);
-        expect(w.drivers[0]!.prompts).toEqual(['work', 'and then this']);
-        w.drivers[0]!.events.onTurnEnd?.(REPLIED);
-        await vi.waitFor(() => expect(w.drivers).toHaveLength(2));
+    it('a message taken behind the turn is kept: it runs on the old account first, then the agent moves, with nothing sent twice', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const w = world();
+            w.host.start(w.record, dir);
+            w.host.prompt(w.record.id, 'work', 'you');
+            w.host.prompt(w.record.id, 'and then this', 'you');
+            w.switchTo(B);
+            w.drivers[0]!.events.onTurnEnd?.(REPLIED);
+            await vi.advanceTimersByTimeAsync(100);
+            // The second message went to the running process: nothing dropped, nothing moved while it runs.
+            expect(w.drivers).toHaveLength(1);
+            expect(w.drivers[0]!.prompts).toEqual(['work', 'and then this']);
+            w.drivers[0]!.events.onTurnEnd?.(REPLIED);
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(w.drivers).toHaveLength(1);
+            await stepUntil(() => w.drivers.length === 2, COOLING_MS + 5_000);
+            expect(w.drivers).toHaveLength(2);
+            expect(w.drivers[1]!.prompts).toEqual([]);
+        } finally { vi.useRealTimers(); }
     });
 
     it('a thread the new account cannot find is never forked: the agent stays on its old process and account, told once', async () => {

@@ -475,6 +475,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // says `unsupported`) is shown as nothing known, a refusal in its words, and an offer not dismissed.
         accounts: async () => { const r = await call('accounts.list'); return r.ok ? (r.value as AccountsSnapshot | null) : null; },
         accountsAct: (action: AccountsAction) => answer<AccountsActResult>('accounts.act', action),
+        accountSignIn: (accountId: string) => answer<SignInResult>('accounts.signIn', accountId),
         dismissSwitchOffer: async (id: string) => { const r = await call('accounts.dismissOffer', id); return r.ok && r.value === true; },
         ...(local ? {
             accountRetry: (agentId: string) => answer<{ ok: true } | { ok: false; reason: string }>('accountRetry', agentId),

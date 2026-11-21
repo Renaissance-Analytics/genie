@@ -3,6 +3,8 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { accountIdentityOf, accountLabel, accountLabelOf, legacyAccountId, unknownAccountIdentity, type AccountIdentity, type AccountRecord } from '../core/accounts.js';
 import { forgetRefusal } from '../core/account-settings.js';
+import { isClaudeLoginMethod } from '../core/claude-accounts.js';
+import { linkSharedSessions } from './claude-account-dirs.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -35,8 +37,12 @@ function parseBook(value: unknown): Parsed {
         const provider = a.provider as AcpProvider;
         if (a.legacy ? a.id !== legacyAccountId(provider) : !MANAGED_ID.test(a.id)) throw new Error('Invalid account id');
         seen.add(a.id);
+        // A Claude account of its own (Tynn #1011): an absolute directory and the method chosen, both or neither; never on Codex.
+        const own = a.configDir !== undefined || a.method !== undefined;
+        if (own && (provider !== 'claude' || a.legacy || typeof a.configDir !== 'string' || !isAbsolute(a.configDir) || !isClaudeLoginMethod(a.method))) throw new Error('Invalid account directory');
         return { id: a.id, provider, label: accountLabelOf(a.label), labelEdited: a.labelEdited, home: a.home, legacy: a.legacy,
-            identity: accountIdentityOf(a.identity), createdAt: a.createdAt };
+            identity: accountIdentityOf(a.identity), createdAt: a.createdAt,
+            ...(own ? { configDir: a.configDir as string, method: a.method as 'subscription' | 'console' } : {}) };
     });
     for (const provider of ACP_PROVIDERS) if (!seen.has(legacyAccountId(provider))) throw new Error('Invalid account book: missing legacy default');
     const active: Partial<Record<AcpProvider, string>> = {};
@@ -120,9 +126,28 @@ export class AccountsHost {
         });
     }
 
-    /** RED stub (Tynn #1011). */
-    addClaude(_input: { method: 'subscription' | 'console'; label?: string }): Promise<AccountRecord> {
-        return Promise.reject(new Error('not built'));
+    /**
+     * A CLAUDE ACCOUNT OF ITS OWN (Tynn #1011): a configuration directory under Genie's data, made now with its session history
+     * linked to the one shared store (claude-account-dirs.ts), and the method the person chose. Nothing is signed in yet: the
+     * person signs in with Claude Code's own login in a terminal they see. No credential is written, read or kept here.
+     */
+    addClaude(input: { method: 'subscription' | 'console'; label?: string }): Promise<AccountRecord> {
+        return this.#queue(async () => {
+            if (!isClaudeLoginMethod(input.method)) throw new Error('Invalid sign-in method');
+            const base = this.#newAccount('claude', input.label, null);
+            const configDir = resolve(this.#options.root, 'accounts', 'claude', base.id);
+            const linked = linkSharedSessions(configDir, this.#sharedStore());
+            if (!linked.ok) throw new Error(linked.reason);
+            const account: AccountRecord = { ...base, configDir, method: input.method };
+            const next = [...this.#accounts, account];
+            await this.#write(next, this.#active); this.#accounts = next;
+            return detached(account);
+        });
+    }
+
+    /** The one store every Claude account directory shares: the default home's own `projects`. */
+    #sharedStore(): string {
+        return this.#options.sharedSessionStore ?? join(this.#options.legacyHomes.claude, 'projects');
     }
 
     /**
@@ -138,7 +163,9 @@ export class AccountsHost {
             const reported = accountIdentityOf(identity);
             const email = reported.email?.toLowerCase() ?? null;
             if (email === null) return null;
-            const mine = this.#accounts.filter(a => a.provider === provider);
+            // Only the accounts that live in the provider's ONE default home: one with its own directory (Tynn #1011) is chosen,
+            // never taken over by whoever signs in to the default home, even with the same email.
+            const mine = this.#accounts.filter(a => a.provider === provider && a.configDir === undefined);
             const match = mine.find(a => a.identity.email?.toLowerCase() === email) ?? mine.find(a => a.identity.email === null);
             let accounts: readonly AccountRecord[];
             let account: AccountRecord;

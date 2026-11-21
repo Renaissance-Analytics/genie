@@ -1,6 +1,6 @@
 import type { LocalFramePort } from '../core/local-frame.js';
 import { bindTerminalViews, watchTerminal } from './local-terminal-client.js';
-import type { GenieBridge, LocalOwnerBridge } from './bridge.js';
+import type { GenieBridge, LocalOwnerBridge, SignInResult } from './bridge.js';
 import { localTransport } from './local-transport.js';
 import { connectRemote, type RemoteClient } from './remote-bridge.js';
 import type { LocalFilesBridge } from './local-files-client.js';
@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'marketplace' | 'gapps' | 'crashReport' | 'chooseProviderProgram' | 'scratchTerminal'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'accountSignIn' | 'dismissSwitchOffer' | 'marketplace' | 'gapps' | 'crashReport' | 'chooseProviderProgram' | 'scratchTerminal'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -339,6 +339,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         // The account chips (Tynn #895), as the IPC answered them: nothing known while the link is down, its words, false.
         accounts: async () => { const r = await requestBridge((bridge) => bridge.accounts!()); return r !== null && 'ok' in r ? null : r; },
         accountsAct: (action) => requestBridge((bridge) => bridge.accountsAct!(action)),
+        // One account's own sign-in (Tynn #1011): genie-host starts it and asks this window's process to show it.
+        accountSignIn: (accountId) => requestBridge((bridge) => bridge.accountSignIn!(accountId)) as Promise<SignInResult>,
         dismissSwitchOffer: async (id) => (await requestBridge((bridge) => bridge.dismissSwitchOffer!(id))) === true,
         agents: {
             restart: (id, kind) => requestAgent((agents) => agents.restart(id, kind)),

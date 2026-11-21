@@ -37,7 +37,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.localBegin': [{ kind: 'write', id: 'quiet' }], 'terminals.localChunk': ['ticket', 'x'], 'terminals.localFinish': ['ticket'],
     'terminals.localWatch': ['view', null, 'quiet'], 'terminals.localReady': ['view'], 'terminals.localAck': ['view', 1], 'terminals.localUnwatch': ['view'],
     snapshot: [], agentDetail: ['missing'], openAgent: ['agent_a'], stopAgent: ['agent_a'],
-    cancelTurn: ['agent_a'], stopToolCall: ['agent_a', 't1'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'], 'logins.design': [], 'accounts.switch': ['claude'], 'logins.provider': ['claude'],
+    cancelTurn: ['agent_a'], stopToolCall: ['agent_a', 't1'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'], 'logins.design': [], 'accounts.switch': ['claude'], 'logins.provider': ['claude'], 'accounts.signIn': ['account_x'],
     prompt: ['agent_a', 'hello'], resolvePrompt: ['agent_a', 'draft_1', 'send'],
     addAgent: ['work', { name: 'new', purpose: 'contract', provider: 'claude' }],
     answerApproval: ['agent_a', 'allow', 'note'],

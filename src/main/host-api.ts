@@ -740,6 +740,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.signIns ? deps.signIns.design(context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
             case 'accounts.switch':
                 return deps.signIns ? deps.signIns.switchAccount(str(args[0]), args[1], context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
+            case 'accounts.signIn':
+                return deps.signIns ? deps.signIns.accountLogin(str(args[0]), context) : { ok: false, reason: SIGN_IN_UNAVAILABLE };
             // The crash report: the draft, and only what the person sends (Tynn #386 part 4; #897 2c-2).
             case 'crashReport.draft':
                 return deps.crashReports ? deps.crashReports.draft() : { text: '' };

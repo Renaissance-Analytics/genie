@@ -8,7 +8,11 @@ import type { AccountView } from './accounts-view.js';
  */
 export type AccountsAction =
     | { readonly kind: 'rename'; readonly id: string; readonly label: string }
-    | { readonly kind: 'forget'; readonly id: string };
+    | { readonly kind: 'forget'; readonly id: string }
+    /** Tynn #1011: a Claude account of its own (a configuration directory); the person then signs in to it. */
+    | { readonly kind: 'add-claude'; readonly method: 'subscription' | 'console'; readonly label?: string }
+    /** Tynn #1011: make it the provider's active account; every agent draws on it from its next turn, on the same thread. */
+    | { readonly kind: 'set-active'; readonly id: string };
 
 export type AccountsActResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
@@ -28,7 +32,13 @@ export function forgetRefusal(account: Pick<AccountView, 'active' | 'label'>): s
 export function accountsActionOf(value: unknown): AccountsAction | null {
     if (typeof value !== 'object' || value === null) return null;
     const v = value as Record<string, unknown>;
+    if (v['kind'] === 'add-claude') {
+        if (v['method'] !== 'subscription' && v['method'] !== 'console') return null;
+        // Only these fields are kept: anything else a window sent (a key, a token) never reaches the host.
+        return typeof v['label'] === 'string' && v['label'].trim() !== '' ? { kind: 'add-claude', method: v['method'], label: v['label'] } : { kind: 'add-claude', method: v['method'] };
+    }
     if (typeof v['id'] !== 'string' || v['id'] === '') return null;
+    if (v['kind'] === 'set-active') return { kind: 'set-active', id: v['id'] };
     if (v['kind'] === 'forget') return { kind: 'forget', id: v['id'] };
     if (v['kind'] === 'rename' && typeof v['label'] === 'string') return { kind: 'rename', id: v['id'], label: v['label'] };
     return null;

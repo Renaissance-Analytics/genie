@@ -8,6 +8,8 @@ import { claudeConfigDirOf, claudeLiveOf, respawnDecision, type RespawnInput } f
 import { AccountsHost, type AccountsOptions } from '../src/main/accounts-host.js';
 import { linkSharedSessions, SHARED_SESSION_FOLDERS, type SessionLinkFs } from '../src/main/claude-account-dirs.js';
 import { LoginHost } from '../src/main/login-host.js';
+import { ClaudeAccountsLive } from '../src/main/claude-accounts-live.js';
+import { AccountIdentityReader } from '../src/main/account-identity.js';
 import { claudeDriverAccountOptions } from '../src/main/session-host.js';
 
 // Tynn #1011: Claude accounts as configuration directories (prism-acp 0.45.0 claudeAccounts). Genie keeps a label, the
@@ -140,11 +142,12 @@ describe('linkSharedSessions: the one place an account directory gets the shared
     });
 });
 
-const status = (over: Partial<ClaudeAccountStatus> = {}): ClaudeAccountStatus => ({
+// A field given as `undefined` is LEFT OUT, as prism-acp leaves out what the CLI did not print.
+const status = (over: { [K in keyof ClaudeAccountStatus]?: ClaudeAccountStatus[K] | undefined } = {}): ClaudeAccountStatus => Object.fromEntries(Object.entries({
     signedIn: true, method: 'subscription', cliAuthMethod: 'claude.ai', billing: 'subscription', email: 'person@example.test',
     organizationId: 'org-1', organizationName: 'Example Org', subscriptionType: 'max', requestedConfigDir: '/acct',
     configDirectory: '/acct', configDirectoryMatches: true, loginExpiresAt: '2026-12-01T00:00:00Z', withheld: ['ANTHROPIC_API_KEY'], ...over,
-});
+}).filter(([, v]) => v !== undefined)) as unknown as ClaudeAccountStatus;
 
 describe('claudeLiveOf: what the popover shows of an account, from describe and check (typed, no text parsed)', () => {
     it('keeps exactly the fields the person sees', () => {
@@ -169,10 +172,11 @@ describe('claudeLiveOf: what the popover shows of an account, from describe and 
 });
 
 describe('accountsActionOf: the new account actions, checked', () => {
-    it('accepts add (subscription or console), sign in and switch', () => {
+    it('accepts add (subscription or console) and switch', () => {
         expect(accountsActionOf({ kind: 'add-claude', method: 'console' })).toEqual({ kind: 'add-claude', method: 'console' });
         expect(accountsActionOf({ kind: 'add-claude', method: 'subscription', label: 'Work' })).toEqual({ kind: 'add-claude', method: 'subscription', label: 'Work' });
-        expect(accountsActionOf({ kind: 'sign-in', id: 'account_x' })).toEqual({ kind: 'sign-in', id: 'account_x' });
+        // Signing in opens a window for the person: that is accounts.signIn (a sign-in method), never an account action.
+        expect(accountsActionOf({ kind: 'sign-in', id: 'account_x' })).toBeNull();
         expect(accountsActionOf({ kind: 'set-active', id: 'account_x' })).toEqual({ kind: 'set-active', id: 'account_x' });
     });
     it('refuses anything else', () => {
@@ -218,7 +222,7 @@ describe('signing in to an account with its own directory: prism-acp loginComman
         const opened: Array<{ command?: string; env?: Readonly<Record<string, string>>; cwd: string }> = [];
         const windows: string[] = [];
         const login = new LoginHost({
-            terminals: { open: (o) => { opened.push(o); return { id: `t${opened.length}` } as never; }, onExit: () => () => {}, close: () => {} } as never,
+            terminals: { open: (o: { command?: string; env?: Readonly<Record<string, string>>; cwd: string }) => { opened.push(o); return { id: `t${opened.length}` } as never; }, onExit: () => () => {}, close: () => {} } as never,
             openWindow: (route) => { windows.push(route); },
             runStatus: async () => 0,
             accountFor: () => account,
@@ -249,5 +253,74 @@ describe('launching on the active account: the driver gets its configuration dir
         expect(claudeDriverAccountOptions({ legacy: false })).toEqual({ configDir: null });
         expect(claudeDriverAccountOptions({ legacy: false, configDir: '/genie/accounts/claude/x' })).toEqual({ configDir: '/genie/accounts/claude/x' });
         expect(claudeDriverAccountOptions(undefined)).toEqual({});
+        // The default home Genie itself was started with is still the default: nothing about it changes.
+        expect(claudeDriverAccountOptions({ legacy: true }, { CLAUDE_CONFIG_DIR: '/custom/claude' })).toEqual({ configDir: '/custom/claude' });
+        expect(claudeDriverAccountOptions({ legacy: false, configDir: '/own' }, { CLAUDE_CONFIG_DIR: '/custom/claude' })).toEqual({ configDir: '/own' });
+    });
+});
+
+describe('ClaudeAccountsLive: each account\'s live state, asked of the CLI in that account\'s own directory', () => {
+    const rec = (id: string, extra: Record<string, unknown> = {}) => ({ id, provider: 'claude' as const, label: id, labelEdited: false, home: '/home/.claude', legacy: id === 'account_legacy_claude',
+        identity: { name: null, email: null, plan: null }, createdAt: NOW, ...extra });
+
+    it('an account with its own directory is described there and checked against what the person chose; its email is recorded', async () => {
+        const asked: Array<string | null> = [];
+        const recorded: Array<[string, string | null]> = [];
+        const own = rec(`account_${'3'.repeat(32)}`, { configDir: '/genie/accounts/claude/x', method: 'subscription' });
+        const live = new ClaudeAccountsLive({
+            accounts: () => [rec('account_legacy_claude'), own],
+            describe: async (dir) => { asked.push(dir); return dir === '/genie/accounts/claude/x' ? status({ requestedConfigDir: dir, configDirectory: dir }) : status({ requestedConfigDir: null, configDirectory: '/home/.claude', email: 'other@example.test' }); },
+            defaultDir: () => null,
+            recordIdentity: async (id, identity) => { recorded.push([id, identity.email]); },
+            changed: () => {},
+        });
+        await live.refresh();
+        expect(asked.sort()).toEqual([null, '/genie/accounts/claude/x'].sort());
+        expect(live.view()[own.id]).toMatchObject({ signedIn: true, email: 'person@example.test', check: { state: 'ready', differences: [] } });
+        expect(recorded).toContainEqual([own.id, 'person@example.test']);
+    });
+
+    it('a Console login where the person chose a subscription is a MISMATCH, typed', async () => {
+        const own = rec(`account_${'4'.repeat(32)}`, { configDir: '/d', method: 'subscription' });
+        const live = new ClaudeAccountsLive({
+            accounts: () => [own], defaultDir: () => null, recordIdentity: async () => {}, changed: () => {},
+            describe: async (dir) => status({ requestedConfigDir: dir, configDirectory: dir ?? undefined, method: 'console', billing: 'apiUsage', cliAuthMethod: 'api_key' }),
+        });
+        await live.refresh();
+        expect(live.view()[own.id]?.check).toEqual({ state: 'mismatch', differences: ['method'] });
+    });
+
+    it('the default home\'s status belongs only to the default-home account with its email: never to another', async () => {
+        const known = rec('account_legacy_claude', { identity: { name: null, email: 'person@example.test', plan: null } });
+        const otherKnown = rec(`account_${'5'.repeat(32)}`, { identity: { name: null, email: 'someone@example.test', plan: null } });
+        const live = new ClaudeAccountsLive({
+            accounts: () => [known, otherKnown], defaultDir: () => null, recordIdentity: async () => {}, changed: () => {},
+            describe: async () => status({ requestedConfigDir: null, configDirectory: '/home/.claude' }),
+        });
+        await live.refresh();
+        expect(live.view()[known.id]?.signedIn).toBe(true);
+        expect(live.view()[otherKnown.id]).toBeUndefined();
+    });
+
+    it('a describe that fails says nothing (no state), never a guess', async () => {
+        const own = rec(`account_${'6'.repeat(32)}`, { configDir: '/d', method: 'console' });
+        const live = new ClaudeAccountsLive({ accounts: () => [own], defaultDir: () => null, recordIdentity: async () => {}, changed: () => {}, describe: async () => { throw new Error('no CLI'); } });
+        await live.refresh();
+        expect(live.view()[own.id]).toBeUndefined();
+    });
+});
+
+describe('the default home\'s identity read never takes over a CHOSEN account with its own directory', () => {
+    it('with an own-directory account active, nothing is read from the default home and nothing is recorded', async () => {
+        const runs: string[] = [];
+        const recorded: unknown[] = [];
+        const book = {
+            activeFor: () => ({ provider: 'claude' as const, configDir: '/genie/accounts/claude/x' }),
+            recordSignedIn: async (_p: unknown, identity: unknown) => { recorded.push(identity); return null; },
+        };
+        const ports = (() => ({ run: async (binary: string) => { runs.push(binary); return { exitCode: 0, stdout: '{"loggedIn":true,"email":"other@example.test"}' }; } })) as never;
+        await new AccountIdentityReader(book as never, ports).refreshProvider('claude');
+        expect(runs).toEqual([]);
+        expect(recorded).toEqual([]);
     });
 });

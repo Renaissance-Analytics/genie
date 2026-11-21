@@ -1243,6 +1243,10 @@ function DesktopApp({ bridge }: AppProps) {
     const switchAccount = useCallback((provider: string, choose?: string) => {
         void resolvedBridge?.switchAccount?.(provider, choose).then((r) => { if (!r.ok) { showAlert({ title: 'The switch could not start', body: r.reason }); return; } openCompanion(r, 'Switch account'); }, () => {});
     }, [resolvedBridge, showAlert, openCompanion]);
+    // One account's own sign-in (Tynn #1011): genie-host starts Claude Code's login for it; the window opens it for the person.
+    const accountSignIn = useCallback((accountId: string) => {
+        void resolvedBridge?.accountSignIn?.(accountId).then((r) => { if (!r.ok) { showAlert({ title: 'Sign-in could not start', body: r.reason }); return; } openCompanion(r, 'Sign in'); }, () => {});
+    }, [resolvedBridge, showAlert, openCompanion]);
     const accountsAct = useCallback(async (action: AccountsAction): Promise<AccountsActResult> => {
         const r = (await resolvedBridge?.accountsAct?.(action)) ?? { ok: false as const, reason: 'Genie’s host is not connected yet.' };
         readAccounts();
@@ -2181,6 +2185,7 @@ function DesktopApp({ bridge }: AppProps) {
             onSwitchAccount={switchAccount}
             onDismissSwitchOffer={dismissSwitchOffer}
             onAccountsAct={accountsAct}
+            onAccountSignIn={accountSignIn}
             onDesignSignIn={designSignIn}
             mailSignals={mailSignalList}
             route={route}

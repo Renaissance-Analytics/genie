@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { claudeAccounts } from '@particle-academy/prism-acp';
 import { join } from 'node:path';
 import { DESIGN_LOGIN } from '../core/design-login.js';
 import { type ProviderAccountHome } from '../core/accounts.js';
@@ -59,7 +60,9 @@ export interface LoginHostOptions {
     /** Run a status command in `cwd` through the shell, in the provider's normal home; resolves with its exit code. */
     runStatus: (command: string, cwd: string) => Promise<number>;
     /** The host book's account, to refuse a provider it does not know; it sets no environment (Tynn #753). */
-    accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string }) | null;
+    accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string; configDir?: string; method?: 'subscription' | 'console'; identity?: { readonly email: string | null } }) | null;
+    /** A sign-in to a Claude account's own directory ended (Tynn #1011): the host asks that directory who is signed in. */
+    onOwnDirectoryEnded?: ((provider: string, accountId: string) => void) | undefined;
     onSignedIn: (provider: string, accountId?: string) => void;
     /** An account switch's login is over (Tynn #482): `signedIn` is the provider's status answer. Called once per switch. */
     onSwitchEnded?: ((provider: string, signedIn: boolean) => void) | undefined;
@@ -85,7 +88,12 @@ interface Live {
     scratch: string;
     /** An account switch (Tynn #753): the provider's own login, in its one home, with the steps on screen. */
     switching?: boolean;
+    /** A Claude account's own directory (Tynn #1011): its status is asked by the host, of that directory. */
+    ownDirectory?: boolean;
 }
+
+/** An email passed to `--email` only when it is plainly one: it goes on a shell line. */
+const SIMPLE_EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 const OS_WORKSPACE = '__genie__';
 
@@ -144,7 +152,20 @@ export class LoginHost {
         if (binary !== null && !quotable(binary)) return { ok: false, reason: `The ${known?.name ?? provider} login could not start: the path set for it has a character Genie will not put in a command.` };
         const program = binary === null ? cli : `"${binary}"`;
         // The provider's documented login, its first word the resolved CLI; with none known (or Claude Design), the CLI itself.
-        const command = known ? `${program}${known.login.slice(known.login.indexOf(' '))}` : program;
+        let command = known ? `${program}${known.login.slice(known.login.indexOf(' '))}` : program;
+        /*
+         * A CLAUDE ACCOUNT OF ITS OWN (Tynn #1011): prism-acp's `claudeAccounts.loginCommand` for its directory and the method the
+         * person chose (`auth login --claudeai` or `--console`), started with the environment it hands back: CLAUDE_CONFIG_DIR set
+         * to that directory, every inherited credential withheld. The person finishes Anthropic's own flow; Genie sees nothing of it.
+         */
+        let env: Readonly<Record<string, string>> | undefined;
+        const own = design ? null : this.#ownDirectory(cli, accountId);
+        if (own) {
+            const email = own.email !== null && SIMPLE_EMAIL.test(own.email) ? own.email : undefined;
+            const login = claudeAccounts.loginCommand(own.configDir, { method: own.method, ...(email ? { email } : {}), parentEnv: this.#options.parentEnv ?? process.env });
+            command = [program, ...login.args].join(' ');
+            env = login.env;
+        }
         let scratch: string;
         try {
             scratch = mkdtempSync(join(this.#options.scratch(), `genie-login-${provider}-`));
@@ -153,15 +174,23 @@ export class LoginHost {
         }
         let opened: { id: string };
         try {
-            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false });
+            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false, ...(env ? { env } : {}) });
         } catch (error) {
             rmSync(scratch, { recursive: true, force: true });
             return { ok: false, reason: `The ${known?.name ?? provider} login could not start: ${(error as Error).message}` };
         }
-        const live: Live = { key, provider, ...(resolvedId !== undefined ? { accountId: resolvedId } : {}), terminalId: opened.id, scratch };
+        const live: Live = { key, provider, ...(resolvedId !== undefined ? { accountId: resolvedId } : {}), terminalId: opened.id, scratch, ...(own ? { ownDirectory: true } : {}) };
         this.#live.set(key, live);
         this.#options.openWindow(this.#route(live));
         return { ok: true, terminalId: opened.id };
+    }
+
+    /** The account's own directory and method, when it is a Claude account with one (Tynn #1011). */
+    #ownDirectory(provider: string, accountId: string | undefined): { configDir: string; method: 'subscription' | 'console'; email: string | null } | null {
+        if (provider !== 'claude' || !this.#options.accountFor) return null;
+        const account = this.#options.accountFor(provider, accountId);
+        if (!account || account.configDir === undefined || account.method === undefined) return null;
+        return { configDir: account.configDir, method: account.method, email: account.identity?.email ?? null };
     }
 
     /**
@@ -237,6 +266,12 @@ export class LoginHost {
         try {
             if (live.provider === DESIGN_LOGIN) {
                 this.#options.onDesignLoginEnded?.();
+                return;
+            }
+            // An account's own directory (Tynn #1011): its status is that directory's, asked by the host through prism-acp's
+            // `describe`; the default home's status command here would answer for another account.
+            if (live.ownDirectory === true) {
+                if (live.accountId !== undefined) this.#options.onOwnDirectoryEnded?.(live.provider, live.accountId);
                 return;
             }
             const known = providerLogin(live.provider);

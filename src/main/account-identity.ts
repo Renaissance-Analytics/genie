@@ -38,7 +38,7 @@ export async function readAccountIdentity(account: Pick<AccountRecord, 'provider
 /** What reading who is signed in records: the book matches the email to a known account and makes it the active one. */
 interface IdentityBook {
     recordSignedIn(provider: AcpProvider, identity: AccountIdentity): Promise<AccountRecord | null>;
-    activeFor(provider: AcpProvider): Pick<AccountRecord, 'provider'>;
+    activeFor(provider: AcpProvider): Pick<AccountRecord, 'provider' | 'configDir'>;
 }
 
 /** Told when a read of who is signed in starts and when it has ended: the account a reading belongs to may change in between. */
@@ -84,7 +84,11 @@ export class AccountIdentityReader {
 
     async #read(provider: AcpProvider): Promise<void> {
         try {
-            const identity = await readAccountIdentity(this.#book.activeFor(provider), this.#ports());
+            // An active Claude account with a directory of its own (Tynn #1011) was CHOSEN: whoever is signed in to the default home
+            // never takes its place. Its own identity is read in its own directory (claude-accounts-live.ts).
+            const active = this.#book.activeFor(provider);
+            if (active.configDir !== undefined) return;
+            const identity = await readAccountIdentity(active, this.#ports());
             if (identity === null || identity.email === null) return;
             await this.#book.recordSignedIn(provider, identity);
         } catch (error) {

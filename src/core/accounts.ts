@@ -31,7 +31,7 @@ export interface AccountRecord {
  * The home a provider runs in. R2 (Tynn #753): ONE home per provider, the provider's own normal one, never an environment of
  * Genie's making; this describes an account, it is not a launch input.
  */
-export type ProviderAccountHome = Pick<AccountRecord, 'provider' | 'home' | 'legacy'>;
+export type ProviderAccountHome = Pick<AccountRecord, 'provider' | 'home' | 'legacy' | 'configDir'>;
 
 /** S4 supplies ONLY fields returned by the provider's own status command. */
 export function accountLabel(email: string | null, ordinal: number): string {

@@ -44,7 +44,8 @@ import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, exitRecordOf, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
-import { providerBinary, realListModels, SessionHost } from './session-host.js';
+import { claudeLaunchConfigDir, providerBinary, realDescribeClaude, realListModels, SessionHost } from './session-host.js';
+import { ClaudeAccountsLive } from './claude-accounts-live.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
@@ -1213,6 +1214,7 @@ async function main(): Promise<void> {
         login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
         switchLogin: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         providerOf: (agentId) => hostRegistry.find(agentId)?.provider ?? null,
+        accountProvider: (accountId) => accounts.get(accountId)?.provider ?? null,
         cancel: (terminalId) => logins?.cancel(terminalId),
         openWindow: (context, route, closed) => openCallersTerminalWindow(terminalWindowPorts, context, route, { startedHere: false, ended: closed }),
     });
@@ -1223,9 +1225,31 @@ async function main(): Promise<void> {
     let designAuthNow: DesignAuthBook | null = null;
     // Settings → Providers → Accounts (Tynn #484): rename, or forget (the signed-in account refused, saying so); a forgotten
     // account's readings leave the board. Only the book changes; no credential is touched.
+    // Each Claude account's live state, asked of Claude Code in its own directory (Tynn #1011, prism-acp `describe`/`compare`).
+    const claudeLive = new ClaudeAccountsLive({
+        accounts: () => accounts.list(),
+        describe: (dir) => realDescribeClaude(dir),
+        defaultDir: () => claudeLaunchConfigDir({}),
+        recordIdentity: (id, identity) => accounts.recordIdentity(id, identity),
+        changed: () => { accountsChangedNow?.(); },
+    });
+    void claudeLive.refresh();
     const accountsAct = async (action: AccountsAction): Promise<AccountsActResult> => {
         try {
             if (action.kind === 'rename') await accounts.rename(action.id, action.label);
+            else if (action.kind === 'add-claude') { await accounts.addClaude(action.label !== undefined ? { method: action.method, label: action.label } : { method: action.method }); accountsChangedNow?.(); }
+            else if (action.kind === 'set-active') {
+                // SWITCH = CHOOSE (Tynn #1011): the account becomes the active one; every agent draws on it from its next clean idle,
+                // on the same thread (SessionHost.accountChanged). Readings from then on are this account's.
+                const target = accounts.get(action.id);
+                if (!target) throw new Error('Genie does not know that account.');
+                await accounts.setActive(target.provider, target.id);
+                readingAttribution.signedIn(target.provider);
+                host.accountChanged(target.provider);
+                void providerHealth.refresh(target.provider);
+                void claudeLive.refresh();
+                accountsChangedNow?.();
+            }
             else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); saveBoardNow?.(); }
             return { ok: true };
         } catch (error) {
@@ -1233,7 +1257,7 @@ async function main(): Promise<void> {
         }
     };
     // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
-    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() });
+    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000)), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() });
     // ...the same book on the one protocol (Tynn #895), answered here for every client.
     accountsPortNow = { list: () => accountsSnapshot(), act: (action) => accountsAct(action), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
     // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
@@ -1665,6 +1689,20 @@ async function main(): Promise<void> {
         },
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
         onDesignLoginEnded: () => { designAuth.apply({ kind: 'login-ended' }); tellDesignLoginRan(host); },
+        // A sign-in to a Claude account's own directory ended (Tynn #1011): that directory is asked who is signed in, and if it is
+        // the active account, the agents its provider had signed out come back.
+        onOwnDirectoryEnded: (provider, accountId) => {
+            void providerHealth.refresh(provider);
+            void claudeLive.refresh().then(() => {
+                if (!isAcpProvider(provider) || accounts.activeFor(provider).id !== accountId || claudeLive.view()[accountId]?.signedIn !== true) return;
+                readingAttribution.signedIn(provider);
+                afterSignedIn(provider, {
+                    signedOutAgents: (p) => host.signedOutAgents(p),
+                    restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+                    resumeLimit: (p) => host.resumeLimit(p),
+                });
+            });
+        },
         // A switch's login is over (Tynn #482): the flow reads who is signed in and says so.
         onSwitchEnded: (provider, signedIn) => { void switchFlow?.settle(provider, signedIn); },
     });

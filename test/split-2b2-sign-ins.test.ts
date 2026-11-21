@@ -49,7 +49,7 @@ const METHODS = ['providerLogin', 'logins.design', 'accounts.switch'] as const;
 
 describe('the three sign-in methods are named once, written by the owner (the step-3 hook)', () => {
     it('SIGN_IN_METHODS names them, and each is a write any client may make', () => {
-        expect((protocol as unknown as { SIGN_IN_METHODS?: readonly string[] }).SIGN_IN_METHODS).toEqual([...METHODS, 'logins.provider']); // + the tray's (2b-2b, split-2b2b)
+        expect((protocol as unknown as { SIGN_IN_METHODS?: readonly string[] }).SIGN_IN_METHODS).toEqual([...METHODS, 'logins.provider', 'accounts.signIn']); // + the tray's (2b-2b, split-2b2b), one account's own (Tynn #1011)
         for (const method of METHODS) {
             expect(protocol.REMOTE_METHODS as readonly string[]).toContain(method);
             expect(capabilityOf(method as RemoteMethod), method).toBe('write');
