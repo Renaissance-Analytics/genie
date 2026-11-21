@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { accountsActionOf } from '../src/core/account-settings.js';
 import { claudeConfigDirOf, claudeLiveOf, respawnDecision, type RespawnInput } from '../src/core/claude-accounts.js';
 import { AccountsHost, type AccountsOptions } from '../src/main/accounts-host.js';
-import { linkSharedSessions, SHARED_SESSION_FOLDERS, type SessionLinkFs } from '../src/main/claude-account-dirs.js';
 import { LoginHost } from '../src/main/login-host.js';
 import { ClaudeAccountsLive } from '../src/main/claude-accounts-live.js';
 import { AccountIdentityReader } from '../src/main/account-identity.js';
@@ -94,53 +93,7 @@ describe('the book: one configuration directory per added Claude account', () =>
     });
 });
 
-describe('linkSharedSessions: the one place an account directory gets the shared session history (swappable for prism-acp)', () => {
-    it('links only session-history folders, never anything credential-bearing', () => {
-        expect(SHARED_SESSION_FOLDERS).toContain('projects');
-        for (const name of SHARED_SESSION_FOLDERS) expect(name).not.toMatch(/credential|auth|key|\.json$|keychain|settings/i);
-    });
-
-    it('is idempotent: a link already pointing at the store is left as it is', async () => {
-        const store = join(dir, 'store'), account = join(dir, 'acct');
-        expect(linkSharedSessions(account, store)).toEqual({ ok: true });
-        expect(linkSharedSessions(account, store)).toEqual({ ok: true });
-        expect(resolve(await readlink(join(account, 'projects')))).toBe(resolve(store));
-    });
-
-    it('refuses to replace a REAL folder, and leaves it and its contents untouched', async () => {
-        const store = join(dir, 'store'), account = join(dir, 'acct');
-        await mkdir(join(account, 'projects'), { recursive: true });
-        await writeFile(join(account, 'projects', 'keep.jsonl'), 'history');
-        const result = linkSharedSessions(account, store);
-        expect(result.ok).toBe(false);
-        expect(result.ok === false && result.reason).toMatch(/projects/);
-        expect((await lstat(join(account, 'projects'))).isSymbolicLink()).toBe(false);
-        expect(await readFile(join(account, 'projects', 'keep.jsonl'), 'utf8')).toBe('history');
-    });
-
-    it('refuses a link that points somewhere else', async () => {
-        const store = join(dir, 'store'), account = join(dir, 'acct');
-        linkSharedSessions(account, join(dir, 'other'));
-        expect(linkSharedSessions(account, store).ok).toBe(false);
-    });
-
-    it('a junction on Windows, a directory symlink elsewhere; it never reads a session file', () => {
-        for (const platform of ['win32', 'linux', 'darwin'] as const) {
-            const calls: string[] = [];
-            const fs: SessionLinkFs = {
-                mkdir: (p) => { calls.push(`mkdir ${p}`); },
-                lstat: () => null,
-                readlink: () => { throw new Error('no link'); },
-                symlink: (target, path, type) => { calls.push(`symlink ${type}`); },
-            };
-            expect(linkSharedSessions('/acct', '/store', { fs, platform })).toEqual({ ok: true });
-            expect(calls.filter((c) => c.startsWith('symlink'))).toEqual(SHARED_SESSION_FOLDERS.map(() => `symlink ${platform === 'win32' ? 'junction' : 'dir'}`));
-        }
-        // The ports have no read of a file's contents at all: the type has none to call.
-        const ports: Array<keyof SessionLinkFs> = ['mkdir', 'lstat', 'readlink', 'symlink'];
-        expect(ports).not.toContain('readFile' as keyof SessionLinkFs);
-    });
-});
+// The linking itself is prism-acp's (0.46.0 prepare): test/claude-accounts-prepare-1011.test.ts.
 
 // A field given as `undefined` is LEFT OUT, as prism-acp leaves out what the CLI did not print.
 const status = (over: { [K in keyof ClaudeAccountStatus]?: ClaudeAccountStatus[K] | undefined } = {}): ClaudeAccountStatus => Object.fromEntries(Object.entries({

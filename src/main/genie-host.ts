@@ -429,6 +429,8 @@ async function main(): Promise<void> {
     bootStep('settings', stepAt);
     // The host's account book (S1). Existing provider homes remain references, never read or moved.
     const accounts = await AccountsHost.open({ root: home, legacyHomes: legacyProviderHomes() });
+    // Every Claude account directory Genie made, kept in step: its history shared, its cleanupPeriodDays the default's (Tynn #1011).
+    accounts.syncClaudeDirs();
     const own = await openAgentStores(home, () => new Date().toISOString(), (id) => sessionsForInbox?.probe(id) ?? null, () => attentionLimitsFrom(settings.snapshot()));
     const drafts = await ChatDraftStore.open(home);
     bootStep('agent stores', stepAt);

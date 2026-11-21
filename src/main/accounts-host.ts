@@ -4,7 +4,7 @@ import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.j
 import { accountIdentityOf, accountLabel, accountLabelOf, legacyAccountId, unknownAccountIdentity, type AccountIdentity, type AccountRecord } from '../core/accounts.js';
 import { forgetRefusal } from '../core/account-settings.js';
 import { isClaudeLoginMethod } from '../core/claude-accounts.js';
-import { linkSharedSessions } from './claude-account-dirs.js';
+import { prepareAccountDir, syncCleanupPeriod } from './claude-account-dirs.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -136,13 +136,26 @@ export class AccountsHost {
             if (!isClaudeLoginMethod(input.method)) throw new Error('Invalid sign-in method');
             const base = this.#newAccount('claude', input.label, null);
             const configDir = resolve(this.#options.root, 'accounts', 'claude', base.id);
-            const linked = linkSharedSessions(configDir, this.#sharedStore());
-            if (!linked.ok) throw new Error(linked.reason);
+            const prepared = prepareAccountDir(configDir, this.#sharedStore());
+            if (!prepared.ok) throw new Error(prepared.reason);
+            syncCleanupPeriod(configDir, this.#options.legacyHomes.claude);
             const account: AccountRecord = { ...base, configDir, method: input.method };
             const next = [...this.#accounts, account];
             await this.#write(next, this.#active); this.#accounts = next;
             return detached(account);
         });
+    }
+
+    /**
+     * KEEP EVERY DIRECTORY GENIE MADE IN STEP (at the host's start): its history still shared, and its `cleanupPeriodDays` the
+     * default account's, so no account prunes the shared store sooner than the default does. A directory that refuses is left
+     * as it is; its account still works on its own history.
+     */
+    syncClaudeDirs(): void {
+        for (const a of this.#accounts) {
+            if (a.provider !== 'claude' || a.configDir === undefined) continue;
+            try { prepareAccountDir(a.configDir, this.#sharedStore()); syncCleanupPeriod(a.configDir, this.#options.legacyHomes.claude); } catch { /* left as it is */ }
+        }
     }
 
     /** The one store every Claude account directory shares: the default home's own `projects`. */

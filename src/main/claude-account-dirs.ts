@@ -1,61 +1,86 @@
-import { lstatSync, mkdirSync, readlinkSync, symlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { claudeAccounts, ClaudeSharedSessionsError, type ClaudeSharedSessionsRefusal } from '@particle-academy/prism-acp';
 
 /**
- * ONE SESSION STORE FOR EVERY CLAUDE ACCOUNT (Tynn #1011). Each account Genie adds signs in to a configuration directory of its
- * own (credentials stay apart), and that directory's session history is a link to ONE store, the default home's `projects`,
+ * A CLAUDE ACCOUNT'S DIRECTORY, MADE READY (Tynn #1011). Each account Genie adds signs in to a configuration directory of its
+ * own (credentials stay apart), and that directory's `projects` is a link to ONE session store, the default home's `projects`,
  * so a thread resumes under whichever account is active.
  *
- * MEASURED, not assumed (scripts/probes/claude-shared-store-probe.sh, Claude Code 2.1.330 on the Linux test VM, Azure jobs
- * 1121-173755-fb8c72 and 1121-174416-6e0d49): a thread started under directory A resumed under B with its history; B's
- * requests carried B's credential only; B's run opened nothing under A (strace, with positive controls); a directory with a
- * real `projects` of its own could not resume it. `--resume` reads only `projects/` (the transcript, its per-session folder and
- * the project's `memory/`); `sessions/` holds per-process key files and stays per directory.
+ * MEASURED before it was built (scripts/probes/claude-shared-store-probe.sh, Claude Code 2.1.330 on the Linux test VM, Azure jobs
+ * 1121-173755-fb8c72 and 1121-174416-6e0d49): a thread started under directory A resumed under B with its history; B's requests
+ * carried B's credential only; B's run opened nothing under A (strace, with positive controls); a directory with a real
+ * `projects` of its own could not resume it. `--resume` reads only `projects/`.
  *
- * This is the one function that links; prism-acp is to own it (`claudeAccounts.prepare(configDir, { sharedSessions: true })`),
- * and it is swapped in here when published. Rules: only session-history folders; never a credential-bearing one; a REAL folder
- * already there is refused, never replaced; a link pointing elsewhere is refused; a junction on Windows (no privilege needed),
- * a directory symlink elsewhere; no file's contents are ever read.
+ * prism-acp owns the linking (0.46.0 `claudeAccounts.prepare(configDir, { sharedSessions: true })`): only `projects`, a junction
+ * on Windows and a directory symlink elsewhere, never replacing, merging or reading anything, refusing with a typed code. Genie
+ * makes the store and the directory's parent (prepare creates neither) and says each refusal in its own words.
  */
-export const SHARED_SESSION_FOLDERS: readonly string[] = ['projects'];
 
-/** The only filesystem calls this makes: none reads a file's contents. */
-export interface SessionLinkFs {
-    mkdir(path: string): void;
-    /** `null` when nothing is there. */
-    lstat(path: string): { isSymbolicLink(): boolean } | null;
-    readlink(path: string): string;
-    symlink(target: string, path: string, type: 'junction' | 'dir'): void;
-}
-
-const realFs: SessionLinkFs = {
-    mkdir: (path) => { mkdirSync(path, { recursive: true }); },
-    lstat: (path) => lstatSync(path, { throwIfNoEntry: false }) ?? null,
-    readlink: (path) => readlinkSync(path),
-    symlink: (target, path, type) => { symlinkSync(target, path, type); },
+/** Every refusal prism-acp's `prepare` can give, with Genie's words for it. The words name no path. */
+const REFUSAL_WORDS: Readonly<Record<ClaudeSharedSessionsRefusal, string>> = {
+    realFolder: 'This account already keeps its own conversation history, so it cannot share the others\'. Genie leaves that history exactly as it is.',
+    linkedElsewhere: 'This account\'s conversation history already points somewhere else, so Genie leaves it as it is rather than replace it.',
+    occupied: 'Something that is not a folder is where this account\'s conversation history goes, so Genie leaves it as it is.',
+    unexpectedLink: 'This account\'s conversation history is linked although it was meant to be separate, so Genie will not use it as it is.',
+    storeMissing: 'The shared conversation history Claude Code keeps could not be found, so this account cannot share it yet.',
+    storeInvalid: 'The shared conversation history is not in a place Genie can link to, so this account cannot share it.',
+    configDirInvalid: 'The folder for this account could not be made ready (it is not a folder, or it is Claude Code\'s own default one).',
+    linkFailed: 'The system refused to link this account\'s conversation history to the shared one.',
 };
+export const SHARED_SESSIONS_REFUSALS = Object.keys(REFUSAL_WORDS) as readonly ClaudeSharedSessionsRefusal[];
 
-/** Paths compared as the OS does: resolved, and case-insensitively on Windows. A junction reads back with a trailing separator. */
-function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
-    const norm = (p: string) => { const r = resolve(p.replace(/^\\\\\?\\/, '')).replace(/[\\/]+$/, ''); return platform === 'win32' ? r.toLowerCase() : r; };
-    return norm(a) === norm(b);
+export function sharedSessionsWords(code: ClaudeSharedSessionsRefusal): string {
+    return REFUSAL_WORDS[code] ?? 'The folder for this account could not be made ready.';
 }
 
-export function linkSharedSessions(configDir: string, store: string, options: { fs?: SessionLinkFs; platform?: NodeJS.Platform } = {}): { ok: true } | { ok: false; reason: string } {
-    const fs = options.fs ?? realFs;
-    const platform = options.platform ?? process.platform;
+export type PreparedAccountDir = { ok: true } | { ok: false; code: ClaudeSharedSessionsRefusal | 'unknown'; reason: string };
+
+/** Make the account's directory ready, its history shared with `store`. Never throws: a refusal comes back with its words. */
+export function prepareAccountDir(configDir: string, store: string): PreparedAccountDir {
     try {
-        fs.mkdir(configDir);
-        fs.mkdir(store);
-        for (const name of SHARED_SESSION_FOLDERS) {
-            const path = join(configDir, name);
-            const there = fs.lstat(path);
-            if (there === null) { fs.symlink(resolve(store), path, platform === 'win32' ? 'junction' : 'dir'); continue; }
-            if (!there.isSymbolicLink()) return { ok: false, reason: `The account folder already has its own "${name}" folder, so its conversations cannot be shared. Genie leaves it as it is.` };
-            if (!samePath(fs.readlink(path), store, platform)) return { ok: false, reason: `The account folder's "${name}" links somewhere else, so Genie leaves it as it is.` };
-        }
+        mkdirSync(store, { recursive: true });
+        mkdirSync(dirname(configDir), { recursive: true });
+        claudeAccounts.prepare(configDir, { sharedSessions: true, store });
         return { ok: true };
     } catch (error) {
-        return { ok: false, reason: `The account folder could not be prepared: ${error instanceof Error ? error.message : String(error)}` };
+        if (error instanceof ClaudeSharedSessionsError) return { ok: false, code: error.code, reason: sharedSessionsWords(error.code) };
+        return { ok: false, code: 'unknown', reason: `The folder for this account could not be made ready: ${error instanceof Error ? error.message : String(error)}` };
     }
+}
+
+/** Claude Code's own default for `cleanupPeriodDays` (code.claude.com settings reference). */
+export const CLAUDE_CLEANUP_DEFAULT_DAYS = 30;
+
+/** The default account's `cleanupPeriodDays`, read as that ONE key: nothing else in its settings is kept or copied. */
+function defaultCleanupDays(defaultHome: string): number {
+    try {
+        const value = (JSON.parse(readFileSync(join(defaultHome, 'settings.json'), 'utf8')) as Record<string, unknown>)?.['cleanupPeriodDays'];
+        return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : CLAUDE_CLEANUP_DEFAULT_DAYS;
+    } catch {
+        return CLAUDE_CLEANUP_DEFAULT_DAYS;
+    }
+}
+
+/**
+ * ONE CLEANUP PERIOD FOR A SHARED STORE (prism-acp 0.46.0's caveat). Claude Code deletes transcripts older than
+ * `cleanupPeriodDays` under `projects/` whichever account is active, so with a shared store the SHORTEST setting among the
+ * accounts prunes everyone's. Each directory Genie made carries the default account's value (Claude Code's 30 when it sets
+ * none), in that directory's own `settings.json`, whose other keys are kept as they are.
+ */
+export function syncCleanupPeriod(configDir: string, defaultHome: string): void {
+    const days = defaultCleanupDays(defaultHome);
+    const file = join(configDir, 'settings.json');
+    let current: Record<string, unknown> = {};
+    let text: string | null = null;
+    try { text = readFileSync(file, 'utf8'); } catch { /* none yet: written fresh */ }
+    if (text !== null) {
+        let parsed: unknown;
+        // A settings file that is not a JSON object is the person's to fix: never overwritten here.
+        try { parsed = JSON.parse(text); } catch { return; }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+        current = parsed as Record<string, unknown>;
+    }
+    if (current['cleanupPeriodDays'] === days) return;
+    writeFileSync(file, `${JSON.stringify({ ...current, cleanupPeriodDays: days }, null, 2)}\n`, { mode: 0o600 });
 }
