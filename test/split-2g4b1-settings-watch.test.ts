@@ -168,7 +168,7 @@ describe('main’s settings: read from the watch, written over the protocol', ()
         const s = windowSettings(o.client);
         s.start();
         const heard: Array<[string, SettingValue, string | undefined, SettingValue]> = [];
-        s.onChange((key, value, workspaceId) => heard.push([key, value, workspaceId, s.snapshot().do_not_disturb]));
+        s.onChange((key, value, workspaceId) => heard.push([key, value, workspaceId, s.snapshot().do_not_disturb as SettingValue]));
         o.say({ data: DATA, key: null, value: null, workspaceId: null });
         const next = { ...DATA, values: { ...DATA.values, do_not_disturb: false } };
         o.say({ data: next, key: 'do_not_disturb', value: false, workspaceId: null });
@@ -256,7 +256,7 @@ describe('the window registry’s Deck wiring is dead: main reads only its agent
 
     it('so main builds no Deck, signals or handoff into it, and no change of the stores touches it', () => {
         expect(main).not.toMatch(/registry\.(setDeckSource|setSignals|setHandoffProbe)\(/);
-        expect(main).not.toMatch(/composed\.(signals|deckItems|attention|approvals\.onChange|flows\.onChange|onFrontDoorChange)\b/);
+        expect(main).not.toMatch(/composed\.(signals|deckItems|attention|approvals\.onChange|flows\.onChange)\b|composed\.onFrontDoorChange\(\(\) => registry/);
     });
 
     it('PINNED: an error main caught reaches the tray’s waiting count directly, not through the registry', () => {

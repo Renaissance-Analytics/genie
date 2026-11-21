@@ -67,9 +67,10 @@ describe('ApprovalQueue tells its listeners when the Deck it feeds changes', () 
         expect(changes).toBe(0);
     });
 
-    it('main.ts rebuilds the snapshot (and so the Deck) on every approval change', () => {
+    it('the Deck follows every approval change: genie-host’s features listen to its approvals (main’s window registry carried a Deck nobody read, Tynn #998)', () => {
         // Comments stripped by line, CRLF-safe, so prose cannot satisfy it.
-        const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-        expect(src).toMatch(/composed\.approvals\.onChange\(\(\) => registry\?\.touch\(\)\);/);
+        const src = readFileSync('src/main/genie-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+        expect(src).toMatch(/approvals\.onChange\(listener\), stores\.onEvent\(listener\)\]/);
+        expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/composed\.approvals\.onChange\(/);
     });
 });

@@ -117,7 +117,7 @@ describe('main.ts', () => {
         expect(src).toMatch(/onShutDown: \(\) => \{ void confirmTray\('shut-down'\)\.then\(\(ok\) => \{ if \(ok\) \{ leftRunning\.set\(false\); requestQuit\('shut-down'\); \} \}\); \}/);
         expect(block(src, "powerMonitor.on('shutdown'")).not.toMatch(/leftRunning/);
         expect(src).not.toMatch(/session-end', \(\) => \{[^}]*leftRunning/);
-        expect(src).toMatch(/void wireLoginItem\(composed\.settings, loginItemPort, \{[\s\S]*?\}, leftRunning\);/);
+        expect(src).toMatch(/void wireLoginItem\(settingsNow, loginItemPort, \{[\s\S]*?\}, leftRunning\);/);
     });
 
     it('a quit with an answer chosen up front (the tray, Restart, the tray-only exit) chooses it, then quits', () => {

@@ -150,15 +150,17 @@ describe('the setting', () => {
     });
 });
 
-describe('main.ts wires the setting to the updater', () => {
-    const main = () => readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
+// The updater is genie-host's, and follows the setting itself; since Tynn #998 (2g-4b1) main keeps no copy of it.
+describe('genie-host wires the setting to the updater', () => {
+    const host = () => readFileSync('src/main/genie-host.ts', 'utf8').replace(/\r\n/g, '\n');
 
     it('sets the channel from the stored setting at boot', () => {
-        expect(main()).toContain('updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel))');
+        expect(host()).toMatch(/updatesService\.setChannel\(channelFrom\(settings\.snapshot\(\)\.update_channel\)\)|channel: channelFrom\(settings\.snapshot\(\)\.update_channel\)/);
     });
 
-    it('and again whenever update_channel changes', () => {
-        expect(main()).toMatch(/settings\.onChange\(\(key, value\) => \{ if \(key === 'update_channel'\) updates\?\.setChannel\(channelFrom\(value\)\); \}\)/);
+    it('and again whenever update_channel changes; main follows nothing of it', () => {
+        expect(host()).toMatch(/settings\.onChange\(\(key, value, workspaceId\) => \{ if \(key === 'update_channel' && workspaceId === undefined\) updatesService\.setChannel\(channelFrom\(value\)\); \}\);/);
+        expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/update_channel/);
     });
 });
 
