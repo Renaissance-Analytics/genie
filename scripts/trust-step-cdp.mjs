@@ -12,6 +12,7 @@
  *   trusted. A second workspace nobody trusted is the control: the step still shows for it, in both runs.
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -32,6 +33,8 @@ const root = mkdtempSync(join(tmpdir(), 'trust-step-'));
 const home = join(root, 'home');
 mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
 mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
+// What's new for this version already seen: a fresh home would open it late, over the step (Tynn #1009).
+seedWhatsNewSeen(join(home, '.genie'));
 const log = join(root, 'electron.log');
 const env = {
     ...process.env,
@@ -235,6 +238,7 @@ try {
 
     console.log(`  add: ${String(await addAll(cdp, [acme, other])).slice(0, 320)}`);
     check(await reconnect(cdp), '0b. the app has its own connection back');
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     const acmeId = await idOf(cdp, acme);
     const otherId = await idOf(cdp, other);
     check(typeof acmeId === 'string' && typeof otherId === 'string', '1. two workspaces added', `${acmeId}, ${otherId}`);
