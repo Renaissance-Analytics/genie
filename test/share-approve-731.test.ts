@@ -280,7 +280,8 @@ describe('the words and the wiring (Tynn #731)', () => {
 
     it('wiring: main notifies each new guest request, and the remote window shows the wait', () => {
         const main = readFileSync(join(__dirname, '../src/main/main.ts'), 'utf8');
-        const block = main.slice(main.indexOf('composed.pairing.onChange('), main.indexOf('const arrivals = new ConnectWatch()'));
+        // Since Tynn #997 (2g-4a) both notifications read genie-host's remote.watch on main's own client.
+        const block = main.slice(main.indexOf('ownProtocol.watchRemote('), main.indexOf('const arrived = arrivals.next(view.connections)'));
         expect(block).toContain('newGuestAsks(');
         expect(block).toContain('guestAskNotice(');
         const app = readFileSync(join(__dirname, '../src/renderer/App.tsx'), 'utf8');

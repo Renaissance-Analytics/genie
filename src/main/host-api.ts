@@ -163,6 +163,8 @@ export interface HostApiDeps {
     hostShell?: import('./host-shell.js').HostShell;
     /** What this host runs, as this machine's tray and quit read it, said when it changes (core/host-summary.ts; Tynn #953). */
     hostSummary?: { now(): import('../core/host-summary.js').HostSummary; subscribe(listener: (summary: import('../core/host-summary.js').HostSummary) => void): () => void };
+    /** Who is at this machine, as main's own client's notifications read it, said when it changes (core/remote-watch.ts; Tynn #997). */
+    remoteWatch?: { now(): import('../core/remote-watch.js').RemoteWatchView; subscribe(listener: (view: import('../core/remote-watch.js').RemoteWatchView) => void): () => void };
     /** A window's transport to another machine, owned by its connection (device-link-protocol.ts; Tynn #941, 2f-2). */
     deviceLinkProtocol?: Pick<import('./device-link-protocol.js').DeviceLinkProtocol, 'call' | 'dropOwner'>;
     /** What an older Genie sealed, adopted into this host's keychain (host-legacy-adopt.ts; Tynn #959, 2g-3b). Absent = refused. */
@@ -898,6 +900,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         releaseCaller: context => { deps.features.releaseCaller?.(context); deps.deviceLinkProtocol?.dropOwner(context.connectionId); },
         // What this host runs, for a connection that said summary.watch (Tynn #953, 2g-2).
         ...(deps.hostSummary ? { hostSummary: () => deps.hostSummary!.now() } : {}),
+        // Who is at this machine, for main's own client saying remote.watch (Tynn #997, 2g-4a).
+        ...(deps.remoteWatch ? { remoteWatch: () => deps.remoteWatch!.now() } : {}),
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
@@ -941,6 +945,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
                 deps.hostSummary?.subscribe((summary) => listener(LOCAL_EVENTS.summary, summary)) ?? (() => {}),
+                deps.remoteWatch?.subscribe((view) => listener(LOCAL_EVENTS.remote, view)) ?? (() => {}),
                 deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
                 deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
                 deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),

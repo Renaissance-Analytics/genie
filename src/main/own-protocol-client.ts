@@ -1,6 +1,7 @@
 import { remoteOffer } from '../core/protocol-version.js';
 import type { DeckItem } from '../core/deck.js';
 import { readHostSummary, type HostSummary } from '../core/host-summary.js';
+import { readRemoteWatch, type RemoteWatchView } from '../core/remote-watch.js';
 import { LOCAL_EVENTS, inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
 
 /**
@@ -32,6 +33,11 @@ export interface OwnProtocolClient {
      * `local-summary`: the live terminals, armed flows and scheduled tasks this window's tray and quit read.
      */
     watchSummary(onSummary: (summary: HostSummary) => void): () => void;
+    /**
+     * WHO IS AT THIS MACHINE, KEPT (Tynn #997, 2g-4a): the same kind of connection, which says `remote.watch` and hears
+     * `local-remote`: the connections and pair requests this window's desktop notifications read.
+     */
+    watchRemote(onView: (view: RemoteWatchView) => void): () => void;
 }
 
 /**
@@ -100,7 +106,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
      * ONE CONNECTION HELD OPEN that says `control` once welcomed and hears `channel` (Tynn #941, #953): what it answered and
      * each event's payload reach `onValue`. Opened again whenever it drops, until the returned stop.
      */
-    const persistent = (control: 'deck.watch' | 'summary.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
+    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
         let stopped = false;
         let current: ReturnType<typeof inMemoryPair>['client'] | null = null;
         let attempt = 0;
@@ -147,7 +153,9 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
         persistent('deck.watch', LOCAL_EVENTS.deck, (value) => onItems(deckItems(value)), (payload) => onItems(deckItems((payload as { items?: unknown } | null)?.items)));
     const watchSummary = (onSummary: (summary: HostSummary) => void): (() => void) =>
         persistent('summary.watch', LOCAL_EVENTS.summary, (value) => onSummary(readHostSummary(value)), (payload) => onSummary(readHostSummary(payload)));
-    return { door, call, watchDeck, watchSummary };
+    const watchRemote = (onView: (view: RemoteWatchView) => void): (() => void) =>
+        persistent('remote.watch', LOCAL_EVENTS.remote, (value) => onView(readRemoteWatch(value)), (payload) => onView(readRemoteWatch(payload)));
+    return { door, call, watchDeck, watchSummary, watchRemote };
 }
 
 /** How long the Deck's connection waits before it is opened again; the last repeats. */
