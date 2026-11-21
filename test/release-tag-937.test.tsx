@@ -41,14 +41,28 @@ describe('judging Tynn\'s release decision (pure)', () => {
     });
 
     it('a signed, valid, unused decision for this version and this commit lets the tag through', () => {
-        expect(judgeReleaseDecision(decision(), { versionId: 'v1', commit: HEAD })).toEqual({ ok: true, versionNumber: '0.17.0', recordId: 'rec1', signedBy: 'Owner' });
+        expect(judgeReleaseDecision(decision(), { versionId: 'v1', commit: HEAD })).toEqual({ ok: true, required: true, versionNumber: '0.17.0', recordId: 'rec1', signedBy: 'Owner' });
     });
 
-    it('ACCEPTANCE 1: no signed decision is refused with the reason, even where Tynn would not require one', () => {
+    it('ACCEPTANCE 1: where Tynn requires one, no signed decision is refused with the reason', () => {
         const r = judgeReleaseDecision(decision({ signed: false, valid: false, record_id: null, release_commit: null, commit_matches: null }), { versionId: 'v1', commit: HEAD });
         expect(r).toMatchObject({ ok: false, reason: expect.stringContaining('no signed release decision for version 0.17.0') });
-        const optional = judgeReleaseDecision(decision({ required: false, signed: false, valid: false, commit_matches: null }, { required: false }), { versionId: 'v1', commit: HEAD });
-        expect(optional.ok).toBe(false);
+    });
+
+    it('Tynn\'s required:false (the repository has not opted into the release rules) lets the tag through, saying none was required', () => {
+        const unsigned = judgeReleaseDecision(decision({ required: false, signed: false, valid: false, record_id: null, release_commit: null, commit_matches: null }, { required: false }), { versionId: 'v1', commit: HEAD });
+        expect(unsigned).toEqual({ ok: true, required: false, versionNumber: '0.17.0', recordId: null, signedBy: null });
+        // Not required is not required: a decision signed for another commit does not turn it into a refusal.
+        expect(judgeReleaseDecision(decision({ required: false, release_commit: 'fff9999', commit_matches: false }, { required: false }), { versionId: 'v1', commit: HEAD })).toMatchObject({ ok: true, required: false });
+        // It is still the version asked about (CONTROL: another version's answer is refused, required or not).
+        expect(judgeReleaseDecision(decision({ required: false }, { required: false, version: { ...VERSION, id: 'v2' } }), { versionId: 'v1', commit: HEAD }).ok).toBe(false);
+    });
+
+    it('fails closed on an answer that says neither required nor a decision', () => {
+        const { required: _r, ...noRequired } = decision();
+        expect(judgeReleaseDecision({ ...noRequired, decision: undefined }, { versionId: 'v1', commit: HEAD }).ok).toBe(false);
+        expect(judgeReleaseDecision({ ...noRequired, required: 'no', decision: undefined }, { versionId: 'v1', commit: HEAD }).ok).toBe(false);
+        expect(judgeReleaseDecision({ schema: 'pm-records/1/release', version: VERSION }, { versionId: 'v1', commit: HEAD }).ok).toBe(false);
     });
 
     it('ACCEPTANCE 2: a decision signed for a different commit is refused, naming both commits', () => {
@@ -139,9 +153,18 @@ describe('repoTagRelease, against a real git', () => {
     });
 
     it('a passing gate tags, and the tag message names the decision it was made under', async () => {
-        const r = await repoTagRelease(ws, '', 'v0.17.0', { gate: async () => ({ ok: true, versionNumber: '0.17.0', recordId: 'rec1', signedBy: 'Owner' }) });
+        const r = await repoTagRelease(ws, '', 'v0.17.0', { gate: async () => ({ ok: true, required: true, versionNumber: '0.17.0', recordId: 'rec1', signedBy: 'Owner' }) });
         expect(r).toMatchObject({ ok: true });
         expect(await git('tag', '-l', '--format=%(contents)', 'v0.17.0')).toMatch(/Tynn release decision rec1 for version 0\.17\.0, signed by Owner/);
+        expect(await remoteTags()).toBe('v0.17.0');
+    });
+
+    it('a gate that required no decision tags, and the tag message says none was required', async () => {
+        const r = await repoTagRelease(ws, '', 'v0.17.0', { gate: async () => ({ ok: true, required: false, versionNumber: '0.17.0', recordId: null, signedBy: null }) });
+        expect(r).toMatchObject({ ok: true });
+        const message = await git('tag', '-l', '--format=%(contents)', 'v0.17.0');
+        expect(message).toMatch(/Tynn required no release decision for version 0\.17\.0/);
+        expect(message).not.toMatch(/Tynn release decision \S+ for version/);
         expect(await remoteTags()).toBe('v0.17.0');
     });
 
@@ -154,7 +177,7 @@ describe('repoTagRelease, against a real git', () => {
 
     it('a tag name git would not take, or one that reads as an option, is refused before anything runs', async () => {
         let asked = 0;
-        const gate = async () => { asked += 1; return { ok: true as const, versionNumber: null, recordId: null, signedBy: null }; };
+        const gate = async () => { asked += 1; return { ok: true as const, required: true, versionNumber: null, recordId: null, signedBy: null }; };
         for (const bad of ['', 'has space', '-d', 'a..b', 'end.lock']) {
             expect((await repoTagRelease(ws, '', bad, { gate })).ok).toBe(false);
         }
@@ -224,6 +247,15 @@ describe('the Repository panel\'s Tag release, by workspace (the host)', () => {
         expect(await git('tag', '--list')).toBe('');
         const signed = tynn({ [DOOR]: { status: 200, body: decision({ release_commit: head.slice(0, 7).toUpperCase(), commit_matches: true }) } });
         expect(await repoCall(deps(signed.ports), 'tag', 'w', '', 'v0.17.0', 'v1')).toEqual({ ok: true, value: { tag: 'v0.17.0', commit: head } });
+        expect(await remoteTags()).toBe('v0.17.0');
+    });
+
+    it('linked, but Tynn says no decision is required (repository not opted in): tags as an unlinked workspace would', async () => {
+        await link();
+        const head = await git('rev-parse', 'HEAD');
+        const t = tynn({ [DOOR]: { status: 200, body: decision({ required: false, signed: false, valid: false, record_id: null, release_commit: null, commit_matches: null }, { required: false }) } });
+        expect(await repoCall(deps(t.ports), 'tag', 'w', '', 'v0.17.0', 'v1')).toEqual({ ok: true, value: { tag: 'v0.17.0', commit: head } });
+        expect(t.calls).toEqual([{ path: `${DOOR}?commit=${head}`, method: 'GET' }]);
         expect(await remoteTags()).toBe('v0.17.0');
     });
 
