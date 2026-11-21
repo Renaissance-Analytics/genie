@@ -35,6 +35,8 @@ export interface QuestionPreload {
     onShow(listener: (view: QuestionView) => void): () => void;
     openInFiles?(id: string, path: string): Promise<boolean>;
     drawer?(open: boolean): Promise<void>;
+    /** The whole window maximized to its display's work area, or restored (Tynn #1019). */
+    maximize?(on: boolean): Promise<void>;
     remote(request: { kind: 'answer'; id: string; selections: string[][]; notes: string[] } | { kind: 'dismiss'; id: string; notes: string[] } | { kind: 'visuals'; id: string }): Promise<unknown>;
 }
 
@@ -52,6 +54,7 @@ export interface QuestionBridge {
     file?(id: string, path: string): Promise<FileAnswer>;
     openInFiles?(id: string, path: string): Promise<boolean>;
     drawer?(open: boolean): Promise<void>;
+    maximize?(on: boolean): Promise<void>;
     /** The shown question's visuals (Tynn #835): its ArtBoard posts, from its workspace or the machine that asked. */
     visuals?(id: string): Promise<VisualsAnswer>;
 }
@@ -126,6 +129,7 @@ export function questionBridge(preload: QuestionPreload, connect: () => Question
         ...(preload.draft ? { draft: (id: string, draft: QuestionDraft) => preload.draft!(id, draft) } : {}),
         ...(preload.openInFiles ? { openInFiles: (id: string, path: string) => preload.openInFiles!(id, path) } : {}),
         ...(preload.drawer ? { drawer: (open: boolean) => preload.drawer!(open) } : {}),
+        ...(preload.maximize ? { maximize: (on: boolean) => preload.maximize!(on) } : {}),
         answer: async (selections, notes, id) => {
             const target = id ?? view?.item.id;
             if (target !== undefined && isRemoteQuestionId(target)) return outcomeOf(await preload.remote({ kind: 'answer', id: target, selections, notes }).catch((e: unknown) => ({ ok: false, reason: reasonOf(e) })));
