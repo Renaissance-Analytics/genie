@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { providerTicks } from './provider-ticks.mjs';
+import { seedWhatsNewSeen } from './cdp-whats-new.mjs';
 
 export const WIN = process.platform === 'win32';
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -93,6 +94,8 @@ export function makeHome(label) {
     mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
     const genie = join(home, '.genie');
     mkdirSync(join(genie, 'runtime'), { recursive: true });
+    // What's new for this version already seen: a fresh home would open it late, over the page (Tynn #1009).
+    seedWhatsNewSeen(genie);
     // One workspace, registered as a person's machine already has it: a folder and the registry entry.
     const ws = join(root, 'ws');
     mkdirSync(ws, { recursive: true });

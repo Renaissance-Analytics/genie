@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
+import { seedWhatsNewSeen } from './cdp-whats-new.mjs';
 
 /**
  * Electron's `userData`, per platform.
@@ -49,6 +50,9 @@ function userData() {
 // above is kept only as documentation of what it is NOT.
 const runtime = join(homedir(), '.genie', 'runtime');
 mkdirSync(runtime, { recursive: true });
+// WHAT'S NEW FOR THIS VERSION ALREADY SEEN (Tynn #1009): an unseen one opens late, over whatever a row is clicking.
+// GENIE_SEED_WHATS_NEW=unseen leaves it unseen, for the one row that measures the first run's (ui-lag-cdp).
+if (process.env.GENIE_SEED_WHATS_NEW !== 'unseen') seedWhatsNewSeen(join(homedir(), '.genie'));
 
 const now = new Date().toISOString();
 

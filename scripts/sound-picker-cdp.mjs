@@ -14,6 +14,7 @@
  *   every row is one height, and each name sits on one line.
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew, forceWhatsNewOpenForProbe, seedWhatsNewSeen } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -33,6 +34,8 @@ const root = mkdtempSync(join(tmpdir(), 'sound-picker-'));
 const home = join(root, 'home');
 mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
 mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
+// What's new for this version already seen: a fresh home would open it late, over Settings (Tynn #1009).
+seedWhatsNewSeen(join(home, '.genie'));
 const log = join(root, 'electron.log');
 const env = {
     ...process.env,
@@ -134,6 +137,7 @@ async function waitFor(cdp, expression, ms = 30_000) {
  * one covered the Settings nav after the start-up Escape): a person closes it with Escape and clicks again; so does this.
  */
 async function click(cdp, selector) {
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     let at = null;
     for (let attempt = 0; attempt < 4; attempt++) {
         at = await cdp.evaluate(`(() => {
@@ -232,6 +236,7 @@ try {
         await sleep(500);
     }
     await cdp.evaluate(`window.location.hash = '#genie://settings'; true`);
+    await forceWhatsNewOpenForProbe((expression) => cdp.evaluate(expression));
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-settings-nav="notifications"]'))`, 30_000), '1. Settings is open, with its Notifications section');
     check(await click(cdp, '[data-settings-nav="notifications"]'), '2. Notifications takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(TRIGGER)}))`, 15_000), '3. the page has a sound button');
