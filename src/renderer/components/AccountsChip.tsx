@@ -4,14 +4,16 @@ import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, 
 import { shortDateTime } from '../../core/clock-words.js';
 import { limitLevel, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
 import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
+import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
 import type { DesignAuthView } from '../../core/design-auth.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 
 /**
  * THE PROVIDER'S ACCOUNT CHIP (Tynn #483, Accounts S10). The chip names the account signed in on the host, which every agent
- * of the provider uses (Tynn #751/#753), with its tightest window. Its popover lists every known account: its name, its plan
- * (or "unknown"), one bar per window with the share left and the local reset time ("unknown" for a window not reported,
+ * of the provider uses (Tynn #751/#753), with its tightest window. Its popover (wide, two panes since Tynn #988: the signed-in
+ * account large on the left, the others in a column on the right in the order to switch to them) lists every known account:
+ * its name, its plan (a chip only when known), one bar per window with the share left and the local reset time ("unknown" for a window not reported,
  * "Refreshed" past its reset), and, on every account but the signed-in one, one click to switch: the provider's own login, in
  * its one home (S9). Below them, always, "Use another account" (Tynn #850): the same login naming no account, for one Genie
  * does not know yet. A standing switch offer (S8) leads the popover and marks the chip. Every action is a react-fancy Button.
@@ -63,6 +65,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
     const firstTarget = offer?.targets[0];
     const firstAccount = firstTarget ? view.accounts.find((a) => a.id === firstTarget.accountId) : undefined;
     const offerChoose = firstAccount ? chooseWords(firstAccount) : firstTarget?.label;
+    const others = rankSwitchNext(view.accounts.filter((a) => a.id !== active.id), now);
     return (
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
             <Popover.Trigger>
@@ -85,10 +88,16 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                     {offer ? <Icon name="arrow-right-left" size="xs" className="text-[var(--warning)]" /> : null}
                 </Button>
             </Popover.Trigger>
-            <Popover.Content role="dialog" aria-label={`${name} accounts`} data-account-popover={provider}
-                className="w-72 border-[var(--border-1)] bg-[var(--surface-raised)] p-3 text-[var(--fg-1)]">
-                <div className="flex flex-col gap-3 text-xs">
-                    <ProviderLogo provider={provider} size="md" />
+            {/* WIDE, TWO PANES (Tynn #988): the signed-in account large on the left with all its stats; the other accounts in a
+                column on the right, in the order to switch to them (rankSwitchNext), each with its Switch. */}
+            <Popover.Content role="dialog" aria-label={`${name} accounts`} data-account-popover={provider} data-layout="two-pane"
+                className="w-[40rem] max-w-[calc(100vw-1.5rem)] overflow-hidden border-[var(--border-1)] bg-[var(--surface-raised)] p-0 text-[var(--fg-1)]">
+                <div className="flex max-h-[70vh] text-xs">
+                <div data-accounts-pane="active" className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+                    <div className="flex items-center gap-2">
+                        <ProviderLogo provider={provider} size="md" />
+                        <span className="text-[var(--fg-3)]">{name}</span>
+                    </div>
                     {offer ? (
                         <Callout color="amber" icon={<Icon name="arrow-right-left" size="sm" />} data-switch-offer={offer.id}>
                             <p>{offer.label}: {offer.over ? 'spent' : `${offer.leftPct}% left`} of its {windowWords(offer.window)} window.</p>
@@ -101,30 +110,91 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                             </div>
                         </Callout>
                     ) : null}
-                    {view.accounts.map((a) => <AccountSection key={a.id} account={a} now={now} onSwitch={() => switchTo(chooseWords(a))} />)}
+                    <ActiveAccount account={active} now={now} />
+                    {design && provider === 'claude' ? <DesignAuthRow design={design} onSignIn={onDesignSignIn} /> : null}
+                </div>
+                <div data-accounts-pane="others" className="flex w-60 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
+                    {/* The list scrolls; Use another account stays below it, always in view (measured in the real app: at a
+                        640 px window it had scrolled out of the popover). */}
+                    <div data-accounts-others-list="" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--fg-3)]">{others.length > 0 ? 'Switch to next' : 'Other accounts'}</span>
+                        {others.length === 0 ? <span className="text-[var(--fg-3)]">No other {name} account yet.</span> : null}
+                        {others.map((a, i) => <OtherAccount key={a.id} account={a} rank={i + 1} now={now} onSwitch={() => switchTo(chooseWords(a))} />)}
+                    </div>
                     {/* USE ANOTHER ACCOUNT (Tynn #850): always here, even with one known account. The provider's own login,
                         naming no account: the person picks or creates a different one, and Genie reads who it is afterwards. */}
-                    <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" className="self-start" onClick={() => switchTo()}>Use another account</Button>
-                    {design && provider === 'claude' ? <DesignAuthRow design={design} onSignIn={onDesignSignIn} /> : null}
+                    <div className="shrink-0 border-t border-[var(--border-1)] p-2">
+                        <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" onClick={() => switchTo()}>Use another account</Button>
+                    </div>
+                </div>
                 </div>
             </Popover.Content>
         </Popover>
     );
 }
 
-function AccountSection({ account, now, onSwitch }: { account: AccountView; now: number; onSwitch: () => void }) {
+/** The plan chip, only when the plan is known (Tynn #988: a chip reading "unknown" told the person nothing). */
+function PlanChip({ plan }: { plan: string | null }) {
+    return plan ? <Badge size="sm" variant="soft" color="violet" data-account-plan="">{plan}</Badge> : null;
+}
+
+/** THE LEFT PANE: the account the chip names, large, with who it is and every window it reported. */
+function ActiveAccount({ account, now }: { account: AccountView; now: number }) {
     return (
-        <section data-account={account.id} data-active={account.active ? 'true' : 'false'} className="flex flex-col gap-1.5 border-t border-[var(--border-1)] pt-2">
+        <section data-account={account.id} data-active={account.active ? 'true' : 'false'} className="flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+                <Avatar size="lg" fallback={initial(account.label)} />
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-sm font-semibold">{account.label}</span>
+                    {account.email && account.email !== account.label ? <span data-account-email="" className="truncate text-[var(--fg-3)]">{account.email}</span> : null}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                        <PlanChip plan={account.plan} />
+                        {account.active
+                            ? <Badge size="sm" variant="outline" color="green" dot data-account-active="">Signed in</Badge>
+                            : <Badge size="sm" variant="outline" color="zinc" data-account-active-unknown="">Not signed in</Badge>}
+                    </div>
+                </div>
+            </div>
+            <div className="flex flex-col gap-2.5 border-t border-[var(--border-1)] pt-3">
+                {account.windows.map((w) => <WindowRow key={w.window} w={w} now={now} />)}
+            </div>
+        </section>
+    );
+}
+
+/** THE RIGHT COLUMN: another account, compact: its name, plan, a line per window and its Switch. */
+function OtherAccount({ account, rank, now, onSwitch }: { account: AccountView; rank: number; now: number; onSwitch: () => void }) {
+    return (
+        <section data-account={account.id} data-active="false" data-switch-rank={rank} className="flex flex-col gap-1.5 rounded-md border border-[var(--border-1)] bg-[var(--surface-raised)] p-2">
             <div className="flex items-center gap-1.5">
                 <Avatar size="xs" fallback={initial(account.label)} />
-                <span className="min-w-0 flex-1 truncate font-medium">{account.label}</span>
-                <Badge size="sm" variant="soft" color={account.plan ? 'violet' : 'zinc'} data-account-plan="">{account.plan ?? 'unknown'}</Badge>
-                {account.active
-                    ? <Badge size="sm" variant="outline" color="green" dot data-account-active="">Signed in</Badge>
-                    : <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} onClick={onSwitch}>Switch</Button>}
+                <span className="min-w-0 flex-1 truncate font-medium" title={account.email ?? account.label}>{account.label}</span>
+                <PlanChip plan={account.plan} />
             </div>
-            {account.windows.map((w) => <WindowRow key={w.window} w={w} now={now} />)}
+            {account.windows.map((w) => <CompactWindow key={w.window} w={w} now={now} />)}
+            <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} className="self-end" onClick={onSwitch}>Switch</Button>
         </section>
+    );
+}
+
+function CompactWindow({ w, now }: { w: AccountWindowRow; now: number }) {
+    if ('unknown' in w) {
+        return <div data-account-window={w.window} data-level="unknown" className="flex gap-2 text-[11px] text-[var(--fg-3)]"><span className="w-10 shrink-0">{w.window}</span><span>unknown</span></div>;
+    }
+    if (w.refreshed || w.resetsAtMs <= now) {
+        return <div data-account-window={w.window} data-level="refreshed" className="flex gap-2 text-[11px] text-[var(--fg-3)]"><span className="w-10 shrink-0">{w.window}</span><span>Refreshed</span></div>;
+    }
+    const level = limitLevel(w);
+    return (
+        <div data-account-window={w.window} data-level={level} className="flex flex-col text-[11px]">
+            <div className="flex items-center gap-2">
+                <span className="w-10 shrink-0 text-[var(--fg-2)]">{w.window}</span>
+                <Progress value={w.leftPct} max={100} size="sm" color={LEVEL_COLOR[level]} aria-label={`${w.window} left`} className="flex-1" />
+                <span className={`w-8 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+            </div>
+            {/* The reset is half of the switch-next rule, so it is read in full, not cut short. */}
+            <span data-account-reset-in="" className="pl-12 text-[var(--fg-4)]" title={shortDateTime(w.resetsAtMs)}>{resetsIn(w.resetsAtMs, now)}</span>
+        </div>
     );
 }
 
