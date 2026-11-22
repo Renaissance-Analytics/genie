@@ -118,6 +118,10 @@ try {
         return { busy: chat?.getAttribute('data-chat-busy') ?? null, text, chips, held, threadHasMark: thread.some((t) => t.includes(${JSON.stringify(MARK)})), fieldFocused: document.activeElement === f, agentSurface: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')) };
     })()`);
 
+    // What's new opens on a first run and covers the window (run 2's screenshots): closed first, as a person would.
+    try { await until('What’s new', () => page.evaluate(`Boolean(document.querySelector('[data-whats-new]'))`), 20_000); await page.evaluate(`document.querySelector('[data-action="whats-new-close"]')?.click(); true`); } catch { /* not shown */ }
+    await until('What’s new to close', () => page.evaluate(`!document.querySelector('[data-whats-new]')`), 15_000);
+
     // Open atlas, with its chat beside it.
     await page.evaluate(`window.location.hash = '#genie://agent/${atlas.id}?tab=stream'; true`);
     await until('atlas with its chat and composer', () => page.evaluate(`Boolean(document.querySelector(${JSON.stringify(FIELD)}))`), 60_000);
@@ -133,7 +137,8 @@ try {
     check('E0', Boolean(first), 'gauge control: the stub records a message that reached the agent', first);
     await until('atlas mid-turn (data-chat-busy)', async () => (await state()).busy === 'true', 60_000);
 
-    // E1: held, with its file, and the hint.
+    // E1: held, with its file, and the hint. Nothing covers the window: the key goes where a person's would.
+    demand(await page.evaluate(`!document.querySelector('[role="dialog"]')`), 'no dialog over the window before E1');
     await typeText(MARK);
     demand(await attachPng('unsend-me.png'), 'the composer file input');
     await until('the attachment chip', async () => (await state()).chips.length === 1, 10_000);
