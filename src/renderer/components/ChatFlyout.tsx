@@ -582,6 +582,7 @@ function ChatFlyoutBody({
      * prism went to moic). `Message lark — in beta.example` can not be read as the project you are looking at.
      */
     const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
+    const elsewhereId = scope?.kind === 'elsewhere' ? scope.workspaceId : null;
     const blocked = scope?.kind === 'blocked' ? scope.reason : null;
     const sendKey = useSendKey();
     // Resolved after mount, as the title bar's hint is: reading `navigator` while rendering is a hydration mismatch.
@@ -667,10 +668,16 @@ function ChatFlyoutBody({
                     {thread ? thread.name : 'genie'}
                 </span>
 
+                {/*
+                  * THE AGENT IS FROM ANOTHER WORKSPACE (Tynn #1002): said in its own words, never in a hover. It read "in Tynn"
+                  * with its meaning only in a tooltip, and "in Tynn" reads as the Tynn product. A click opens that workspace.
+                  */}
                 {elsewhere ? (
-                    <span data-chat-scope="elsewhere" title={`${thread?.name ?? 'This agent'} is in ${elsewhere}, not the workspace on screen`} className="shrink-0 rounded-sm bg-[var(--warning)]/15 px-1.5 py-px font-mono text-[10px] text-[var(--warning)]">
-                        in {elsewhere}
-                    </span>
+                    onOpenWorkspace && elsewhereId ? (
+                        <Button size="xs" labelClassName="contents" type="button" data-chat-scope="elsewhere" data-chat-scope-workspace={elsewhereId} onClick={() => onOpenWorkspace(elsewhereId)} className="shrink-0 rounded-sm bg-[var(--warning)]/15 px-1.5 py-px text-[11px] text-[var(--warning)] hover:bg-[var(--warning)]/25">Agent from {elsewhere}</Button>
+                    ) : (
+                        <span data-chat-scope="elsewhere" className="shrink-0 rounded-sm bg-[var(--warning)]/15 px-1.5 py-px text-[11px] text-[var(--warning)]">Agent from {elsewhere}</span>
+                    )
                 ) : null}
 
                 {mailOnly ? (
