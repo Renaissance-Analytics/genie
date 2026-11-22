@@ -116,6 +116,8 @@ describe('a slider a mouse can reach (the first VM proof: the master slider coll
     it('the range input’s hit box is taller than its drawn track (h-5), so a press near the line still lands on it', () => {
         render({});
         click(q('[data-action="sound-levels-toggle"]')!);
+        // COUNTED, so it cannot pass over no tracks at all (it did, against the collapsing layout, in 1122-020349-0faba7).
+        expect(sliders()).toHaveLength(1 + ALERT_KINDS.length);
         for (const s of sliders()) expect(s.className).toContain('[&_input]:h-5');
     });
     it('a row wraps rather than squeezing its slider: the master row and each level row are flex-wrap', () => {

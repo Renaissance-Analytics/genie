@@ -263,6 +263,8 @@ const valueOf = (cdp, selector) => cdp.evaluate(`Number(document.querySelector($
 async function volumeProof(cdp) {
     const MASTER = '[data-sound-master] input[type="range"]';
     const MUTE = '[data-action="sound-mute"]';
+    const column = await cdp.evaluate(`Math.round(document.querySelector('[data-settings-page="notifications"]')?.parentElement?.clientWidth ?? 0)`);
+    check(column >= 400, 'V0. the Notifications column is wide enough to use (>= 400 px as drawn)', `${column} px`);
     check(await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(MASTER)}))`, 10_000), 'V1. Notifications has a master volume slider');
     check((await valueOf(cdp, MASTER)) === 100, 'V2. a fresh home is at 100%', String(await valueOf(cdp, MASTER)));
     await cdp.evaluate(`document.querySelector('[data-sound-volume]')?.scrollIntoView({ block: 'start' }); true`);
@@ -390,6 +392,11 @@ try {
     await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${wasDark}); true`);
     for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await waitFor(cdp, `!document.querySelector('[data-sound-popover]')`, 5_000);
+    // MAKE ROOM, as a person would (job 1122-020349-0faba7): on a fresh home in this window the chat pane leaves the Settings
+    // content column about 20 px wide, where no slider can be aimed at; a person widens the window first. 1920x1080, as
+    // scripts/comms-arcs-proof.mjs and layout-sweep.mjs do. The column's width is CHECKED (V0), never assumed.
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false });
+    await sleep(1500);
     await volumeProof(cdp);
 } catch (error) {
     check(false, 'the run did not finish', error instanceof Error ? error.message : String(error));
