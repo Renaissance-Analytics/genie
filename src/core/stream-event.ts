@@ -387,6 +387,10 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
             };
         }
 
+        // `plan` is ACP's own name for a plan update, and what prism-acp's CodexDriver sends for Codex's
+        // `turn/plan/updated` (`{ sessionUpdate: 'plan', entries: [{ content, status }] }`); `plan_update` is the
+        // older name. Unmapped, a Codex plan fell through to `unknown` and never reached the Dashboard (genie#2132).
+        case 'plan':
         case 'plan_update': {
             const entries = update['entries'] ?? update['plan'];
             return { kind: 'plan', entries: Array.isArray(entries) ? entries : [] };
