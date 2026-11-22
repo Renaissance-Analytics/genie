@@ -23,7 +23,8 @@ describe('main.ts wiring', () => {
     it('the main window boots by showOnBoot (start minimised) and its close goes through wireCloseToTray with the quit sequence', () => {
         const src = main();
         // Built by mountMainWindow (P1b: built again after "Just close the UI"), shown at boot by showOnBoot.
-        expect(src).toMatch(/mountMainWindow\(showOnBoot\(\{ startMinimized: composed\.settings\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
+        // As genie-host says it: its settings first (Tynn #998, 2g-4b1).
+        expect(src).toMatch(/await settingsNow\.ready\(SETTINGS_BOOT_DEADLINE_MS\);\s*mountMainWindow\(showOnBoot\(\{ startMinimized: settingsNow\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
         expect(src).toMatch(/window = createWindow\(show\);/);
         // Shown ACTIVE: this is the launch the person made (genie#1235: only a gesture may take focus).
         expect(src).toMatch(/if \(show\) onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, \{ activation: 'user-gesture'/);
@@ -91,6 +92,6 @@ describe('main.ts wiring', () => {
     });
 
     it('launch at sign-in is wired at boot with the installed exe', () => {
-        expect(main()).toMatch(/void wireLoginItem\(composed\.settings, loginItemPort, \{[\s\S]*?packaged: app\.isPackaged,[\s\S]*?execPath: process\.execPath,/);
+        expect(main()).toMatch(/void wireLoginItem\(settingsNow, loginItemPort, \{[\s\S]*?packaged: app\.isPackaged,[\s\S]*?execPath: process\.execPath,/);
     });
 });
