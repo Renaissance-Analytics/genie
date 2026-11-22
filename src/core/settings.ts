@@ -33,6 +33,11 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'dnd_question_sound', group: 'general', scope: 'host', label: 'Still chime for questions in Do not disturb', description: 'While Do not disturb is on, every alert is silent — except an agent asking you something, when this is on.', type: 'boolean', default: false },
     { key: 'dnd_reply', group: 'general', scope: 'host', label: 'Do-not-disturb reply', description: 'What an agent is told when it asks while you are away.', type: 'string', default: 'Away from the desk — I will answer when I am back.' },
     { key: 'notification_sounds', group: 'general', scope: 'device', label: 'Notification sounds', description: 'Play a sound for each alert kind.', type: 'boolean', default: true },
+    // SOUND VOLUME (Tynn #1022, core/sound-volume.ts): a master level with a mute, and a level per alert kind as JSON. Host
+    // scope, so every client of a host hears the same levels. Hidden: Settings → Notifications draws them as sliders.
+    { key: 'sound_volume', group: 'general', scope: 'host', label: 'Sound volume', description: 'How loud every Genie sound plays, 0 to 100.', type: 'string', default: '100', hidden: true },
+    { key: 'sound_muted', group: 'general', scope: 'host', label: 'Mute sounds', description: 'Silence every Genie sound, keeping the levels you set.', type: 'boolean', default: false, hidden: true },
+    { key: 'sound_levels', group: 'general', scope: 'host', label: 'Sound levels per alert', description: 'Each alert’s own level, multiplied by the volume.', type: 'string', default: '{}', hidden: true },
     // RATE-LIMIT ALERTS (Tynn #748): the person's own thresholds, each with its own sound, as JSON (core/limit-alerts.ts). Host
     // scope: genie-host fires them. Hidden: Settings → Notifications and sounds draws it as a list. None by default.
     { key: 'rate_limit_alerts', group: 'general', scope: 'host', label: 'Rate-limit alerts', description: 'Alerts you add at the thresholds you choose, each with its own sound.', type: 'string', default: '[]', hidden: true },

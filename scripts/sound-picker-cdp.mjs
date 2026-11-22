@@ -12,6 +12,9 @@
  *   name chooses it and closes it → reopened: the chosen row is INVERTED (its computed background is not the other
  *   rows', and its text reads on it at >= 4.5:1), its play button included, in light AND dark → no check mark anywhere →
  *   every row is one height, and each name sits on one line.
+ *
+ *   Then SOUND VOLUME (Tynn #1022, checks V1-V21): the master slider and a kind's level moved with the mouse and saved on
+ *   the host, mute inverted, Advanced listing every kind, and a preview played at master x level (the Audio's own volume).
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
@@ -219,6 +222,93 @@ function judge(seen, theme, chosen, n) {
     check(seen.rows.every((r) => r.labelLines === 1 && Math.abs(r.labelMid - r.playMid) <= 2), `${n}h. [${theme}] each name is on one line, level with its play button`, JSON.stringify(seen.rows.filter((r) => r.labelLines !== 1 || Math.abs(r.labelMid - r.playMid) > 2).map((r) => r.v)));
 }
 
+/**
+ * SOUND VOLUME (Tynn #1022), on the same page: the master slider moved with the mouse is written to the HOST (it reads the
+ * same after leaving Notifications and coming back); mute is a button that turns INVERTED; Advanced lists every alert kind;
+ * a kind's level moved with the mouse, then its play button, plays at master x that level — read off the Audio element the
+ * one player made (its `volume`), so the claim is about the gain applied, not about a number on the page.
+ */
+async function rangeAt(cdp, selector, fraction) {
+    const at = await cdp.evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width * ${fraction}, r.top + r.height / 2);
+        return { x: r.left + r.width * ${fraction}, y: r.top + r.height / 2, reaches: hit === el, under: hit ? hit.outerHTML.slice(0, 120) : null };
+    })()`);
+    if (!at?.reaches) { console.log(`  the mouse at ${selector} would reach: ${at?.under ?? 'nothing'}`); return false; }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, button: 'none', clickCount: 0 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+    return true;
+}
+const valueOf = (cdp, selector) => cdp.evaluate(`Number(document.querySelector(${JSON.stringify(selector)})?.value ?? NaN)`);
+async function volumeProof(cdp) {
+    const MASTER = '[data-sound-master] input[type="range"]';
+    const MUTE = '[data-action="sound-mute"]';
+    check(await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(MASTER)}))`, 10_000), 'V1. Notifications has a master volume slider');
+    check((await valueOf(cdp, MASTER)) === 100, 'V2. a fresh home is at 100%', String(await valueOf(cdp, MASTER)));
+    await cdp.evaluate(`document.querySelector('[data-sound-volume]')?.scrollIntoView({ block: 'start' }); true`);
+    await shot(cdp, 'sound-volume-1022-master.png');
+    // The master, moved with the mouse to about 40%.
+    check(await rangeAt(cdp, MASTER, 0.4), 'V3. the master slider takes a mouse press at 40% of its width');
+    await sleep(200);
+    const master = await valueOf(cdp, MASTER);
+    check(master >= 33 && master <= 47, 'V4. and reads about 40%', String(master));
+    await sleep(800);
+    // Written to the host: away to General and back, the page is drawn again from the host's settings.
+    check(await click(cdp, '[data-settings-nav="general"]'), 'V5. away to General');
+    await waitFor(cdp, `!document.querySelector(${JSON.stringify(MASTER)})`, 5_000);
+    check(await click(cdp, '[data-settings-nav="notifications"]'), 'V6. and back to Notifications');
+    check(await waitFor(cdp, `Number(document.querySelector(${JSON.stringify(MASTER)})?.value) === ${master}`, 10_000), `V7. the master still reads ${master}%: it was saved on the host`, String(await valueOf(cdp, MASTER)));
+    // Mute: a button, inverted while on (its background is not the unmuted one), and saved.
+    const bg = `(() => { const cv = document.createElement('canvas'); cv.width = cv.height = 1; const g = cv.getContext('2d'); g.fillStyle = '#000'; g.fillStyle = getComputedStyle(document.querySelector(${JSON.stringify(MUTE)})).backgroundColor; g.fillRect(0, 0, 1, 1); return [...g.getImageData(0, 0, 1, 1).data].join(','); })()`;
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, button: 'none', clickCount: 0 });
+    await sleep(400);
+    const before = await cdp.evaluate(bg);
+    check((await cdp.evaluate(`document.querySelector(${JSON.stringify(MUTE)})?.getAttribute('aria-pressed')`)) === 'false', 'V8. mute starts off');
+    check(await click(cdp, MUTE), 'V9. mute takes a mouse click');
+    check(await waitFor(cdp, `document.querySelector(${JSON.stringify(MUTE)})?.getAttribute('aria-pressed') === 'true'`, 10_000), 'V10. the host answers: muted');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, button: 'none', clickCount: 0 });
+    let after = await cdp.evaluate(bg);
+    for (let i = 0, prev = null; i < 10 && after !== prev; i++) { prev = after; await sleep(300); after = await cdp.evaluate(bg); }
+    check(after !== before, 'V11. muted, the button is INVERTED (its background changed)', `${before} -> ${after}`);
+    check((await valueOf(cdp, MASTER)) === master, 'V12. muting keeps the level where it was', String(await valueOf(cdp, MASTER)));
+    await shot(cdp, 'sound-volume-1022-muted.png');
+    // The one player's Audio elements, recorded from here on: their `volume` is the gain that was applied.
+    await cdp.evaluate(`(() => { const A = window.Audio; window.__made = []; const W = function (url) { const a = new A(url); window.__made.push(a); return a; }; W.prototype = A.prototype; window.Audio = W; return true; })()`);
+    // Advanced: every kind, its own level, its own play button.
+    check(await click(cdp, '[data-action="sound-levels-toggle"]'), 'V13. Advanced takes a mouse click');
+    check(await waitFor(cdp, `document.querySelectorAll('[data-sound-level]').length === 26`, 5_000), 'V14. it lists every alert kind (26), each with a level', String(await cdp.evaluate(`document.querySelectorAll('[data-sound-level]').length`)));
+    const LEVEL = '[data-sound-level="finished"] input[type="range"]';
+    check(await rangeAt(cdp, LEVEL, 0.5), 'V15. "An agent finishes" takes a mouse press at half its width');
+    await sleep(200);
+    const level = await valueOf(cdp, LEVEL);
+    check(level >= 43 && level <= 57, 'V16. and reads about 50%', String(level));
+    check(await click(cdp, '[data-sound-level-play="finished"]'), 'V17. its play button takes a mouse click (muted: a preview still plays, so a level is set by ear)');
+    check(await waitFor(cdp, `(window.__made ?? []).length > 0`, 5_000), 'V18. the player made a sound');
+    const vol = await cdp.evaluate(`window.__made.at(-1)?.volume ?? null`);
+    const want = (master / 100) * (level / 100);
+    check(typeof vol === 'number' && Math.abs(vol - want) < 0.005, `V19. it played at master x level = ${master}% x ${level}% = ${want.toFixed(3)}`, String(vol));
+    await sleep(800);
+    const wasDarkV = await cdp.evaluate(`document.documentElement.classList.contains('dark')`);
+    for (const theme of ['light', 'dark']) {
+        await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'}); document.documentElement.setAttribute('data-theme', '${theme}'); document.querySelector('[data-sound-volume]')?.scrollIntoView({ block: 'start' }); true`);
+        await sleep(600);
+        await shot(cdp, `sound-volume-1022-advanced-${theme}.png`);
+    }
+    await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${wasDarkV}); true`);
+    // The level was saved too: away and back, Advanced reopened, the kind reads the same.
+    await click(cdp, '[data-settings-nav="general"]');
+    await waitFor(cdp, `!document.querySelector('[data-sound-volume]')`, 5_000);
+    await click(cdp, '[data-settings-nav="notifications"]');
+    await waitFor(cdp, `Boolean(document.querySelector('[data-action="sound-levels-toggle"]'))`, 10_000);
+    await click(cdp, '[data-action="sound-levels-toggle"]');
+    check(await waitFor(cdp, `Number(document.querySelector(${JSON.stringify(LEVEL)})?.value) === ${level}`, 10_000), `V20. "An agent finishes" still reads ${level}%: saved on the host`, String(await valueOf(cdp, LEVEL)));
+    check(await waitFor(cdp, `Number(document.querySelector('[data-sound-level="question"] input[type="range"]')?.value) === 100`, 2_000), 'V21. CONTROL: a kind not moved is still 100%');
+}
+
 console.log('\nTHE SOUND PICKER — what a person sees, in the real app\n');
 const TRIGGER = '[data-surface="settings"] [data-sound-picker]';
 let app = launch();
@@ -273,6 +363,9 @@ try {
         await shot(cdp, `sound-picker-996-${theme}.png`);
     }
     await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${wasDark}); true`);
+    for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await waitFor(cdp, `!document.querySelector('[data-sound-popover]')`, 5_000);
+    await volumeProof(cdp);
 } catch (error) {
     check(false, 'the run did not finish', error instanceof Error ? error.message : String(error));
 } finally {

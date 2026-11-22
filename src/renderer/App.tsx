@@ -61,6 +61,7 @@ import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
+import { alertVolume } from '../core/sound-volume.js';
 import { limitAlertSound } from '../core/limit-alerts.js';
 import { accountSwitchOutcomeOf, accountSwitchToast } from '../core/account-switch.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
@@ -665,7 +666,7 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
         const deck = snapshot.deckItems !== null ? alertsBetween(prev.current, next) : [];
         for (const alert of [...deck, ...finishes.alerts]) {
             // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
-            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, settings ?? {}));
             // The agent's workspace colour beside its address (genie#1300).
             const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
             show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
@@ -684,7 +685,7 @@ function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, setting
     useEffect(() => {
         if (tools === null) return;
         for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
-            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, settings ?? {}));
             show(toastFor(alert));
         }
         prev.current = tools;
@@ -1252,7 +1253,7 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
         if (action.kind === 'limit-alert' && action.title && action.body) {
-            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}));
+            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}), alertVolume(null, soundSettings.current ?? {}));
             showAlert({ title: action.title, body: action.body });
             return;
         }
@@ -1262,7 +1263,7 @@ function DesktopApp({ bridge }: AppProps) {
             if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider).then((r) => { if (r.ok) openCompanion(r, 'Switch account'); }, () => {}); }));
             return;
         }
-        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
+        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}), alertVolume(action.kind as AlertKind, soundSettings.current ?? {}));
         const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
         if (emoji && action.agentId) {
             const id = action.agentId;

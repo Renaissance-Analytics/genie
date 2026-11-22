@@ -23,6 +23,8 @@ import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.j
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
+import { SoundVolume } from './SoundVolume.js';
+import { previewVolume } from '../../core/sound-volume.js';
 import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, InstallPreview, ProcessLogOpen, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
@@ -1838,7 +1840,7 @@ function PrimaryWorkspaceRow({ value, onAction }: { value: string | null; onActi
         </div>
     );
 }
-function SettingControl({ def, value, onAction, customPath }: { def: SettingDef; value: boolean | string | null; onAction: SurfaceProps['onAction']; customPath?: boolean | string | undefined }) {
+function SettingControl({ def, value, onAction, customPath, levels }: { def: SettingDef; value: boolean | string | null; onAction: SurfaceProps['onAction']; customPath?: boolean | string | undefined; /** The settings, for a preview's volume (Tynn #1022). */ levels?: Readonly<Record<string, boolean | string>> | null | undefined }) {
     // Your own sound file (Tynn #766 B2), picked over the HOST's disk in the window (Tynn #835): sound files only.
     const pickHostPath = useHostPathPicker();
     const pickSound = () => {
@@ -1866,7 +1868,7 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
                     value={String(value)}
                     label={def.label}
                     onSelect={(v) => { if (v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }}
-                    onPreview={(v) => playPreviewSound(previewSound(kind, v, customPath))}
+                    onPreview={(v) => playPreviewSound(previewSound(kind, v, customPath), previewVolume(kind, levels ?? {}))}
                     canPreview={(v) => v !== 'off' && (v !== 'custom' || hasCustom)}
                 />
                 {file ? (
@@ -1894,7 +1896,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                 <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
             </div>
             <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
-                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} levels={values} />
             </div>
         </li>
     );
@@ -1950,7 +1952,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                                                 <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
                                             </div>
                                             <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
-                                                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+                                                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} levels={values} />
                                             </div>
                                         </li>
                                     );
@@ -1973,8 +1975,9 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'notifications' ? (
                                 <>
                                     <SetSection title="Notifications" desc="The master switch for every sound.">{rows('notifications')}</SetSection>
+                                    <SoundVolume values={values} onAction={onAction} />
                                     <AlertSounds values={values} onAction={onAction} />
-                                    <RateLimitAlerts raw={values === null ? undefined : values[LIMIT_ALERTS_SETTING]} onAction={onAction} />
+                                    <RateLimitAlerts raw={values === null ? undefined : values[LIMIT_ALERTS_SETTING]} onAction={onAction} volume={previewVolume(null, values ?? {})} />
                                 </>
                             ) : null}
                             {active === 'keyboard' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
@@ -2059,7 +2062,7 @@ function AlertSounds({ values, onAction }: { values: Readonly<Record<string, boo
                             return (
                                 <li key={def.key} data-setting={def.key} className="flex items-center gap-4 py-2">
                                     <div className="flex-1 text-sm">{k.label}</div>
-                                    <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+                                    <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} levels={values} />
                                 </li>
                             );
                         })}
@@ -2076,7 +2079,7 @@ function AlertSounds({ values, onAction }: { values: Readonly<Record<string, boo
  * window used, which window (5-hour, weekly, any) and a sound of its own, picked with the sound popover (each with its own
  * play button). Ordered by threshold. None by default: nothing new is heard until one is added. genie-host fires them.
  */
-function RateLimitAlerts({ raw, onAction }: { raw: boolean | string | undefined; onAction: SurfaceProps['onAction'] }) {
+function RateLimitAlerts({ raw, onAction, volume = 1 }: { raw: boolean | string | undefined; onAction: SurfaceProps['onAction']; /** The master volume a preview plays at (Tynn #1022). */ volume?: number }) {
     const alerts = parseLimitAlerts(raw);
     const save = (next: readonly RateLimitAlert[]): void => onAction({ kind: 'settings.set', key: LIMIT_ALERTS_SETTING, value: serializeLimitAlerts(next) });
     // A new alert starts at 90% on any window with the Default chime; the person edits it in place.
@@ -2120,7 +2123,7 @@ function RateLimitAlerts({ raw, onAction }: { raw: boolean | string | undefined;
                             value={alert.sound}
                             label={`Sound for the ${alert.thresholdPct}% rate-limit alert`}
                             onSelect={(v) => { if (v !== 'custom') save(upsertLimitAlert(alerts, { ...alert, sound: v })); }}
-                            onPreview={(v) => playPreviewSound(limitAlertSound(v, {}))}
+                            onPreview={(v) => playPreviewSound(limitAlertSound(v, {}), volume)}
                             canPreview={canPreview}
                         />
                         <Button data-action="limit-alert-remove" type="button" size="sm" variant="ghost" className="justify-start" aria-label={`Remove the ${alert.thresholdPct}% rate-limit alert`} onClick={() => save(removeLimitAlert(alerts, alert.id))}>
