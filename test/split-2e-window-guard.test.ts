@@ -170,4 +170,15 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         expect(ratchet([['newThing', 'move:2g']], []).joined).toEqual(['newThing']);
         expect(ratchet([['hosting', 'window:chrome']], ['hosting']).relabelled).toEqual(['hosting']);
     });
+
+    it('CONTROL: the scanner follows an alias of the engine client, and names a client handed over whole (Tynn #1007, 2g-4e)', () => {
+        // main.ts:1471 read the registry as `engineLink.stores()` through `const engineLink = agentEngineLink.client`: unseen.
+        expect(engineUses("const engineLink = agentEngineLink.client;\nengineLink.stores();\nconst e = agentEngineLink?.client ?? null;\nif (e) e.onLink(a, b);\n// e.flows()\nvoid e?.mcpStatus();"))
+            .toEqual(['mcpStatus', 'onLink', 'stores']);
+        // A client handed to another module is every member at once: it is named, so no list can leave it unseen.
+        expect(engineUses("const e = agentEngineLink.client;\nconst r = e ? withHostTools(all, e, resolve) : all;\nif (e) {}\nf({ run: (c) => e.runHostTool(c) });"))
+            .toEqual(['runHostTool', 'whole:e']);
+        // CONTROL: `.client` read for something else is no alias.
+        expect(engineUses("const c = this.client.other;\nc.thing();")).toEqual(['other']);
+    });
 });
