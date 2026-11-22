@@ -226,11 +226,11 @@ function judge(seen, theme, chosen, n) {
 console.log('\nTHE SOUND PICKER — what a person sees, in the real app\n');
 const TRIGGER = '[data-surface="settings"] [data-sound-picker]';
 /**
- * In the page: whether the address is this workstation's own (`genie://<workstation>/<page>...`), the form the app rewrites
- * every route to once it has its snapshot (App.tsx rewrittenAddress); with `page`, whether it is that page. The name is
+ * In the page: whether the address is this workstation's own (`genie://<workstation>/<path>...`), the form the window
+ * rewrites every route to once it has its snapshot; with `path`, whether it is at that page (or within it). The name is
  * the window's own snapshot's, so the test holds only once the rewrite has really happened.
  */
-const ON_THIS_WORKSTATION = `async (page) => {
+const ON_THIS_WORKSTATION = `async (path) => {
     let s = null;
     try { s = await (window.genieTest ?? window.genie).snapshot(); } catch { return false; }
     const w = String(s?.workstation?.name ?? '').toLowerCase();
@@ -238,9 +238,10 @@ const ON_THIS_WORKSTATION = `async (page) => {
     const h = decodeURIComponent(window.location.hash).toLowerCase();
     const at = '#genie://' + w + '/';
     if (!h.startsWith(at)) return false;
-    return page === null || h.slice(at.length).split(/[?#]/)[0].split('/')[0] === page;
+    const here = h.slice(at.length).split(/[?#]/)[0];
+    return path === null || here === path || here.startsWith(path + '/');
 }`;
-const onThisWorkstation = (page) => `(${ON_THIS_WORKSTATION})(${JSON.stringify(page)})`;
+const onThisWorkstation = (path) => `(${ON_THIS_WORKSTATION})(${JSON.stringify(path)})`;
 let app = launch();
 let cdp = null;
 try {
@@ -251,17 +252,15 @@ try {
         for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
         await sleep(500);
     }
-    // The app rewrites its address to this workstation's own once it has its snapshot, from the address it last RENDERED
-    // (App.tsx rewrittenAddress): a navigation or a click before then is overwritten. Gate 1122-020342-554d85: the row's
-    // own `#genie://settings` went back to the Dashboard; rerun 1122-013356-260f53: the Notifications click landed and the
-    // page stayed on General. A person acts on a page that has settled; so does this run (Tynn #1009).
-    check(await waitFor(cdp, onThisWorkstation(null), 60_000), '0b. the app has settled on this workstation’s own address', await cdp.evaluate('window.location.hash'));
     await cdp.evaluate(`window.location.hash = '#genie://settings'; true`);
     await forceWhatsNewOpenForProbe((expression) => cdp.evaluate(expression));
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-settings-nav="notifications"]'))`, 30_000), '1. Settings is open, with its Notifications section');
-    check(await waitFor(cdp, onThisWorkstation('settings'), 30_000), '1b. the address settled on this workstation’s own Settings page', await cdp.evaluate('window.location.hash'));
     check(await click(cdp, '[data-settings-nav="notifications"]'), '2. Notifications takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(TRIGGER)}))`, 15_000), '3. the page has a sound button');
+    // PINNED (Tynn #1023): this row navigates and clicks as early as a person can, before the window has its snapshot. A
+    // late address rewrite used to undo both (gate 1122-020342-554d85: back to the Dashboard; rerun 1122-013356-260f53:
+    // back to General). Neither is undone: the window ends at this workstation's own Settings → Notifications.
+    check(await waitFor(cdp, onThisWorkstation('settings/notifications'), 30_000), '3b. the address is this workstation’s own Settings → Notifications: no late rewrite undid a navigation', await cdp.evaluate('window.location.hash'));
     const before = await cdp.evaluate(`document.querySelector(${JSON.stringify(TRIGGER)})?.textContent ?? ''`);
     check(await click(cdp, TRIGGER), '4. the sound button takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-sound-popover] [data-sound-row]'))`, 5_000), '5. the popover opens, with its rows');

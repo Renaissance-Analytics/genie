@@ -50,13 +50,25 @@ export function rewrittenAddress(address: string, ctx: AddressContext | null, be
  * THE WINDOW'S ADDRESS, QUALIFIED (Tynn #1023): once the window has its address context (the snapshot), an internal route
  * (`genie://settings`) is replaced in place by this machine's address form (`genie://<workstation>/settings`), and a
  * window that now reads another machine takes its page there (rewrittenAddress).
+ *
+ * It qualifies the address the window is AT, read from its hash now, not the one it last rendered: the window learns of a
+ * new hash only when its `hashchange` is delivered, a task later, and a navigation made in between (a person's click, a
+ * test's `location.hash =`) was replaced by the old page's address (#1009's gates: Settings went back to the Dashboard,
+ * Notifications back to General). That navigation's own hashchange renders it again, already qualified.
  */
 export function useAddressQualifier(address: string, shownAddress: string, ctx: AddressContext | null): void {
     // The workstation this window read until now: connecting in place, its page goes with it to the host (beta.61, step four).
     const readBefore = useRef<string | null>(null);
     useEffect(() => {
-        const next = rewrittenAddress(address, ctx, readBefore.current);
+        const current = currentAddress(address);
+        const next = rewrittenAddress(current, ctx, readBefore.current);
         if (ctx) readBefore.current = ctx.workstation;
-        if (next !== null) window.location.replace(`#${next}`);
+        if (next !== null && next !== current) window.location.replace(`#${next}`);
     }, [address, shownAddress, ctx !== null, ctx?.workstation]);
+}
+
+/** The address the window is at: its hash as it is now (as useRoute reads it), or `rendered` where there is no window. */
+function currentAddress(rendered: string): string {
+    if (typeof window === 'undefined') return rendered;
+    return window.location.hash.slice(1) || rendered;
 }
