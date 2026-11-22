@@ -147,3 +147,73 @@ export function windowLabelOf(url: string): string {
     if (page.endsWith('/index.html')) return 'main';
     return 'unknown';
 }
+
+/** How long after `show()` a new window's first focus may take before the trace says the compositor never showed it. */
+export const FIRST_SHOW_FOCUS_MS = 10_000;
+
+export type FirstShowStep = 'did-finish-load' | 'ready-to-show' | 'focus';
+
+/**
+ * A NEW WINDOW'S FIRST SHOW, EACH STEP TIMED (Tynn #1032). On Linux CI a terminal "dropped" typed input in 4 of 39
+ * smoke runs: the keys reached the shell and were echoed, xterm's buffer held them, and its rows never drew them. In
+ * all four, and in none of the 35 passes, the main window never took focus at launch. On Wayland a window the
+ * compositor has not shown gets no frames (genie#1370), so everything drawn on a frame (xterm's renderer, anything on
+ * requestAnimationFrame) stops, while the page, its DOM and its input carry on, and nothing said so.
+ *
+ * So each step of the first show is logged with its time since the window was made (the load, the paint, `show()` and
+ * the event that called it, the first focus), and a window shown and NOT focused within `FIRST_SHOW_FOCUS_MS` is said
+ * once. Only the first of each step: a reload's load or a later focus is not the first show.
+ */
+export class FirstShowTrace {
+    readonly #label: string;
+    readonly #madeAt: number;
+    readonly #log: (line: string) => void;
+    readonly #seen = new Set<string>();
+    #shownAt: number | null = null;
+    #shownOn: string | null = null;
+    #focused = false;
+    #reported = false;
+
+    constructor(label: string, madeAt: number, log: (line: string) => void) {
+        this.#label = label;
+        this.#madeAt = madeAt;
+        this.#log = log;
+    }
+
+    #say(text: string): void {
+        this.#log(`[genie] window ${this.#label}: ${text}`);
+    }
+
+    note(step: FirstShowStep, now: number): void {
+        if (this.#seen.has(step)) return;
+        this.#seen.add(step);
+        if (step === 'focus') {
+            this.#focused = true;
+            const after = this.#shownAt === null ? '' : ` (${now - this.#shownAt} ms after show())`;
+            this.#say(`focus at +${now - this.#madeAt} ms${after}`);
+            return;
+        }
+        this.#say(`${step} at +${now - this.#madeAt} ms`);
+    }
+
+    /** `show()` (or `showInactive()`) was called, by the event that made the window showable. */
+    shown(on: string, now: number): void {
+        if (this.#shownAt !== null) return;
+        this.#shownAt = now;
+        this.#shownOn = on;
+        this.#say(`show() at +${now - this.#madeAt} ms, on ${on}`);
+    }
+
+    /** Called on a timer: says, once, that a shown window never took focus. */
+    check(now: number): void {
+        if (this.#reported || this.#focused || this.#shownAt === null) return;
+        if (now - this.#shownAt < FIRST_SHOW_FOCUS_MS) return;
+        this.#reported = true;
+        this.#say(`NOT FOCUSED ${FIRST_SHOW_FOCUS_MS} ms after show() (on ${this.#shownOn}): the compositor has not shown it, and a window it does not show gets no frames (Tynn #1032)`);
+    }
+
+    /** Nothing more to say: focused, or reported. */
+    get done(): boolean {
+        return this.#focused || this.#reported;
+    }
+}
