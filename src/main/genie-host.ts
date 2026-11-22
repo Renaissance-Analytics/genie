@@ -46,6 +46,9 @@ import { crashHeader, exitRecordOf, previousRunCause, previousRunRecord, readLif
 import { runningAgentNote } from '../core/crash-record.js';
 import { claudeLaunchConfigDir, providerBinary, realDescribeClaude, realListModels, SessionHost } from './session-host.js';
 import { ClaudeAccountsLive } from './claude-accounts-live.js';
+import { ClaudeSignIns, realClaudeLogin } from './claude-sign-ins.js';
+import { removeAccountDir } from './claude-account-dirs.js';
+import type { CallContext } from '../core/remote-protocol.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
@@ -1221,6 +1224,9 @@ async function main(): Promise<void> {
         login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
         switchLogin: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         providerOf: (agentId) => hostRegistry.find(agentId)?.provider ?? null,
+        // CLAUDE SIGNS IN IN THE BROWSER (Tynn #1011): an agent's Log in signs the active account in; a switch naming an account
+        // signs that one in and makes it active; a switch naming none is Use another account. No terminal.
+        claudeBrowser: (choose, context, switching) => claudeSignInFor(choose, context, switching),
         cancel: (terminalId) => logins?.cancel(terminalId),
         openWindow: (context, route, closed) => openCallersTerminalWindow(terminalWindowPorts, context, route, { startedHere: false, ended: closed }),
     });
@@ -1248,9 +1254,49 @@ async function main(): Promise<void> {
         const reading = headroomFeedNow?.accounts().find((r) => r.provider === provider && r.accountId === accountId);
         host.accountSwitched(provider, { account, headroom: reading?.room ?? null });
     };
-    const accountsAct = async (action: AccountsAction): Promise<AccountsActResult> => {
+    // EVERY CLAUDE SIGN-IN IN THE BROWSER (Tynn #1011; the owner: "I should not see any terminals nor do we store login keys"):
+    // prism-acp's hidden login(), Anthropic's page opened on the screen of the window that asked; sign out is its logout().
+    const claudeSignIns = new ClaudeSignIns({
+        get: (id) => accounts.get(id),
+        activeId: () => accounts.activeFor('claude').id,
+        addClaude: (input) => accounts.addClaude(input),
+        setActive: (id) => accounts.setActive('claude', id),
+        activated: (provider, id) => {
+            readingAttribution.signedIn(provider);
+            announceSwitch(provider, id);
+            host.accountChanged(provider);
+            void providerHealth.refresh(provider);
+            void claudeLive.refresh();
+        },
+        recordIdentity: (id, identity) => accounts.recordIdentity(id, identity),
+        forget: async (id) => { await accounts.forget(id); headroomFeedNow?.forget(id); saveBoardNow?.(); },
+        removeDir: (configDir) => removeAccountDir(configDir, join(home, 'accounts', 'claude')),
+        open: async (url, context) => {
+            const ui = context ? featureCallers.presentation(context) : null;
+            if (!ui?.openExternal) throw new Error('Open Genie on this machine to sign in: the sign-in page opens in this machine\'s browser.');
+            await ui.openExternal(url);
+        },
+        changed: () => { void claudeLive.refresh(); accountsChangedNow?.(); },
+        tell: (words) => { say(`[accounts] ${words}`); engine.callback({ name: 'toolSignal', signal: { kind: 'account-notice', title: 'Accounts', body: words } }); },
+        platform: process.platform,
+        ...realClaudeLogin,
+        describe: (configDir) => realDescribeClaude(configDir),
+    });
+    // The sign-ins that used to open a terminal (Tynn #1011): `choose` undefined from an agent's Log in signs the ACTIVE account
+    // in; from a switch it is Use another account; a named one (its email, else its label) is signed in and made active.
+    const claudeSignInFor = async (choose: string | undefined, context: CallContext | undefined, switching: boolean): Promise<AccountsActResult> => {
+        if (choose === undefined) return switching ? claudeSignIns.useAnother('subscription', context) : claudeSignIns.signIn(accounts.activeFor('claude').id, context);
+        const named = accounts.list().find((a) => a.provider === 'claude' && (a.identity.email?.toLowerCase() === choose.toLowerCase() || a.label === choose));
+        return named ? claudeSignIns.signIn(named.id, context, { activate: true }) : claudeSignIns.useAnother('subscription', context);
+    };
+    const accountsAct = async (action: AccountsAction, context?: CallContext): Promise<AccountsActResult> => {
         try {
             if (action.kind === 'rename') await accounts.rename(action.id, action.label);
+            else if (action.kind === 'sign-in') return await claudeSignIns.signIn(action.id, context);
+            else if (action.kind === 'use-another') return await claudeSignIns.useAnother(action.method, context);
+            else if (action.kind === 'cancel-sign-in') { claudeSignIns.cancel(action.id); }
+            else if (action.kind === 'submit-code') { if (!claudeSignIns.submitCode(action.requestId, action.code)) return { ok: false, reason: 'That sign-in is no longer waiting for a code.' }; }
+            else if (action.kind === 'sign-out') return await claudeSignIns.signOut(action.id);
             else if (action.kind === 'add-claude') { await accounts.addClaude(action.label !== undefined ? { method: action.method, label: action.label } : { method: action.method }); accountsChangedNow?.(); }
             else if (action.kind === 'set-active') {
                 // SWITCH = CHOOSE (Tynn #1011): the account becomes the active one; every agent draws on it from its next clean idle,
@@ -1272,9 +1318,9 @@ async function main(): Promise<void> {
         }
     };
     // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
-    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000)), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() });
+    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000)), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view(), signIns: claudeSignIns.view() });
     // ...the same book on the one protocol (Tynn #895), answered here for every client.
-    accountsPortNow = { list: () => accountsSnapshot(), act: (action) => accountsAct(action), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
+    accountsPortNow = { list: () => accountsSnapshot(), act: (action, context) => accountsAct(action, context), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
     // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
     // readings are held, then shown under the account found; the first after a sign-in or a new active account keeps no earlier
     // window. A new active account tells the window, which re-reads its account chips.
@@ -1564,6 +1610,8 @@ async function main(): Promise<void> {
     });
     const host = new SessionHost({
         activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
+        // Nothing launches in a folder a Claude sign-in is running in (prism-acp: one process per folder; Tynn #1011).
+        launchBlocked: (account) => (account.configDir !== undefined && claudeSignIns.busy(account.configDir) ? 'That account is signing in; it starts once the sign-in is over.' : null),
         userData: home,
         ...engineHostOptions,
         // An agent's record, read per call (genie#1188), from this host's own registry: no window pushes records (Tynn #954).

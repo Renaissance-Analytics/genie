@@ -601,6 +601,7 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #activeAccount: ((provider: string) => AccountRecord | null) | undefined;
     readonly #threadInAccount: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
+    readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
     /** Agents being moved to the active account now (Tynn #1011): one move at a time per agent. */
     readonly #moving = new Set<AgentId>();
     /** The account each agent was last told it could not move to: told once per account, not on every turn. */
@@ -752,6 +753,8 @@ export class SessionHost {
          * by default. Asked before an agent is moved to a new active account; anything but `present` keeps it where it is.
          */
         threadInAccount?: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
+        /** Why nothing may launch in that account's folder now (a sign-in is running there, Tynn #1011), or `null`. */
+        launchBlocked?: (account: AccountRecord) => string | null;
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -804,6 +807,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#activeAccount = options.activeAccount;
         this.#threadInAccount = options.threadInAccount ?? realThreadInAccount;
+        this.#launchBlocked = options.launchBlocked;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -1145,6 +1149,9 @@ export class SessionHost {
             if (found && reason === null) account = found;
             if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
         }
+        // Never a launch in a folder a sign-in is running in (prism-acp: one process per folder at a time; Tynn #1011).
+        const blocked = account ? this.#launchBlocked?.(account) ?? null : null;
+        if (blocked !== null) { this.refusals.set(record.id, blocked); this.#emit(record.id); return { ok: false, reason: blocked }; }
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
         // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
@@ -1542,6 +1549,8 @@ export class SessionHost {
         };
         const first = respawnDecision({ ...base, store: 'absent' });
         if (first.kind === 'stay' || first.kind === 'wait') return;
+        // The new account's folder is signing in: the move waits for its end (the next change asks again).
+        if (this.#launchBlocked?.(active) != null) return;
         // Only now is the store asked: it is the one look before anything is stopped.
         const decision = threadId === null ? first : respawnDecision({ ...base, store: this.#threadInAccount(threadId, activeConfigDir) });
         if (decision.kind === 'note') { this.#tellStayed(agentId, entry.account, active, decision.text); return; }

@@ -93,6 +93,11 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
                             <Button type="button" size="xs" variant="ghost" data-action="account-rename-cancel" onClick={() => setRenaming(null)}>Cancel</Button>
                         </>}
                     <Button type="button" size="xs" variant="ghost" data-action="account-forget" onClick={forget}>Forget</Button>
+                    {/* SIGN OUT AND REMOVE (Tynn #1011): prism-acp's logout() for an account with a folder of its own, not the
+                        one every agent uses; then the account and its folder go. No window, no terminal. */}
+                    {account.ownDirectory === true && !account.active
+                        ? <Button type="button" size="xs" variant="ghost" icon="log-out" data-action="account-sign-out" onClick={() => act({ kind: 'sign-out', id: account.id })}>Sign out and remove</Button>
+                        : null}
                 </span>
             </div>
             <div className="flex flex-wrap gap-3 pl-7 text-xs text-[var(--fg-3)]">

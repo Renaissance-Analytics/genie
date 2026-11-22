@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import type { ClaudeAccountCheck, ClaudeAccountStatus } from '@particle-academy/prism-acp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { accountsActionOf } from '../src/core/account-settings.js';
-import { claudeConfigDirOf, claudeLiveOf, OWN_DIRECTORY_SIGN_IN_LATER, respawnDecision, type RespawnInput } from '../src/core/claude-accounts.js';
+import { CLAUDE_SIGNS_IN_IN_THE_BROWSER, claudeConfigDirOf, claudeLiveOf, respawnDecision, type RespawnInput } from '../src/core/claude-accounts.js';
 import { AccountsHost, type AccountsOptions } from '../src/main/accounts-host.js';
 import { LoginHost } from '../src/main/login-host.js';
 import { ClaudeAccountsLive } from '../src/main/claude-accounts-live.js';
@@ -187,16 +187,19 @@ describe('an account with its own directory is never signed in through a termina
 
     it.each(['subscription', 'console'] as const)('%s: refused with the words for later; no terminal, no window', (method) => {
         const f = fixture(perDir(method));
-        expect(f.login.start('claude', `account_${'7'.repeat(32)}`)).toEqual({ ok: false, reason: OWN_DIRECTORY_SIGN_IN_LATER });
+        expect(f.login.start('claude', `account_${'7'.repeat(32)}`)).toEqual({ ok: false, reason: CLAUDE_SIGNS_IN_IN_THE_BROWSER });
         expect(f.opened).toEqual([]);
         expect(f.windows).toEqual([]);
     });
 
-    it('CONTROL: the default account\'s login still opens (the refusal is only for an account of its own)', () => {
+    it('the default account too: every Claude sign-in is the browser one now; CONTROL: another provider\'s login still opens', () => {
         const { configDir: _c, method: _m, ...home } = perDir('subscription');
         const f = fixture(home as ReturnType<typeof perDir>);
-        expect(f.login.start('claude', `account_${'7'.repeat(32)}`).ok).toBe(true);
-        expect(f.opened).toHaveLength(1);
+        expect(f.login.start('claude', `account_${'7'.repeat(32)}`)).toEqual({ ok: false, reason: CLAUDE_SIGNS_IN_IN_THE_BROWSER });
+        expect(f.opened).toEqual([]);
+        const codex = fixture({ ...(home as ReturnType<typeof perDir>), provider: 'codex' as never });
+        expect(codex.login.start('codex', `account_${'7'.repeat(32)}`).ok).toBe(true);
+        expect(codex.opened).toHaveLength(1);
     });
 });
 

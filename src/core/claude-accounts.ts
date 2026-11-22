@@ -101,9 +101,25 @@ export function stayedWords(input: { from: string; to: string; why: string }): s
     return `The active Claude account is ${input.to} now, but this agent keeps running on ${input.from}: ${input.why}. Its conversation and work are unchanged.`;
 }
 
+/** NO TERMINAL FOR A CLAUDE SIGN-IN (Tynn #1011; the owner: "I should not see any terminals"): what the terminal path says now. */
+export const CLAUDE_SIGNS_IN_IN_THE_BROWSER = 'Claude signs in in your browser now: use Sign in or Use another account in the Claude account menu.';
+
 /**
- * NO TERMINAL FOR A SIGN-IN (Tynn #1011; the owner: "I should not see any terminals nor do we store login keys"). Signing in to
- * an account with a folder of its own is prism-acp's hidden login, which opens Anthropic's page in the person's browser; until
- * that ships, the Sign in action is shown, disabled, with these words.
+ * WHERE A SIGN-IN MAY SEND THE PERSON'S BROWSER (Tynn #1011): https on Anthropic's own sign-in hosts only, the same rule
+ * prism-acp's `claudeSignInUrl` applies before `onUrl` hears of it. Genie checks again before it opens anything.
  */
-export const OWN_DIRECTORY_SIGN_IN_LATER = 'Signing in to this account opens Anthropic\'s sign-in page in your browser, with no terminal. That comes with the next prism-acp update.';
+const SIGN_IN_HOSTS = new Set(['claude.ai', 'claude.com', 'platform.claude.com', 'console.anthropic.com']);
+export function isClaudeSignInUrl(value: string): boolean {
+    let url: URL;
+    try { url = new URL(value); } catch { return false; }
+    return url.protocol === 'https:' && SIGN_IN_HOSTS.has(url.hostname.toLowerCase()) && url.username === '' && url.password === '';
+}
+
+/** A sign-in Genie is running for an account (Tynn #1011): the browser is open on it, or the CLI asked for a pasted code. */
+export interface ClaudeSignInView {
+    readonly accountId: string;
+    readonly label: string;
+    readonly state: 'browser' | 'code';
+    /** Only while a code is asked for: what the code is sent back against. Never the code. */
+    readonly requestId?: string;
+}

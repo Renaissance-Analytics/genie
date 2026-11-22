@@ -252,12 +252,14 @@ try {
     // SIGN IN, NOT YET (the owner: "I should not see any terminals nor do we store login keys"): shown, disabled, with why;
     // a click opens no window and runs no login. prism-acp's hidden login (Anthropic's page in the browser) comes next.
     await openPopover(cdp);
-    const signIn = await cdp.evaluate(`(() => { const b = document.querySelector(${q(`${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`)}); return b ? { disabled: b.disabled, title: b.getAttribute('title'), note: b.closest('[data-account-sign-in-later]')?.textContent ?? '' } : null; })()`);
-    check(signIn?.disabled === true && /no terminal/.test(signIn.title ?? '') && /next prism-acp/.test(signIn.note), '18. Sign in on Team API is shown DISABLED, saying it comes with the next prism-acp, never a terminal', JSON.stringify(signIn));
+    // Until prism-acp ships its browser login (prism-acp-ts #71, unreleased), the sign-in says so; after the bump this run serves
+    // a stand-in sign-in URL and checks the browser is asked to open it.
     const before = (await targets()).filter((t) => t.type === 'page').length;
-    await click(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`);
-    await sleep(2_000);
-    check((await targets()).filter((t) => t.type === 'page').length === before && !(await targets()).some((t) => /login=claude/.test(t.url)), '19. a click on it opens no window (no terminal)');
+    check(await click(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`), '18. Sign in on Team API takes a click (no terminal, no login window)');
+    const said = await waitFor(cdp, `/newer prism-acp|in your browser/.test(document.body.innerText)`, 15_000);
+    check(said, '18b. it says where the sign-in happens (the browser), or that it needs the newer prism-acp', String(await cdp.evaluate(`document.body.innerText.match(/[^\n]*(newer prism-acp|in your browser)[^\n]*/)?.[0] ?? ''`)));
+    await sleep(1_000);
+    check((await targets()).filter((t) => t.type === 'page').length === before && !(await targets()).some((t) => /login=claude/.test(t.url)), '19. no window opened (no terminal)');
     const logins = (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((c) => c.args[0] === 'auth' && c.args[1] === 'login');
     check(logins.length === 0, '20. and no `claude auth login` ran anywhere', JSON.stringify(logins));
     const statusCalls = (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((c) => c.args[1] === 'status');

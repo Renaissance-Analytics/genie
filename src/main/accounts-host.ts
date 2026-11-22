@@ -151,9 +151,10 @@ export class AccountsHost {
      * default account's, so no account prunes the shared store sooner than the default does. A directory that refuses is left
      * as it is; its account still works on its own history.
      */
-    syncClaudeDirs(): void {
+    syncClaudeDirs(busy: (configDir: string) => boolean = () => false): void {
         for (const a of this.#accounts) {
-            if (a.provider !== 'claude' || a.configDir === undefined) continue;
+            // Never while a sign-in runs in that folder (prism-acp: one process per folder at a time).
+            if (a.provider !== 'claude' || a.configDir === undefined || busy(a.configDir)) continue;
             try { prepareAccountDir(a.configDir, this.#sharedStore()); syncCleanupPeriod(a.configDir, this.#options.legacyHomes.claude); } catch { /* left as it is */ }
         }
     }

@@ -5,9 +5,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountsView } from '../src/core/accounts-view.js';
-import type { ClaudeAccountLive } from '../src/core/claude-accounts.js';
+import type { ClaudeAccountLive, ClaudeSignInView } from '../src/core/claude-accounts.js';
 import type { AccountsAction, AccountsActResult } from '../src/core/account-settings.js';
 import { AccountsChip } from '../src/renderer/components/AccountsChip.js';
+import { AccountsSettings } from '../src/renderer/components/AccountsSettings.js';
 
 /**
  * THE POPOVER FOR CLAUDE ACCOUNTS OF THEIR OWN (Tynn #1011), on the two panes of Tynn #988. Each account's live state is what
@@ -47,8 +48,8 @@ describe('the popover: live state, one-click switch, sign in, add', () => {
     beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host); });
     afterEach(() => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ''; });
     type Act = (action: AccountsAction) => Promise<AccountsActResult>;
-    const open = (handlers: { onSwitch?: (provider: string, choose?: string) => void; onAct?: Act } = {}) => {
-        act(() => root.render(<AccountsChip view={VIEW} offer={null} now={NOW} onSwitch={handlers.onSwitch ?? (() => {})} onAccountsAct={handlers.onAct ?? vi.fn<Act>(async () => ({ ok: true }))} />));
+    const open = (handlers: { onSwitch?: (provider: string, choose?: string) => void; onAct?: Act; signIns?: readonly ClaudeSignInView[] } = {}) => {
+        act(() => root.render(<AccountsChip view={VIEW} offer={null} now={NOW} onSwitch={handlers.onSwitch ?? (() => {})} onAccountsAct={handlers.onAct ?? vi.fn<Act>(async () => ({ ok: true }))} signIns={handlers.signIns} />));
         act(() => { host.querySelector('[data-account-chip="claude"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
         return document.querySelector('[data-account-popover="claude"]') as HTMLElement;
     };
@@ -91,18 +92,44 @@ describe('the popover: live state, one-click switch, sign in, add', () => {
         expect(onSwitch).not.toHaveBeenCalled();
     });
 
-    it('an account not signed in shows Sign in DISABLED, saying it comes with prism-acp (never a terminal), not Switch', () => {
+    it('an account not signed in offers Sign in: the browser sign-in (an action), never a terminal or the login window', () => {
         // The owner: "I should not see any terminals nor do we store login keys."
         const onAct = vi.fn<Act>(async () => ({ ok: true }));
         const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
         const row = open({ onAct, onSwitch }).querySelector(`[data-account="${B}"]`)!;
         expect(row.querySelector('[data-action="account-switch"]')).toBeNull();
         const button = row.querySelector('[data-action="account-sign-in"]') as HTMLButtonElement;
-        expect(button.disabled).toBe(true);
-        expect(button.getAttribute('title')).toMatch(/no terminal/);
-        expect(row.textContent).toContain('Coming with the next prism-acp');
+        expect(button.disabled).toBe(false);
         click(button);
-        expect(onAct).not.toHaveBeenCalled();
+        expect(onAct).toHaveBeenCalledWith({ kind: 'sign-in', id: B });
+        expect(onSwitch).not.toHaveBeenCalled();
+    });
+
+    it('a sign-in in progress says to finish it in the browser, with Cancel; no code field unless the CLI asked', () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const pop = open({ onAct, signIns: [{ accountId: B, label: 'Team API', state: 'browser' }] });
+        const pending = pop.querySelector(`[data-sign-in-pending="${B}"]`)!;
+        expect(pending.textContent).toMatch(/Finish signing in to Team API in your browser/);
+        expect(pending.querySelector('[data-sign-in-code]')).toBeNull();
+        click(pending.querySelector('[data-action="sign-in-cancel"]'));
+        expect(onAct).toHaveBeenCalledWith({ kind: 'cancel-sign-in', id: B });
+    });
+
+    it('when the CLI asks for a code: a field, and Send hands the code to it, once', async () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const pop = open({ onAct, signIns: [{ accountId: B, label: 'Team API', state: 'code', requestId: 'req-1' }] });
+        const field = pop.querySelector(`[data-sign-in-pending="${B}"] [data-sign-in-code] input`) as HTMLInputElement;
+        expect(field).not.toBeNull();
+        act(() => { const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!; set.call(field, 'abc-123'); field.dispatchEvent(new Event('input', { bubbles: true })); });
+        click(pop.querySelector('[data-action="sign-in-send-code"]'));
+        expect(onAct).toHaveBeenCalledWith({ kind: 'submit-code', requestId: 'req-1', code: 'abc-123' });
+    });
+
+    it('Use another account (Claude) is the browser sign-in of a new account, not the provider\'s login window', () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
+        click(open({ onAct, onSwitch }).querySelector('[data-action="account-use-another"]'));
+        expect(onAct).toHaveBeenCalledWith({ kind: 'use-another', method: 'subscription' });
         expect(onSwitch).not.toHaveBeenCalled();
     });
 
@@ -120,5 +147,27 @@ describe('the popover: live state, one-click switch, sign in, add', () => {
         expect(src).not.toMatch(/<(a|div|span|section|li)\b[^>]*onClick=/);
         // The positive control: the guard can see the Buttons that are there.
         expect(src.match(/<Button\b/g)?.length ?? 0).toBeGreaterThan(5);
+    });
+});
+
+describe('Settings → Accounts: "Sign out and remove" (prism-acp logout(), no window)', () => {
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    let host: HTMLDivElement;
+    let root: Root;
+    beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host); });
+    afterEach(() => { act(() => root.unmount()); host.remove(); });
+    const HOME = `account_${'d'.repeat(32)}`;
+    const snapshot = { providers: accountsView([...KNOWN, { id: HOME, provider: 'claude', label: 'Home', identity: { email: 'home@example.invalid', plan: null } }], [], { claude: A }, LIVE), offers: [] };
+
+    it('beside Forget on an account with its own folder that is not active; never on the active one or a default-home one', () => {
+        const onAct = vi.fn(async (_a: AccountsAction): Promise<AccountsActResult> => ({ ok: true }));
+        act(() => root.render(<AccountsSettings snapshot={snapshot} offerWindows="both" onSetOfferWindows={() => {}} onAct={onAct} />));
+        const row = (id: string) => host.querySelector(`[data-settings-account="${id}"]`)!;
+        expect(row(A).querySelector('[data-action="account-sign-out"]')).toBeNull();
+        expect(row(HOME).querySelector('[data-action="account-sign-out"]')).toBeNull();
+        const button = row(C).querySelector('[data-action="account-sign-out"]')!;
+        expect(button.textContent).toBe('Sign out and remove');
+        act(() => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+        expect(onAct).toHaveBeenCalledWith({ kind: 'sign-out', id: C });
     });
 });

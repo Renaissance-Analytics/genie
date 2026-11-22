@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { claudeAccounts, ClaudeSharedSessionsError, type ClaudeSharedSessionsRefusal } from '@particle-academy/prism-acp';
 
 /**
@@ -83,4 +83,51 @@ export function syncCleanupPeriod(configDir: string, defaultHome: string): void 
     }
     if (current['cleanupPeriodDays'] === days) return;
     writeFileSync(file, `${JSON.stringify({ ...current, cleanupPeriodDays: days }, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** A directory Genie made for an account: `<accounts root>/<account id>`, nothing else. */
+const ACCOUNT_DIR = /^account_[0-9a-f]{32}$/;
+
+/** Remove a link as a link (a junction on Windows is removed with rmdir), never what it points to. */
+function removeLink(path: string): void {
+    try { unlinkSync(path); } catch { rmdirSync(path); }
+}
+
+/** Remove a tree by lstat alone: a link is removed as a link and never followed; no file's contents are read. */
+function removeTree(path: string): void {
+    for (const name of readdirSync(path)) {
+        const entry = join(path, name);
+        const st = lstatSync(entry);
+        if (st.isSymbolicLink()) removeLink(entry);
+        else if (st.isDirectory()) removeTree(entry);
+        else unlinkSync(entry);
+    }
+    rmdirSync(path);
+}
+
+/**
+ * REMOVE THE DIRECTORY GENIE MADE FOR AN ACCOUNT (Tynn #1011, "Sign out and remove"), after Claude Code has signed it out.
+ * Its `projects` is a LINK to everyone's shared conversations: it is removed as a link and never followed, so nobody's
+ * history goes with it (a recursive delete that followed it would empty the shared store: the junction trap). Only a
+ * directory Genie made (`<accounts root>/account_<id>`) is ever touched; one that kept its OWN history (a real `projects`)
+ * is not removed, since that history is the person's. No file's contents are read.
+ */
+export function removeAccountDir(configDir: string, accountsRoot: string): { ok: true } | { ok: false; reason: string } {
+    const dir = resolve(configDir);
+    if (dirname(dir) !== resolve(accountsRoot) || !ACCOUNT_DIR.test(basename(dir))) {
+        return { ok: false, reason: 'That is not a folder Genie made for an account, so Genie leaves it as it is.' };
+    }
+    try {
+        const st = lstatSync(dir, { throwIfNoEntry: false });
+        if (!st) return { ok: true };
+        if (st.isSymbolicLink() || !st.isDirectory()) return { ok: false, reason: 'The account\'s folder is not a plain folder, so Genie leaves it as it is.' };
+        const projects = lstatSync(join(dir, 'projects'), { throwIfNoEntry: false });
+        if (projects && !projects.isSymbolicLink()) {
+            return { ok: false, reason: 'This account kept its own conversation history, so its folder is left on disk for you to keep or delete.' };
+        }
+        removeTree(dir);
+        return { ok: true };
+    } catch (error) {
+        return { ok: false, reason: `The account's folder could not be removed completely: ${error instanceof Error ? error.message : String(error)}` };
+    }
 }
