@@ -225,8 +225,22 @@ function judge(seen, theme, chosen, n) {
 
 console.log('\nTHE SOUND PICKER — what a person sees, in the real app\n');
 const TRIGGER = '[data-surface="settings"] [data-sound-picker]';
-/** In the page: the address is this workstation's own Settings (`genie://<workstation>/settings…`), not the bare route. */
-const SETTLED_SETTINGS = `(() => { const h = decodeURIComponent(window.location.hash); const rest = h.startsWith('#genie://') ? h.slice(9).split(/[?#]/)[0].split('/') : []; return rest.length >= 2 && rest[0] !== 'settings' && rest[1] === 'settings'; })()`;
+/**
+ * In the page: whether the address is this workstation's own (`genie://<workstation>/<page>...`), the form the app rewrites
+ * every route to once it has its snapshot (App.tsx rewrittenAddress); with `page`, whether it is that page. The name is
+ * the window's own snapshot's, so the test holds only once the rewrite has really happened.
+ */
+const ON_THIS_WORKSTATION = `async (page) => {
+    let s = null;
+    try { s = await (window.genieTest ?? window.genie).snapshot(); } catch { return false; }
+    const w = String(s?.workstation?.name ?? '').toLowerCase();
+    if (!w) return false;
+    const h = decodeURIComponent(window.location.hash).toLowerCase();
+    const at = '#genie://' + w + '/';
+    if (!h.startsWith(at)) return false;
+    return page === null || h.slice(at.length).split(/[?#]/)[0].split('/')[0] === page;
+}`;
+const onThisWorkstation = (page) => `(${ON_THIS_WORKSTATION})(${JSON.stringify(page)})`;
 let app = launch();
 let cdp = null;
 try {
@@ -237,13 +251,15 @@ try {
         for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
         await sleep(500);
     }
+    // The app rewrites its address to this workstation's own once it has its snapshot, from the address it last RENDERED
+    // (App.tsx rewrittenAddress): a navigation or a click before then is overwritten. Gate 1122-020342-554d85: the row's
+    // own `#genie://settings` went back to the Dashboard; rerun 1122-013356-260f53: the Notifications click landed and the
+    // page stayed on General. A person acts on a page that has settled; so does this run (Tynn #1009).
+    check(await waitFor(cdp, onThisWorkstation(null), 60_000), '0b. the app has settled on this workstation’s own address', await cdp.evaluate('window.location.hash'));
     await cdp.evaluate(`window.location.hash = '#genie://settings'; true`);
     await forceWhatsNewOpenForProbe((expression) => cdp.evaluate(expression));
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-settings-nav="notifications"]'))`, 30_000), '1. Settings is open, with its Notifications section');
-    // The app rewrites `genie://settings` to this workstation's own address once it has its snapshot, from the address it
-    // last rendered (App.tsx rewrittenAddress): a click before that is overwritten (gate rerun 1122-013356-260f53: the
-    // click landed, the page stayed on General). A person clicks a page that has settled; so does this run (Tynn #1009).
-    check(await waitFor(cdp, SETTLED_SETTINGS, 30_000), '1b. the address settled on this workstation’s own Settings page', await cdp.evaluate('window.location.hash'));
+    check(await waitFor(cdp, onThisWorkstation('settings'), 30_000), '1b. the address settled on this workstation’s own Settings page', await cdp.evaluate('window.location.hash'));
     check(await click(cdp, '[data-settings-nav="notifications"]'), '2. Notifications takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(TRIGGER)}))`, 15_000), '3. the page has a sound button');
     const before = await cdp.evaluate(`document.querySelector(${JSON.stringify(TRIGGER)})?.textContent ?? ''`);
