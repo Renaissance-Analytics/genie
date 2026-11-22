@@ -12,7 +12,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { McpServerSwitches } from '../src/renderer/components/AgentSkills.js';
 
 /**
- * GENIE PROVIDES THE FANCY UI MCP TO EVERY AGENT (Tynn #1017; the owner: "the fancy mcp needs to be provided by Genie so
+ * GENIE PROVIDES THE FANCY DEV KIT MCP TO EVERY AGENT (Tynn #1017; the owner: "the fancy mcp needs to be provided by Genie so
  * all agents can have access to that. It should be able to be turned off though if devs don't want their agents using
  * it or taking up context. It is on by default.").
  *
@@ -61,6 +61,30 @@ describe('the built-in row', () => {
         expect(row).toContain('data-mcp-built-in=""');
         expect(row).toContain(MCP_WORDS.builtIn);
         expect(row).not.toContain('data-mcp-required');
+    });
+
+    // The owner: the product is the "Fancy Dev Kit", not "Fancy UI". The server's id stays `fancy-ui` (what providers
+    // and the stored switches know it by); every word a person reads names the product.
+    it('names the product, Fancy Dev Kit, in its label, its description and its switch; the id stays fancy-ui', () => {
+        expect(workspaceMcpRows({})[2]).toMatchObject({ name: 'fancy-ui', label: 'Fancy Dev Kit', description: MCP_WORDS.fancyDevKit });
+        expect(mcpRows({})[2]).toMatchObject({ name: 'fancy-ui', label: 'Fancy Dev Kit', description: MCP_WORDS.fancyDevKit });
+        expect(MCP_WORDS.fancyDevKit).toMatch(/^The Fancy Dev Kit /);
+        const html = renderToStaticMarkup(<McpServerSwitches rows={workspaceMcpRows({})} agentName="tynn" workspace onSet={async () => ({ ok: true })} />);
+        const row = html.split('data-mcp-server="fancy-ui"')[1] ?? '';
+        expect(row).toContain('<span data-mcp-label="" title="' + MCP_WORDS.fancyDevKit + '"');
+        expect(row).toContain('>Fancy Dev Kit</span>');
+        expect(row).toContain('aria-label="Fancy Dev Kit, on by default in tynn"');
+        expect(row).toContain('>fancy-ui</span>');
+        const agentHtml = renderToStaticMarkup(<McpServerSwitches rows={mcpRows({})} agentName="atlas" onSet={async () => ({ ok: true })} />);
+        expect(agentHtml).toContain('aria-label="Fancy Dev Kit, on for atlas"');
+        expect(`${html}${agentHtml}`).not.toMatch(/fancy[ -]?ui(?!<\/span>|")/i);
+    });
+
+    it('CONTROL: a server with no label keeps its id in its switch, and gets no label', () => {
+        const html = renderToStaticMarkup(<McpServerSwitches rows={workspaceMcpRows({ mcpSeen: ['github'] })} agentName="tynn" workspace onSet={async () => ({ ok: true })} />);
+        const row = html.split('data-mcp-server="github"')[1] ?? '';
+        expect(row).toContain('aria-label="github, on by default in tynn"');
+        expect(row).not.toContain('data-mcp-label');
     });
 });
 
