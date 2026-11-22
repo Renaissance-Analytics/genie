@@ -42,7 +42,10 @@ describe('no client names in the repository', () => {
         const offenders = ROOTS.flatMap(files).flatMap((path) =>
             readFileSync(path, 'utf8').split(/\r?\n/).flatMap((line, i) => (hits(line) ? [`${path}:${i + 1}`] : [])));
         expect(offenders).toEqual([]);
-    });
+        // A TIMEOUT, not a weaker check: this reads every file under src/, test/ and docs/, about 2.9 s on the unit shard's
+        // 2-vCPU D2 VM and 7.0 s on a busy one (Azure job 1122-034131-afe614), past vitest's default 5 s. Nothing it checks
+        // changes; it is only given the time a whole-repository read takes on the smallest machine the unit row runs on.
+    }, 30_000);
 
     it('CONTROL: the matcher finds every spelling of a two-word name, and passes neutral text', () => {
         const sample = new Set([`10:${sha('acmewidget')}`]);
