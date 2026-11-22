@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ActivationLedger, FIRST_SHOW_FOCUS_MS, FirstShowTrace, bringUp, onceShowable, showWhenReady, windowLabelOf, type ActivatableWindow, type FirstShowWindow } from '../src/core/window-activation.js';
+import { ActivationLedger, FIRST_SHOW_FOCUS_MS, FirstShowTrace, bringUp, traceFirstShow, onceShowable, showWhenReady, windowLabelOf, type ActivatableWindow, type FirstShowWindow } from '../src/core/window-activation.js';
 
 /**
  * GENIE NEVER TAKES THE KEYBOARD ON ITS OWN (genie#1235; the owner, 2026-10-26: "the most annoying thing ever").
@@ -239,5 +239,50 @@ describe('FirstShowTrace — a new window\'s first show, each step timed (Tynn #
         t.note('did-finish-load', 900);
         t.note('focus', 950);
         expect(lines).toHaveLength(3);
+    });
+});
+
+describe('traceFirstShow — the trace, on a real window\'s events (Tynn #1032)', () => {
+    function fakeTracedWindow() {
+        const listeners = new Map<string, Array<() => void>>();
+        const once = (event: string, listener: () => void): void => { listeners.set(event, [...(listeners.get(event) ?? []), listener]); };
+        const emit = (event: string): void => { const fns = listeners.get(event) ?? []; listeners.delete(event); for (const fn of fns) fn(); };
+        return { once, webContents: { once }, emit };
+    }
+
+    it('logs the load, the show (naming the event that came first) and the first focus, timed from when it was traced', () => {
+        const w = fakeTracedWindow();
+        const lines: string[] = [];
+        let now = 1_000;
+        traceFirstShow(w, 'main', { log: (l) => lines.push(l), now: () => now, every: () => () => {} });
+        now = 1_400; w.emit('did-finish-load');
+        now = 1_401; w.emit('show');
+        now = 1_500; w.emit('focus');
+        expect(lines).toEqual([
+            '[genie] window main: did-finish-load at +400 ms',
+            '[genie] window main: show() at +401 ms, on did-finish-load',
+            '[genie] window main: focus at +500 ms (99 ms after show())',
+        ]);
+    });
+
+    it('a window shown and never focused is said by the timer, and the timer stops once it is said', () => {
+        const w = fakeTracedWindow();
+        const lines: string[] = [];
+        let now = 0, stopped = 0;
+        const ticks: Array<() => void> = [];
+        traceFirstShow(w, 'main', { log: (l) => lines.push(l), now: () => now, every: (fn) => { ticks.push(fn); return () => { stopped += 1; }; } });
+        now = 300; w.emit('did-finish-load');
+        now = 301; w.emit('show');
+        now = 301 + FIRST_SHOW_FOCUS_MS; ticks[0]!();
+        expect(lines.at(-1)).toMatch(/^\[genie\] window main: NOT FOCUSED 10000 ms after show\(\) \(on did-finish-load\)/);
+        expect(stopped).toBe(1);
+    });
+
+    it('a show before any load or paint says so, rather than naming an event that did not come', () => {
+        const w = fakeTracedWindow();
+        const lines: string[] = [];
+        traceFirstShow(w, 'remote', { log: (l) => lines.push(l), now: () => 0, every: () => () => {} });
+        w.emit('show');
+        expect(lines).toEqual(['[genie] window remote: show() at +0 ms, on neither the load nor the first paint']);
     });
 });
