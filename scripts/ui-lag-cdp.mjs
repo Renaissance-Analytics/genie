@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { initFixtureRepo } from './fixture-git-repo.mjs';
 import { builtFramePath } from './built-frame-path.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
@@ -250,7 +251,7 @@ try {
     for (const port of [PORT, INSPECT, HOST_INSPECT]) { let occupied = false; try { await targets(port); occupied = true; } catch (e) { if (e.name === 'TimeoutError') occupied = true; } demand(!occupied, `debugger port ${port} occupied; no app touched`); }
     root = mkdtempSync(join(tmpdir(), 'genie-ui-lag-')); const workspace = join(root, 'workspace'), runtime = join(root, '.genie', 'runtime');
     mkdirSync(workspace); mkdirSync(OUT, { recursive: true });
-    const env = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE_UI_LAG_MEASURE: '1' };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE_UI_LAG_MEASURE: '1', GENIE_SEED_WHATS_NEW: 'unseen' };
     execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env, stdio: 'pipe', timeout: 15000, windowsHide: true });
     // THE WORKSPACE: a git repository of 1,500 tracked sources, its build output ignored, and the build script.
     for (let d = 0; d < 30; d += 1) { mkdirSync(join(workspace, 'src', `m${d}`), { recursive: true }); for (let f = 0; f < 50; f += 1) writeFileSync(join(workspace, 'src', `m${d}`, `s${f}.js`), `export const s${d}_${f} = ${f};\n`); }
@@ -295,8 +296,7 @@ try {
      * That was the terminal's "cost" on Linux. Nothing is measured with a dialog over the window: see `noDialog`.
      */
     await until('What’s new on a first run', () => page.evaluate(`Boolean(document.querySelector('[data-whats-new]'))`), 30000);
-    await page.evaluate(`document.querySelector('[data-action="whats-new-close"]').click(); true`);
-    await until('What’s new to close', () => page.evaluate(`!document.querySelector('[data-whats-new]')`), 15000);
+    if (!(await closeWhatsNew((expression) => page.evaluate(expression), { timeoutMs: 15000 })).closed) throw new Error('What’s new was not there to close');
     const noDialog = async (when) => {
         const open = await page.evaluate(`[...document.querySelectorAll('[aria-modal="true"], [role="dialog"], dialog[open]')].filter((d) => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).map((d) => (d.textContent ?? '').trim().slice(0, 80))`);
         demand(open.length === 0, `no dialog over the window ${when}: ${JSON.stringify(open)}`);

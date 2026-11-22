@@ -8,7 +8,7 @@ import { NO_PAGES_HERE, notAvailableHere, type HostCapabilities } from '../core/
  *
  * Genie's MCP server lives in genie-host, so an agent keeps its tools when the window closes. The tools whose world is
  * the host's own — the stores agents write to, the sessions, the processes, flows, terminals, sites and services — run
- * here, including the enabled plugins' tools. The others (pages, workspace tabs, createAgent, checkIssues, openFileForUser) still need
+ * here, including the enabled plugins' tools, and createAgent (Tynn #1015). The others (pages, workspace tabs, checkIssues, openFileForUser) still need
  * what only the window has, so their calls are FORWARDED to it whole, with the caller the host resolved; the window runs
  * today's handler. So is `sites open` (WINDOW_ACTIONS). With no window the agent is told at once,
  * in words; a window that closes mid-call answers the same way.
@@ -19,7 +19,8 @@ import { NO_PAGES_HERE, notAvailableHere, type HostCapabilities } from '../core/
 // `manageTerminals` since P3.3e (the terminals are the host's), `sites` and `services` since Tynn #444 (P5a moved the sites,
 // the supervisor and the service engines here; until then every call went to the window, and on beta.60 none arrived).
 // `mail` from its start (Genie Mail G6, Tynn #492): the inbox book and the shared Mailpit are the host's.
-export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals', 'sites', 'services', 'mail', 'playwright']);
+// `createAgent` since Tynn #1015: the approval queue and the registry are the host's, so it works with no window.
+export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals', 'sites', 'services', 'mail', 'playwright', 'createAgent']);
 
 /**
  * The actions of a host tool that still need the WINDOW: forwarded to it like a window tool, the rest answered here.

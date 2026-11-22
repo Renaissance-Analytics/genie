@@ -12,7 +12,8 @@ export interface SourcePorts {
     readonly services: { list(): readonly ServiceInstance[] };
     readonly settings: { workspaceValues(workspaceId: string): Readonly<Record<string, boolean | string>> };
     readonly registry: {
-        defaultAgentOf(workspaceId: string): string | null;
+        /** The default someone CHOSE: an automatic one (the first agent, Tynn #1015) is not saved as a choice. */
+        chosenDefaultAgentOf(workspaceId: string): string | null;
         workspaceMcpOff(workspaceId: string): string[];
         listAgents(): readonly { id: string; name: string; workspaceId: string; issueWatch?: IssueWatchSetting }[];
         listWorkspaces(): readonly { id: string; envFile?: string }[];
@@ -25,7 +26,7 @@ export interface SourcePorts {
 
 export function elementSourcesFor(ports: SourcePorts, workspaceId: string): ElementSources {
     const agents = ports.registry.listAgents().filter((a) => a.workspaceId === workspaceId);
-    const defaultId = ports.registry.defaultAgentOf(workspaceId);
+    const defaultId = ports.registry.chosenDefaultAgentOf(workspaceId);
     return {
         services: ports.services.list(),
         workspace: {

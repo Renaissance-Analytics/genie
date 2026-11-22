@@ -39,7 +39,8 @@ describe('main: one door to the window’s view, and it asks who', () => {
 
     it('workspaceTabs: the tabs are written in place and the workspace pulses', () => {
         const port = /write: \(workspaceId, raw\) => \{([^\n]*)\}/.exec(main)?.[1] ?? '';
-        expect(port).toMatch(/composed\.settings\.setFor\(workspaceId, 'workspace_tabs', raw\)/);
+        // Written to genie-host over the protocol since Tynn #998 (2g-4b1: window-settings.ts).
+        expect(port).toMatch(/settingsNow\.setFor\(workspaceId, 'workspace_tabs', raw\)/);
         expect(port).toMatch(/showToPerson\(\{ activation: 'background', workspaceId, reason: 'workspaceTabs' \}\)/);
     });
 

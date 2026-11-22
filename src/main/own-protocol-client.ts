@@ -2,6 +2,7 @@ import { remoteOffer } from '../core/protocol-version.js';
 import type { DeckItem } from '../core/deck.js';
 import { readHostSummary, type HostSummary } from '../core/host-summary.js';
 import { readRemoteWatch, type RemoteWatchView } from '../core/remote-watch.js';
+import { readSettingsWatch, type SettingsWatchView } from './settings-watch.js';
 import { LOCAL_EVENTS, inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
 
 /**
@@ -38,6 +39,11 @@ export interface OwnProtocolClient {
      * `local-remote`: the connections and pair requests this window's desktop notifications read.
      */
     watchRemote(onView: (view: RemoteWatchView) => void): () => void;
+    /**
+     * THE SETTINGS, KEPT (Tynn #998, 2g-4b1): the same kind of connection, which says `settings.watch` and hears
+     * `local-settings`: genie-host's settings data, then each change, which this window's reads follow.
+     */
+    watchSettings(onView: (view: SettingsWatchView) => void): () => void;
 }
 
 /**
@@ -106,7 +112,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
      * ONE CONNECTION HELD OPEN that says `control` once welcomed and hears `channel` (Tynn #941, #953): what it answered and
      * each event's payload reach `onValue`. Opened again whenever it drops, until the returned stop.
      */
-    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
+    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch' | 'settings.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
         let stopped = false;
         let current: ReturnType<typeof inMemoryPair>['client'] | null = null;
         let attempt = 0;
@@ -155,7 +161,9 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
         persistent('summary.watch', LOCAL_EVENTS.summary, (value) => onSummary(readHostSummary(value)), (payload) => onSummary(readHostSummary(payload)));
     const watchRemote = (onView: (view: RemoteWatchView) => void): (() => void) =>
         persistent('remote.watch', LOCAL_EVENTS.remote, (value) => onView(readRemoteWatch(value)), (payload) => onView(readRemoteWatch(payload)));
-    return { door, call, watchDeck, watchSummary, watchRemote };
+    const watchSettings = (onView: (view: SettingsWatchView) => void): (() => void) =>
+        persistent('settings.watch', LOCAL_EVENTS.settings, (value) => onView(readSettingsWatch(value)), (payload) => onView(readSettingsWatch(payload)));
+    return { door, call, watchDeck, watchSummary, watchRemote, watchSettings };
 }
 
 /** How long the Deck's connection waits before it is opened again; the last repeats. */

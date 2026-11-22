@@ -250,7 +250,7 @@ describe('what the workspace holds', () => {
         services: { list: () => [dedicatedPg, sharedRedis] },
         settings: { workspaceValues: (id: string) => (id === WS ? { agent_cap: '4', approval_gates: 'none' } : { agent_cap: '16' }) },
         registry: {
-            defaultAgentOf: (id: string) => (id === WS ? 'agent_1' : null),
+            chosenDefaultAgentOf: (id: string) => (id === WS ? 'agent_1' : null),
             workspaceMcpOff: (id: string) => (id === WS ? ['slack'] : []),
             listAgents: () => [
                 { id: 'agent_1', name: 'lift', workspaceId: WS, issueWatch: { delivery: 'push' as const, kinds: ['issue.new' as const] } },

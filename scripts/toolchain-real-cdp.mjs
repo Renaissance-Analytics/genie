@@ -35,6 +35,7 @@ import { mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, 
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 if (process.env.GENIE_TEST_MACHINE !== '1' && userInfo().username !== 'genie') {
     console.error('refusing: this removes system packages and changes sudo; test machines only');
@@ -340,6 +341,7 @@ try {
     // The bridge AND its features: window.genie can exist before features.act does (the 2026-11-20 rerun threw on it).
     const bridged = await until(90_000, () => cdp.evaluate('typeof (window.genieTest ?? window.genie)?.features?.act === "function" && typeof (window.genieTest ?? window.genie)?.features?.snapshot === "function"'));
     if (!bridged) throw new Error('the page has no features bridge (features.act / features.snapshot) within 90 s');
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     await cdp.evaluate(`window.location.hash = '#genie://toolchain'; true`);
     // Every progress step a card shows, as it shows it: a step that lasts 50 ms is still a step the person saw.
     await cdp.evaluate(`(() => {

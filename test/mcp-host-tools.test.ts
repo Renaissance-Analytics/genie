@@ -41,8 +41,9 @@ function rig(window: { connected: boolean; answer?: (c: ForwardedToolCall) => Pr
 describe('the host keeps its own tools; the rest are the window\'s', () => {
     it('the host-native list is the stores-and-sessions tools', () => {
         // processes joined in P3.3c (the book, its scheduler and the supervisor are the host's), flows in P3.3d, manageTerminals in P3.3e,
-        // sites and services with Tynn #444 (P5a moved the sites, the supervisor and the engines into the host).
-        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'flows', 'imDone', 'knowledge', 'lists', 'manageTerminals', 'mail', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp'].sort());
+        // sites and services with Tynn #444 (P5a moved the sites, the supervisor and the engines into the host), createAgent
+        // with Tynn #1015 (the host's approval queue and registry).
+        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'createAgent', 'flows', 'imDone', 'knowledge', 'lists', 'manageTerminals', 'mail', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp'].sort());
     });
 
     it('a host-native tool runs in the host, window or not', async () => {
@@ -107,9 +108,10 @@ describe('openFileForUser with no window', () => {
  * forwarded, run or kept for later. The host's own tools are unchanged.
  */
 describe('window tools on a host with no window and no browser', () => {
-    // Every tool genie-host forwards to a window whole: the window's tools (checkIssues, workspaceTabs, createAgent,
-    // openFileForUser), pages, and a plugin's tool. `sites open` and `services exec` are pinned below.
-    const WINDOW_TOOLS = ['checkIssues', 'workspaceTabs', 'createAgent', 'openFileForUser', 'ai.genie.spreadsheet.createWorkbook'];
+    // Every tool genie-host forwards to a window whole: the window's tools (checkIssues, workspaceTabs, openFileForUser),
+    // pages, and a plugin's tool. `sites open` and `services exec` are pinned below. createAgent is the host's own since
+    // Tynn #1015 (test/create-agent-every-agent-1015.test.ts).
+    const WINDOW_TOOLS = ['checkIssues', 'workspaceTabs', 'openFileForUser', 'ai.genie.spreadsheet.createWorkbook'];
     const rigHere = (connected: boolean, capabilities?: { window: boolean; browser: boolean }) => {
         const ran: string[] = [];
         const forwarded: ForwardedToolCall[] = [];
