@@ -110,7 +110,9 @@ describe('SessionHost.accountSwitched: every running agent of the provider, and 
             return d;
         };
         const headroom = vi.fn();
-        const host = new SessionHost({ userData: dir, driverFor, processTree: noTree, stopGraceMs: 0, onHeadroom: headroom, activeAccount: (p) => (p === 'claude' ? LAB : account('9', 'codex')) });
+        // The reading's clock and the host's are one (the windows reset at NOW + 3 h and NOW + 90 h).
+        // The reading's clock and the host's are one (the windows reset at NOW + 3 h and NOW + 90 h).
+        const host = new SessionHost({ userData: dir, driverFor, processTree: noTree, stopGraceMs: 0, onHeadroom: headroom, clock: () => NOW, clock: () => NOW, activeAccount: (p) => (p === 'claude' ? LAB : account('9', 'codex')) });
         hosts.push(host);
         const mk = (name: string, provider: 'claude' | 'codex'): AgentRecord => agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider, name });
         const a = mk('one', 'claude'), b = mk('two', 'claude'), c = mk('three', 'codex');
