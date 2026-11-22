@@ -7,7 +7,7 @@ import type { AlertSound } from '../core/alerts.js';
  * is decided in core/alerts.ts and the chime's notes in core/alert-chime.ts; this is the untestable remainder that needs
  * a real speaker. Best-effort and silent on failure: an alert must never throw into what it announces.
  */
-export function playAlertSound(sound: AlertSound | null): void {
+export function playAlertSound(sound: AlertSound | null, _volume = 1): void { // RED STUB (Tynn #1022): the gain is not applied yet.
     start(sound);
 }
 
@@ -38,7 +38,7 @@ export function stopPreviewSound(): void {
 }
 
 /** Settings' preview: stops whatever preview is playing, then plays this one. */
-export function playPreviewSound(sound: AlertSound | null): void {
+export function playPreviewSound(sound: AlertSound | null, _volume = 1): void { // RED STUB (Tynn #1022)
     stopPreviewSound();
     previewing = start(sound);
 }
