@@ -78,9 +78,11 @@ function measureScript() {
 }
 /**
  * PLAN MODE (scripts/plan-popover-cdp.mjs, Tynn #1021): while `<tmpdir>/genie-stub-codex-plan` holds `{ owner, steps }` with a
- * live owner pid, a turn publishes that plan as Codex does (`turn/plan/updated`, each step `{ step, status }` with status
- * completed | inProgress | pending) and then streams a tick a second, for ever: an agent mid-turn whose Dashboard row
- * carries the plan. Without the file nothing below changes.
+ * live owner pid, a turn reports that plan the way an agent in Genie does: a `tools/call` of Genie's own `plan` tool, on the
+ * `genie` MCP server this provider was given at thread start (its URL and bearer), each step `{ content, status }`. That
+ * is the path a Claude agent's plan takes to the Dashboard (Codex's own `turn/plan/updated` arrives as ACP `plan`, which
+ * Genie does not map yet). What Genie answered goes to `<tmpdir>/genie-stub-codex-plan.result`. Then the turn streams a
+ * tick a second, for ever: an agent mid-turn whose Dashboard row carries the plan. Without the file nothing below changes.
  */
 function planScript() {
     const marker = join(tmpdir(), 'genie-stub-codex-plan');
@@ -90,6 +92,29 @@ function planScript() {
         process.kill(script.owner, 0);
         return Array.isArray(script.steps) ? script : null;
     } catch { return null; }
+}
+/** The `genie` MCP server this provider was given (thread/start or thread/resume): `{ url, headers }`, or null. */
+let genieServer = null;
+function keepGenieServer(params) {
+    const server = params?.config?.mcp_servers?.genie;
+    if (!server || typeof server.url !== 'string' || server.enabled === false) return;
+    const headers = { 'content-type': 'application/json', accept: 'application/json', ...(server.http_headers ?? {}) };
+    const bearer = server.bearer_token_env_var ? process.env[server.bearer_token_env_var] : undefined;
+    if (bearer) headers.authorization = `Bearer ${bearer}`;
+    genieServer = { url: server.url, headers };
+}
+async function reportPlanToGenie(steps) {
+    const result = join(tmpdir(), 'genie-stub-codex-plan.result');
+    const say = (line) => { appendFileSync(result, `${line}\n`); note(line); };
+    if (!genieServer) { say('no genie MCP server was given at thread start'); return; }
+    const call = async (id, method, params) => {
+        const res = await fetch(genieServer.url, { method: 'POST', headers: genieServer.headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+        return `${method} ${res.status} ${(await res.text()).slice(0, 400)}`;
+    };
+    try {
+        say(await call(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'stub-codex', version: '0.0.0' } }));
+        say(await call(2, 'tools/call', { name: 'plan', arguments: { steps } }));
+    } catch (error) { say(`plan call failed: ${String(error)}`); }
 }
 /**
  * RECORD MODE (scripts/agent-key-no-window-cdp.mjs, genie#1457): while `<tmpdir>/genie-stub-codex-record-servers` exists, a
@@ -289,11 +314,13 @@ function handle(frame) {
 
         case 'thread/start':
             recordServers(frame?.params);
+            keepGenieServer(frame?.params);
             respond(id, { thread: { id: threadId } });
             return;
 
         case 'thread/resume':
             recordServers(frame?.params, 'thread/resume');
+            keepGenieServer(frame?.params);
             if (typeof frame?.params?.threadId === 'string' && frame.params.threadId.length > 0) threadId = frame.params.threadId;
             respond(id, { thread: { id: threadId } });
             return;
@@ -331,7 +358,7 @@ function handle(frame) {
             const planned = planScript();
             if (planned) {
                 note(`plan: ${planned.steps.length} steps`);
-                send({ jsonrpc: '2.0', method: 'turn/plan/updated', params: { threadId, turnId: TURN_ID, explanation: null, plan: planned.steps } });
+                void reportPlanToGenie(planned.steps);
                 let tick = 0;
                 setInterval(() => { tick += 1; delta(`plan tick ${tick}\n`); }, 1000);
                 return;

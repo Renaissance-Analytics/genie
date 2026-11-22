@@ -24,7 +24,8 @@ describe('planListMaxHeight: the room beside the trigger, less the popover chrom
     });
 
     it('a trigger near the bottom: the room above it (the popover flips up)', () => {
-        expect(planListMaxHeight({ top: 800, bottom: 820 }, 900)).toBe(750);
+        // 800 above, less the offset, the margin and the chrome: 800 - 8 - 8 - 26.
+        expect(planListMaxHeight({ top: 800, bottom: 820 }, 900)).toBe(758);
     });
 
     it('is never taller than the viewport, and keeps a usable floor in a tiny window', () => {

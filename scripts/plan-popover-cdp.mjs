@@ -6,7 +6,8 @@
  *
  * The owner's report: the per-agent plan popover ("27/77" and its steps) grew past the bottom of the screen, with no scroll.
  * This opens the built app on a seeded workspace with one stub-codex agent (scripts/stub-codex.mjs, PLAN MODE) whose turn
- * publishes a 77-step plan, 27 done and step 28 in progress, through the real CodexDriver and host. A What's new window,
+ * reports a 77-step plan, 27 done and step 28 in progress, through Genie's own `plan` MCP tool with the agent's own key:
+ * the path an agent's plan takes to the Dashboard. A What's new window,
  * if the fresh home shows one, is closed first, with its own Close button. Then a REAL pointer (CDP Input.dispatchMouseEvent)
  * hovers the Dashboard's plan cell and the popover is measured from the DOM: it is whole on the screen, its list is capped
  * and scrolls (the 77 steps really do not fit: the control that the cap is doing work), the "27/77" header sits outside the
@@ -59,14 +60,16 @@ writeFileSync(join(runtime, 'agents.json'), JSON.stringify([{
 }], null, 2));
 writeFileSync(join(runtime, 'settings.json'), JSON.stringify({ theme: 'dark' }, null, 2));
 
-// THE PLAN: 77 steps, 27 done, step 28 in progress (the owner's "27/77"). Codex's own shape; prism-acp maps it.
-const STEPS = Array.from({ length: 77 }, (_, i) => ({ step: `Step ${i + 1}: ${['read the brief', 'write the failing test', 'build it', 'wire it', 'measure it', 'review it', 'ship it'][i % 7]}`, status: i < 27 ? 'completed' : i === 27 ? 'inProgress' : 'pending' }));
-const CURRENT = STEPS[27].step;
-const LAST = STEPS[76].step;
+// THE PLAN: 77 steps, 27 done, step 28 in progress (the owner's "27/77"), as the `plan` tool takes them.
+const STEPS = Array.from({ length: 77 }, (_, i) => ({ content: `Step ${i + 1}: ${['read the brief', 'write the failing test', 'build it', 'wire it', 'measure it', 'review it', 'ship it'][i % 7]}`, status: i < 27 ? 'completed' : i === 27 ? 'in_progress' : 'pending' }));
+const CURRENT = STEPS[27].content;
+const LAST = STEPS[76].content;
 const stub = join(ROOT, 'scripts', 'stub-codex.mjs');
 chmodSync(stub, 0o755);
 const PLAN_MARKER = join(tmpdir(), 'genie-stub-codex-plan');
+const PLAN_RESULT = `${PLAN_MARKER}.result`;
 rmSync(PLAN_MARKER, { force: true });
+rmSync(PLAN_RESULT, { force: true });
 rmSync(join(tmpdir(), 'genie-stub-codex-ticker'), { force: true });
 
 class Cdp {
@@ -224,7 +227,14 @@ try {
     const cellUp = await waitFor('the plan cell', `Boolean(document.querySelector(${JSON.stringify(CELL)}))`, 60_000);
     const cellText = cellUp ? await ev(`document.querySelector(${JSON.stringify(CELL)}).textContent`) : null;
     check('1. CONTROL: the agent\'s Dashboard row shows the plan, 27/77 and the step in progress', cellUp && /27\/77/.test(cellText ?? '') && (cellText ?? '').includes(CURRENT), cellText);
-    if (!cellUp) throw new Error('no plan cell on the Dashboard');
+    let answered = '(the stub wrote nothing)';
+    try { answered = readFileSync(PLAN_RESULT, 'utf8').trim(); } catch { /* none */ }
+    proof.notes.push(`what Genie answered the stub's plan call: ${answered}`);
+    say(`the stub's plan call: ${answered}`);
+    if (!cellUp) {
+        proof.notes.push(`the agent's last rows: ${await ev(`window.genieTest.agentDetail(${JSON.stringify(AGENT.id)}).then((d) => JSON.stringify((d?.rows ?? []).slice(-8).map((r) => r.event?.kind ?? r.kind)))`)}`);
+        throw new Error('no plan cell on the Dashboard');
+    }
 
     // A REAL HOVER: the pointer moved onto the cell. The popover opens after its hover delay.
     await mouse('mouseMoved', await centre(CELL));
