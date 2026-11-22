@@ -285,6 +285,34 @@ describe('probing — what the Dashboard reads', () => {
         expect(agentRowFor(r, live, () => now)).toMatchObject({ step: '1/3', target: 'Map the update' });
     });
 
+    it('keeps the plan when a delta-only `plan_update` follows it, and never blanks it (genie#2132)', () => {
+        /**
+         * The same driver sends Codex's `turn/plan/delta` as `{ sessionUpdate: 'plan_update', delta }`: no
+         * `entries`, no `plan`. Read as a plan, that is a plan of NO steps, and the Dashboard's plan went blank
+         * the moment Codex streamed one.
+         */
+        const r = record();
+        host.start(r, dir);
+        events.onUpdate?.({
+            sessionUpdate: 'plan',
+            entries: [
+                { content: 'Read the driver', status: 'completed' },
+                { content: 'Map the update', status: 'in_progress' },
+            ],
+        });
+        expect(host.probe(r.id)?.plan).toEqual({ step: 1, of: 2, doing: 'Map the update' });
+
+        events.onUpdate?.({ sessionUpdate: 'plan_update', delta: 'Next: open the PR' });
+
+        const live = host.probe(r.id);
+        expect(live?.plan).toEqual({ step: 1, of: 2, doing: 'Map the update' });
+        expect(live?.planSteps).toEqual([
+            { content: 'Read the driver', status: 'completed' },
+            { content: 'Map the update', status: 'in_progress' },
+        ]);
+        expect(agentRowFor(r, live, () => now)).toMatchObject({ step: '1/2', target: 'Map the update' });
+    });
+
     it('surfaces a FAILED turn as a broken row with a route out', () => {
         const r = record();
         host.start(r, dir);
