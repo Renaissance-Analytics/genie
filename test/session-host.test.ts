@@ -255,6 +255,36 @@ describe('probing — what the Dashboard reads', () => {
         expect(host.probe(r.id)?.plan).toEqual({ step: 1, of: 2, doing: 'Enrolment endpoint' });
     });
 
+    it('reports a Codex agent’s plan, sent as ACP `plan` (genie#2132), on its Dashboard row', () => {
+        /**
+         * prism-acp's CodexDriver maps Codex's `turn/plan/updated` to `{ sessionUpdate: 'plan', entries }`
+         * (`#emitPlan(object.plan, 'plan')`, entries `{ content, status }`). `plan` is ACP's own name for a
+         * plan update; only `plan_update` was mapped, so a Codex plan fell through to `unknown` and the
+         * Dashboard's plan column and its hover stayed empty.
+         */
+        const r = record();
+        host.start(r, dir);
+        expect(host.probe(r.id)?.plan).toBeNull();
+
+        events.onUpdate?.({
+            sessionUpdate: 'plan',
+            entries: [
+                { content: 'Read the driver', status: 'completed' },
+                { content: 'Map the update', status: 'in_progress' },
+                { content: 'Open the PR', status: 'pending' },
+            ],
+        });
+
+        const live = host.probe(r.id);
+        expect(live?.plan).toEqual({ step: 1, of: 3, doing: 'Map the update' });
+        expect(live?.planSteps).toEqual([
+            { content: 'Read the driver', status: 'completed' },
+            { content: 'Map the update', status: 'in_progress' },
+            { content: 'Open the PR', status: 'pending' },
+        ]);
+        expect(agentRowFor(r, live, () => now)).toMatchObject({ step: '1/3', target: 'Map the update' });
+    });
+
     it('surfaces a FAILED turn as a broken row with a route out', () => {
         const r = record();
         host.start(r, dir);
