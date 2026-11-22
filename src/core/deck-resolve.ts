@@ -24,6 +24,8 @@ export type DeckCommand =
     | { kind: 'answer-question'; questionId: string; selections: string[][]; notes: string[]; note: string }
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent; '' = none. */
     | { kind: 'resolve-approval'; approvalId: string; choice: 'allow' | 'deny'; note: string }
+    /** An approval nobody answered in time (`apprx_`, Tynn #1006): the person dismisses its notice. */
+    | { kind: 'dismiss-expired-approval'; approvalId: string }
     | { kind: 'answer-provider-approval'; agentId: string; optionId: string; note: string }
     | { kind: 'list-done'; workspaceId: string; itemId: string }
     | { kind: 'mark-read'; messageId: string }

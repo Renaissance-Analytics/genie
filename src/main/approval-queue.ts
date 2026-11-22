@@ -13,7 +13,11 @@ import type { Caller, McpCall } from './mcp-tools.js';
  * the timeout: a verdict nobody gave is not a verdict, and the only safe default is no.
  */
 
-export type Verdict = 'allowed' | 'denied';
+export type Verdict = 'allowed' | 'denied' | 'expired';
+/** How long a request waits for the person (Tynn #1006: enforced by genie-host's sweep). */
+export const APPROVAL_TIMEOUT_MS = 0;
+/** How often genie-host sweeps the queue. */
+export const APPROVAL_SWEEP_MS = 0;
 
 /** One action an autonomous agent took without asking (Tynn #801). */
 export interface AutoApproved {
@@ -235,6 +239,9 @@ export class ApprovalQueue {
     lastCancelled(): Array<{ action: string; detail: string; reason: string }> {
         return this.#cancelled;
     }
+
+    /** An expired request's Deck item, dismissed by the person. False for an id that is not an expired item. */
+    dismissExpired(_id: string): boolean { throw new Error('2g-4b2: not built yet'); }
 
     /** Deny requests older than the timeout as abandoned. Returns how many. */
     sweep(): number {

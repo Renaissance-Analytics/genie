@@ -24,7 +24,7 @@ export interface DeckAnswerPorts {
     deckItems(): readonly DeckItem[];
     readonly attention: Pick<AttentionStore, 'answer' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
     /** As the window's approvals API types it (a replica may answer later); read exactly as the feature action always did. */
-    readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean> };
+    readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean>; dismissExpired?(id: string): boolean | Promise<boolean> };
     readonly inbox: Pick<InboxStore, 'unread' | 'receive'>;
     readonly deliverToAgent?: ((agentId: string, text: string) => boolean | Promise<boolean>) | undefined;
     readonly trustCertificate?: () => Promise<{ ok: true } | { ok: false; reason: string }>;

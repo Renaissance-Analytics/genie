@@ -22,7 +22,8 @@ export type OwnCallAnswer = { ok: true; value: unknown } | { ok: false; reason: 
 export interface OwnProtocolClient {
     /** Tunnelled by main over its engine link; never a listener. */
     readonly door: ServerTransport;
-    call(method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer>;
+    /** `timeoutMs`: this call's own deadline, for an answer that waits on the person (approvals.gate); else the client's. */
+    call(method: RemoteMethod, args: unknown[], options?: { timeoutMs?: number }): Promise<OwnCallAnswer>;
     /**
      * THE HOST'S DECK, KEPT (Tynn #941, 2f-2): one connection held open on the door, which says `deck.watch` and hears
      * `local-deck` when the Deck changes, and nothing else of the estate. It is opened again whenever it drops (genie-host
