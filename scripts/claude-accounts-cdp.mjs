@@ -17,6 +17,7 @@
  *   prism-acp's hidden login ships (the owner: "I should not see any terminals"): a click opens no window, runs no login.
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -55,6 +56,8 @@ const book = { version: 1, active: { claude: WORK }, accounts: [legacy('claude')
 mkdirSync(join(home, '.genie', 'runtime'), { recursive: true });
 writeFileSync(join(home, '.genie', 'runtime', 'accounts.json'), JSON.stringify(book, null, 2));
 for (const id of [WORK, LAB, TEAM]) mkdirSync(dirOf(id), { recursive: true });
+// A fresh home opens What's new: seeded as seen, as every clicking row's is (Tynn #1009).
+seedWhatsNewSeen(join(home, '.genie'));
 
 // THE STAND-IN CLI: what `claude auth status --json` prints in each directory (the real CLI's field names), and a login that
 // says what it was asked and waits, as the real one waits for the browser. Its table is a file: prism-acp hands the CLI an
@@ -181,15 +184,9 @@ const q = (s) => JSON.stringify(s);
 const CHIP = '[data-title-bar] [data-account-chip="claude"]';
 const POP = '[data-account-popover="claude"]';
 
-/** Close what covers the window first (a fresh home opens with What's new), as a person would, then open the popover. */
+/** What's new closed first with the shared helper (Tynn #1009; its home is seeded as seen, so normally none opens), then the popover. */
 async function openPopover(cdp) {
-    const hitChip = `(() => { const el = document.querySelector(${q(CHIP)}); if (!el) return false; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return Boolean(at && at.closest('[data-account-chip]')); })()`;
-    for (let i = 0; i < 4 && !(await cdp.evaluate(hitChip)); i++) {
-        const modal = await cdp.evaluate(`(() => { const d = document.querySelector('[role="dialog"], [aria-modal="true"]'); return d ? d.innerText.replace(/\\s+/g, ' ').slice(0, 120) : '(none)'; })()`);
-        console.log(`  a dialog covers the window (${modal}): closing it with Escape`);
-        for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-        await waitFor(cdp, hitChip, 3_000);
-    }
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     if (!(await cdp.evaluate(`Boolean(document.querySelector(${q(POP)}))`))) await click(cdp, CHIP);
     const opened = await waitFor(cdp, `(() => { const r = document.querySelector(${q(POP)})?.getBoundingClientRect(); return Boolean(r && r.left >= 0 && r.top >= 0); })()`, 8_000);
     return opened;
