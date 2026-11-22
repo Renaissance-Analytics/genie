@@ -57,6 +57,10 @@ export interface McpRow {
     readonly overrides?: boolean;
     /** A server Genie provides (BUILT_IN_MCP_SERVERS): listed always, on by default, switchable. */
     readonly builtIn?: boolean;
+    /** A built-in server's name as a person reads it (its product), beside its id. */
+    readonly label?: string;
+    /** What a built-in server gives agents, in a sentence: the label's tooltip. */
+    readonly description?: string;
 }
 
 export interface McpChoices {
@@ -68,6 +72,7 @@ export interface McpChoices {
 export const MCP_WORDS = {
     required: 'Required by Genie',
     builtIn: 'Provided by Genie',
+    fancyDevKit: 'The Fancy Dev Kit registry: its components, install steps and design blueprints, for every agent here. Switch it off to keep it out of their context.',
     note: (agent: string) => `This list is Genie’s own servers, the ones it provides, and every server one of ${agent}’s sessions reported when it started. A server that no session has reported yet is not listed, and cannot be switched off here until it is.`,
     workspaceNote: 'The default for every agent in this workspace; an agent’s own switch wins. This list is Genie’s own servers, the ones it provides, and every server a session of one of this workspace’s agents reported. A server that no session has reported yet is not listed.',
     saved: (agent: string) => `Saved. It applies the next time ${agent} starts a session.`,
@@ -77,6 +82,15 @@ export const MCP_WORDS = {
     stays: (name: string) => `${name} is Genie’s own server and stays on.`,
     name: 'Name the MCP server, and say on or off.',
 } as const;
+
+/**
+ * WHAT A PERSON READS FOR A BUILT-IN SERVER (the owner: the product is the "Fancy Dev Kit", not "Fancy UI"). Its id
+ * (`fancy-ui`) is what providers and the stored switches know it by and stays; the label and its tooltip name the product.
+ */
+const BUILT_IN_WORDS: Readonly<Record<string, { readonly label: string; readonly description: string }>> = {
+    [FANCY_UI_MCP.name]: { label: 'Fancy Dev Kit', description: MCP_WORDS.fancyDevKit },
+};
+const builtInRow = (name: string) => ({ builtIn: true as const, ...BUILT_IN_WORDS[name] });
 
 const NAME_LIMIT = 200;
 /** A server's name as a provider reports it: one line of text, not empty, not absurdly long. */
@@ -105,7 +119,7 @@ export function mcpRows(record: McpChoices, workspaceOff: readonly string[] = []
         ...REQUIRED_MCP.map((name) => ({ name, required: true, on: true })),
         ...[...BUILT_IN_MCP, ...others].map((name) => ({
             name, required: false, on: !off.has(name),
-            ...(BUILT_IN_MCP.includes(name) ? { builtIn: true } : {}),
+            ...(BUILT_IN_MCP.includes(name) ? builtInRow(name) : {}),
             ...(workspace.has(name) && !own.has(name) && !ownOn.has(name) ? { inherited: true } : {}),
             ...(workspace.has(name) && !own.has(name) && ownOn.has(name) ? { overrides: true } : {}),
         })),
@@ -139,7 +153,7 @@ export function workspaceMcpRows(workspace: { readonly mcpOff?: readonly string[
     const off = new Set(switchable(workspace.mcpOff));
     return [
         ...REQUIRED_MCP.map((name) => ({ name, required: true, on: true })),
-        ...BUILT_IN_MCP.map((name) => ({ name, required: false, on: !off.has(name), builtIn: true })),
+        ...BUILT_IN_MCP.map((name) => ({ name, required: false, on: !off.has(name), ...builtInRow(name) })),
         ...switchable([...(workspace.mcpSeen ?? []), ...off]).filter((name) => !BUILT_IN_MCP.includes(name)).map((name) => ({ name, required: false, on: !off.has(name) })),
     ];
 }

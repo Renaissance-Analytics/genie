@@ -29,12 +29,13 @@ export function McpServerSwitches({ rows, agentName, workspace = false, onSet, i
             <ul data-mcp-servers={rows.length} className="flex flex-col">
                 {rows.map((row) => (
                     <li key={row.name} data-mcp-server={row.name} data-mcp-state={row.required ? 'required' : row.on ? 'on' : 'off'} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--border-1)]/50 py-1.5 text-[12px]">
+                        {row.label ? <span data-mcp-label="" title={row.description} className="shrink-0 text-[12px] font-medium text-[var(--fg-1)]">{row.label}</span> : null}
                         <span className="min-w-0 break-all font-mono text-[var(--fg-1)]">{row.name}</span>
                         {row.builtIn ? <span data-mcp-built-in="" className="shrink-0 text-[11px] text-[var(--fg-3)]">{MCP_WORDS.builtIn}</span> : null}
                         {row.required ? (
                             <span data-mcp-required="" className="shrink-0 text-[11px] text-[var(--fg-3)]">{MCP_WORDS.required}</span>
                         ) : onSet ? (
-                            <span className="shrink-0"><Switch checked={row.on} disabled={busy !== null} onCheckedChange={(checked) => set(row.name, checked)} aria-label={workspace ? `${row.name}, on by default in ${agentName}` : `${row.name}, on for ${agentName}`} /></span>
+                            <span className="shrink-0"><Switch checked={row.on} disabled={busy !== null} onCheckedChange={(checked) => set(row.name, checked)} aria-label={workspace ? `${row.label ?? row.name}, on by default in ${agentName}` : `${row.label ?? row.name}, on for ${agentName}`} /></span>
                         ) : (
                             <span className="shrink-0 text-[11px] text-[var(--fg-3)]">{row.on ? 'On' : 'Off'}</span>
                         )}
