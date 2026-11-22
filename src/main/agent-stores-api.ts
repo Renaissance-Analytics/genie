@@ -25,7 +25,7 @@ export interface ApprovalsApi {
     /** The person's verdict. The host's queue answers later (true = there was such an item). */
     resolve(id: string, choice: 'allow' | 'deny'): MaybePromise<boolean>;
     /** A gated action asks the ONE queue (the host's in engine mode): a window tool's approval among them. */
-    gate(caller: Caller, action: string, detail: string, call?: McpCall): Promise<'allowed' | 'denied'>;
+    gate(caller: Caller, action: string, detail: string, call?: McpCall): Promise<'allowed' | 'denied' | 'expired'>;
 }
 
 /** The knowledge graph: read and written where it lives (a call across the link in engine mode). */

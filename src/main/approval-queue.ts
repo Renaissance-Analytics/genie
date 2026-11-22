@@ -15,9 +15,9 @@ import type { Caller, McpCall } from './mcp-tools.js';
 
 export type Verdict = 'allowed' | 'denied' | 'expired';
 /** How long a request waits for the person (Tynn #1006: enforced by genie-host's sweep). */
-export const APPROVAL_TIMEOUT_MS = 0;
+export const APPROVAL_TIMEOUT_MS = 30 * 60_000;
 /** How often genie-host sweeps the queue. */
-export const APPROVAL_SWEEP_MS = 0;
+export const APPROVAL_SWEEP_MS = 60_000;
 
 /** One action an autonomous agent took without asking (Tynn #801). */
 export interface AutoApproved {
@@ -91,6 +91,8 @@ export const SWITCH_ANSWERS: Readonly<Record<string, 'drivePages' | 'manageTabs'
 export class ApprovalQueue {
     readonly #now: () => number;
     readonly #timeoutMs: number;
+    /** Asks nobody answered in time (Tynn #1006): a notice on the Deck until the person dismisses it. */
+    #expired: Array<{ id: string; caller: Caller; action: string; detail: string; at: number }> = [];
     readonly #pending = new Map<string, Pending>();
     #cancelled: Array<{ action: string; detail: string; reason: string }> = [];
     #n = 0;
@@ -109,7 +111,7 @@ export class ApprovalQueue {
      */
     constructor(options: { now?: () => number; timeoutMs?: number; autoApproved?: (caller: Caller, action: string) => boolean; granted?: (caller: Caller, action: string) => boolean } = {}) {
         this.#now = options.now ?? Date.now;
-        this.#timeoutMs = options.timeoutMs ?? 30 * 60_000;
+        this.#timeoutMs = options.timeoutMs ?? APPROVAL_TIMEOUT_MS;
         this.#autoApproved = options.autoApproved;
         this.#granted = options.granted;
     }
@@ -224,7 +226,19 @@ export class ApprovalQueue {
             answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] },
             forwardedFrom: null,
             ...(p.why ? { why: p.why } : {}),
-        }));
+        })).concat(this.#expired.map((e) => ({
+            id: e.id,
+            source: 'agent-question' as const,
+            agentId: e.caller.agentId,
+            agentName: e.caller.agentName,
+            workspaceId: e.caller.workspaceId === '' ? null : e.caller.workspaceId,
+            title: `${e.caller.agentName} wanted to ${VERBS[e.action] ?? e.action}: ${e.detail} — expired, no answer in 30 min`,
+            blocking: false,
+            priority: 'normal' as const,
+            at: e.at,
+            answer: { kind: 'inline' as const, options: [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' as const }] },
+            forwardedFrom: null,
+        })));
     }
 
     /** Deny everything pending, with the reason — for a quit or a hibernate. */
@@ -241,17 +255,28 @@ export class ApprovalQueue {
     }
 
     /** An expired request's Deck item, dismissed by the person. False for an id that is not an expired item. */
-    dismissExpired(_id: string): boolean { throw new Error('2g-4b2: not built yet'); }
+    dismissExpired(id: string): boolean {
+        const before = this.#expired.length;
+        this.#expired = this.#expired.filter((e) => e.id !== id);
+        if (this.#expired.length === before) return false;
+        this.#changed();
+        return true;
+    }
 
     /** Deny requests older than the timeout as abandoned. Returns how many. */
     sweep(): number {
         let n = 0;
         for (const p of [...this.#pending.values()]) {
             if (this.#now() - p.at > this.#timeoutMs) {
-                this.resolve(p.id, 'deny');
+                // EXPIRED, not denied (Tynn #1006): nobody answered. Each caller hears 'expired', and the Deck keeps a notice
+                // the person dismisses, so neither the person nor the agent reads it as a Deny.
+                this.#pending.delete(p.id);
+                this.#expired = [...this.#expired, { id: `apprx_${p.id.slice('appr_'.length)}`, caller: p.caller, action: p.action, detail: p.detail, at: this.#now() }].slice(-20);
+                for (const r of p.resolvers) r('expired');
                 n += 1;
             }
         }
+        if (n > 0) this.#changed();
         return n;
     }
 }

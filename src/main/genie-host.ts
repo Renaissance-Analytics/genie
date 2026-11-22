@@ -223,7 +223,7 @@ import { openSecretKeychain } from './file-secrets.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
-import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
+import { APPROVAL_SWEEP_MS, ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { attentionLimitsFrom } from './attention-store.js';
 import { startHostMcp, type HostMcp } from './host-mcp.js';
@@ -476,6 +476,10 @@ async function main(): Promise<void> {
             return flag !== undefined && hostRegistry.listAgents().some((a) => a.id === caller.agentId && a[flag] === true);
         },
     });
+    // THE APPROVAL'S OWN EXPIRY, ENFORCED (Tynn #1006): an ask nobody answers in 30 minutes expires, and the person and the
+    // agent are told so. It was never swept before, so a pending ask waited for ever.
+    const approvalSweep = setInterval(() => { approvals.sweep(); }, APPROVAL_SWEEP_MS);
+    approvalSweep.unref();
     // The agent's calls while a window runs them (P3.1): a window tool's approval in this queue ends with its call (genie#1360).
     const forwardedCalls = new Map<string, import('./mcp-tools.js').McpCall>();
     const stores = new AgentStoresService({ ...own, approvals, settings, drafts, registry: { store: registryStore, model: hostRegistry } }, { forwardedCall: (id) => forwardedCalls.get(id) });
@@ -1982,6 +1986,8 @@ async function main(): Promise<void> {
         settingsWatch,
         // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
         legacySecrets: legacyAdopt,
+        // A window-run tool's approval, from this queue, tied to the agent's real call (Tynn #1006, 2g-4b2).
+        approvalsGate: (caller, action, detail, forwardedCallId) => approvals.gate(caller, action, detail, forwardedCallId ? forwardedCalls.get(forwardedCallId) : undefined),
         // Ask Tynn again whether this host is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
         tynnRecheck: async () => { const account = await tynnOpening.catch(() => null); if (account && !account.status().signedIn) await account.recheck(); },
         providerPrograms: hostProviderPrograms({

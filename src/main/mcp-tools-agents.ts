@@ -4,6 +4,7 @@ import { isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { agentRecord, type AgentId, type AgentRecord } from '../core/identity.js';
 import { callerFrom } from './mcp-callers.js';
 import type { Caller, McpCall, Registration } from './mcp-tools.js';
+import { refusalWords } from '../core/approval-words.js';
 
 /**
  * `createAgent` — ANY AGENT MAY ASK TO CREATE A WORKSPACE AGENT; THE PERSON DECIDES (the owner, 2026-10-19, FTQ q_09d1f4a0:
@@ -44,7 +45,7 @@ export interface AgentToolsDeps {
     /** A caller's session key (or terminal id) → the caller; `null` for one Genie does not know. */
     readonly resolveCaller: (key: string) => Caller | null;
     readonly roster: () => readonly AgentRecord[];
-    readonly approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
     /** Make the agent as Add agent does (project.json + AGENT.md + the registry): the record, or the refusal in words. */
     readonly create: (input: { workspaceId: string; provider: AcpProvider; name: string; purpose: string }) => Promise<CreateOutcome>;
     readonly addressOf: (record: AgentRecord) => string;
@@ -72,7 +73,8 @@ export function agentTools(deps: AgentToolsDeps): Registration[] {
             if (instructions === null) return err(NO_PURPOSE);
             if (deps.roster().some((a) => a.workspaceId === found.workspaceId && a.name === name)) return err(`${found.workspaceId} already has an agent named ${name}`);
             const detail = `Create a new agent “${name}” (${provider}) in ${found.workspaceId}${instructions ? ` — instructions: ${instructions}` : ''}`;
-            if ((await deps.approve(found, CREATE_AGENT_ACTION, detail, context)) !== 'allowed') return err('The person declined: no agent was created.');
+            const verdict = await deps.approve(found, CREATE_AGENT_ACTION, detail, context);
+            if (verdict !== 'allowed') return err(refusalWords(verdict, 'creating the agent', 'no agent was created'));
             const made = await deps.create({ workspaceId: found.workspaceId, provider, name, purpose: instructions });
             if (!made.ok) return err(made.reason);
             return ok({ ok: true, id: made.record.id, name: made.record.name, address: deps.addressOf(made.record) });

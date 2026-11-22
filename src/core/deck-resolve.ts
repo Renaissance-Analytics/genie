@@ -168,6 +168,7 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
     switch (item.source) {
         case 'agent-question':
             if (item.id.startsWith('q_')) return { kind: 'answer-question', questionId: item.id, selections: [[optionId]], notes: [''], note: note.trim() };
+            if (item.id.startsWith('apprx_')) return { kind: 'dismiss-expired-approval', approvalId: item.id };
             if (item.id.startsWith('appr_')) return { kind: 'resolve-approval', approvalId: item.id, choice: optionId === 'allow' ? 'allow' : 'deny', note: note.trim() };
             if (item.id.startsWith('approval:') && item.agentId) return { kind: 'answer-provider-approval', agentId: item.agentId, optionId, note: note.trim() };
             return refuse(`${item.id} is not an item Genie knows how to answer`);

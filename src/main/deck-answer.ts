@@ -97,6 +97,11 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if (text !== null && !(await ports.deliverToAgent!(item.agentId!, text))) throw new Error(`answered — but ${item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
             break;
         }
+        // An approval nobody answered in time (Tynn #1006): its notice goes; there is no verdict to give any more.
+        case 'dismiss-expired-approval': {
+            if (!ports.approvals.dismissExpired || !(await ports.approvals.dismissExpired(command.approvalId))) throw new Error(DECK_ITEM_GONE);
+            break;
+        }
         case 'list-done':
             // The PERSON's Done: the store mails the agent that put the item on their list (attention-store.ts).
             if (!(await ports.attention.lists.done({ workspaceId: command.workspaceId, id: command.itemId, by: HUMAN }))) throw new Error(`no list item ${command.itemId}`);

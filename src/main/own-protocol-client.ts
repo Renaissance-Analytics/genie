@@ -76,7 +76,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
             schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities,
         }));
     };
-    const call = (method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer> => {
+    const call = (method: RemoteMethod, args: unknown[], callOptions: { timeoutMs?: number } = {}): Promise<OwnCallAnswer> => {
         if (listeners.size === 0) return Promise.resolve({ ok: false, reason: NOT_READY });
         const pair = inMemoryPair();
         const client = pair.client;
@@ -89,7 +89,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
                 resolve(answer);
                 client.close();
             };
-            const timer = setTimeout(() => finish({ ok: false, reason: `${method} got no answer from Genie in time` }), timeoutMs);
+            const timer = setTimeout(() => finish({ ok: false, reason: `${method} got no answer from Genie in time` }), callOptions.timeoutMs ?? timeoutMs);
             client.onClose(() => finish({ ok: false, reason: NOT_READY }));
             client.onMessage((text) => {
                 const parsed = parseMessage(text);

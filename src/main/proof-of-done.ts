@@ -65,7 +65,7 @@ export interface PodPorts {
      * The person's Sign / Decline for one HITL claim: `detail` names the task, the score and the commits. `signal` aborts
      * (reason `POD_WITHDRAWN`) when Tynn stops listing the claim as waiting (Tynn #858): the ask leaves the Deck unanswered.
      */
-    approve(request: { readonly id: string; readonly detail: string; readonly signal: AbortSignal }): Promise<'allowed' | 'denied'>;
+    approve(request: { readonly id: string; readonly detail: string; readonly signal: AbortSignal }): Promise<'allowed' | 'denied' | 'expired'>;
     workspaces(): readonly { readonly id: string; readonly path: string }[];
     git(cwd: string, args: readonly string[]): Promise<GitResult>;
     /** What is still owed to git, kept across restarts. */
