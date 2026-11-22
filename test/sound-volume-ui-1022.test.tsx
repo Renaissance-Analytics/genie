@@ -52,7 +52,7 @@ describe('the master control', () => {
     it('is a react-fancy slider at the saved level (100 when never set), beside a mute Button', () => {
         render({});
         expect(range('[data-sound-master]').value).toBe('100');
-        render({ sound_volume: '35' });
+        render({ alert_volume: '35' });
         expect(range('[data-sound-master]').value).toBe('35');
         expect(q('[data-sound-master] [data-react-fancy-slider]')).not.toBeNull();
         const mute = q('[data-action="sound-mute"]')!;
@@ -61,34 +61,34 @@ describe('the master control', () => {
         expect(mute.getAttribute('aria-pressed')).toBe('false');
     });
 
-    it('moving it writes sound_volume to the host once the hand settles (one write per move, not per pixel)', () => {
+    it('moving it writes alert_volume to the host once the hand settles (one write per move, not per pixel)', () => {
         vi.useFakeTimers();
-        render({ sound_volume: '100' });
+        render({ alert_volume: '100' });
         const input = range('[data-sound-master]');
         slide(input, 80);
         slide(input, 61);
         slide(input, 60);
         expect(input.value).toBe('60');
-        expect(actions.filter((a) => a.key === 'sound_volume')).toEqual([]);
+        expect(actions.filter((a) => a.key === 'alert_volume')).toEqual([]);
         act(() => { vi.advanceTimersByTime(400); });
-        expect(actions.filter((a) => a.key === 'sound_volume')).toEqual([{ kind: 'settings.set', key: 'sound_volume', value: '60' }]);
+        expect(actions.filter((a) => a.key === 'alert_volume')).toEqual([{ kind: 'settings.set', key: 'alert_volume', value: '60' }]);
     });
 
-    it('mute is an icon button, INVERTED while on; a click writes sound_muted; the slider stays where it was', () => {
-        render({ sound_muted: true, sound_volume: '70' });
+    it('mute is an icon button, INVERTED while on; a click writes alert_muted; the slider stays where it was', () => {
+        render({ alert_muted: true, alert_volume: '70' });
         const mute = q('[data-action="sound-mute"]')!;
         expect(mute.getAttribute('aria-pressed')).toBe('true');
         expect(mute.className).toContain('bg-[var(--selected-bg)]');
         expect(mute.querySelector('svg')).not.toBeNull();
         expect(range('[data-sound-master]').value).toBe('70');
         click(mute);
-        expect(actions).toContainEqual({ kind: 'settings.set', key: 'sound_muted', value: false });
-        render({ sound_muted: false });
+        expect(actions).toContainEqual({ kind: 'settings.set', key: 'alert_muted', value: false });
+        render({ alert_muted: false });
         const unmuted = q('[data-action="sound-mute"]')!;
         // CONTROL: not muted, not inverted.
         expect(unmuted.className).not.toContain('bg-[var(--selected-bg)]');
         click(unmuted);
-        expect(actions).toContainEqual({ kind: 'settings.set', key: 'sound_muted', value: true });
+        expect(actions).toContainEqual({ kind: 'settings.set', key: 'alert_muted', value: true });
     });
 });
 
@@ -109,21 +109,21 @@ describe('Advanced: a level per event', () => {
         }
     });
 
-    it('a kind shows its saved level; moving it writes sound_levels with that kind and keeps the others', () => {
+    it('a kind shows its saved level; moving it writes alert_levels with that kind and keeps the others', () => {
         vi.useFakeTimers();
-        render({ sound_levels: '{"mail":20,"finished":40}' });
+        render({ alert_levels: '{"mail":20,"finished":40}' });
         click(q('[data-action="sound-levels-toggle"]')!);
         expect(range('[data-sound-level="finished"]').value).toBe('40');
         expect(range('[data-sound-level="question"]').value).toBe('100');
         slide(range('[data-sound-level="finished"]'), 75);
         act(() => { vi.advanceTimersByTime(400); });
-        const write = actions.find((a) => a.key === 'sound_levels')!;
+        const write = actions.find((a) => a.key === 'alert_levels')!;
         expect(write.kind).toBe('settings.set');
         expect(JSON.parse(String(write.value))).toEqual({ mail: 20, finished: 75 });
     });
 
     it('a play button previews that kind at master × its level, even while muted', () => {
-        render({ sound_muted: true, sound_volume: '50', sound_levels: '{"finished":40}' });
+        render({ alert_muted: true, alert_volume: '50', alert_levels: '{"finished":40}' });
         click(q('[data-action="sound-levels-toggle"]')!);
         click(q('[data-sound-level-play="finished"]')!);
         expect(previews).toHaveLength(1);

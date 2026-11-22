@@ -20,6 +20,10 @@ describe('the settings', () => {
         for (const k of [SOUND_VOLUME_SETTING, SOUND_MUTED_SETTING, SOUND_LEVELS_SETTING]) expect(sectionOf(k), k).toBe('notifications');
     });
 
+    it('stay OUT of the sound_<kind> namespace, which holds exactly one choice per alert kind (alerts.test pins it)', () => {
+        for (const k of [SOUND_VOLUME_SETTING, SOUND_MUTED_SETTING, SOUND_LEVELS_SETTING]) expect(k, k).not.toMatch(/^sound_/);
+    });
+
     it('they are the host’s, never kept locally by a client (so every client hears the same levels)', () => {
         const split = splitSettings(SETTINGS);
         for (const k of [SOUND_VOLUME_SETTING, SOUND_MUTED_SETTING, SOUND_LEVELS_SETTING]) {
@@ -32,32 +36,32 @@ describe('the settings', () => {
 describe('the master level', () => {
     it('reads the percent the person set, 100 when never set', () => {
         expect(masterLevel({})).toBe(100);
-        expect(masterLevel({ sound_volume: '35' })).toBe(35);
-        expect(masterLevel({ sound_volume: '0' })).toBe(0);
+        expect(masterLevel({ alert_volume: '35' })).toBe(35);
+        expect(masterLevel({ alert_volume: '0' })).toBe(0);
     });
     it('clamps to 0..100 and reads anything that is not a number as 100, never silence', () => {
-        expect(masterLevel({ sound_volume: '250' })).toBe(100);
-        expect(masterLevel({ sound_volume: '-4' })).toBe(0);
-        expect(masterLevel({ sound_volume: 'loud' })).toBe(100);
-        expect(masterLevel({ sound_volume: '' })).toBe(100);
-        expect(masterLevel({ sound_volume: true })).toBe(100);
-        expect(masterLevel({ sound_volume: '42.6' })).toBe(43);
+        expect(masterLevel({ alert_volume: '250' })).toBe(100);
+        expect(masterLevel({ alert_volume: '-4' })).toBe(0);
+        expect(masterLevel({ alert_volume: 'loud' })).toBe(100);
+        expect(masterLevel({ alert_volume: '' })).toBe(100);
+        expect(masterLevel({ alert_volume: true })).toBe(100);
+        expect(masterLevel({ alert_volume: '42.6' })).toBe(43);
     });
 });
 
 describe('an event level', () => {
     it('is 100 when never set; the JSON map holds the ones the person moved', () => {
         expect(eventLevel('finished', {})).toBe(100);
-        expect(eventLevel('finished', { sound_levels: '{"finished":40,"mail":0}' })).toBe(40);
-        expect(eventLevel('mail', { sound_levels: '{"finished":40,"mail":0}' })).toBe(0);
-        expect(eventLevel('question', { sound_levels: '{"finished":40}' })).toBe(100);
+        expect(eventLevel('finished', { alert_levels: '{"finished":40,"mail":0}' })).toBe(40);
+        expect(eventLevel('mail', { alert_levels: '{"finished":40,"mail":0}' })).toBe(0);
+        expect(eventLevel('question', { alert_levels: '{"finished":40}' })).toBe(100);
     });
     it('a broken map or value is 100 (never a crash, never silence); out of range clamps', () => {
-        expect(eventLevel('finished', { sound_levels: 'not json' })).toBe(100);
-        expect(eventLevel('finished', { sound_levels: '[1,2]' })).toBe(100);
-        expect(eventLevel('finished', { sound_levels: '{"finished":"x"}' })).toBe(100);
-        expect(eventLevel('finished', { sound_levels: '{"finished":900}' })).toBe(100);
-        expect(eventLevel('finished', { sound_levels: '{"finished":-1}' })).toBe(0);
+        expect(eventLevel('finished', { alert_levels: 'not json' })).toBe(100);
+        expect(eventLevel('finished', { alert_levels: '[1,2]' })).toBe(100);
+        expect(eventLevel('finished', { alert_levels: '{"finished":"x"}' })).toBe(100);
+        expect(eventLevel('finished', { alert_levels: '{"finished":900}' })).toBe(100);
+        expect(eventLevel('finished', { alert_levels: '{"finished":-1}' })).toBe(0);
     });
     it('withEventLevel writes one kind and keeps the others; 100 is dropped (it is the default)', () => {
         const once = withEventLevel('{"mail":20}', 'finished', 55);
@@ -71,25 +75,25 @@ describe('an event level', () => {
 describe('what plays: master × event', () => {
     it('is the product of the two, as a 0..1 gain', () => {
         expect(alertVolume('finished', {})).toBe(1);
-        expect(alertVolume('finished', { sound_volume: '50' })).toBeCloseTo(0.5);
-        expect(alertVolume('finished', { sound_volume: '50', sound_levels: '{"finished":40}' })).toBeCloseTo(0.2);
+        expect(alertVolume('finished', { alert_volume: '50' })).toBeCloseTo(0.5);
+        expect(alertVolume('finished', { alert_volume: '50', alert_levels: '{"finished":40}' })).toBeCloseTo(0.2);
         // CONTROL: another kind keeps the master alone.
-        expect(alertVolume('question', { sound_volume: '50', sound_levels: '{"finished":40}' })).toBeCloseTo(0.5);
+        expect(alertVolume('question', { alert_volume: '50', alert_levels: '{"finished":40}' })).toBeCloseTo(0.5);
     });
     it('mute is silence whatever the levels; unmuted, the levels come back as they were', () => {
-        expect(alertVolume('finished', { sound_muted: true, sound_volume: '80' })).toBe(0);
-        expect(alertVolume('finished', { sound_muted: false, sound_volume: '80' })).toBeCloseTo(0.8);
+        expect(alertVolume('finished', { alert_muted: true, alert_volume: '80' })).toBe(0);
+        expect(alertVolume('finished', { alert_muted: false, alert_volume: '80' })).toBeCloseTo(0.8);
     });
     it('every kind has a level (the Advanced list is derived from the registry)', () => {
         for (const k of ALERT_KINDS) expect(alertVolume(k.kind, {}), k.kind).toBe(1);
     });
     it('a rate-limit alert (no kind of its own) plays at the master level', () => {
-        expect(alertVolume(null, { sound_volume: '30', sound_levels: '{"limited":10}' })).toBeCloseTo(0.3);
-        expect(alertVolume(null, { sound_muted: true })).toBe(0);
+        expect(alertVolume(null, { alert_volume: '30', alert_levels: '{"limited":10}' })).toBeCloseTo(0.3);
+        expect(alertVolume(null, { alert_muted: true })).toBe(0);
     });
     it('a PREVIEW plays at master × event even while muted, so a sound can still be chosen by ear', () => {
-        expect(previewVolume('finished', { sound_muted: true, sound_volume: '50', sound_levels: '{"finished":40}' })).toBeCloseTo(0.2);
-        expect(previewVolume(null, { sound_muted: true, sound_volume: '50' })).toBeCloseTo(0.5);
+        expect(previewVolume('finished', { alert_muted: true, alert_volume: '50', alert_levels: '{"finished":40}' })).toBeCloseTo(0.2);
+        expect(previewVolume(null, { alert_muted: true, alert_volume: '50' })).toBeCloseTo(0.5);
     });
 });
 

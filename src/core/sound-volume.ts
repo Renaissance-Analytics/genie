@@ -10,9 +10,9 @@ import type { AlertKind } from './alerts.js';
  * Every reading is forgiving: a level that is not a number reads as 100, never as silence — a broken value must not
  * quietly turn every alert off.
  */
-export const SOUND_VOLUME_SETTING = 'sound_volume';
-export const SOUND_MUTED_SETTING = 'sound_muted';
-export const SOUND_LEVELS_SETTING = 'sound_levels';
+export const SOUND_VOLUME_SETTING = 'alert_volume';
+export const SOUND_MUTED_SETTING = 'alert_muted';
+export const SOUND_LEVELS_SETTING = 'alert_levels';
 
 type Values = Readonly<Record<string, boolean | string | undefined>>;
 

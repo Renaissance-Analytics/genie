@@ -228,20 +228,46 @@ function judge(seen, theme, chosen, n) {
  * a kind's level moved with the mouse, then its play button, plays at master x that level — read off the Audio element the
  * one player made (its `volume`), so the claim is about the gain applied, not about a number on the page.
  */
+/**
+ * A range input moved as a person moves it. First the mouse: pressed where the track is, at `fraction` of its width. The
+ * track is thin (measured on the VM: a hit test at the input's middle answered its wrapper div, and the press never reached
+ * it), so points across the input's height are tried, and what each reaches is logged. If no point reaches the input, the
+ * keyboard, as a person would: focus it, Home, then Right arrow presses to the level. Returns how it moved, or null.
+ */
 async function rangeAt(cdp, selector, fraction) {
     const at = await cdp.evaluate(`(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return null;
         el.scrollIntoView({ block: 'center', inline: 'center' });
         const r = el.getBoundingClientRect();
-        const hit = document.elementFromPoint(r.left + r.width * ${fraction}, r.top + r.height / 2);
-        return { x: r.left + r.width * ${fraction}, y: r.top + r.height / 2, reaches: hit === el, under: hit ? hit.outerHTML.slice(0, 120) : null };
+        const x = r.left + r.width * ${fraction};
+        const tried = [];
+        for (const f of [0.5, 0.3, 0.7, 0.15, 0.85]) {
+            const y = r.top + r.height * f;
+            const hit = document.elementFromPoint(x, y);
+            tried.push({ y: Math.round(y * 10) / 10, hit: hit ? hit.tagName + (hit === el ? '(input)' : '') : null });
+            if (hit === el) return { x, y, reaches: true, rect: [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 10) / 10), tried };
+        }
+        return { reaches: false, rect: [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 10) / 10), tried };
     })()`);
-    if (!at?.reaches) { console.log(`  the mouse at ${selector} would reach: ${at?.under ?? 'nothing'}`); return false; }
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, button: 'none', clickCount: 0 });
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-    return true;
+    if (!at) return null;
+    console.log(`  ${selector}: rect ${JSON.stringify(at.rect)}, tried ${JSON.stringify(at.tried)}`);
+    const want = Math.round(fraction * 100);
+    if (at.reaches) {
+        const before = await valueOf(cdp, selector);
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, button: 'none', clickCount: 0 });
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+        await sleep(200);
+        if ((await valueOf(cdp, selector)) !== before) return 'mouse';
+        console.log('  the mouse press reached the input and did not move it; the keyboard next');
+    }
+    await cdp.evaluate(`(() => { document.querySelector(${JSON.stringify(selector)})?.focus(); return true; })()`);
+    const press = async (key, code, vk) => { for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: vk }); };
+    await press('Home', 'Home', 36);
+    for (let i = 0; i < want; i++) await press('ArrowRight', 'ArrowRight', 39);
+    await sleep(200);
+    return (await valueOf(cdp, selector)) === want ? 'keyboard' : null;
 }
 const valueOf = (cdp, selector) => cdp.evaluate(`Number(document.querySelector(${JSON.stringify(selector)})?.value ?? NaN)`);
 async function volumeProof(cdp) {
@@ -252,8 +278,8 @@ async function volumeProof(cdp) {
     await cdp.evaluate(`document.querySelector('[data-sound-volume]')?.scrollIntoView({ block: 'start' }); true`);
     await shot(cdp, 'sound-volume-1022-master.png');
     // The master, moved with the mouse to about 40%.
-    check(await rangeAt(cdp, MASTER, 0.4), 'V3. the master slider takes a mouse press at 40% of its width');
-    await sleep(200);
+    const howMaster = await rangeAt(cdp, MASTER, 0.4);
+    check(howMaster !== null, `V3. the master slider is moved to about 40% (by the ${howMaster ?? 'nothing'})`);
     const master = await valueOf(cdp, MASTER);
     check(master >= 33 && master <= 47, 'V4. and reads about 40%', String(master));
     await sleep(800);
@@ -282,15 +308,16 @@ async function volumeProof(cdp) {
     check(await click(cdp, '[data-action="sound-levels-toggle"]'), 'V13. Advanced takes a mouse click');
     check(await waitFor(cdp, `document.querySelectorAll('[data-sound-level]').length === 26`, 5_000), 'V14. it lists every alert kind (26), each with a level', String(await cdp.evaluate(`document.querySelectorAll('[data-sound-level]').length`)));
     const LEVEL = '[data-sound-level="finished"] input[type="range"]';
-    check(await rangeAt(cdp, LEVEL, 0.5), 'V15. "An agent finishes" takes a mouse press at half its width');
-    await sleep(200);
+    const howLevel = await rangeAt(cdp, LEVEL, 0.5);
+    check(howLevel !== null, `V15. "An agent finishes" is moved to about 50% (by the ${howLevel ?? 'nothing'})`);
     const level = await valueOf(cdp, LEVEL);
     check(level >= 43 && level <= 57, 'V16. and reads about 50%', String(level));
     check(await click(cdp, '[data-sound-level-play="finished"]'), 'V17. its play button takes a mouse click (muted: a preview still plays, so a level is set by ear)');
     check(await waitFor(cdp, `(window.__made ?? []).length > 0`, 5_000), 'V18. the player made a sound');
     const vol = await cdp.evaluate(`window.__made.at(-1)?.volume ?? null`);
     const want = (master / 100) * (level / 100);
-    check(typeof vol === 'number' && Math.abs(vol - want) < 0.005, `V19. it played at master x level = ${master}% x ${level}% = ${want.toFixed(3)}`, String(vol));
+    // Only a gain BELOW full volume proves the levels reached the player: 100% x 100% = 1 is what no levels at all give too.
+    check(typeof vol === 'number' && want < 0.5 && Math.abs(vol - want) < 0.005, `V19. it played at master x level = ${master}% x ${level}% = ${want.toFixed(3)}`, String(vol));
     await sleep(800);
     const wasDarkV = await cdp.evaluate(`document.documentElement.classList.contains('dark')`);
     for (const theme of ['light', 'dark']) {
