@@ -1,14 +1,25 @@
 import { Icon, Popover } from '@particle-academy/react-fancy';
 import type { ChatPlanView } from '../../core/chat-plan.js';
+import { PlanScrollFrame, usePlanPopoverRoom } from './PlanPopoverFrame.js';
 
 /**
  * THE POPOVER'S CONTENT (Tynn #703): the open items of the active plan in the plan's order, each with its status, the
- * current one marked. Done items are one count, never rows. Hook-free, so a test can render it.
+ * current one marked. Done items are one count, never rows. A long plan (Tynn #1021) never runs off the screen: the list
+ * sits in the plan popovers' shared frame (PlanPopoverFrame), capped at `maxHeight`, the items scrolling and the done
+ * count fixed beneath them, opened on the item in progress.
  */
-/** RED STUB (Tynn #1021): `maxHeight` is not applied yet. */
-export function ChatPlanList({ plan }: { plan: ChatPlanView; maxHeight?: number | undefined }) {
+export function ChatPlanList({ plan, maxHeight }: { plan: ChatPlanView; maxHeight?: number | undefined }) {
     return (
-        <div data-plan-popover="" className="flex max-w-sm flex-col gap-1.5 text-xs">
+        <PlanScrollFrame
+            maxHeight={maxHeight}
+            frame={{ 'data-plan-popover': '' }}
+            foot={plan.done > 0 ? (
+                <p data-plan-done={plan.done} className="flex shrink-0 items-center gap-1 text-[var(--fg-4)]">
+                    <Icon name="check" size="xs" />
+                    {plan.done} done
+                </p>
+            ) : undefined}
+        >
             <ol className="flex flex-col gap-1">
                 {plan.items.map((item, i) => (
                     <li
@@ -24,14 +35,13 @@ export function ChatPlanList({ plan }: { plan: ChatPlanView; maxHeight?: number 
                     </li>
                 ))}
             </ol>
-            {plan.done > 0 ? (
-                <p data-plan-done={plan.done} className="flex items-center gap-1 text-[var(--fg-4)]">
-                    <Icon name="check" size="xs" />
-                    {plan.done} done
-                </p>
-            ) : null}
-        </div>
+        </PlanScrollFrame>
     );
+}
+
+/** The popover's body: the list, capped to the room beside the line (usePlanPopoverRoom). */
+function ChatPlanBody({ plan }: { plan: ChatPlanView }) {
+    return <ChatPlanList plan={plan} maxHeight={usePlanPopoverRoom()} />;
 }
 
 /**
@@ -48,7 +58,7 @@ export function ChatPlanLine({ text, plan }: { text: string; plan: ChatPlanView 
                 </span>
             </Popover.Trigger>
             <Popover.Content role="dialog" aria-label="Open plan items" className="border-[var(--border-1)] bg-[var(--surface-raised)] p-3 text-[var(--fg-1)]">
-                <ChatPlanList plan={plan} />
+                <ChatPlanBody plan={plan} />
             </Popover.Content>
         </Popover>
     );
