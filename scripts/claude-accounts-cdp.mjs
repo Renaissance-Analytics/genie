@@ -82,9 +82,10 @@ if (args[0] === 'auth' && args[1] === 'login') { console.log('STAND-IN LOGIN: cl
 console.log('stand-in claude: ' + args.join(' '));
 `);
 chmodSync(fakeCjs, 0o755);
-// On Windows a shell cannot run a .cjs by itself: a .cmd runs it with this Node, as an npm shim runs a CLI.
-const standIn = process.platform === 'win32' ? join(root, 'claude.cmd') : fakeCjs;
-if (process.platform === 'win32') writeFileSync(standIn, `@"${process.execPath}" "${fakeCjs}" %*\r\n`);
+// The .cjs on every platform: Genie runs a configured script as Node itself (its Electron, ELECTRON_RUN_AS_NODE), so
+// prism-acp's describe runs it with no shell. A .cmd wrapper (the 4ac1f9c2 gate) is not something prism-acp spawns: on
+// Windows its describe never ran, and every live state read nothing.
+const standIn = fakeCjs;
 
 const env = {
     ...process.env,

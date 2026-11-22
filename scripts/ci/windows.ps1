@@ -576,6 +576,12 @@ function Invoke-Row([string]$name) {
         if ($left.Count -gt 0) {
             $leftover = (@($left | ForEach-Object { "$($_.Name) $($_.Id)" })) -join ', '
             Add-Content -Path $log -Value "LEFT RUNNING after the row: $leftover"
+            # WHAT each leftover was (Tynn #1011, the 4ac1f9c2 gate's packaged-launcher): its parent and its command line, read
+            # before it is stopped, so a leftover names its cause instead of only its pid.
+            foreach ($p in $left) {
+                $ci = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue
+                if ($ci) { Add-Content -Path $log -Value "LEFT RUNNING $($p.Id): parent $($ci.ParentProcessId), $($ci.CommandLine)" }
+            }
             Stop-GenieLeftovers $left
             $ok = $false
         }

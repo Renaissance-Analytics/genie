@@ -4,7 +4,6 @@ import { type AccountRecord, type ProviderAccountHome } from '../core/accounts.j
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
@@ -140,7 +139,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries, type PromptAction, type PromptDelivery } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
-import { sessionsDir } from './paths.js';
+import { sessionsDir, userHome } from './paths.js';
 
 /**
  * THE RUNNING AGENTS — one place that owns sessions, and counts them.
@@ -423,7 +422,7 @@ export function listModelsOptionsFor(
     if (account && account.provider !== provider) throw new Error('The model probe needs an account of its provider');
     // The models the ACTIVE account offers (Tynn #1011): a Claude account's own directory, as its launches use it.
     const dir = provider === 'claude' && account ? claudeDriverAccountOptions(account, env) : {};
-    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS, ...dir };
+    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: userHome(), timeoutMs: MODEL_LIST_TIMEOUT_MS, ...dir };
 }
 
 /**
@@ -432,7 +431,7 @@ export function listModelsOptionsFor(
  */
 export function realDescribeClaude(configDir: string | null): ReturnType<typeof claudeAccounts.describe> {
     const o = listModelsOptionsFor('claude', process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
-    return claudeAccounts.describe(configDir, { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}), cwd: homedir() });
+    return claudeAccounts.describe(configDir, { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}), cwd: userHome() });
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
@@ -516,7 +515,7 @@ export function claudeLaunchConfigDir(account: { readonly configDir?: string }, 
 
 /** prism-acp's own answer to "is this thread in that account's store" (it looks for the file; it reads none). */
 export function realThreadInAccount(threadId: string, configDir: string | null): 'present' | 'absent' | 'indeterminate' {
-    return probeSessionStore(threadId, { configDir: configDir ?? join(homedir(), '.claude') }).existence;
+    return probeSessionStore(threadId, { configDir: configDir ?? join(userHome(), '.claude') }).existence;
 }
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
