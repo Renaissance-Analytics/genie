@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
 import { DEFAULT_ROUTE } from '../core/route.js';
 
@@ -43,4 +44,19 @@ export function rewrittenAddress(address: string, ctx: AddressContext | null, be
     }
     const shown = addressOf(routeFor(address, ctx), ctx);
     return shown === address || !isInternalRoute(address) ? null : shown;
+}
+
+/**
+ * THE WINDOW'S ADDRESS, QUALIFIED (Tynn #1023): once the window has its address context (the snapshot), an internal route
+ * (`genie://settings`) is replaced in place by this machine's address form (`genie://<workstation>/settings`), and a
+ * window that now reads another machine takes its page there (rewrittenAddress).
+ */
+export function useAddressQualifier(address: string, shownAddress: string, ctx: AddressContext | null): void {
+    // The workstation this window read until now: connecting in place, its page goes with it to the host (beta.61, step four).
+    const readBefore = useRef<string | null>(null);
+    useEffect(() => {
+        const next = rewrittenAddress(address, ctx, readBefore.current);
+        if (ctx) readBefore.current = ctx.workstation;
+        if (next !== null) window.location.replace(`#${next}`);
+    }, [address, shownAddress, ctx !== null, ctx?.workstation]);
 }
