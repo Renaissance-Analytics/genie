@@ -1070,6 +1070,12 @@ if (!approvalEnabled) {
             }
             if (line !== null) { wire.push(at + ' ' + line); if (wire.length > 300) wire.splice(0, wire.length - 300); }
         });
+        // FRAMES (Tynn #1032): the frames this window got in the first second after the pane mounted, counted without
+        // waiting on it. xterm draws its rows on animation frames; a window the compositor does not show gets none, and
+        // then only the cursor row is drawn (xterm's focus handler draws that row directly). Read on the 37 failure path,
+        // beside a second count taken then: the first is the control for the second.
+        watch.framesAtMount = null;
+        { let n = 0; const t0 = performance.now(); const tick = () => { n += 1; if (performance.now() - t0 < 1000) requestAnimationFrame(tick); else watch.framesAtMount = n; }; requestAnimationFrame(tick); setTimeout(() => { if (watch.framesAtMount === null) watch.framesAtMount = n; }, 1500); }
         if (!rows) return true;
         const seen = () => {
             const text = (rows.innerText ?? '').trim();
@@ -1139,6 +1145,21 @@ if (!approvalEnabled) {
             return JSON.stringify(out);
         })()`).catch((e) => `(unread: ${e?.message ?? e})`);
         console.log(`  TERMINAL_LAYERS ${layers}`);
+        // FRAMES NOW, AND XTERM'S RENDERER (Tynn #1032): frames in one second now, beside the count at mount; whether
+        // xterm's renderer is paused (its IntersectionObserver), owes a full redraw, or waits on a frame that has not come.
+        const frames = await cdp.evaluate(`new Promise((done) => {
+            const el = document.querySelector('[data-terminal-pane]');
+            const key = el ? Object.keys(el).find((k) => k.startsWith('__reactFiber$')) : null;
+            let f = key ? el[key] : null, x = null;
+            for (let i = 0; f && i < 40 && !x; i++, f = f.return) if (f.ref && typeof f.ref === 'object' && f.ref.current && 'xterm' in f.ref.current) x = f.ref.current.xterm;
+            const rs = x?._core?._renderService ?? null;
+            const renderer = rs ? { isPaused: rs._isPaused ?? null, needsFullRefresh: rs._needsFullRefresh ?? null, framePending: rs._renderDebouncer?._animationFrame != null } : null;
+            let n = 0; const t0 = performance.now();
+            const tick = () => { n += 1; if (performance.now() - t0 < 1000) requestAnimationFrame(tick); else done(JSON.stringify({ framesAtMount: window.__smokeTerminal?.framesAtMount ?? null, framesNow: n, renderer })); };
+            requestAnimationFrame(tick);
+            setTimeout(() => done(JSON.stringify({ framesAtMount: window.__smokeTerminal?.framesAtMount ?? null, framesNow: n, renderer })), 1500);
+        })`).catch((e) => `(unread: ${e?.message ?? e})`);
+        console.log(`  TERMINAL_FRAMES ${frames}`);
         // INPUT OR OUTPUT (beta.61.1): the second token not showing means the keys never reached the shell OR the pane
         // stopped drawing what the shell printed. The workspace's terminal error says why a pane's stream ended, and a
         // REMOUNT (away to the Dashboard and back: a new watch, a fresh snapshot from the host) shows what the shell has
