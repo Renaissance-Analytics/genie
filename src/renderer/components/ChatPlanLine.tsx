@@ -5,7 +5,8 @@ import type { ChatPlanView } from '../../core/chat-plan.js';
  * THE POPOVER'S CONTENT (Tynn #703): the open items of the active plan in the plan's order, each with its status, the
  * current one marked. Done items are one count, never rows. Hook-free, so a test can render it.
  */
-export function ChatPlanList({ plan }: { plan: ChatPlanView }) {
+/** RED STUB (Tynn #1021): `maxHeight` is not applied yet. */
+export function ChatPlanList({ plan }: { plan: ChatPlanView; maxHeight?: number | undefined }) {
     return (
         <div data-plan-popover="" className="flex max-w-sm flex-col gap-1.5 text-xs">
             <ol className="flex flex-col gap-1">
