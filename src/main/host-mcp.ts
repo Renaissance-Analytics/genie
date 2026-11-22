@@ -49,6 +49,11 @@ export interface HostMcpPorts {
     /** The settings: the host's own since P3.2 (dnd, inbox access, workspace tabs are read here, live). */
     readonly settings: Pick<import('./settings-store.js').SettingsStore, 'snapshot' | 'snapshotFor'>;
     readonly records: () => readonly AgentRecord[];
+    /**
+     * createAgent's create, after the person approved (Tynn #1015): genie-host's own Add agent (`addAgent`: project.json,
+     * AGENT.md, its registry — genie-host.ts wires createThroughAddAgent). Absent = this host cannot, and the tool says so.
+     */
+    readonly createAgent?: import('./mcp-tools-agents.js').AgentToolsDeps['create'];
     /** The host's own registry (P3.2): a workspace's path, its default agent, the address slugs. */
     readonly registry: Pick<import('./host-registry.js').HostRegistry, 'workspace' | 'workspaceSlugs' | 'defaultAgentOf' | 'setNames'> & Partial<Pick<import('./host-registry.js').HostRegistry, 'mailRefusal'>>;
     readonly probe: (agentId: AgentId) => Parameters<typeof livenessOf>[0];
@@ -124,6 +129,7 @@ export interface HostMcp {
 }
 
 const unavailable = (what: string) => (): never => { throw new Error(`${what} runs in Genie's window; this call was forwarded there`); };
+const noCreate = async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'this Genie host cannot create agents' });
 
 export function startHostMcp(ports: HostMcpPorts): HostMcp {
     const book = new CallerBook();
@@ -188,7 +194,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
             ...(ports.workspaceTrusted ? { workspaceTrusted: ports.workspaceTrusted } : {}),
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
-            agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
+            // createAgent runs HERE (Tynn #1015): the person approves in the host's queue, the host's Add agent makes it.
+            agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), create: ports.createAgent ?? noCreate },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));
@@ -202,7 +209,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const servedAll = hostRegistrations(all, { native: (name) => pluginNames.has(name), resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         // Every call this server answers is the calling agent's to have ended by its Interrupt (Tynn #702), forwarded ones too.
         const served = ports.toolCalls ? withInterruptibleCalls(servedAll, resolveCaller, ports.toolCalls) : servedAll;
-        tools = served.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? ''));
+        tools = served.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         native = new Map(served.filter((r) => isNative(r.definition.name)).map((r) => [r.definition.name, r]));
         servedNow = served;
         return served;

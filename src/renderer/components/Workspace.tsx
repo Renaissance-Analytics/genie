@@ -765,7 +765,8 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                         <div className="text-[var(--fg-3)]">The agent here that an action uses when it names none, and the one that hears GitHub by default.</div>
                                     </div>
                                     <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
-                                        <Select data-default-agent="" aria-label="Default agent" list={[{ value: '', label: 'None' }, ...ops.defaultAgent.agents.map((a) => ({ value: a.id, label: a.name }))]} value={ops.defaultAgent.current ?? ''} onValueChange={(v) => ops.defaultAgent!.onSet(v === '' ? null : v)} />
+                                        {/* The first or only agent IS the default (Tynn #1015): one of the agents, never "None" while there are any. */}
+                                        <Select data-default-agent="" aria-label="Default agent" list={ops.defaultAgent.agents.length > 0 ? ops.defaultAgent.agents.map((a) => ({ value: a.id, label: a.name })) : [{ value: '', label: 'None' }]} value={ops.defaultAgent.current ?? ops.defaultAgent.agents[0]?.id ?? ''} onValueChange={(v) => ops.defaultAgent!.onSet(v === '' ? null : v)} />
                                     </div>
                                 </li>
                             ) : null}
