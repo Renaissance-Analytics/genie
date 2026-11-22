@@ -41,6 +41,7 @@ import { isPromptAction } from '../core/prompt-delivery.js';
 import { answerAccounts, isAccountsMethod, type AccountsPort } from './accounts-protocol.js';
 import { readGateRequest } from './approvals-gate-protocol.js';
 import { readWindowView } from './host-window-view.js';
+import { readRegistryWrite } from './registry-protocol.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -177,6 +178,10 @@ export interface HostApiDeps {
     /** What this machine's window says of the person: whether they are at the computer (host-window-view.ts; Tynn #1044). */
     windowView?: { userActive(active: boolean): void };
     approvalsGate?: (caller: import('./mcp-tools.js').Caller, action: string, detail: string, forwardedCallId: string | null) => Promise<'allowed' | 'denied' | 'expired'>;
+    /** genie-host's registry, read and written by main's window registry (registry-protocol.ts; Tynn #1007). Absent = refused. */
+    registry?: { call(method: string, args: unknown[]): Promise<unknown>; dropped(): readonly string[] };
+    /** That genie-host's registry was written, said to main's own client on registry.watch (Tynn #1007, 2g-4e). */
+    registryWatch?: { now(): import('./registry-protocol.js').RegistryWatchView; subscribe(listener: (view: import('./registry-protocol.js').RegistryWatchView) => void): () => void };
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
     tynnRecheck?: () => Promise<void>;
     takeOver?: {
@@ -807,6 +812,15 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if ('ok' in request) return request;
                 return deps.approvalsGate(request.caller, request.action, request.detail, request.forwardedCallId);
             }
+            // A WRITE TO GENIE-HOST'S REGISTRY (Tynn #1007, 2g-4e): `local` keeps every other machine out, and of this machine's
+            // connections only main's own client writes; the write is read strictly (registry-protocol.ts).
+            case 'registry.write': {
+                if (!deps.registry) return { ok: false, reason: 'this host keeps no registry' };
+                if (context.own !== true) return { ok: false, reason: 'the registry is written by Genie itself, never by a window' };
+                const write = readRegistryWrite(args);
+                if ('ok' in write) return write;
+                return deps.registry.call(write.method, write.args);
+            }
             // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
             case 'tynn.recheck':
                 if (!deps.tynnRecheck) return { ok: false, reason: 'this host has no Tynn account to ask' };
@@ -930,6 +944,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         ...(deps.remoteWatch ? { remoteWatch: () => deps.remoteWatch!.now() } : {}),
         // genie-host's settings, for main's own client saying settings.watch (Tynn #998, 2g-4b1).
         ...(deps.settingsWatch ? { settingsWatch: () => deps.settingsWatch!.now() } : {}),
+        // genie-host's registry, for main's own client saying registry.watch and registry.read (Tynn #1007, 2g-4e).
+        ...(deps.registryWatch ? { registryWatch: () => deps.registryWatch!.now() } : {}),
+        ...(deps.registry ? { registryRead: async (method: string) => (method === 'dropped' ? [...deps.registry!.dropped()] : deps.registry!.call(method, [])) } : {}),
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
@@ -975,6 +992,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.hostSummary?.subscribe((summary) => listener(LOCAL_EVENTS.summary, summary)) ?? (() => {}),
                 deps.remoteWatch?.subscribe((view) => listener(LOCAL_EVENTS.remote, view)) ?? (() => {}),
                 deps.settingsWatch?.subscribe((view) => listener(LOCAL_EVENTS.settings, view)) ?? (() => {}),
+                deps.registryWatch?.subscribe((view) => listener(LOCAL_EVENTS.registry, view)) ?? (() => {}),
                 deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
                 deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
                 deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),

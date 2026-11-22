@@ -51,10 +51,11 @@ describe('the settings and the chat drafts are genie-host\'s (P3.2)', () => {
 describe('the registry\'s files and the mail wake are genie-host\'s (P3.2)', () => {
     it('the window\'s registry reads and writes through the host, and re-reads when another wrote', () => {
         const main = code('src/main/main.ts');
-        expect(main).toMatch(/theRegistry\.useStore\(new HostRegistryStore\(engineLink\.stores\(\)\)\)/);
-        // The same host replica drives the owned watcher; its behavior is exercised in registry-refresh-636.test.ts.
+        // Over the one protocol since 2g-4e (Tynn #1007; test/split-2g4e-registry.test.ts), not the engine link's replicas.
+        expect(main).toMatch(/theRegistry\.useStore\(await openWindowRegistryStore\(ownProtocol\)\)/);
+        // The registry's own watch drives the owned watcher; its behavior is exercised in registry-refresh-636.test.ts.
         expect(main).toContain("import { watchRegistryRefresh } from './registry-refresh.js';");
-        expect(main).toMatch(/watchRegistryRefresh\(engineLink\.stores\(\), theRegistry, \(error\) => console\.error\('\[registry\] Background refresh failed; waiting for the next host update\.', error\)\)/);
+        expect(main).toMatch(/watchRegistryRefresh\(registryChanges\(ownProtocol\), theRegistry, \(error\) => console\.error\('\[registry\] Background refresh failed; waiting for the next host update\.', error\)\)/);
     });
 
     it('the mail wake runs in the host; the window\'s own only on the emergency path', () => {

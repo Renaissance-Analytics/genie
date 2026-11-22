@@ -143,6 +143,10 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['heartbeat', 'link'],
     // Electron resolves this machine's proxies; the host is told what it cannot ask for itself.
     ['call:engine.proxyRemember', 'link'],
+    // The link's own coming and going: what main says again when genie-host restarts (Tynn #1007 saw it through the alias).
+    ['onLink', 'link'],
+    // Where genie-host's MCP server listens and which tools it offers, asked once the link is up (Tynn #1007, seen likewise).
+    ['mcpStatus', 'link'],
     // The window announces itself and its launch line, and quits when the host installs an update.
     ['updates', 'link'],
     // The window's browser pane and its site panels.
@@ -161,7 +165,34 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window (the feature machine that
     // reads them runs in genie-host), and the engine link's replicas of them went with the accounts'.
     ['flows', 'move:2g'],
+    // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955):
+    // the processes child's exec and streams (Tynn task #1468),
+    ['spawnLink', 'move:2g'],
+    ['onSpawnFrame', 'move:2g'],
+    // the window's view, its workspace names and whether the person is at the computer (#1469),
+    ['pushWindowView', 'move:2g'],
+    // Genie 1's memories and AgentInbox history, imported once at boot (#1470),
+    ['v1Import', 'move:2g'],
+    // and a window-registered host tool's call, a flow step's, once handed the whole client in withHostTools (#1471).
+    ['runHostTool', 'move:2g'],
+    // The Files panel's per-view watch and its disk changes, through main's `link` alias (Tynn #1007 saw it; task #1472 on #955).
+    ['onFilesEvent', 'move:2g'],
+    ['filesWatch', 'move:2g'],
+    ['filesUnwatch', 'move:2g'],
+    // IssueWatch and the Tynn board, issues and features watches, through main's `engineClient` alias (Tynn #1007 saw them;
+    // they go with tynn/tynnPage in G-1, #934 task #1474).
+    ['issueWatch', 'move:2g'],
+    ['tynnBoardWatch', 'move:2g'],
+    ['tynnBoardUnwatch', 'move:2g'],
+    ['onTynnBoardEvent', 'move:2g'],
+    ['tynnIssuesWatch', 'move:2g'],
+    ['tynnIssuesUnwatch', 'move:2g'],
+    ['onTynnIssuesEvent', 'move:2g'],
+    ['tynnFeaturesWatch', 'move:2g'],
+    ['tynnFeaturesUnwatch', 'move:2g'],
+    ['onTynnFeaturesEvent', 'move:2g'],
     ['hosting', 'move:2g'],
+    // compose's agentStores input (2g-4d, #955); main's registry left it in 2g-4e (#1007): registry.read/write/watch.
     ['stores', 'move:2g'],
     ['supervisor', 'move:2g'],
 ];

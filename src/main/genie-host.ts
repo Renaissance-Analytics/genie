@@ -115,6 +115,7 @@ import { onTheClock } from '../core/tray-only.js';
 import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
 import { remoteWatchFeed, remoteWatchOf } from '../core/remote-watch.js';
 import { settingsWatchFeed } from './settings-watch.js';
+import { registryWatchFeed } from './registry-protocol.js';
 import { mailSignalsOfRead, mailSignalsOfSend } from '../core/mail-actions.js';
 import { sayThings } from '../core/thing-sounds.js';
 import { hostDraftPrune } from './host-draft-prune.js';
@@ -1204,6 +1205,9 @@ async function main(): Promise<void> {
      */
     // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
     const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
+    // THE REGISTRY, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #1007, 2g-4e): a new revision each time its files are written, by
+    // whoever (a window, this host's own registry), on registry.watch; main's window registry reads them again.
+    const registryWatch = registryWatchFeed({ dropped: () => registryStore.dropped, onWritten: (listener) => stores.onEvent((event) => { if (event.store === 'registry') listener(); }) });
     const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
@@ -2012,6 +2016,10 @@ async function main(): Promise<void> {
         remoteWatch,
         // This host's settings, for what this machine's window reads (Tynn #998, 2g-4b1).
         settingsWatch,
+        // This host's registry, read and written by this machine's window registry over the protocol (Tynn #1007, 2g-4e):
+        // the same store calls the engine link carried, which keep the host's model following and its writes in order.
+        registry: { call: (method, args) => stores.call('registry', method, args), dropped: () => registryStore.dropped },
+        registryWatch,
         // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
         legacySecrets: legacyAdopt,
         // A window-run tool's approval, from this queue, tied to the agent's real call (Tynn #1006, 2g-4b2).
