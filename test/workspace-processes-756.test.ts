@@ -102,7 +102,7 @@ describe('processes in Save to repo', () => {
         const other = { ...record, id: 'proc_2', workspaceId: 'ws_other', name: 'Not mine' };
         const ports = {
             services: { list: () => [] }, settings: { workspaceValues: () => ({}) },
-            registry: { defaultAgentOf: () => null, workspaceMcpOff: () => [], listAgents: () => [], listWorkspaces: () => [] },
+            registry: { chosenDefaultAgentOf: () => null, workspaceMcpOff: () => [], listAgents: () => [], listWorkspaces: () => [] },
             processes: { kept: () => [record, other] },
         } as unknown as SourcePorts;
         expect(elementSourcesFor(ports, WS).processes).toEqual([{ name: 'Queue worker', workspaceId: WS, command: 'php artisan queue:work', cwd: `${ROOT}/repos/app`, restart: 'always', schedule: { cron: '0 3 * * *', kind: 'command' } }]);

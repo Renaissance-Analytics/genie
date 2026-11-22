@@ -4,7 +4,6 @@ import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
 import { guestAskNotice, newGuestAsks } from '../core/pair-confirm.js';
-import { rosterPruner } from '../core/chat-drafts.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
@@ -35,12 +34,14 @@ import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AgentId, type AgentRecord } from '../core/identity.js';
+import { createThroughAddAgent } from './mcp-tools-agents.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile } from 'node:fs/promises';
 import { setProviderChoiceFile } from './provider-choice.js';
-import { mailAction } from '../core/agent-actions.js';
+import { readMailSignal } from '../core/mail-actions.js';
+import { windowSettings } from './window-settings.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
@@ -132,7 +133,6 @@ import { rerouteGenieBrowserSession, watchWorkspaceStores, workspaceBrowserSessi
 import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
-import { channelFrom } from '../core/update-channel.js';
 import { genieRoot, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
@@ -470,7 +470,7 @@ function watchTrayOnly(): void {
 }
 
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
-const headroomFeed = new HeadroomFeed(() => headroomBufferMs(services?.settings.snapshot() ?? {}));
+const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settingsNow.snapshot()));
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
 function alertAccountPaused(provider: string): void {
@@ -577,6 +577,14 @@ let hostSummaryNow: HostSummary = EMPTY_HOST_SUMMARY;
  * window's door once the link is composed. Before that a call is refused as still starting.
  */
 const ownProtocol = ownProtocolClient();
+/**
+ * THE SETTINGS THIS WINDOW READS ARE GENIE-HOST'S, KEPT FROM settings.watch on main's own client (Tynn #998, 2g-4b1;
+ * window-settings.ts): do not disturb, start minimized, the login item, the tray notice, the window tools, the terminal's cwd
+ * tracking. Its writes go to genie-host over the protocol.
+ */
+const settingsNow = windowSettings(ownProtocol);
+/** How long the boot waits for genie-host's settings before reading start minimized and the login item at their defaults. */
+const SETTINGS_BOOT_DEADLINE_MS = 10_000;
 // SWITCH ACCOUNT (Tynn #753): the provider's own login in its one home, in a window that shows the steps. The entry the UI calls.
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
@@ -856,7 +864,8 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
     let defaults = 0;
     if (prior?.defaultsApplied !== true && catalog !== null) {
         for (const [workspaceId, agentId] of Object.entries(v1DefaultAgents(catalog.agents, theRegistry.listAgents()))) {
-            if (theRegistry.defaultAgentOf(workspaceId) !== null) continue;
+            // Only where nobody CHOSE one: the first agent the import registered is the default automatically (Tynn #1015).
+            if (theRegistry.chosenDefaultAgentOf(workspaceId) !== null) continue;
             if ((await theRegistry.setDefaultAgent(workspaceId, agentId)).ok) defaults += 1;
         }
     }
@@ -1330,6 +1339,8 @@ async function boot(): Promise<void> {
             // Something about the accounts changed in the host (Claude Design's authorization, Tynn #480): windows read them again.
             else if (signal.kind === 'accounts-changed') broadcast('genie:action', { agentId: null, kind: 'accounts-changed' });
             else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
+            // Mail between agents (genie#1209, Tynn #766 C2a; Tynn #998): genie-host keeps the inbox and says each; only what reads goes on.
+            else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
@@ -1484,20 +1495,8 @@ async function boot(): Promise<void> {
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
     // The agent host reads each agent's record per call (genie#1188) from its own registry (Tynn #954): nothing is pushed.
-    /*
-     * EVERY CHAT'S UNSENT DRAFT (genie#1261, main/chat-draft-store.ts), kept here so it survives a restart and a reload —
-     * Genie 1 kept its part-typed answers in main the same way (v0.7.0-beta.342 main/ask/force-question.ts:1118, 1181-1217).
-     * Opened only once the roster is in, so a prune never reads a registry not loaded yet as "every agent deleted"; then a
-     * deleted agent's draft and files go on the change that removes it. Answered before any window exists.
-     */
-    // genie-host's (P3.2): one writer for the drafts file.
-    const drafts = agentEngineLink.client.stores().drafts;
-    const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
-    const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
-    // Sent when the roster changes, not on every snapshot: a streaming agent touches the registry ~20 times a second.
-    const draftPruner = rosterPruner({ ids: draftAgents, prune: (ids) => drafts.prune(ids), failed: pruneFailed });
-    await draftPruner.start();
-    registry.subscribe(() => draftPruner.changed());
+    // EVERY CHAT'S UNSENT DRAFT (genie#1261) is genie-host's, and so is pruning it when its agent goes (Tynn #997, 2g-4a:
+    // host-draft-prune.ts): main prunes nothing.
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
     await writeOsaHome({
         dir: osaHomeDir(genieRoot()),
@@ -1521,7 +1520,7 @@ async function boot(): Promise<void> {
      */
     // ONE pty engine, shared by the terminal host and the composition root's supervisor.
     // The engine gates its cwd hook on GENIE'S settings, read live (§6.5).
-    const ptyPort = realFancyTermPort(() => services?.settings.snapshot() ?? {});
+    const ptyPort = realFancyTermPort(() => settingsNow.snapshot());
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
     // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
     // the open ones a previous window left running are taken back with what they printed.
@@ -1739,10 +1738,9 @@ async function boot(): Promise<void> {
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     /*
      * REMOTE ACCESS IS GENIE-HOST'S (Tynn #409, host split P5d.1): with genie-host linked, IT listens on the tailnet, pairs,
-     * and holds the baton and the lock; this window starts no listener, opens no device store, and drives it through the
-     * replica. It serves no protocol of its own: its door tunnels to genie-host's RemoteHost (Tynn #898 step 2d-4b).
+     * and holds the baton and the lock; this window starts no listener, opens no device store, and keeps no replica of it
+     * (Tynn #997, 2g-4a): Settings draws it from genie-host's features, and the notifications below read remote.watch.
      */
-    const linkedRemote = agentEngineLink.client.remoteAccess();
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
@@ -1842,12 +1840,8 @@ async function boot(): Promise<void> {
         workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
-        // Remote access is genie-host’s (Tynn #409); this window drives it through the replica and serves no protocol itself.
-        remoteAccess: linkedRemote,
     });
     services = composed;
-    // Settings → Remote access reads genie-host's status through the replica, from the first draw.
-    void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
     /*
      * THIS WINDOW IS SERVED BY GENIE-HOST (Tynn #898 step 2d-4b): each connection the door admits rides the engine link
      * to genie-host's RemoteHost, admitted there as this machine's window. main serves none of it; the window's browser
@@ -1868,6 +1862,8 @@ async function boot(): Promise<void> {
     // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
     // `own`: genie-host admits this door's connections as main's own client, the only caller keychain.adoptLegacy takes.
     tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
+    // The settings this window reads, from genie-host, as soon as its own client can ask (Tynn #998, 2g-4b1).
+    settingsNow.start();
     // What genie-host runs, as the tray and the quit read it, kept as it changes (Tynn #953, 2g-2).
     // ...and this machine's role and its Tynn account (Tynn #954, 2g-3a): another account (or none) closes the relay windows
     // opened under the last one, which hold its grants (M0 finding 2).
@@ -1878,7 +1874,6 @@ async function boot(): Promise<void> {
         refreshTray();
         // genie-host's keychain can keep secrets now (Tynn #959): what an older Genie sealed is handed over again.
         unsealer.summary(before, summary);
-        if (summary.githubBlocked !== before.githubBlocked) registry?.touch();
     });
     /*
      * WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b; legacy-unsealer.ts): only this process has Electron's safeStorage, so it
@@ -1902,32 +1897,38 @@ async function boot(): Promise<void> {
 
     // A share-link guest waiting to be let in (Tynn #731) also gets a desktop notification, once: the window may be hidden
     // in the tray, and the ask lapses in two minutes.
-    const guestAsksSeen = new Set<string>();
-    composed.pairing.onChange(() => {
-        pushFeatures();
-        const requests = composed.pairing.requests();
-        const fresh = newGuestAsks(guestAsksSeen, requests);
-        if (requests.length === 0) return;
-        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
-        if (!Notification.isSupported()) return;
-        for (const request of fresh) {
-            const notice = guestAskNotice(request);
-            const n = new Notification({ title: notice.title, body: notice.body });
-            n.on('click', () => { revealMainWindow('notification click: guest asks'); });
-            n.show();
-        }
-    });
     // SOMEONE CONNECTED TO THIS MACHINE (Tynn #726, consent): a desktop notice for each arrival, whether or not a window
     // is open (the windows carry the banner while anyone stays). A Pilot over the relay is never asked to pair, so
     // without this the person at this machine was never told.
+    // Both read genie-host's remote.watch on main's own client (Tynn #997, 2g-4a): who is here and who asks, as it changes.
+    const guestAsksSeen = new Set<string>();
+    let pairRequestsSaid = '';
     const arrivals = new ConnectWatch();
-    composed.remote.onChange(() => {
-        const arrived = arrivals.next(composed.remote.connections());
+    const flashWindows = (): void => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true); };
+    ownProtocol.watchRemote((view) => {
+        const requestsKey = JSON.stringify(view.pairRequests);
+        if (requestsKey !== pairRequestsSaid) {
+            pairRequestsSaid = requestsKey;
+            pushFeatures();
+            const fresh = newGuestAsks(guestAsksSeen, view.pairRequests);
+            if (view.pairRequests.length > 0) {
+                flashWindows();
+                if (Notification.isSupported()) {
+                    for (const request of fresh) {
+                        const notice = guestAskNotice(request);
+                        const n = new Notification({ title: notice.title, body: notice.body });
+                        n.on('click', () => { revealMainWindow('notification click: guest asks'); });
+                        n.show();
+                    }
+                }
+            }
+        }
+        const arrived = arrivals.next(view.connections);
         if (arrived.length === 0) return;
-        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
+        flashWindows();
         if (!Notification.isSupported()) return;
         for (const label of arrived) {
-            const notice = connectNotice(label, composed.remote.hostName);
+            const notice = connectNotice(label, view.hostName);
             const n = new Notification({ title: notice.title, body: notice.body });
             n.on('click', () => { revealMainWindow('notification click: connected'); });
             n.show();
@@ -1972,10 +1973,7 @@ async function boot(): Promise<void> {
     // THE PROCESS BOOK AND ITS SCHEDULER ARE GENIE-HOST'S (P3.3c): what the person keeps running is restored there, and a
     // scheduled task fires on its clock, with or without this window. Every window manages them over the protocol; this
     // process reads only what its tray says (hostSummaryNow, Tynn #953).
-    // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
-    // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.
-    updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel));
-    composed.settings.onChange((key, value) => { if (key === 'update_channel') updates?.setChannel(channelFrom(value)); });
+    // UPDATE CHANNEL (the owner, 2026-10-12): genie-host's updater follows the setting itself (genie-host.ts), since Tynn #998.
     // GENIE'S OWN MCP SERVER (§6.9): every tool registered, the loopback listening, the boot probe recorded.
     {
         // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.
@@ -1995,21 +1993,22 @@ async function boot(): Promise<void> {
             inbox: hostOnly<InboxStore>('the AgentInbox'),
             attention: hostOnly<AttentionStore>('attention (questions, imDone, lists)'),
             knowledge: hostOnly<KnowledgeStore>('the knowledge graph'),
-            settings: composed.settings,
+            settings: settingsNow,
             // ONE approval queue: genie-host's (a window tool's ask goes there).
             approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
             refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
             resolveCaller,
-            // createAgent: the workspace's default agent asks, the person approves in the Deck, the registry registers.
+            // createAgent: any agent asks, the person approves in the Deck, the registry registers (genie-host's own since Tynn #1015).
             agents: {
                 defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
-                register: (input) => registry!.register(input),
+                // genie-host's Add agent, as the form calls it (the window's registry is its replica).
+                create: createThroughAddAgent(async (method, args) => { const answer = await ownProtocol.call(method, args); return answer.ok ? answer.value : answer; }, (id) => registry?.find(id as AgentId) ?? null),
             },
             // workspaceTabs (beta.35 item 36): the workspace's tabs setting (every window reloads it), and its sites' hosts.
             workspaceTabs: {
-                write: (workspaceId, raw) => { void composed.settings.setFor(workspaceId, 'workspace_tabs', raw); showToPerson({ activation: 'background', workspaceId, reason: 'workspaceTabs' }); },
+                write: (workspaceId, raw) => { void settingsNow.setFor(workspaceId, 'workspace_tabs', raw).catch((error: unknown) => console.error(`[genie] workspace tabs could not be saved: ${error instanceof Error ? error.message : String(error)}`)); showToPerson({ activation: 'background', workspaceId, reason: 'workspaceTabs' }); },
                 sites: (workspaceId) => composed.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host),
             },
             // pages (browser rebuild step 7): the Genie browser's tabs and the live site panels, each drivable.
@@ -2045,7 +2044,7 @@ async function boot(): Promise<void> {
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
         const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
-        mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? ''));
+        mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
         if (engineLink) {
@@ -2125,26 +2124,9 @@ async function boot(): Promise<void> {
     registry.setRendererNotice(() => rendererNotice);
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // Remote access is genie-host's (Tynn #820, #409): it applies the switch at boot and on every change of `remote_access`.
-    // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking (what the GitHub
-    // sign-in read from GitHub), the OS agent working.
-    registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })(), githubBlocked: hostSummaryNow.githubBlocked }));
-    // The header's flow pills (Tynn #707): a flow starting, ending or failing changes the signals, so the windows are told.
-    composed.flows.onChange(() => registry?.touch());
-    // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
-    // finished agents, Genie's tool approvals. Built in compose and never read before (the owner never saw a question).
-    registry.setDeckSource(() => [...mainErrors.deckItems(), ...composed.deckItems()]);
-    // An error the main process caught and survived (the policy at the top of this file) reaches the Deck at once.
-    mainErrors.onChange(() => registry?.touch());
-    // Genie's own Deck item (Trust its certificate) follows the front door: read trusted, a site added, Not now.
-    composed.onFrontDoorChange(() => registry?.touch());
-    // A question asked or answered, a list item, a finished agent: the snapshot (and so the Deck, its badge and the
-    // "an agent asks you something" alert) follows at once.
-    composed.attention.onChange(() => registry?.touch());
-    // The workspace dashboard's "Last finished" (q_09d1f4a0): each agent's last handoff, from the same record.
-    registry.setHandoffProbe((id) => composed.attention.lastHandoff(id));
-    // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
-    // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
-    composed.approvals.onChange(() => registry?.touch());
+    // THE DECK, ITS SIGNALS AND EACH AGENT'S LAST HANDOFF are genie-host's (the question window and the tray read deck.watch,
+    // and every window draws the host's features): the window registry built them too, and nothing read them. main reads only
+    // its registry's agents and workspaces (Tynn #998, 2g-4b1: test/split-2g4b1-settings-watch.test.ts holds the proof).
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
     // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told after the coalescing window — a busy one at its
     // next step, as typed input arrives (genie#1411). An app's message starts a stopped agent only if it is automated and
@@ -2175,13 +2157,7 @@ async function boot(): Promise<void> {
     // push it, so a reply or a "read 14:07" lands without anyone polling.
 
 
-    // MAIL BETWEEN AGENTS ON THE BOARD (genie#1209): who sent which message to whom, and which were read.
-    composed.inbox.onSend((to, message) => { broadcast('genie:action', { agentId: message.from, kind: 'mail-sent', to, id: message.id }); });
-    composed.inbox.onRead((reader, ids) => { if (ids && ids.length > 0) broadcast('genie:action', { agentId: reader, kind: 'mail-read', ids }); });
-    // Agent-to-agent mail changes the Dashboard's comms cells: rebuild the snapshot on every send.
-    composed.inbox.onSend(() => { registry?.touch(); });
-    // One agent writing to another is the sender's action, with its own sound row (Tynn #766 C2a).
-    composed.inbox.onSend((_to, message) => { const action = mailAction(message); if (action) broadcast('genie:action', action); });
+    // MAIL BETWEEN AGENTS ON THE BOARD (genie#1209, Tynn #766 C2a): genie-host says each send and read (a `mail` tool signal).
     const ownFeatureUi = featureWindow(localDoor, {
         openFlowEditor: route => openFlowEditorWindow(route, 'user-gesture'),
         openExternal: async url => { if (!/^https:\/\//i.test(url)) throw new Error('only an HTTPS sign-in page can be opened'); await shell.openExternal(url); },
@@ -2264,7 +2240,7 @@ async function boot(): Promise<void> {
         // Do Not Disturb (Settings → General) is the ONE thing that keeps the window shut (the owner, 2026-10-15: "If DnD
         // is not turned on then FTQ always opens for every agent"). Read at every change; the agent is still told the DND
         // reply at once (attention-store.ts), and the question waits in Pending Questions.
-        dnd: () => composed.settings.snapshot().do_not_disturb === true,
+        dnd: () => settingsNow.snapshot().do_not_disturb === true,
     });
     // The host's Deck as it changes: the question window, and the tray's count (Tynn #941, 2f-2).
     ownProtocol.watchDeck((items) => {
@@ -2273,7 +2249,7 @@ async function boot(): Promise<void> {
         refreshTrayWaiting();
     });
     // Do Not Disturb turned OFF, by hand or on its schedule, opens what waited (Tynn #721).
-    composed.settings.onChange((key) => { if (key === 'do_not_disturb') questionWindow?.changed(); });
+    settingsNow.onChange((key) => { if (key === 'do_not_disturb') questionWindow?.changed(); });
     // Questions already waiting when Genie starts come up too.
     questionWindow.changed();
     ipcMain.handle(FEATURE_CHANNELS.browserBounds, (_event, raw: unknown) => {
@@ -2283,8 +2259,11 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
-    // This window's own error notices change with its registry; the host's Deck as it says.
+    // The tray follows this window's registry (its agents) and the host's Deck as it says.
     registry.subscribe(() => { refreshTrayWaiting(); });
+    // An error the main process caught and survived (the policy at the top of this file) reaches the tray's waiting count at
+    // once, directly: no longer through the window registry's Deck, which nothing read (Tynn #998, 2g-4b1).
+    mainErrors.onChange(() => { refreshTrayWaiting(); });
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -2326,10 +2305,13 @@ async function boot(): Promise<void> {
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.
     livePanels = sitePanels({ window: () => window, genieHome: genieRoot(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? '_shared', openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null), restart: panelRestart(confirmTray, restartGenie) });
-    mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
-    mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
+    mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => composed.routes(), settings: settingsNow, pushFeatures: () => { pushFeatures(); } };
+    // Start minimized and the login item are read as genie-host says them, not as defaults: its settings first (a host that
+    // does not answer is waited for no longer than the deadline, and then the defaults stand).
+    await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);
+    mountMainWindow(showOnBoot({ startMinimized: settingsNow.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
-    void wireLoginItem(composed.settings, loginItemPort, {
+    void wireLoginItem(settingsNow, loginItemPort, {
         platform: process.platform,
         packaged: app.isPackaged,
         execPath: process.execPath,

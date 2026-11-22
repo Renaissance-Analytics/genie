@@ -11,6 +11,11 @@ export interface McpToolRow {
     readonly description: string;
     readonly summary: string;
     readonly family: McpToolFamily;
+    /**
+     * Served only to SOME agents: a per-request gate decides (workspaceTabs and pages: the default agent, or one whose
+     * switch is on). Genie's written instructions name only the tools every agent has (Tynn #1015). Absent = every agent.
+     */
+    readonly someAgents?: true;
 }
 
 export const MCP_FAMILIES: readonly { readonly id: McpToolFamily; readonly label: string; readonly icon: string }[] = [
@@ -57,8 +62,8 @@ export function toolSummary(name: string, description: string): string {
     return BUILTIN_TOOL_SUMMARIES[name]?.summary ?? firstSentence(description);
 }
 
-export function describeMcpTool(name: string, description: string): McpToolRow {
-    return { name, description, summary: toolSummary(name, description), family: toolFamily(name) };
+export function describeMcpTool(name: string, description: string, someAgents = false): McpToolRow {
+    return { name, description, summary: toolSummary(name, description), family: toolFamily(name), ...(someAgents ? { someAgents: true as const } : {}) };
 }
 
 export function filterMcpTools(tools: readonly McpToolRow[], query: string): McpToolRow[] {

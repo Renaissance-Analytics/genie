@@ -70,6 +70,7 @@ describe('the engine link carries no account, keyring, registration, secret, plu
 
     it('the window’s engine inventory has no catalog or plugins row: what is left on move:2g is 2g-4’s', () => {
         const rows = WINDOW_ENGINE_INVENTORY.filter(([, d]) => d === 'move:2g').map(([u]) => u).sort();
-        expect(rows).toEqual(['flows', 'hosting', 'remoteAccess', 'stores', 'supervisor']);
+        // remoteAccess left in 2g-4a (#997).
+        expect(rows).toEqual(['flows', 'hosting', 'stores', 'supervisor']);
     });
 });

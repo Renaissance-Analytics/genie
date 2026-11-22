@@ -22,6 +22,7 @@ import {
     alive, attach, check, cleanQuit, failures, finish, gone, hostPid, killHard, launch, makeHome, readOr,
     refuseOffTestMachines, running, sleep, step, tickerOn, ticksOf, twoStreamingAgents, until, Cdp,
 } from './crash-cdp-lib.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 refuseOffTestMachines('renderer-crash-cdp');
 const PORT = Number(process.env.RENDERER_CDP_PORT ?? 9360);
@@ -110,6 +111,7 @@ try {
         const text = String((await until(async () => { const t = String(await cdp.evaluate(bodyText, 5_000)); return /Restart Genie/.test(t) ? t : null; }, 15_000, 200)) ?? await cdp.evaluate(bodyText, 5_000));
         check(/Restart Genie/.test(text) && /Send a crash report/.test(text), 'C3. with Restart Genie and Send a crash report', text.slice(0, 160).replace(/\n/g, ' | '));
         step('D1', 'Restart Genie');
+        await closeWhatsNew((expression) => cdp.evaluate(expression));
         await cdp.evaluate(`document.querySelector('[data-action="renderer-restart"]').click(); true`, 10_000).catch(() => null);
         await cdp.closed(2_000);
         const back = await until(async () => { const p = await pageNow(); return p && isGeniePage(p.url) ? p : null; }, 30_000);

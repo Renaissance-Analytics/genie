@@ -36,7 +36,8 @@ import { runtimeDir } from './paths.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
-import type { PairingView, RemoteAccessReplica, RemoteAccessView } from './remote-access-replica.js';
+import { RemoteAccessReplica, type PairingView, type RemoteAccessView } from './remote-access-replica.js';
+import { hostname } from 'node:os';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
 import type { WorkTracking } from '../core/genie-protocol.js';
@@ -140,9 +141,10 @@ export interface ComposeInput extends HostingOptions {
     /**
      * Remote access is genie-host's (Tynn #409, P5d.1): the paired devices, the PIN, the pair prompts, the baton and the lock.
      * A client is a dumb terminal and serves no remote connection (Tynn #898 step 2d-4b2): this window's protocol door
-     * tunnels to genie-host's RemoteHost, and Settings reads and drives the host's remote access through this replica.
+     * tunnels to genie-host's RemoteHost. Since Tynn #997 (2g-4a) the app's window passes none: Settings draws remote access
+     * from genie-host's features and main's notifications read remote.watch; only a test that composes alone hands one in.
      */
-    readonly remoteAccess: RemoteAccessReplica;
+    readonly remoteAccess?: RemoteAccessReplica;
     /**
      * A site's or a kept process's OWN app credential (genie#1345, main/app-inbox-service.ts): `GENIE_INBOX_URL` and
      * `GENIE_INBOX_TOKEN`, or nothing. Compose lays it over THAT site's env only — never the service env — and gives none
@@ -319,6 +321,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     // The window holds no Tynn account (Tynn #959) and writes no agent's docs: genie-host decides it from its own account
     // (genie-host.ts featureWorkspaceFiles). What the window composes alone is a test's, and says the fallback (Tynn #961).
     const workTracking = (): WorkTracking => 'files';
+    // Remote access is genie-host's: with none handed in, the window's stand-in answers nothing, and refuses whatever is asked.
+    const remoteAccess: RemoteAccessReplica = input.remoteAccess ?? new RemoteAccessReplica(hostname(), async () => { throw new Error("remote access is genie-host's"); });
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
@@ -522,8 +526,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             return workspaceTrust.view(workspace.id)?.trusted !== true;
         },
         approvals,
-        remote: input.remoteAccess,
-        pairing: input.remoteAccess.pairing,
+        remote: remoteAccess,
+        pairing: remoteAccess.pairing,
         // Read at each use (P5a.2): a host that comes back on a new port reaches this window.
         get frontDoorPort() { return hosting.frontDoorPort; },
         browserTrust: () => hosting.browserTrust(),
@@ -562,7 +566,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         }),
         integrations: () => {
             return {
-                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description)) },
+                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description, (t as { someAgents?: boolean }).someAgents === true)) },
                 agentFiles: agentFiles.list(),
             };
         },

@@ -21,8 +21,11 @@ export interface AgentAdoptionPorts extends AgentConfigFs {
     sacredName?(workspaceId: string): Promise<string | null>;
     /** Set an adopted agent's IssueWatch from its config (Tynn #756, PR8). Absent: not applied. */
     setIssueWatch?(agentId: string, setting: IssueWatchSetting): Promise<unknown>;
-    /** The workspace's default agent (by id), or null; and make one the default (Tynn #756, PR8). Absent: not applied. */
-    defaultAgentOf?(workspaceId: string): string | null;
+    /**
+     * The default someone CHOSE (by id), or null — an automatic one (the first agent, Tynn #1015) is not, so project.json's
+     * declaration replaces it; and make one the default (Tynn #756, PR8). Absent: not applied.
+     */
+    chosenDefaultAgentOf?(workspaceId: string): string | null;
     setDefaultAgent?(workspaceId: string, agentId: string): Promise<unknown>;
 }
 
@@ -98,9 +101,9 @@ export async function adoptAgent(ports: AgentAdoptionPorts, workspaceId: string,
         if (agent.refusal !== null || agent.provider === null) return { ok: false, reason: agent.refusal ?? `${name} cannot be adopted` };
         const record = await ports.register({ workspaceId, provider: agent.provider, name: agent.name, instructions: agent.instructions });
         // What project.json says of this agent comes with it: how it hears IssueWatch, and whether it is the workspace's default
-        // agent (only where the workspace has none: a person's choice here is never replaced). Never a capability grant.
+        // agent (only where nobody chose one: a person's choice here is never replaced; the automatic first agent is). Never a capability grant.
         if (agent.issueWatch && ports.setIssueWatch) await ports.setIssueWatch(record.id, agent.issueWatch);
-        if (ports.setDefaultAgent && ports.defaultAgentOf?.(workspaceId) === null && (await declaredDefaultAgent(ports, workspaceId))?.toLowerCase() === agent.name.toLowerCase()) {
+        if (ports.setDefaultAgent && ports.chosenDefaultAgentOf?.(workspaceId) === null && (await declaredDefaultAgent(ports, workspaceId))?.toLowerCase() === agent.name.toLowerCase()) {
             await ports.setDefaultAgent(workspaceId, record.id);
         }
         return { ok: true, id: record.id, name: record.name };

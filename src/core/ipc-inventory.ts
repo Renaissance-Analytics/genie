@@ -157,11 +157,11 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // appInbox, tynnPage and workstation left in 2g-1 (#952): main held them and nothing read them.
     // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
     // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy, legacy-unsealer.ts).
+    // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch, and Settings its features.
     // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window (the feature machine that
     // reads them runs in genie-host), and the engine link's replicas of them went with the accounts'.
     ['flows', 'move:2g'],
     ['hosting', 'move:2g'],
-    ['remoteAccess', 'move:2g'],
     ['stores', 'move:2g'],
     ['supervisor', 'move:2g'],
 ];

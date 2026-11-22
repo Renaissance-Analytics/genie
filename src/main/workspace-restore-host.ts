@@ -17,8 +17,8 @@ export interface RestorePorts {
     /** The workspace's own setting overrides, as the settings store keeps them: what the person (or an agent) already chose. */
     overridden(workspaceId: string): Readonly<Record<string, unknown>>;
     setSetting(workspaceId: string, key: string, value: string): Promise<unknown>;
-    /** The workspace's default agent, by id, or null. */
-    defaultAgentOf(workspaceId: string): string | null;
+    /** The default someone CHOSE, by id, or null: an automatic one (the first agent, Tynn #1015) is replaced. */
+    chosenDefaultAgentOf(workspaceId: string): string | null;
     setDefaultAgent(workspaceId: string, agentId: string): Promise<unknown>;
     /** The env file the workspace was registered with, or null. */
     envFileOf(workspaceId: string): string | null;
@@ -56,7 +56,7 @@ export async function restoreWorkspaceSettings(manifest: unknown, workspaceId: s
 
     if (wanted.defaultAgent !== null) {
         const agent = ports.agentsOf(workspaceId).find((a) => a.name.toLowerCase() === wanted.defaultAgent!.toLowerCase());
-        if (ports.defaultAgentOf(workspaceId) !== null) out.kept.push('defaultAgent');
+        if (ports.chosenDefaultAgentOf(workspaceId) !== null) out.kept.push('defaultAgent');
         else if (agent === undefined) out.waiting.push('defaultAgent');
         else { await ports.setDefaultAgent(workspaceId, agent.id); out.applied.push('defaultAgent'); }
     }

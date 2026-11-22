@@ -66,6 +66,8 @@ describe('main reports them to the window that plays them', () => {
         expect(src).toMatch(/thumbsUp: \(caller, reason\) => \{[^\n]*broadcast\('genie:action', \{ agentId: caller\.agentId, kind: 'thumbsup', reason \}\)/);
     });
     it('every send is checked for agent-to-agent mail and reported as its sender’s action', () => {
-        expect(src).toMatch(/composed\.inbox\.onSend\(\(_to, message\) => \{ const action = mailAction\(message\); if \(action\) broadcast\('genie:action', action\); \}\);/);
+        // genie-host keeps the inbox and says it (Tynn #998, 2g-4b1: core/mail-actions.ts, on the `mail` tool signal).
+        expect(readFileSync('src/core/mail-actions.ts', 'utf8')).toMatch(/const own = mailAction\(message\);/);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/own\.inbox\.onSend\(\(to, message\) => \{ for \(const mail of mailSignalsOfSend\(to, message\)\)/);
     });
 });
