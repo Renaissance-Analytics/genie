@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeckItem } from '../src/core/deck.js';
 import { questionWindowAction } from '../src/core/keys.js';
 import { askWindowMaximized, askWindowRestored } from '../src/core/question-maximize.js';
-import { ICON_NAMES } from '../src/renderer/icons.js';
+import { ICON_NAMES, registerAppIcons } from '../src/renderer/icons.js';
 import { questionBridge, type QuestionPreload } from '../src/renderer/question-bridge.js';
 import { QuestionApp } from '../src/renderer/components/QuestionApp.js';
 import { DeckRow } from '../src/renderer/components/DeckRow.js';
@@ -23,6 +23,9 @@ import { DeckRow } from '../src/renderer/components/DeckRow.js';
  * - In the Deck the same question expands into an overlay that fills the main window below its title bar; its control, or
  *   Esc, restores it, and the form in it is the same element (nothing typed is lost).
  */
+// The app registers its icons at start-up (question-main.tsx); so does this file, so an icon Button draws its svg.
+registerAppIcons();
+
 const press = (key: string, mod: { ctrl?: boolean; shift?: boolean } = {}) => ({ key, ctrlKey: mod.ctrl ?? false, metaKey: false, altKey: false, shiftKey: mod.shift ?? false, typing: false });
 
 const item = {

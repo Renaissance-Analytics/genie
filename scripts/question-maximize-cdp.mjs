@@ -203,7 +203,8 @@ try {
     console.log(`  normal: ${JSON.stringify(before)}`);
     check(before.max === 'off', '4a. it opens at its normal size (not maximized)', String(before.max));
     // POSITIVE CONTROL: the window starts well short of the work area, so "fills it" below is something that changed.
-    check(before.w < before.aw - 100 && before.h < before.ah - 100, '4b. CONTROL: the normal window is smaller than the work area', `${before.w}x${before.h} of ${before.aw}x${before.ah}`);
+    // (The VM's display can be small: measured 512x384, where the normal window is clamped to 400x334.)
+    check(before.w <= before.aw - 40 && before.h <= before.ah - 40, '4b. CONTROL: the normal window is at least 40 px short of the work area each way', `${before.w}x${before.h} of ${before.aw}x${before.ah}`);
     check(await ask.evaluate(`document.querySelector(${JSON.stringify(MAX)})?.getAttribute('title') ?? ''`) === 'Maximize', '4c. the button’s tooltip says Maximize');
     await shot(ask, 'question-maximize-1019-normal.png');
 
