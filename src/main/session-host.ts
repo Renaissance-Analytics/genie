@@ -430,8 +430,13 @@ export function listModelsOptionsFor(
  * home folder (no project's settings choose for it). It reads no file; the CLI's own status carries no credential.
  */
 export function realDescribeClaude(configDir: string | null): ReturnType<typeof claudeAccounts.describe> {
+    return claudeAccounts.describe(configDir, { ...realClaudeCliOptions(), cwd: userHome() });
+}
+
+/** The Claude CLI Genie runs (a configured binary included), for prism-acp's describe, login and logout (Tynn #1011). */
+export function realClaudeCliOptions(): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
     const o = listModelsOptionsFor('claude', process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
-    return claudeAccounts.describe(configDir, { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}), cwd: userHome() });
+    return { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}) };
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */

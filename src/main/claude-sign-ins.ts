@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { claudeAccounts } from '@particle-academy/prism-acp';
+import { claudeAccounts, claudeSignInUrl, type ClaudeAccountOptions } from '@particle-academy/prism-acp';
 import type { AccountIdentity, AccountRecord } from '../core/accounts.js';
 import { forgetRefusal } from '../core/account-settings.js';
 import { isClaudeSignInUrl, type ClaudeSignInView } from '../core/claude-accounts.js';
@@ -129,8 +129,8 @@ export class ClaudeSignIns {
             ...(email ? { email } : {}),
             signal: running.abort.signal,
             onUrl: (url) => {
-                // Only Anthropic's own sign-in page: prism-acp checks too; Genie never opens anything else.
-                if (!isClaudeSignInUrl(url)) return;
+                // Only Anthropic's own sign-in page: prism-acp's own check and Genie's; nothing else is ever opened.
+                if (claudeSignInUrl(url) === null || !isClaudeSignInUrl(url)) return;
                 void this.#p.open(url, context).catch(() => { this.#p.tell(`Genie could not open your browser for ${account.label}. Cancel and try again.`); });
             },
             onCodeRequested: (signal) => new Promise<string>((resolve, reject) => {
@@ -153,7 +153,7 @@ export class ClaudeSignIns {
             },
             (error: unknown) => {
                 const code = (error as { code?: unknown } | null)?.code;
-                this.#p.tell(code === 'cancelled' || running.abort.signal.aborted ? `Signing in to ${account.label} was cancelled.`
+                this.#p.tell(code === 'aborted' || code === 'cancelled' || running.abort.signal.aborted ? `Signing in to ${account.label} was cancelled.`
                     : code === 'timeout' ? `Signing in to ${account.label} took too long and was stopped. Sign in again when you are ready.`
                     : `Signing in to ${account.label} did not finish: ${error instanceof Error ? error.message : String(error)}`);
             },
@@ -182,19 +182,13 @@ export class ClaudeSignIns {
     }
 }
 
-/**
- * prism-acp's login()/logout() (prism-acp-ts #71): merged, NOT YET RELEASED at the time of writing. Reached by name, so this
- * builds against the release Genie pins; until a release has them, a sign-in says so, plainly, and nothing runs.
- */
-type PrismLogin = { login?: (configDir: string, options: ClaudeLoginOptions) => Promise<{ signedIn: boolean; email?: string; subscriptionType?: string }>; logout?: (configDir: string, options?: { signal?: AbortSignal }) => Promise<void> };
-export const CLAUDE_LOGIN_UNAVAILABLE = 'Signing in from Genie needs a newer prism-acp (its browser sign-in). It comes with the next Genie update.';
-export const realClaudeLogin: Pick<ClaudeSignInPorts, 'login' | 'logout'> = {
-    login: (configDir, options) => {
-        const api = claudeAccounts as unknown as PrismLogin;
-        return api.login ? api.login(configDir, options) : Promise.reject(new Error(CLAUDE_LOGIN_UNAVAILABLE));
-    },
-    logout: (configDir, options) => {
-        const api = claudeAccounts as unknown as PrismLogin;
-        return api.logout ? api.logout(configDir, options) : Promise.reject(new Error(CLAUDE_LOGIN_UNAVAILABLE));
-    },
-};
+/** The CLI a sign-in runs: the one Genie launches for Claude (a configured binary included), as `describe` uses it. */
+export type ClaudeCliOptions = Pick<ClaudeAccountOptions, 'binary' | 'binaryArgs' | 'parentEnv' | 'allowEnv'>;
+
+/** prism-acp 0.47.0's `claudeAccounts.login()` / `logout()`: Claude Code's own sign-in and sign-out, hidden, no terminal. */
+export function realClaudeLogin(cli: () => ClaudeCliOptions): Pick<ClaudeSignInPorts, 'login' | 'logout'> {
+    return {
+        login: (configDir, options) => claudeAccounts.login(configDir, { ...cli(), ...options }),
+        logout: async (configDir, options) => { await claudeAccounts.logout(configDir, { ...cli(), ...(options?.signal ? { signal: options.signal } : {}) }); },
+    };
+}

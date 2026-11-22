@@ -44,7 +44,7 @@ import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, exitRecordOf, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
-import { claudeLaunchConfigDir, providerBinary, realDescribeClaude, realListModels, SessionHost } from './session-host.js';
+import { claudeLaunchConfigDir, providerBinary, realClaudeCliOptions, realDescribeClaude, realListModels, SessionHost } from './session-host.js';
 import { ClaudeAccountsLive } from './claude-accounts-live.js';
 import { ClaudeSignIns, realClaudeLogin } from './claude-sign-ins.js';
 import { removeAccountDir } from './claude-account-dirs.js';
@@ -1278,7 +1278,7 @@ async function main(): Promise<void> {
         changed: () => { void claudeLive.refresh(); accountsChangedNow?.(); },
         tell: (words) => { say(`[accounts] ${words}`); engine.callback({ name: 'toolSignal', signal: { kind: 'account-notice', title: 'Accounts', body: words } }); },
         platform: process.platform,
-        ...realClaudeLogin,
+        ...realClaudeLogin(() => realClaudeCliOptions()),
         describe: (configDir) => realDescribeClaude(configDir),
     });
     // The sign-ins that used to open a terminal (Tynn #1011): `choose` undefined from an agent's Log in signs the ACTIVE account
