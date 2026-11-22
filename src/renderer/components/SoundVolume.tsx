@@ -91,14 +91,14 @@ export function SoundVolume({ values, onAction, onPreview }: {
                     size="sm"
                     variant="ghost"
                     data-action="sound-levels-toggle"
+                    icon="sliders-horizontal"
                     aria-expanded={open}
                     aria-controls="sound-levels"
                     title="Advanced: a level per sound"
-                    className={`shrink-0 gap-1.5 border border-[var(--border-1)] ${open ? INVERTED : ''}`}
+                    className={`shrink-0 border border-[var(--border-1)] ${open ? INVERTED : ''}`}
                     onClick={() => setOpen((o) => !o)}
                 >
-                    <Icon name="sliders-horizontal" size="sm" />
-                    <span>Advanced</span>
+                    Advanced
                 </Button>
             </div>
             {open ? (
