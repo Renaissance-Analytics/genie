@@ -1216,7 +1216,6 @@ async function main(): Promise<void> {
         login: (provider, accountId) => logins?.start(provider, accountId) ?? { ok: false, reason: 'Genie’s sign-in is not ready yet; try again in a moment.' },
         switchLogin: (provider) => switchAccount?.(provider) ?? { ok: false, reason: 'Genie’s accounts are not ready yet; try again in a moment.' },
         providerOf: (agentId) => hostRegistry.find(agentId)?.provider ?? null,
-        accountProvider: (accountId) => accounts.get(accountId)?.provider ?? null,
         cancel: (terminalId) => logins?.cancel(terminalId),
         openWindow: (context, route, closed) => openCallersTerminalWindow(terminalWindowPorts, context, route, { startedHere: false, ended: closed }),
     });
@@ -1700,20 +1699,6 @@ async function main(): Promise<void> {
         },
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry.
         onDesignLoginEnded: () => { designAuth.apply({ kind: 'login-ended' }); tellDesignLoginRan(host); },
-        // A sign-in to a Claude account's own directory ended (Tynn #1011): that directory is asked who is signed in, and if it is
-        // the active account, the agents its provider had signed out come back.
-        onOwnDirectoryEnded: (provider, accountId) => {
-            void providerHealth.refresh(provider);
-            void claudeLive.refresh().then(() => {
-                if (!isAcpProvider(provider) || accounts.activeFor(provider).id !== accountId || claudeLive.view()[accountId]?.signedIn !== true) return;
-                readingAttribution.signedIn(provider);
-                afterSignedIn(provider, {
-                    signedOutAgents: (p) => host.signedOutAgents(p),
-                    restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
-                    resumeLimit: (p) => host.resumeLimit(p),
-                });
-            });
-        },
         // A switch's login is over (Tynn #482): the flow reads who is signed in and says so.
         onSwitchEnded: (provider, signedIn) => { void switchFlow?.settle(provider, signedIn); },
     });

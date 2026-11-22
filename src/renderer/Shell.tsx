@@ -141,8 +141,6 @@ export interface ShellProps {
     onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
     /** Rename or forget a known account (Tynn #484). */
     onAccountsAct?: ((action: AccountsAction) => Promise<AccountsActResult>) | undefined;
-    /** Tynn #1011: one account's own sign-in, in a window for the person. */
-    onAccountSignIn?: ((accountId: string) => void) | undefined;
     /** Design sign-in for the machine (Tynn #480). */
     onDesignSignIn?: (() => void) | undefined;
     /** Not now on a switch offer (S8). */
@@ -405,7 +403,6 @@ export function Shell({
     onSwitchAccount,
     onDismissSwitchOffer,
     onAccountsAct,
-    onAccountSignIn,
     onDesignSignIn,
     now,
     mailSignals,
@@ -702,7 +699,7 @@ export function Shell({
                 // written through its feature channel — so a window on another machine shows and sets that machine's.
                 dnd={dndView && !scoped ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
                 // THE ACCOUNT PILLS (Tynn #949): in the title bar, beside the workstation name, so they are on every view.
-                accountPills={scoped ? undefined : { limits: rateLimits ?? {}, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, onAccountsAct, onAccountSignIn, now }}
+                accountPills={scoped ? undefined : { limits: rateLimits ?? {}, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, onAccountsAct, now }}
             />
             {remoteShown?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remoteShown.refusal ?? null} needsBaton={remoteShown.needsBaton === true && !remoteShown.driving} driver={remoteShown.driver} onTakeControl={remoteShown.onTakeControl} onDismiss={() => remoteShown.onDismissRefusal?.()} />

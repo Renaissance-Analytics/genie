@@ -296,8 +296,6 @@ export interface GenieBridge {
     accounts?(): Promise<AccountsSnapshot | null>;
     /** Rename or forget a known account (Tynn #484); a refusal comes back as its reason. */
     accountsAct?(action: AccountsAction): Promise<AccountsActResult>;
-    /** Sign in to ONE account (Tynn #1011): Claude Code's own login for that account's directory, in a window for the person. */
-    accountSignIn?(accountId: string): Promise<SignInResult>;
     /** Not now on a switch offer (Tynn #481): it goes, and is not made again in that window. */
     dismissSwitchOffer?(id: string): Promise<boolean>;
     /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
@@ -732,7 +730,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  */
 export type SignInResult = { ok: true; terminalId?: string; route?: string; ticket?: string } | { ok: false; reason: string };
 
-export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'accountSignIn' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal'> & {
+export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
@@ -798,7 +796,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(local.agentWire);
     const bridge: GenieBridge = { ...preload, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
-        accounts: local.accounts, accountsAct: local.accountsAct, accountSignIn: local.accountSignIn, dismissSwitchOffer: local.dismissSwitchOffer,
+        accounts: local.accounts, accountsAct: local.accountsAct, dismissSwitchOffer: local.dismissSwitchOffer,
         crashReport: local.crashReport,
         chooseProviderProgram: local.chooseProviderProgram,
         scratchTerminal: local.scratchTerminal,

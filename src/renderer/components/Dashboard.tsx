@@ -906,11 +906,9 @@ export interface RateLimitPillsProps {
     onDesignSignIn?: (() => void) | undefined;
     /** Tynn #1011: add a Claude account of its own, or make one active. */
     onAccountsAct?: ((action: AccountsAction) => Promise<AccountsActResult>) | undefined;
-    /** Tynn #1011: one account's own sign-in, in a window for the person. */
-    onAccountSignIn?: ((accountId: string) => void) | undefined;
 }
 
-export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, onAccountsAct, onAccountSignIn }: RateLimitPillsProps) {
+export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, onAccountsAct }: RateLimitPillsProps) {
     // Re-read twice a minute: a window that resets while the header is open turns Refreshed without a new reading.
     const now = useNow(true, pinned, 30_000);
     const viewOf = (p: string) => accounts?.providers.find((v) => v.provider === p) ?? null;
@@ -920,7 +918,7 @@ export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount,
         <div data-rate-limits="" className="flex items-center gap-1.5">
             {providers.map((p) => {
                 const view = viewOf(p);
-                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} onAccountsAct={onAccountsAct} onSignIn={onAccountSignIn} />;
+                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} onAccountsAct={onAccountsAct} />;
                 return limits[p] ? <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} /> : null;
             })}
         </div>

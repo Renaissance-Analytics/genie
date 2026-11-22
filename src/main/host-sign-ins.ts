@@ -23,8 +23,6 @@ export interface SignInPorts {
     readonly switchLogin: (provider: string) => { ok: true; terminalId: string } | { ok: false; reason: string };
     /** The provider an agent runs on; null = no such agent. */
     readonly providerOf: (agentId: string) => string | null;
-    /** The provider of a known account (Tynn #1011); null = the host does not know it. */
-    readonly accountProvider?: ((accountId: string) => string | null) | undefined;
     /** LoginHost.cancel, by the login's terminal: the person left the step. */
     readonly cancel: (terminalId: string) => void;
     /**
@@ -39,8 +37,6 @@ export interface HostSignIns {
     design(context?: CallContext): Promise<SignInAnswer>;
     switchAccount(provider: string, choose: unknown, context?: CallContext): Promise<SignInAnswer>;
     loginFor(provider: string, context?: CallContext): Promise<SignInAnswer>;
-    /** One account's own sign-in (Tynn #1011): its provider's login for that account, e.g. a Claude account's own directory. */
-    accountLogin(accountId: string, context?: CallContext): Promise<SignInAnswer>;
 }
 
 /** The account to choose is words for the steps only: kept short, on one line, never a control character (it goes into a route). */
@@ -59,11 +55,6 @@ export function hostSignIns(ports: SignInPorts): HostSignIns {
         shown(ports.login(provider), (id) => loginRoute(id, provider), context);
     return {
         loginFor,
-        accountLogin: async (accountId, context) => {
-            const provider = typeof accountId === 'string' && accountId !== '' ? ports.accountProvider?.(accountId) ?? null : null;
-            if (provider === null) return { ok: false, reason: 'Genie does not know that account.' };
-            return shown(ports.login(provider, accountId), (id) => loginRoute(id, provider), context);
-        },
         providerLogin: async (agentId, context) => {
             const provider = ports.providerOf(agentId);
             if (provider === null) return { ok: false, reason: 'No agent named.' };

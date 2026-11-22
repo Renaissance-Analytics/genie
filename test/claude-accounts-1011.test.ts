@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import type { ClaudeAccountCheck, ClaudeAccountStatus } from '@particle-academy/prism-acp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { accountsActionOf } from '../src/core/account-settings.js';
-import { claudeConfigDirOf, claudeLiveOf, respawnDecision, type RespawnInput } from '../src/core/claude-accounts.js';
+import { claudeConfigDirOf, claudeLiveOf, OWN_DIRECTORY_SIGN_IN_LATER, respawnDecision, type RespawnInput } from '../src/core/claude-accounts.js';
 import { AccountsHost, type AccountsOptions } from '../src/main/accounts-host.js';
 import { LoginHost } from '../src/main/login-host.js';
 import { ClaudeAccountsLive } from '../src/main/claude-accounts-live.js';
@@ -166,7 +166,7 @@ describe('respawnDecision: a switch reaches a running agent only at a clean idle
     });
 });
 
-describe('signing in to an account with its own directory: prism-acp loginCommand, in a terminal the person sees', () => {
+describe('an account with its own directory is never signed in through a terminal (the owner: "I should not see any terminals")', () => {
     const perDir = (method: 'subscription' | 'console') => ({ id: `account_${'7'.repeat(32)}`, provider: 'claude' as const, label: 'Work', labelEdited: true,
         home: '/home/.claude', legacy: false, identity: { name: null, email: 'person@example.test', plan: null }, createdAt: NOW,
         configDir: resolve(dir, 'acct'), method });
@@ -181,22 +181,22 @@ describe('signing in to an account with its own directory: prism-acp loginComman
             accountFor: () => account,
             onSignedIn: () => {},
             scratch: () => dir,
-            parentEnv: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-ant-parent-should-not-pass', CLAUDE_CODE_OAUTH_TOKEN: 'x' },
         });
         return { login, opened, windows };
     }
 
-    it.each([['subscription', '--claudeai'], ['console', '--console']] as const)('%s: the CLI\'s own login with %s, in that directory, credentials withheld', (method, flag) => {
+    it.each(['subscription', 'console'] as const)('%s: refused with the words for later; no terminal, no window', (method) => {
         const f = fixture(perDir(method));
-        const started = f.login.start('claude', `account_${'7'.repeat(32)}`);
-        expect(started.ok).toBe(true);
+        expect(f.login.start('claude', `account_${'7'.repeat(32)}`)).toEqual({ ok: false, reason: OWN_DIRECTORY_SIGN_IN_LATER });
+        expect(f.opened).toEqual([]);
+        expect(f.windows).toEqual([]);
+    });
+
+    it('CONTROL: the default account\'s login still opens (the refusal is only for an account of its own)', () => {
+        const { configDir: _c, method: _m, ...home } = perDir('subscription');
+        const f = fixture(home as ReturnType<typeof perDir>);
+        expect(f.login.start('claude', `account_${'7'.repeat(32)}`).ok).toBe(true);
         expect(f.opened).toHaveLength(1);
-        expect(f.opened[0]!.command).toMatch(new RegExp(`auth login ${flag}( |$)`));
-        expect(f.opened[0]!.env?.CLAUDE_CONFIG_DIR).toBe(resolve(dir, 'acct'));
-        expect(Object.keys(f.opened[0]!.env ?? {})).not.toContain('ANTHROPIC_API_KEY');
-        expect(Object.keys(f.opened[0]!.env ?? {})).not.toContain('CLAUDE_CODE_OAUTH_TOKEN');
-        // Visible: the person's window is opened on that terminal.
-        expect(f.windows).toHaveLength(1);
     });
 });
 

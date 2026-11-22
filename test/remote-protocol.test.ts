@@ -129,8 +129,7 @@ describe('the capability table', () => {
         // machine, owned by its own connection (Tynn #941, 2f-2).
         // 189 with `keychain.adoptLegacy` (local, main's own client only: what an older Genie sealed, into genie-host's keychain)
         // and `tynn.recheck` (local: genie-host asks Tynn again) (Tynn #959, 2g-3b).
-        // 190 with `accounts.signIn` (a write, the owner's, a sign-in): one account's own sign-in (Tynn #1011).
-        expect(REMOTE_METHODS.length).toBe(190);
+        expect(REMOTE_METHODS.length).toBe(189);
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

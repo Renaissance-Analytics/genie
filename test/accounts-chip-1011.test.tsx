@@ -47,8 +47,8 @@ describe('the popover: live state, one-click switch, sign in, add', () => {
     beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host); });
     afterEach(() => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ''; });
     type Act = (action: AccountsAction) => Promise<AccountsActResult>;
-    const open = (handlers: { onSwitch?: (provider: string, choose?: string) => void; onAct?: Act; onSignIn?: (id: string) => void } = {}) => {
-        act(() => root.render(<AccountsChip view={VIEW} offer={null} now={NOW} onSwitch={handlers.onSwitch ?? (() => {})} onAccountsAct={handlers.onAct ?? vi.fn<Act>(async () => ({ ok: true }))} onSignIn={handlers.onSignIn ?? (() => {})} />));
+    const open = (handlers: { onSwitch?: (provider: string, choose?: string) => void; onAct?: Act } = {}) => {
+        act(() => root.render(<AccountsChip view={VIEW} offer={null} now={NOW} onSwitch={handlers.onSwitch ?? (() => {})} onAccountsAct={handlers.onAct ?? vi.fn<Act>(async () => ({ ok: true }))} />));
         act(() => { host.querySelector('[data-account-chip="claude"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
         return document.querySelector('[data-account-popover="claude"]') as HTMLElement;
     };
@@ -91,12 +91,19 @@ describe('the popover: live state, one-click switch, sign in, add', () => {
         expect(onSwitch).not.toHaveBeenCalled();
     });
 
-    it('an account not signed in offers Sign in (its own login), not Switch', () => {
-        const onSignIn = vi.fn<(id: string) => void>();
-        const row = open({ onSignIn }).querySelector(`[data-account="${B}"]`)!;
+    it('an account not signed in shows Sign in DISABLED, saying it comes with prism-acp (never a terminal), not Switch', () => {
+        // The owner: "I should not see any terminals nor do we store login keys."
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
+        const row = open({ onAct, onSwitch }).querySelector(`[data-account="${B}"]`)!;
         expect(row.querySelector('[data-action="account-switch"]')).toBeNull();
-        click(row.querySelector('[data-action="account-sign-in"]'));
-        expect(onSignIn).toHaveBeenCalledWith(B);
+        const button = row.querySelector('[data-action="account-sign-in"]') as HTMLButtonElement;
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('title')).toMatch(/no terminal/);
+        expect(row.textContent).toContain('Coming with the next prism-acp');
+        click(button);
+        expect(onAct).not.toHaveBeenCalled();
+        expect(onSwitch).not.toHaveBeenCalled();
     });
 
     it('Add account offers a subscription or a Console (API-billed) account', () => {

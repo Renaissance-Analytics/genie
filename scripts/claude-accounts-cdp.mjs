@@ -13,8 +13,8 @@
  *   the chip names the active account → the popover shows its live state (Signed in, Subscription, its org) → an account
  *   signed in with a Console key where a subscription was chosen shows a typed Mismatch → an account not signed in offers
  *   Sign in, not Switch → Switch on another account makes it active with one click (the chip and the book follow; no login
- *   window opens) → Add Console (API) adds an account waiting for its sign-in → Sign in opens Claude Code's own login
- *   (`auth login --console`, in that account's directory) in a window for the person.
+ *   window opens) → Add Console (API) adds an account waiting for its sign-in → Sign in is shown DISABLED until
+ *   prism-acp's hidden login ships (the owner: "I should not see any terminals"): a click opens no window, runs no login.
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
@@ -251,25 +251,17 @@ try {
     check(Boolean(newOne) && existsSync(join(newOne.configDir, 'projects')), '16. its directory links its session history to the shared store (projects)');
     check(added, '17. the popover lists it');
 
-    // SIGN IN: Claude Code's own login, for that account's directory, in a window for the person.
+    // SIGN IN, NOT YET (the owner: "I should not see any terminals nor do we store login keys"): shown, disabled, with why;
+    // a click opens no window and runs no login. prism-acp's hidden login (Anthropic's page in the browser) comes next.
     await openPopover(cdp);
-    check(await click(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`), '18. Sign in on Team API takes a click');
-    let loginPage = null;
-    for (const until = Date.now() + 20_000; Date.now() < until && !loginPage; await sleep(500)) loginPage = (await targets()).find((t) => t.type === 'page' && /login=claude/.test(t.url)) ?? null;
-    check(Boolean(loginPage), '19. a sign-in window opened for the person (genie://takeover/…?login=claude)', loginPage?.url ?? '(none)');
-    const calls = existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
-    let login = null;
-    for (const until = Date.now() + 15_000; Date.now() < until && !login; await sleep(500)) {
-        const now = existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : calls;
-        login = now.find((c) => c.args[0] === 'auth' && c.args[1] === 'login') ?? null;
-    }
-    check(login?.args.join(' ') === 'auth login --console' && login?.dir === dirOf(TEAM), '20. it runs Claude Code\'s own `auth login --console`, in Team API\'s own directory', JSON.stringify(login));
-    if (loginPage) {
-        const lc = await Cdp.connect((all) => all.find((t) => t.id === loginPage.id));
-        await sleep(1_500);
-        await lc.shot('claude-accounts-1011-sign-in-window.png');
-        lc.close();
-    }
+    const signIn = await cdp.evaluate(`(() => { const b = document.querySelector(${q(`${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`)}); return b ? { disabled: b.disabled, title: b.getAttribute('title'), note: b.closest('[data-account-sign-in-later]')?.textContent ?? '' } : null; })()`);
+    check(signIn?.disabled === true && /no terminal/.test(signIn.title ?? '') && /next prism-acp/.test(signIn.note), '18. Sign in on Team API is shown DISABLED, saying it comes with the next prism-acp, never a terminal', JSON.stringify(signIn));
+    const before = (await targets()).filter((t) => t.type === 'page').length;
+    await click(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`);
+    await sleep(2_000);
+    check((await targets()).filter((t) => t.type === 'page').length === before && !(await targets()).some((t) => /login=claude/.test(t.url)), '19. a click on it opens no window (no terminal)');
+    const logins = (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((c) => c.args[0] === 'auth' && c.args[1] === 'login');
+    check(logins.length === 0, '20. and no `claude auth login` ran anywhere', JSON.stringify(logins));
     const statusCalls = (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((c) => c.args[1] === 'status');
     check([dirOf(WORK), dirOf(LAB)].every((d) => statusCalls.some((c) => c.dir === d)), '21. the host asked each account\'s OWN directory (describe), never only the default', `${statusCalls.length} status calls`);
 } catch (error) {

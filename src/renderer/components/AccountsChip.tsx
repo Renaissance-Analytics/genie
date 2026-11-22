@@ -7,7 +7,7 @@ import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
 import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
-import { mismatchWords, type ClaudeAccountLive } from '../../core/claude-accounts.js';
+import { mismatchWords, OWN_DIRECTORY_SIGN_IN_LATER, type ClaudeAccountLive } from '../../core/claude-accounts.js';
 import type { DesignAuthView } from '../../core/design-auth.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 
@@ -31,8 +31,6 @@ export interface AccountsChipProps {
     readonly onDesignSignIn?: (() => void) | undefined;
     /** Tynn #1011: add a Claude account of its own, or make one active (one click, no terminal). */
     readonly onAccountsAct?: ((action: AccountsAction) => Promise<AccountsActResult> | void) | undefined;
-    /** Tynn #1011: Claude Code's own login for that account, in a window the person sees. */
-    readonly onSignIn?: ((accountId: string) => void) | undefined;
 }
 
 /** The footer's rows (Add subscription, Add Console, Use another account): full width, icon and words from the left edge. */
@@ -60,7 +58,7 @@ function targetWords(t: SwitchTarget): string {
     return `${t.label} (${t.leftPct}% left)`;
 }
 
-export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn, onAccountsAct, onSignIn }: AccountsChipProps) {
+export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn, onAccountsAct }: AccountsChipProps) {
     const [open, setOpen] = useState(false);
     const active = activeAccountOf(view);
     if (!active) return null;
@@ -78,11 +76,12 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
     /*
      * HOW AN ACCOUNT IS SWITCHED TO (Tynn #1011). One Claude Code reports signed in where it lives (its own directory, or the
      * default home it is signed in to now) becomes the active account with one click: no terminal, no login. One with its own
-     * directory that is not signed in offers Sign in. Any other is the default home's, reached by signing in again there (#753).
+     * directory that is not signed in shows Sign in, DISABLED until prism-acp's hidden login ships (the owner: "I should not see
+     * any terminals"). Any other is the default home's, reached by signing in again there (#753).
      */
     const choose = (a: AccountView): { kind: 'switch' | 'sign-in'; run: () => void } => {
         if (a.live?.signedIn === true) return { kind: 'switch', run: () => { void onAccountsAct?.({ kind: 'set-active', id: a.id }); } };
-        if (a.ownDirectory === true) return { kind: 'sign-in', run: () => onSignIn?.(a.id) };
+        if (a.ownDirectory === true) return { kind: 'sign-in', run: () => {} };
         return { kind: 'switch', run: () => switchTo(chooseWords(a)) };
     };
     return (
@@ -129,7 +128,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                             </div>
                         </Callout>
                     ) : null}
-                    <ActiveAccount account={active} now={now} onSignIn={active.ownDirectory === true && active.live?.signedIn !== true ? () => onSignIn?.(active.id) : undefined} />
+                    <ActiveAccount account={active} now={now} signInLater={active.ownDirectory === true && active.live?.signedIn !== true} />
                     {design && provider === 'claude' ? <DesignAuthRow design={design} onSignIn={onDesignSignIn} /> : null}
                 </div>
                 <div data-accounts-pane="others" className="flex w-60 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
@@ -166,7 +165,7 @@ function PlanChip({ plan }: { plan: string | null }) {
 }
 
 /** THE LEFT PANE: the account the chip names, large, with who it is and every window it reported. */
-function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: number; onSignIn?: (() => void) | undefined }) {
+function ActiveAccount({ account, now, signInLater }: { account: AccountView; now: number; signInLater: boolean }) {
     return (
         <section data-account={account.id} data-active={account.active ? 'true' : 'false'} className="flex flex-col gap-3">
             <div className="flex items-center gap-3">
@@ -189,7 +188,7 @@ function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: 
                     {account.live?.loginExpiresAt ? <span data-account-login-expires="" className="text-[11px] text-[var(--fg-4)]">Sign-in good until {shortDateTime(Date.parse(account.live.loginExpiresAt))}</span> : null}
                 </div>
             </div>
-            {onSignIn ? <Button type="button" size="sm" icon="log-in" data-action="account-sign-in" className="self-start" onClick={onSignIn}>Sign in</Button> : null}
+            {signInLater ? <SignInLater size="sm" /> : null}
             <div className="flex flex-col gap-2.5 border-t border-[var(--border-1)] pt-3">
                 {account.windows.map((w) => <WindowRow key={w.window} w={w} now={now} />)}
             </div>
@@ -210,8 +209,18 @@ function OtherAccount({ account, rank, now, action }: { account: AccountView; ra
             {account.windows.map((w) => <CompactWindow key={w.window} w={w} now={now} />)}
             {action.kind === 'switch'
                 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} className="self-end" onClick={action.run}>Switch</Button>
-                : <Button type="button" size="xs" icon="log-in" data-action="account-sign-in" aria-label={`Sign in to ${account.label}`} className="self-end" onClick={action.run}>Sign in</Button>}
+                : <SignInLater size="xs" />}
         </section>
+    );
+}
+
+/** SIGN IN, NOT YET (Tynn #1011): shown, disabled, with why: it comes as prism-acp's hidden login, never a terminal. */
+function SignInLater({ size }: { size: 'xs' | 'sm' }) {
+    return (
+        <div data-account-sign-in-later="" className="flex flex-col items-end gap-0.5 self-end">
+            <Button type="button" size={size} icon="log-in" data-action="account-sign-in" disabled aria-disabled="true" title={OWN_DIRECTORY_SIGN_IN_LATER}>Sign in</Button>
+            <span className="text-[11px] text-[var(--fg-4)]">Coming with the next prism-acp</span>
+        </div>
     );
 }
 

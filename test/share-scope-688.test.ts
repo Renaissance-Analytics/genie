@@ -155,8 +155,6 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('accounts.switch', 'refuse', ['claude']),
         // The tray's Log in by provider (Tynn #896, 2b-2b): the host owner's too.
         row('logins.provider', 'refuse', ['claude']),
-        // One account's own sign-in (Tynn #1011): the host owner's.
-        row('accounts.signIn', 'refuse', ['account_x']),
         // The crash report (Tynn #897, 2c-2): the host owner's.
         row('crashReport.draft', 'refuse'),
         row('crashReport.send', 'refuse', ['the report', 'my notes']),

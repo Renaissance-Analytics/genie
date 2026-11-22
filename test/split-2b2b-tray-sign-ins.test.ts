@@ -50,7 +50,7 @@ describe('logins.provider: the tray’s Log in, a sign-in like the others', () =
     it('is a remote method, a write, one of SIGN_IN_METHODS (owner-only, the step-3 hook) and genie-host’s', () => {
         expect(protocol.REMOTE_METHODS as readonly string[]).toContain('logins.provider');
         expect(capabilityOf('logins.provider' as RemoteMethod)).toBe('write');
-        expect(protocol.SIGN_IN_METHODS as readonly string[]).toEqual(['providerLogin', 'logins.design', 'accounts.switch', 'logins.provider', 'accounts.signIn']); // + one account's own (Tynn #1011)
+        expect(protocol.SIGN_IN_METHODS as readonly string[]).toEqual(['providerLogin', 'logins.design', 'accounts.switch', 'logins.provider']);
         expect(HOST_ALONE_METHODS.has('logins.provider' as RemoteMethod)).toBe(true);
     });
 

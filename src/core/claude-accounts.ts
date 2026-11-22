@@ -100,3 +100,10 @@ export function respawnDecision(input: RespawnInput): RespawnDecision {
 export function stayedWords(input: { from: string; to: string; why: string }): string {
     return `The active Claude account is ${input.to} now, but this agent keeps running on ${input.from}: ${input.why}. Its conversation and work are unchanged.`;
 }
+
+/**
+ * NO TERMINAL FOR A SIGN-IN (Tynn #1011; the owner: "I should not see any terminals nor do we store login keys"). Signing in to
+ * an account with a folder of its own is prism-acp's hidden login, which opens Anthropic's page in the person's browser; until
+ * that ships, the Sign in action is shown, disabled, with these words.
+ */
+export const OWN_DIRECTORY_SIGN_IN_LATER = 'Signing in to this account opens Anthropic\'s sign-in page in your browser, with no terminal. That comes with the next prism-acp update.';
