@@ -92,6 +92,30 @@ describe('the master control', () => {
     });
 });
 
+describe('a slider a mouse can reach (the first VM proof: in a narrow Settings pane the master slider collapsed to nothing beside its two fixed buttons, and a press at 40% of it landed on its wrapper div)', () => {
+    const sliders = () => [...host.querySelectorAll('[data-react-fancy-slider]')] as HTMLElement[];
+    it('every slider — master and each level — keeps a minimum width, never min-w-0 (COUNTED: 1 + 26)', () => {
+        render({});
+        click(q('[data-action="sound-levels-toggle"]')!);
+        expect(sliders()).toHaveLength(1 + ALERT_KINDS.length);
+        for (const s of sliders()) {
+            expect(s.className).toContain('min-w-40');
+            expect(s.className).not.toContain('min-w-0');
+        }
+    });
+    it('the range input’s hit box is taller than its drawn track (h-5), so a press near the line still lands on it', () => {
+        render({});
+        click(q('[data-action="sound-levels-toggle"]')!);
+        for (const s of sliders()) expect(s.className).toContain('[&_input[type=range]]:h-5');
+    });
+    it('a row wraps rather than squeezing its slider: the master row and each level row are flex-wrap', () => {
+        render({});
+        click(q('[data-action="sound-levels-toggle"]')!);
+        expect(q('[data-sound-master]')!.className).toContain('flex-wrap');
+        for (const k of ALERT_KINDS) expect(q(`[data-sound-level="${k.kind}"]`)!.className, k.kind).toContain('flex-wrap');
+    });
+});
+
 describe('Advanced: a level per event', () => {
     it('is closed until its disclosure is clicked, then lists EVERY alert kind (COUNTED) with a slider and a play button', () => {
         render({});
