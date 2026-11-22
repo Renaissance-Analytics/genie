@@ -17,13 +17,21 @@ export interface AccountRecord {
     readonly legacy: boolean;
     readonly identity: AccountIdentity;
     readonly createdAt: string;
+    /**
+     * A CLAUDE ACCOUNT OF ITS OWN (Tynn #1011, prism-acp claudeAccounts): the configuration directory it signs in to and runs in.
+     * Absent = the CLI's default directory (`configDir: null` to prism-acp), as every account was before. Genie keeps this path,
+     * a label and what the CLI reported (email, organization); never a key, a token or a read of a credential file.
+     */
+    readonly configDir?: string;
+    /** What the person chose to sign in with there: a claude.ai subscription, or a Console login billed per token. */
+    readonly method?: 'subscription' | 'console';
 }
 
 /**
  * The home a provider runs in. R2 (Tynn #753): ONE home per provider, the provider's own normal one, never an environment of
  * Genie's making; this describes an account, it is not a launch input.
  */
-export type ProviderAccountHome = Pick<AccountRecord, 'provider' | 'home' | 'legacy'>;
+export type ProviderAccountHome = Pick<AccountRecord, 'provider' | 'home' | 'legacy' | 'configDir'>;
 
 /** S4 supplies ONLY fields returned by the provider's own status command. */
 export function accountLabel(email: string | null, ordinal: number): string {

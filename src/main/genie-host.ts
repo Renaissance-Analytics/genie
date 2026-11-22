@@ -44,7 +44,8 @@ import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, exitRecordOf, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
-import { providerBinary, realListModels, SessionHost } from './session-host.js';
+import { claudeLaunchConfigDir, providerBinary, realDescribeClaude, realListModels, SessionHost } from './session-host.js';
+import { ClaudeAccountsLive } from './claude-accounts-live.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
@@ -431,6 +432,8 @@ async function main(): Promise<void> {
     bootStep('settings', stepAt);
     // The host's account book (S1). Existing provider homes remain references, never read or moved.
     const accounts = await AccountsHost.open({ root: home, legacyHomes: legacyProviderHomes() });
+    // Every Claude account directory Genie made, kept in step: its history shared, its cleanupPeriodDays the default's (Tynn #1011).
+    accounts.syncClaudeDirs();
     const own = await openAgentStores(home, () => new Date().toISOString(), (id) => sessionsForInbox?.probe(id) ?? null, () => attentionLimitsFrom(settings.snapshot()));
     const drafts = await ChatDraftStore.open(home);
     bootStep('agent stores', stepAt);
@@ -1228,9 +1231,40 @@ async function main(): Promise<void> {
     let designAuthNow: DesignAuthBook | null = null;
     // Settings → Providers → Accounts (Tynn #484): rename, or forget (the signed-in account refused, saying so); a forgotten
     // account's readings leave the board. Only the book changes; no credential is touched.
+    // Each Claude account's live state, asked of Claude Code in its own directory (Tynn #1011, prism-acp `describe`/`compare`).
+    const claudeLive = new ClaudeAccountsLive({
+        accounts: () => accounts.list(),
+        describe: (dir) => realDescribeClaude(dir),
+        defaultDir: () => claudeLaunchConfigDir({}),
+        recordIdentity: (id, identity) => accounts.recordIdentity(id, identity),
+        changed: () => { accountsChangedNow?.(); },
+    });
+    void claudeLive.refresh();
+    // EVERY SWITCH TELLS THE AGENTS THEIR NEW ROOM (Tynn #1011, the owner's requirement): the new account's last reading,
+    // published at once and put ahead of each running agent's next turn; its limit holds lifted.
+    const announceSwitch = (provider: string, accountId: string): void => {
+        const account = accounts.get(accountId);
+        if (!account) return;
+        const reading = headroomFeedNow?.accounts().find((r) => r.provider === provider && r.accountId === accountId);
+        host.accountSwitched(provider, { account, headroom: reading?.room ?? null });
+    };
     const accountsAct = async (action: AccountsAction): Promise<AccountsActResult> => {
         try {
             if (action.kind === 'rename') await accounts.rename(action.id, action.label);
+            else if (action.kind === 'add-claude') { await accounts.addClaude(action.label !== undefined ? { method: action.method, label: action.label } : { method: action.method }); accountsChangedNow?.(); }
+            else if (action.kind === 'set-active') {
+                // SWITCH = CHOOSE (Tynn #1011): the account becomes the active one; every agent draws on it from its next clean idle,
+                // on the same thread (SessionHost.accountChanged). Readings from then on are this account's.
+                const target = accounts.get(action.id);
+                if (!target) throw new Error('Genie does not know that account.');
+                await accounts.setActive(target.provider, target.id);
+                readingAttribution.signedIn(target.provider);
+                announceSwitch(target.provider, target.id);
+                host.accountChanged(target.provider);
+                void providerHealth.refresh(target.provider);
+                void claudeLive.refresh();
+                accountsChangedNow?.();
+            }
             else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); saveBoardNow?.(); }
             return { ok: true };
         } catch (error) {
@@ -1238,7 +1272,7 @@ async function main(): Promise<void> {
         }
     };
     // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
-    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id]))), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() });
+    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000)), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view() });
     // ...the same book on the one protocol (Tynn #895), answered here for every client.
     accountsPortNow = { list: () => accountsSnapshot(), act: (action) => accountsAct(action), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
     // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
@@ -1682,7 +1716,11 @@ async function main(): Promise<void> {
         login: switchLogin,
         active: (provider) => { const a = isAcpProvider(provider) ? accounts.activeFor(provider) : null; return a ? { id: a.id, label: a.label } : { id: '', label: provider }; },
         readIdentity: (provider) => { if (!isAcpProvider(provider)) return Promise.resolve(); readingAttribution.signedIn(provider); return accountIdentity.refreshProvider(provider); },
-        emit: (outcome) => { engine.callback({ name: 'toolSignal', signal: accountSwitchSignal(outcome) }); },
+        emit: (outcome) => {
+            // A switch by signing in again (Tynn #753) is a switch too: the agents are told their new room (Tynn #1011).
+            if (outcome.kind === 'switched') announceSwitch(outcome.provider, outcome.accountId);
+            engine.callback({ name: 'toolSignal', signal: accountSwitchSignal(outcome) });
+        },
     });
     const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
