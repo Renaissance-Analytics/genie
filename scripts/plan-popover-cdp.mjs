@@ -85,7 +85,15 @@ class Cdp {
         await new Promise((resolveOpen, reject) => { cdp.#socket.addEventListener('open', resolveOpen, { once: true }); cdp.#socket.addEventListener('error', () => reject(new Error('CDP socket error')), { once: true }); });
         return cdp;
     }
-    send(method, params = {}) { const id = this.#next++; return new Promise((r) => { this.#pending.set(id, r); this.#socket.send(JSON.stringify({ id, method, params })); }); }
+    /** Every call is bounded: measured on the Azure VM, a mouseWheel dispatch went unanswered and held the run to its deadline. */
+    send(method, params = {}, ms = 15_000) {
+        const id = this.#next++;
+        return new Promise((r, reject) => {
+            const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error(`no answer to ${method} within ${ms} ms`)); }, ms);
+            this.#pending.set(id, (frame) => { clearTimeout(timer); r(frame); });
+            this.#socket.send(JSON.stringify({ id, method, params }));
+        });
+    }
     async evaluate(expression) {
         const frame = await Promise.race([this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }), sleep(30_000).then(() => { throw new Error(`no answer in 30 s: ${expression.slice(0, 80)}`); })]);
         if (frame.error) throw new Error(`CDP error: ${JSON.stringify(frame.error)}`);
@@ -252,19 +260,31 @@ try {
     const over = { x: Math.round((opened.scrollBox.left + opened.scrollBox.right) / 2), y: Math.round((opened.scrollBox.top + opened.scrollBox.bottom) / 2) };
     await mouse('mouseMoved', over);
     await sleep(400);
-    for (let i = 0; i < 6; i++) { await mouse('mouseWheel', over, { deltaX: 0, deltaY: -1000 }); await sleep(120); }
+    // The wheel first, as a person scrolls. If the page does not answer a wheel dispatch (measured once on the Azure VM:
+    // it never answered), the list is scrolled by its scrollTop instead, and the checks below say which it was.
+    let by = 'the mouse wheel';
+    const wheel = async (deltaY, to) => {
+        if (by === 'the mouse wheel') {
+            try { for (let i = 0; i < 8; i++) { await mouse('mouseWheel', over, { deltaX: 0, deltaY }); await sleep(120); } return; } catch (error) {
+                by = 'scrollTop (the wheel dispatch was not answered)';
+                proof.notes.push(`the wheel: ${String(error?.message ?? error)}; the list is scrolled by its scrollTop instead`);
+            }
+        }
+        await ev(`(() => { const s = document.querySelector('[data-plan-scroll]'); s.scrollTop = ${to}; return true; })()`);
+    };
+    await wheel(-1000, 0);
     await sleep(600);
     const top = await measure();
     proof.seen.top = top;
-    check('7. wheeled up: the list is at its top, step 1 in view, the popover still open', top.open && top.scrollTop === 0 && top.firstInView, { scrollTop: top.scrollTop });
+    check(`7. scrolled up by ${by}: the list is at its top, step 1 in view, the popover still open`, top.open && top.scrollTop === 0 && top.firstInView, { scrollTop: top.scrollTop });
     check('8. and the header did not move', top.open && top.head.top === opened.head.top && top.pop.top === opened.pop.top, { head: top.head, pop: top.pop });
     await shot('02-top');
 
-    for (let i = 0; i < 8; i++) { await mouse('mouseWheel', over, { deltaX: 0, deltaY: 1000 }); await sleep(120); }
+    await wheel(1000, 's.scrollHeight');
     await sleep(600);
     const end = await measure();
     proof.seen.scrolled = end;
-    check('9. wheeled down: the list is at its end, the last step in view, the popover still open', end.open && Math.abs(end.scrollTop - (end.scrollHeight - end.clientHeight)) <= 2 && end.lastInView && end.scrollTop > opened.scrollTop, { scrollTop: end.scrollTop, last: LAST });
+    check(`9. scrolled down by ${by}: the list is at its end, the last step in view, the popover still open`, end.open && Math.abs(end.scrollTop - (end.scrollHeight - end.clientHeight)) <= 2 && end.lastInView && end.scrollTop > opened.scrollTop, { scrollTop: end.scrollTop, last: LAST });
     check('10. and the header is still in place, the popover still whole on the screen', end.open && end.head.top === opened.head.top && end.pop.bottom <= end.viewport, { head: end.head, pop: end.pop });
     await shot('03-scrolled');
 } catch (error) {
