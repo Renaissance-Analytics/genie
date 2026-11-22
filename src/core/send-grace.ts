@@ -7,8 +7,13 @@ import type { DraftHandle } from './plan-pill.js';
  * A Claude run takes a message mid-turn at once (`AgentSession.deliver` hands it to the provider, which reads it at its
  * next step), so once the host has it there is nothing left to take back. The window therefore holds a message typed to
  * a BUSY agent for `UNDO_SEND_MS` before it sends it, with Undo (the words go back into the composer) and Send now. An
- * idle agent's message starts a turn the person is waiting for, and goes at once; so does one with files, whose bytes
- * the composer's kept draft owns until the send.
+ * idle agent's message starts a turn the person is waiting for, and goes at once.
+ *
+ * ESC UNSENDS (Tynn #1029; the owner: "the esc key should unsend while it's in the buffer time"). A bare Esc in the chat
+ * takes back that chat's newest held message (`unsendOnEscape`). The window is the ONLY hold: nothing reaches the host
+ * until it ends, so unsending cancels delivery at its source and no other window or client ever saw the message. A
+ * message with files is held too, with the composer's whole draft (`HeldSend.draft`) and its picks (`attachments`), so it
+ * comes back files and all; its stored files are released only once it really goes.
  *
  * PURE: timers and the clock are injected.
  */
@@ -23,11 +28,25 @@ export interface HeldSend {
     readonly until: number;
     /** It has gone to the host and the answer is not back: drawn, with nothing left to undo. */
     readonly sending: boolean;
+    /** The composer's draft as it was sent (text, pills, attachments): what an unsend puts back. Absent: the text alone. */
+    readonly draft?: ChatDraft | null | undefined;
+    /** The files picked with it (react-fancy `PromptAttachment`s): what goes when the window ends. */
+    readonly attachments?: readonly HeldFile[] | undefined;
 }
 
-/** Whether this send is held for the grace window: a busy agent, and text only. */
+/** One file held with a message: react-fancy's `PromptAttachment`, by shape. */
+export interface HeldFile {
+    readonly id: string;
+    readonly name: string;
+    readonly bytes?: number | undefined;
+    readonly type?: string | undefined;
+    readonly file?: File | undefined;
+    readonly ref?: string | undefined;
+}
+
+/** Whether this send is held for the grace window: a busy agent's, files and all (Tynn #1029). */
 export function holdsSend(o: { busy: boolean; files: number }): boolean {
-    return o.busy && o.files === 0;
+    return o.busy;
 }
 
 export interface SendGraceOptions {
@@ -56,8 +75,12 @@ export class SendGrace {
         this.#clearTimer = options.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
     }
 
-    hold(chat: string, text: string): HeldSend {
-        const h: HeldSend = { id: `held-${++this.#seq}`, chat, text, until: this.#now() + this.#ms, sending: false };
+    hold(chat: string, text: string, more: { draft?: ChatDraft | null; attachments?: readonly HeldFile[] } = {}): HeldSend {
+        const h: HeldSend = {
+            id: `held-${++this.#seq}`, chat, text, until: this.#now() + this.#ms, sending: false,
+            ...(more.draft ? { draft: more.draft } : {}),
+            ...(more.attachments && more.attachments.length > 0 ? { attachments: more.attachments } : {}),
+        };
         this.#items = [...this.#items, h];
         this.#timers.set(h.id, this.#setTimer(() => this.#go(h.id), this.#ms));
         this.#changed();
@@ -72,6 +95,12 @@ export class SendGrace {
         this.#items = this.#items.filter((x) => x.id !== id);
         this.#changed();
         return h;
+    }
+
+    /** Esc (Tynn #1029): take back the NEWEST message of this chat still waiting, or `null` when none is. */
+    unsendLatest(chat: string): HeldSend | null {
+        const h = this.#items.filter((x) => x.chat === chat && !x.sending).at(-1);
+        return h ? this.undo(h.id) : null;
     }
 
     /** Send it now, without waiting out the window. `false` when it is not held. */
@@ -129,25 +158,65 @@ export class SendGrace {
     }
 }
 
-/** The composer's draft with the undone words back in it, ahead of anything typed since. */
-export function draftWithUndone(current: ChatDraft | null, text: string): ChatDraft {
-    const base = current ?? { v: 1 as const, text: '', pills: [], attachments: [] };
-    return { ...base, text: base.text.trim() === '' ? text : `${text}\n${base.text}` };
+/** A key press, as React or the DOM hands it over. */
+export interface UnsendKey {
+    readonly key: string;
+    readonly shiftKey: boolean;
+    readonly ctrlKey: boolean;
+    readonly altKey: boolean;
+    readonly metaKey: boolean;
+    readonly defaultPrevented: boolean;
+    readonly isComposing?: boolean | undefined;
+    /** React keeps the IME state on the native event. */
+    readonly nativeEvent?: { readonly isComposing?: boolean } | undefined;
+    preventDefault(): void;
+    stopPropagation(): void;
 }
 
 /**
- * Put undone (or refused) words back in their chat's composer, ahead of what was typed since, and in its kept draft. The
+ * ESC UNSENDS (Tynn #1029). A bare Esc in a chat holding a message still in its window takes the newest one back, hands
+ * it to `putBack`, and consumes the key. Anything else (a modifier, an IME composition, an Esc something inside already
+ * handled, such as the composer closing its command menu, a chat with nothing waiting, a message already Sending) is
+ * left alone, so Esc keeps its normal meaning: in the Agent view, blur the field, then the Inspector, then the Dashboard.
+ */
+export function unsendOnEscape(e: UnsendKey, grace: Pick<SendGrace, 'unsendLatest'>, chat: string | null, putBack: (h: HeldSend) => void): boolean {
+    if (e.key !== 'Escape' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.defaultPrevented || e.isComposing === true || e.nativeEvent?.isComposing === true || chat === null) return false;
+    const h = grace.unsendLatest(chat);
+    if (!h) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    putBack(h);
+    return true;
+}
+
+/**
+ * The composer's draft with the undone message back in it, ahead of anything typed since: its words, and (a whole draft,
+ * Tynn #1029) its pills and attachments before the ones added since.
+ */
+export function draftWithUndone(current: ChatDraft | null, undone: string | ChatDraft): ChatDraft {
+    const base = current ?? { v: 1 as const, text: '', pills: [], attachments: [] };
+    const back: Pick<ChatDraft, 'text' | 'pills' | 'attachments'> = typeof undone === 'string' ? { text: undone, pills: [], attachments: [] } : undone;
+    return {
+        ...base,
+        text: base.text.trim() === '' ? back.text : back.text.trim() === '' ? base.text : `${back.text}\n${base.text}`,
+        pills: [...back.pills, ...base.pills.filter((p) => !back.pills.some((q) => q.id === p.id))],
+        attachments: [...back.attachments, ...base.attachments.filter((a) => !back.attachments.some((b) => b.id === a.id))],
+    };
+}
+
+/**
+ * Put an undone (or refused) message back in its chat's composer (its words, or its whole draft), ahead of what was typed since, and in its kept draft. The
  * caret moves only when `focus` — the person's own Undo click; a send refused after the window never takes it (genie#1235).
  */
 export function putBackUndone(
     handles: ReadonlyMap<string, DraftHandle>,
     chat: string,
-    text: string,
+    undone: string | ChatDraft,
     focus: boolean,
     keep: { initial: (chat: string) => ChatDraft | null; change: (chat: string, draft: ChatDraft) => void } | null,
 ): ChatDraft {
     const handle = handles.get(chat);
-    const next = draftWithUndone(handle?.getDraft() ?? keep?.initial(chat) ?? null, text);
+    const next = draftWithUndone(handle?.getDraft() ?? keep?.initial(chat) ?? null, undone);
     handle?.setDraft(next, { focus });
     keep?.change(chat, next);
     return next;

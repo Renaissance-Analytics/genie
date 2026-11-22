@@ -28,7 +28,7 @@ import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
-import { SendGrace, holdsSend, putBackUndone, type HeldSend } from '../../core/send-grace.js';
+import { SendGrace, holdsSend, putBackUndone, unsendOnEscape, type HeldFile, type HeldSend } from '../../core/send-grace.js';
 import { takeBackQueued, type QueuedAction, type QueuedResolve } from '../../core/queued-withdraw.js';
 import { ChatHeldSends } from './ChatHeldSend.js';
 import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
@@ -409,6 +409,14 @@ export function ComposerSendError({ chat, error, onChooseProviderProgram }: { ch
 /** The stored files a sent message carried (genie#1261): released once the message holds their bytes. */
 const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatMap((a) => (typeof a.ref === 'string' ? [a.ref] : []));
 
+/** An unsent message's file, back for the composer that asks (Tynn #1029): taken once, as the File react-fancy keeps. */
+function restoreHeld(held: Map<string, File>, entry: ChatDraftFile): File | undefined {
+    const file = held.get(entry.id);
+    if (!file) return undefined;
+    held.delete(entry.id);
+    return file;
+}
+
 /** Drawn only when something it shows changed (renderer/stable-view.tsx, genie#1340): never for another agent's push. */
 export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
@@ -483,23 +491,37 @@ function ChatFlyoutBody({
      */
     const onSendRef = useRef(onSend);
     onSendRef.current = onSend;
-    // The words back in their chat's composer (core/send-grace.ts `putBackUndone`); only Undo, the person's click, focuses it.
-    const putBack = (chat: string, text: string, focus: boolean): void => {
-        putBackUndone(composerRefs.current, chat, text, focus,
-            keeper && chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
+    const keeperRef = useRef(keeper);
+    keeperRef.current = keeper;
+    /*
+     * A HELD MESSAGE'S FILES (Tynn #1029): the Files picked with it, by attachment id, while it waits. An unsend puts its
+     * draft back, and react-fancy asks `restoreAttachment` for each file the draft names: these answer first, so a file
+     * comes back even where no draft store keeps it. Forgotten once the message has really gone.
+     */
+    const heldFiles = useRef(new Map<string, File>());
+    // The message back in its chat's composer (core/send-grace.ts `putBackUndone`): its whole draft when the composer gave
+    // one, else its words. Only the person's own Undo or Esc focuses it.
+    const putBack = (h: HeldSend, focus: boolean): void => {
+        putBackUndone(composerRefs.current, h.chat, h.draft ?? h.text, focus,
+            keeper && h.chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
     };
     const putBackRef = useRef(putBack);
     putBackRef.current = putBack;
-    const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
-        // Refused after the window: the words go back to the composer, with why — never lost.
-        if (out && out.kind === 'failed') {
-            putBackRef.current(h.chat, h.text, false);
-            setSendErrors((e) => withSendError(e, h.chat, out.reason));
-        }
-    }, (error: unknown) => {
-        putBackRef.current(h.chat, h.text, false);
-        setSendErrors((e) => withSendError(e, h.chat, errorWords(error)));
-    })));
+    const [grace] = useState(() => new SendGrace((h: HeldSend) => {
+        const picked = h.attachments ?? [];
+        const kept = keeperRef.current;
+        return submitFromComposer({
+            read: () => readAttachments(namePastedImages(h.text, picked), kept ? (ref) => kept.readRef(ref) : undefined),
+            send: (files) => onSendRef.current(h.text, files, h.chat),
+            release: () => kept?.sent(h.chat, sentRefs(picked)),
+        }).then((ack) => {
+            // Refused after the window: the message goes back to the composer, with why — never lost.
+            if (ack) {
+                putBackRef.current(h, false);
+                setSendErrors((e) => withSendError(e, h.chat, ack.error));
+            } else for (const a of picked) heldFiles.current.delete(a.id);
+        });
+    }));
     const [, setHeldSeq] = useState(0);
     useEffect(() => {
         const off = grace.subscribe(() => setHeldSeq((n) => n + 1));
@@ -507,7 +529,7 @@ function ChatFlyoutBody({
     }, [grace]);
     const undoSend = (id: string): void => {
         const h = grace.undo(id);
-        if (h) putBack(h.chat, h.text, true);
+        if (h) putBack(h, true);
     };
     // What the end of the thread IS: its agent, how many messages, and how long the last one is — a reply is one row that
     // GROWS as the agent writes (beta.33 item 6), and keyed on the count alone its words were written below a chat that
@@ -646,6 +668,12 @@ function ChatFlyoutBody({
             data-chat-loaded={thread?.loaded ? 'true' : 'false'}
             // Whose chat this is — the smoke reads it after a Dashboard row click (genie#1209).
             data-chat-subject={thread?.agentId ?? ''}
+            // Whether its agent is mid-turn, so a message sent now waits out the undo window (the Esc-unsend proof reads it).
+            data-chat-busy={busy ? 'true' : 'false'}
+            // ESC UNSENDS (Tynn #1029, core/send-grace.ts): the newest message of this chat still in its window comes back
+            // into the composer and never goes. Bubbled, so a menu inside that took Esc keeps it; with nothing waiting it
+            // is left alone, and Esc keeps its meaning (the Agent view's blur / Inspector / Dashboard).
+            onKeyDown={(e) => { unsendOnEscape(e, grace, activeChat, (h) => putBack(h, true)); }}
             style={{ width }}
             className="relative flex min-h-0 min-w-0 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]"
         >
@@ -1006,8 +1034,9 @@ function ChatFlyoutBody({
                         {...(keeper && chat !== '' ? {
                             ...(keeper.initial(chat) ? { defaultDraft: keeper.initial(chat)! } : {}),
                             persistAttachment: (file: File) => keeper.persistFile(file),
-                            restoreAttachment: (entry: ChatDraftFile) => keeper.restoreFile(entry),
                         } : {})}
+                        /* A file of an unsent message first (Tynn #1029), then the draft store’s. */
+                        restoreAttachment={(entry: ChatDraftFile) => restoreHeld(heldFiles.current, entry) ?? (keeper && chat !== '' ? keeper.restoreFile(entry) : undefined)}
                         /* Each change: to the kept draft, and to the other people on this agent (Tynn #730). A window that keeps no
                            drafts (a window driving another machine) still reports what is typed. Only the chat on screen is
                            typed in: a hidden composer, holding its kept draft, never reports it as typing. */
@@ -1020,9 +1049,12 @@ function ChatFlyoutBody({
                          */
                         onSubmit={(text, picked) => {
                             setSendErrors((e) => withSendError(e, chat, null));
-                            // To a busy agent, text only: held for the undo window; the composer empties now (Tynn #745).
-                            if (holdsSend({ busy, files: picked.length }) && text.trim() !== '') {
-                                grace.hold(chat, text);
+                            // To a busy agent: held for the undo window, files and all; the composer empties now (Tynn #745,
+                            // #1029). Its draft as sent is what an unsend puts back; its Files wait here for that.
+                            if (holdsSend({ busy, files: picked.length }) && (text.trim() !== '' || picked.length > 0)) {
+                                const held: readonly HeldFile[] = picked;
+                                for (const a of held) if (a.file) heldFiles.current.set(a.id, a.file);
+                                grace.hold(chat, text, { draft: composerRefs.current.get(chat)?.getDraft() ?? null, attachments: held });
                                 // It is drawn at the end of the thread: a reader following there sees it, as a sent one.
                                 if (followRef.current) setTimeout(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, 0);
                                 return Promise.resolve(undefined);
