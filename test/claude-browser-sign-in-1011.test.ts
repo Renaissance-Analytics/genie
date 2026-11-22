@@ -18,7 +18,8 @@ const ctx = { connectionId: 'c1', origin: 'local-window', profile: 'desktop', is
 const rec = (id: string, extra: Partial<AccountRecord> = {}): AccountRecord => ({ id, provider: 'claude', label: 'Team API', labelEdited: true, home: '/home/.claude', legacy: false,
     identity: { name: null, email: 'team@example.invalid', plan: null }, createdAt: '2026-11-21T00:00:00Z', configDir: `/g/accounts/claude/${id}`, method: 'console', ...extra });
 const OWN = rec(`account_${'1'.repeat(32)}`);
-const HOME = rec(`account_${'2'.repeat(32)}`, { label: 'Home', identity: { name: null, email: 'home@example.invalid', plan: null }, configDir: undefined, method: undefined });
+const { configDir: _homeDir, method: _homeMethod, ...HOME_BASE } = rec(`account_${'2'.repeat(32)}`, { label: 'Home', identity: { name: null, email: 'home@example.invalid', plan: null } });
+const HOME: AccountRecord = HOME_BASE;
 const ADDED = rec(`account_${'3'.repeat(32)}`, { label: 'Account 3', identity: { name: null, email: null, plan: null }, method: 'subscription' });
 const URL_OK = 'https://claude.ai/oauth/authorize?code=true&state=abc';
 

@@ -209,7 +209,7 @@ describe('S11: a reset placeholder is not a blank row (the coordinator, 2026-11-
 describe('S11: wired through', () => {
     it('genie-host acts on the book and the board; the one protocol carries it (accounts.act, Tynn #895); Shell hands the accounts to Settings', () => {
         expect(source('src/main/genie-host.ts')).toMatch(/accountsAct: \(action\) => accountsAct\(/);
-        expect(source('src/main/genie-host.ts')).toMatch(/act: \(action\) => accountsAct\(action\)/);
+        expect(source('src/main/genie-host.ts')).toMatch(/act: \(action, context\) => accountsAct\(action, context\)/);
         expect(source('src/renderer/remote-bridge.ts')).toMatch(/accountsAct: \(action: AccountsAction\) => answer<AccountsActResult>\('accounts\.act', action\)/);
         expect(source('src/main/preload.ts')).not.toMatch(/genie:accounts-act/);
         expect(source('src/renderer/Shell.tsx')).toMatch(/<AccountsSettings|accountsSettings=\{/);

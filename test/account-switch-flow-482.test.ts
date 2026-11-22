@@ -155,10 +155,10 @@ describe('S9: the login host tells a switch how it ended', () => {
     }
     it('the switch terminal ends signed in: the switch is told signed in (and the sign-in still brings signed-out agents back)', async () => {
         const f = fakes(0);
-        f.host.startSwitch('claude');
+        f.host.startSwitch('codex');
         f.exit('t1');
-        await vi.waitFor(() => expect(f.ended).toEqual([['claude', true]]));
-        expect(f.signedIn).toEqual(['claude']);
+        await vi.waitFor(() => expect(f.ended).toEqual([['codex', true]]));
+        expect(f.signedIn).toEqual(['codex']);
         expect(f.closed).toEqual(['t1']);
     });
     it('the switch terminal ends signed out: the switch is told signed out', async () => {
@@ -170,15 +170,15 @@ describe('S9: the login host tells a switch how it ended', () => {
     });
     it('closing the switch window IS its end: the status is asked, the switch is told, the terminal and folder go', async () => {
         const f = fakes(0);
-        f.host.startSwitch('claude');
+        f.host.startSwitch('codex');
         f.host.cancel('t1');
-        await vi.waitFor(() => expect(f.ended).toEqual([['claude', true]]));
+        await vi.waitFor(() => expect(f.ended).toEqual([['codex', true]]));
         expect(f.statuses).toHaveLength(1);
         expect(f.closed).toEqual(['t1']);
     });
     it('CONTROL: cancelling an ordinary sign-in asks no status and signs nobody in', async () => {
         const f = fakes(0);
-        f.host.start('claude');
+        f.host.start('codex');
         f.host.cancel('t1');
         await new Promise((r) => setTimeout(r, 10));
         expect(f.statuses).toEqual([]);

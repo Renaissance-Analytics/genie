@@ -128,8 +128,8 @@ describe('accountsActionOf: the new account actions, checked', () => {
     it('accepts add (subscription or console) and switch', () => {
         expect(accountsActionOf({ kind: 'add-claude', method: 'console' })).toEqual({ kind: 'add-claude', method: 'console' });
         expect(accountsActionOf({ kind: 'add-claude', method: 'subscription', label: 'Work' })).toEqual({ kind: 'add-claude', method: 'subscription', label: 'Work' });
-        // Signing in opens a window for the person: that is accounts.signIn (a sign-in method), never an account action.
-        expect(accountsActionOf({ kind: 'sign-in', id: 'account_x' })).toBeNull();
+        // Signing in is the browser one (prism-acp login(), Tynn #1011): an account action, no window, no terminal.
+        expect(accountsActionOf({ kind: 'sign-in', id: 'account_x' })).toEqual({ kind: 'sign-in', id: 'account_x' });
         expect(accountsActionOf({ kind: 'set-active', id: 'account_x' })).toEqual({ kind: 'set-active', id: 'account_x' });
     });
     it('refuses anything else', () => {

@@ -228,8 +228,9 @@ describe('the login window', () => {
         f.exit('t99', 0);
         await new Promise((r) => setTimeout(r, 10));
         expect(f.ended()).toBe(0);
-        f.host.start('claude');
-        expect(f.opened[1]!.command).toBe('claude auth login');
+        // Claude signs in in the browser now (Tynn #1011); another provider's login still runs its own command.
+        f.host.start('codex');
+        expect(f.opened[1]!.command).toBe('codex login');
     });
 
     it('the notice: Log in to Claude Design, type /design-login and follow it, then close this window', () => {

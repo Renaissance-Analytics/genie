@@ -48,7 +48,6 @@ import { claudeLaunchConfigDir, providerBinary, realDescribeClaude, realListMode
 import { ClaudeAccountsLive } from './claude-accounts-live.js';
 import { ClaudeSignIns, realClaudeLogin } from './claude-sign-ins.js';
 import { removeAccountDir } from './claude-account-dirs.js';
-import type { CallContext } from '../core/remote-protocol.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
