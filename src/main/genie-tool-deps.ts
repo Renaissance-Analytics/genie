@@ -5,6 +5,7 @@ import type { Liveness } from '../core/liveness.js';
 import { agentAddress } from '../core/inbox.js';
 import { CREATE_AGENT_ACTION, type AgentToolsDeps } from './mcp-tools-agents.js';
 import { WORKSPACE_TABS_ACTION } from './mcp-tools-workspace-tabs.js';
+import { AGENT_MCP_ACTION, type AgentMcpToolDeps } from './mcp-tools-agent-mcp.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
 import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
@@ -34,7 +35,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction | typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction | typeof PLAYWRIGHT_INSTALL_ACTION | typeof AGENT_MCP_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
@@ -86,6 +87,8 @@ export interface GenieToolParts {
     readonly pages?: { open(): readonly DrivablePage[] };
     /** `playwright` (Tynn #846): genie-host's installer and what is on disk. Absent = no such tool (the window, doctor mode). */
     readonly playwright?: PlaywrightToolPort;
+    /** `agentMcp` (Tynn #1033): a workspace's sites and what it offers, and the host's own writes. Absent = no such tool (the window, doctor mode). */
+    readonly agentMcp?: Pick<AgentMcpToolDeps, 'sites' | 'candidates' | 'workspaceMcpOff' | 'setAppMcp' | 'setMcpServer'>;
 }
 
 /**
@@ -175,6 +178,15 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 sites: (ws: string) => p.workspaceTabs!.sites(ws),
                 pages: () => p.pages!.open(),
                 approve: (caller: Caller, action: PageAction, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
+            },
+        } : {}),
+        ...(p.agents && p.agentMcp ? {
+            agentMcp: {
+                resolveCaller: p.resolveCaller,
+                roster: p.roster,
+                defaultAgentOf: (ws: string) => p.agents!.defaultAgentOf(ws),
+                approve: (caller: Caller, action: typeof AGENT_MCP_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
+                ...p.agentMcp,
             },
         } : {}),
         ...(p.playwright ? {

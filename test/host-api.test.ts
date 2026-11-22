@@ -80,6 +80,7 @@ function fakes() {
             setManageTabs: async (id, on) => { calls.push(`agent-tabs:${id}:${on}`); return { ok: true }; },
             setDrivePages: async (id, on) => { calls.push(`agent-pages:${id}:${on}`); return { ok: true }; },
             setMcpServer: async (id, name, on) => { calls.push(`agent-mcp:${id}:${String(name)}:${String(on)}`); return { ok: true }; },
+            setAppMcp: async (id, change) => { calls.push(`agent-app-mcp:${id}:${JSON.stringify(change)}`); return { ok: true }; },
             setIssueWatch: async (id, setting) => { calls.push(`agent-issue-watch:${id}:${JSON.stringify(setting)}`); return { ok: true }; },
             setPermissions: async (id, permissions) => { calls.push(`agent-permissions:${id}:${permissions}`); return { ok: true }; },
             setModel: async (id, model) => { calls.push(`agent-model:${id}:${model}`); return { ok: true }; },

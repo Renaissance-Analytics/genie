@@ -135,6 +135,7 @@ import { agentCapFrom, HUMAN } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
+import { appMcpCandidates, appMcpServersFor } from '../core/app-mcp.js';
 import { createThroughAddAgent } from './mcp-tools-agents.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
@@ -1578,6 +1579,18 @@ async function main(): Promise<void> {
         endToolCalls: (agentId, intent) => toolCalls.end(agentId, intent),
         // What the agent's workspace has off by default (Tynn #628), read from the registry at each launch.
         workspaceMcpOffFor: (record) => hostRegistry.workspaceMcpOff(record.workspaceId),
+        // ITS APP MCP SERVERS (Tynn #1033): from its CURRENT record, through this host's sites and the router's table now (a
+        // site's port changes when it restarts), and none in a workspace that is not trusted. Each left out is logged, why.
+        appMcpServersFor: (record) => {
+            const got = appMcpServersFor(hostRegistry.find(record.id as AgentId) ?? record, {
+                sites: hostingStack?.sites.list(record.workspaceId) ?? [],
+                routes: hostingStack?.sites.routes() ?? [],
+                trusted: !hostUntrustedNow(record),
+                workspaceOff: hostRegistry.workspaceMcpOff(record.workspaceId),
+            });
+            for (const left of got.skipped) lifecycleLog(`${record.name}: app MCP server ${left.name} left out: ${left.reason}`);
+            return got.servers;
+        },
         // A WORKSPACE NOT TRUSTED (genie#1519): its agent gets Genie's own words, never the folder's — and with no hosting
         // to read a verdict, no workspace is trusted.
         untrustedFilesFor: async (record) => {
@@ -1954,8 +1967,13 @@ async function main(): Promise<void> {
             });
         },
     });
+    // AN AGENT'S APP MCP SERVERS (Tynn #1033): what its workspace's sites and kept processes offer, read now, for its
+    // settings and for the default agent's `agentMcp`.
+    const appMcpSites = (workspaceId: string) => hostingStack?.sites.list(workspaceId) ?? [];
+    const appMcpOffers = (workspaceId: string, record: AgentRecord) => appMcpCandidates(appMcpSites(workspaceId), (processBookNow?.kept() ?? []).filter((p) => p.workspaceId === workspaceId), record.appMcp);
     phoneApi = hostAloneApi({
         hostName: hostname(),
+        appMcp: { sites: appMcpSites, candidates: appMcpOffers },
         features: hostFeatures,
         registry: phoneRegistry,
         engine: () => host,
@@ -2363,6 +2381,21 @@ async function main(): Promise<void> {
         registry: hostRegistry,
         // createAgent, once the person approved (Tynn #1015): this host's own Add agent (project.json, AGENT.md, its registry),
         // with or without a window.
+        // agentMcp, the default agent's (Tynn #1033): the list it checked onto the record, the switch through agents.setMcpServer.
+        agentMcp: {
+            sites: appMcpSites,
+            candidates: appMcpOffers,
+            workspaceMcpOff: (workspaceId) => hostRegistry.workspaceMcpOff(workspaceId),
+            setAppMcp: async (id, list) => {
+                const updated = await phoneRegistry.setAppMcp(id as AgentId, list);
+                phoneRegistry.touch();
+                return updated ? { ok: true } : { ok: false, reason: 'unknown agent' };
+            },
+            setMcpServer: async (id, name, on) => {
+                const answer = (phoneApi ? await phoneApi.invoke('agents.setMcpServer', [id, name, on]) : null) as { ok?: unknown; reason?: unknown } | null;
+                return answer?.ok === true ? { ok: true } : { ok: false, reason: typeof answer?.reason === 'string' ? answer.reason : 'Genie’s agents are still starting' };
+            },
+        },
         createAgent: createThroughAddAgent((method, args) => (phoneApi ? phoneApi.invoke(method, args) : Promise.resolve({ ok: false, reason: 'Genie’s agents are still starting' })), (id) => phoneRegistry.find(id as AgentId)),
         probe: (id) => host.probe(id),
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,

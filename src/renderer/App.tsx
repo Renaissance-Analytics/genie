@@ -1719,7 +1719,13 @@ function DesktopApp({ bridge }: AppProps) {
               manageTabs: detail?.agent.manageTabs === true,
               drivePages: detail?.agent.drivePages === true,
               // Its MCP servers (Tynn #628): Genie's own, every one a session reported, and the ones switched off.
-              mcp: mcpRows({ mcpOff: detail?.agent.mcpOff, mcpOn: detail?.agent.mcpOn, mcpSeen: detail?.agent.mcpSeen }, detail?.agent.workspaceMcpOff ?? []),
+              // Its app servers (Tynn #1033) are listed too, so each has its switch before a session has reported it.
+              mcp: mcpRows({ mcpOff: detail?.agent.mcpOff, mcpOn: detail?.agent.mcpOn, mcpSeen: [...(detail?.agent.mcpSeen ?? []), ...(detail?.agent.appMcp ?? []).map((e) => e.name)] }, detail?.agent.workspaceMcpOff ?? []),
+              appMcp: {
+                  entries: detail?.agent.appMcp ?? [],
+                  candidates: detail?.agent.appMcpCandidates ?? [],
+                  onChange: (change) => resolvedBridge.agents.setAppMcp(agentId, change).then((r) => (r.ok ? { ok: true as const } : { ok: false as const, reason: r.reason }), (e: unknown) => ({ ok: false as const, reason: e instanceof Error ? e.message : String(e) })),
+              },
               onSetMcpServer: (name, on) => resolvedBridge.agents.setMcpServer(agentId, name, on).then((r) => (r.ok ? { ok: true as const } : { ok: false as const, reason: r.reason }), (e: unknown) => ({ ok: false as const, reason: e instanceof Error ? e.message : String(e) })),
               ...(detail?.agent.issueWatch ? { issueWatch: detail.agent.issueWatch } : {}),
               permissions: detail?.agent.permissions ?? 'all',

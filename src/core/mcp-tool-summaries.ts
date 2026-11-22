@@ -35,6 +35,7 @@ export const BUILTIN_TOOL_SUMMARIES: Readonly<Record<string, { readonly family: 
     agentinbox: { family: 'messaging', summary: 'Find other agents, message them, read replies.' },
     mail: { family: 'messaging', summary: 'Read and send email through the workspace mailbox.' },
     createAgent: { family: 'messaging', summary: 'Start a new agent in a workspace.' },
+    agentMcp: { family: 'messaging', summary: 'Give the workspace’s other agents the MCP servers its apps serve.' },
     knowledge: { family: 'workspace', summary: 'Read and record notes that outlast a session.' },
     lists: { family: 'workspace', summary: 'Keep lists the person can see and tick off.' },
     checkIssues: { family: 'workspace', summary: 'Check the workspace’s open issues.' },

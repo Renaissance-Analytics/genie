@@ -4,6 +4,7 @@ import { parseManifest, type PluginManifest } from '../core/plugins.js';
 import { builtinFlowPackage } from '../core/builtin-flow-nodes.js';
 import type { BuiltinTool } from './builtin-tool.js';
 import { AGENT_TOOLS } from './mcp-tools-agents.js';
+import { AGENT_MCP_TOOLS } from './mcp-tools-agent-mcp.js';
 import { ATTENTION_TOOLS } from './mcp-tools-attention.js';
 import { FLOWS_TOOLS } from './mcp-tools-flows.js';
 import { HOSTING_TOOLS } from './mcp-tools-hosting.js';
@@ -31,7 +32,7 @@ const BUILTIN_VERSION = '2.0.0';
 /** The builtin tools, in the order agents have always been offered them (`playwright`, Tynn #846, last). */
 export const BUILTIN_TOOLS: readonly BuiltinTool[] = [
     ...GENIE_TOOLS, ...MORE_TOOLS, ...ATTENTION_TOOLS, ...HOSTING_TOOLS, ...PROCESS_TOOLS, ...FLOWS_TOOLS, ...MAIL_TOOLS,
-    ...AGENT_TOOLS, ...WORKSPACE_TABS_TOOLS, ...PAGES_TOOLS, ...PLAYWRIGHT_TOOLS,
+    ...AGENT_TOOLS, ...WORKSPACE_TABS_TOOLS, ...PAGES_TOOLS, ...PLAYWRIGHT_TOOLS, ...AGENT_MCP_TOOLS,
 ];
 
 /** A package as it is handed to `Catalog.register`: plain data, validated there. */

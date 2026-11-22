@@ -61,10 +61,12 @@ const VERBS: Record<string, string> = {
     // An agent's `pages` tool (mcp-tools-pages.ts): the detail names the button or form and the page.
     'page.submit': 'submit a form on a page',
     'page.click': 'click something that changes or deletes on a page',
+    // The default agent's `agentMcp` (mcp-tools-agent-mcp.ts, Tynn #1033): the detail names the agent, the server and why.
+    'agents.mcp': 'change another agent’s MCP servers',
 };
 
 /** Actions an agent's autonomy never approves for it: each waits for the person — unless a switch below answers it. */
-export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click', 'flows.stop'];
+export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'agents.mcp', 'page.submit', 'page.click', 'flows.stop'];
 
 /**
  * A PERMISSION SWITCH THE PERSON TURNED ON IS THEIR ANSWER (genie#1294; the owner, 2026-10-27: an agent with "May manage

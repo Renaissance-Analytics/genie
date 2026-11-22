@@ -20,7 +20,7 @@ import { NO_PAGES_HERE, notAvailableHere, type HostCapabilities } from '../core/
 // the supervisor and the service engines here; until then every call went to the window, and on beta.60 none arrived).
 // `mail` from its start (Genie Mail G6, Tynn #492): the inbox book and the shared Mailpit are the host's.
 // `createAgent` since Tynn #1015: the approval queue and the registry are the host's, so it works with no window.
-export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals', 'sites', 'services', 'mail', 'playwright', 'createAgent']);
+export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals', 'sites', 'services', 'mail', 'playwright', 'createAgent', 'agentMcp']);
 
 /**
  * The actions of a host tool that still need the WINDOW: forwarded to it like a window tool, the rest answered here.

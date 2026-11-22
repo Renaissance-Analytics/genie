@@ -3,6 +3,7 @@ import { attentionTools, type AttentionToolsDeps } from './mcp-tools-attention.j
 import { hostingTools, type HostingToolsDeps } from './mcp-tools-hosting.js';
 import { moreGenieTools, type MoreToolsDeps } from './mcp-tools-more.js';
 import { agentTools, type AgentToolsDeps } from './mcp-tools-agents.js';
+import { agentMcpTools, type AgentMcpToolDeps } from './mcp-tools-agent-mcp.js';
 import { pluginTools, type PluginToolsDeps } from './mcp-tools-plugins.js';
 import { processTools, type ProcessToolsDeps } from './mcp-tools-processes.js';
 import { flowTools, type FlowToolsDeps } from './mcp-tools-flows.js';
@@ -40,6 +41,8 @@ export interface AllToolsDeps {
     readonly pages?: PagesToolDeps;
     /** `playwright` (Tynn #846): what Genie has, and asking it for a version. Absent = not registered (no installer here: the window, doctor mode). */
     readonly playwright?: PlaywrightToolDeps;
+    /** `agentMcp` (Tynn #1033), visible to the workspace's default agent (mcp-tools-agent-mcp.ts). Absent = not registered (doctor mode, the window). */
+    readonly agentMcp?: AgentMcpToolDeps;
 }
 
 export function allGenieTools(deps: AllToolsDeps, catalog: Catalog = genieCatalog()): Registration[] {
@@ -69,6 +72,7 @@ export function allGenieTools(deps: AllToolsDeps, catalog: Catalog = genieCatalo
     if (deps.workspaceTabs) bind(workspaceTabsTools(deps.workspaceTabs));
     if (deps.pages) bind(pagesTools(deps.pages));
     if (deps.playwright) bind(playwrightTools(deps.playwright));
+    if (deps.agentMcp) bind(agentMcpTools(deps.agentMcp));
     bind(pluginTools({ ...deps.plugins, plugins: { ...deps.plugins.plugins, tools: () => refs.filter((ref) => admitted.has(ref.pluginId)) } }));
     return catalog.list('tool').flatMap((d) => {
         const r = handlers.get(String(d.payload.handler));

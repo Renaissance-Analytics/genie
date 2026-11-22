@@ -72,6 +72,7 @@ export const REMOTE_METHODS = [
     'agents.setManageTabs',
     'agents.setDrivePages',
     'agents.setMcpServer',
+    'agents.setAppMcp',
     'activity',
     'accountRetry',
     'headroom',
@@ -298,6 +299,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.setDrivePages': 'write',
     // One MCP server switched on or off for one agent (Tynn #628): a write, agent-scoped; it applies at its next session start.
     'agents.setMcpServer': 'write',
+    // One app MCP server added to or removed from one agent (Tynn #1033): a write, agent-scoped; it applies at its next session start.
+    'agents.setAppMcp': 'write',
     // The Dashboard's lanes (beta.33 item 10): every agent's activity feed in one workspace — a read, workspace-scoped.
     activity: 'read',
     accountRetry: 'local',
@@ -463,7 +466,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'stopToolCall', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'stopToolCall', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setAppMcp', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
 export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.scratch', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'files.openExternal', 'files.reveal'];
 

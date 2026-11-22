@@ -3,6 +3,7 @@ import { OS_AGENT_NAME } from './os-agent.js';
 import { isAcpProvider, type AcpProvider } from './engine.js';
 import type { IssueWatchSetting } from './issue-watch.js';
 import type { CarryOver } from './carry-over.js';
+import type { AppMcpEntry } from './app-mcp.js';
 
 /**
  * ONE ID, MINTED ONCE, USED BY EVERY SUBSYSTEM.
@@ -144,6 +145,11 @@ export interface AgentRecord {
     readonly mcpOn?: readonly string[];
     /** Every MCP server one of its sessions reported, by name: what its Settings can list while it is not running. */
     readonly mcpSeen?: readonly string[];
+    /**
+     * ITS APP MCP SERVERS (Tynn #1033; core/app-mcp.ts): MCP servers the apps in its workspace serve (a Genie site's path,
+     * or a loopback URL), handed to its sessions from the next start. Local only, no secrets. Absent = none.
+     */
+    readonly appMcp?: readonly AppMcpEntry[];
     /**
      * What this agent hears from IssueWatch (Tynn #806): how and which kinds. Absent = never set, and the default applies
      * (`issueWatchPrefsFor`: the workspace's first agent hears new issues, PRs, security and feedback; the rest nothing).

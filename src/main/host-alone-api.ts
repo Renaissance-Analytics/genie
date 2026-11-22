@@ -1,4 +1,5 @@
-import type { AgentId } from '../core/identity.js';
+import type { AgentId, AgentRecord } from '../core/identity.js';
+import type { AppMcpCandidate, AppSite } from '../core/app-mcp.js';
 import { SIGN_IN_METHODS, type RemoteMethod } from '../core/remote-protocol.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import { agentDetailFor } from './agent-detail.js';
@@ -54,7 +55,7 @@ export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
  */
 export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
     'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
-    'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions',
+    'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setAppMcp', 'agents.setIssueWatch', 'agents.setPermissions',
     'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput', 'agents.attachment',
     // What someone is typing (Tynn #730): with no window open, a Pilot and a guest still see each other's.
     'agents.typing',
@@ -120,6 +121,8 @@ export type HostAloneEngine = Pick<SessionHost,
 
 export interface HostAlonePorts {
     readonly hostName: string;
+    /** An agent's app MCP servers (Tynn #1033): its workspace's sites, and what they and its processes offer. Absent = none here. */
+    readonly appMcp?: { sites(workspaceId: string): readonly AppSite[]; candidates(workspaceId: string, record: AgentRecord): readonly AppMcpCandidate[] };
     /** A registry over genie-host's own registry store: the snapshot, the records, the restarts' writes. */
     readonly registry: Registry;
     readonly engine: () => HostAloneEngine | null;
@@ -250,6 +253,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         providerInstalled: ports.providerInstalled,
         signedIn: ports.signedIn ?? (() => true),
         applyOnStart: (id) => settingApplier.requested(id),
+        ...(ports.appMcp ? { appSites: (workspaceId: string) => ports.appMcp!.sites(workspaceId) } : {}),
     });
     // A model change waiting for its agent to be free applies the moment it is, with or without a window.
     const settingApplier = new SettingApplier(agentOps, (id) => agentShells(ports.engine()?.rowsFor(id) ?? []).count);
@@ -290,7 +294,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         subscribeSnapshot: (listener) => registry.subscribe(listener),
         subscribeAgentRecords: (listener) => registry.subscribeAgentRecords(listener),
         find: (id) => registry.find(id as AgentId),
-        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit), ...(ports.signedIn ? { providerSignedIn: ports.signedIn } : {}) }, id as AgentId),
+        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit), ...(ports.signedIn ? { providerSignedIn: ports.signedIn } : {}), ...(ports.appMcp ? { appMcp: ports.appMcp } : {}) }, id as AgentId),
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         ...(ports.saveUploads ? { saveUploads: ports.saveUploads } : {}),

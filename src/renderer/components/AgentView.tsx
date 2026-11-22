@@ -14,7 +14,8 @@ import { contextNote, diffHeader, headerActions, personaView, planSteps, process
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
 import type { McpRow } from '../../core/agent-mcp.js';
-import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
+import type { AppMcpCandidate, AppMcpEntry } from '../../core/app-mcp.js';
+import { AppMcpServers, McpServerSwitches, SkillsAndCommands, type AppMcpChangeInput } from './AgentSkills.js';
 import { FidelityDot } from './Dashboard.js';
 import { Flash } from './Flash.js';
 import { BAR_ACTION, TopBar } from './TopBar.js';
@@ -185,6 +186,8 @@ export interface AgentOpsProps {
     /** Its MCP servers (Tynn #628): the rows, and the switch. Absent rows = no list; absent setter = a list with no switch. */
     readonly mcp?: readonly McpRow[];
     readonly onSetMcpServer?: (name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Its app MCP servers (Tynn #1033): what it has, what its workspace offers, and the change. Absent = no section. */
+    readonly appMcp?: { readonly entries: readonly (AppMcpEntry & { address?: string })[]; readonly candidates: readonly AppMcpCandidate[]; readonly onChange?: (change: AppMcpChangeInput) => Promise<{ ok: true } | { ok: false; reason: string }> };
     /** What it hears from IssueWatch (Tynn #806): how, and which kinds. Absent setter = no section (a window that cannot set it). */
     readonly issueWatch?: IssueWatchPrefs;
     readonly onSetIssueWatch?: (setting: IssueWatchSetting) => Promise<IssueWatchSaved>;
@@ -1448,6 +1451,10 @@ function AgentViewBody({
                                             {/* ── MCP SERVERS: one switch each, kept on the agent, applied at its next session start (Tynn #628). */}
                                             {ops?.mcp && has.has('skills') ? (
                                                 <McpServerSwitches rows={ops.mcp} agentName={agent.name} onSet={ops.onSetMcpServer} />
+                                            ) : null}
+                                            {/* ── APP MCP: the servers its workspace's apps serve, for this agent alone (Tynn #1033). */}
+                                            {ops?.appMcp && has.has('skills') ? (
+                                                <AppMcpServers agentName={agent.name} entries={ops.appMcp.entries} candidates={ops.appMcp.candidates} onChange={ops.appMcp.onChange} />
                                             ) : null}
                                             {session?.extensions && has.has('skills') ? (
                                                 <SkillsAndCommands extensions={session.extensions} provider={agent.provider} />

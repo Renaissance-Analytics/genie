@@ -1,4 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { AppMcpCandidate, AppMcpEntry } from '../core/app-mcp.js';
 import type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
 export type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
 import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
@@ -127,7 +128,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; /** Its MCP servers (Tynn #628): switched off, and ever reported. */ mcpOff?: readonly string[]; mcpSeen?: readonly string[]; /** On for it over its workspace's default; and that default. */ mcpOn?: readonly string[]; workspaceMcpOff?: readonly string[]; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; /** Its MCP servers (Tynn #628): switched off, and ever reported. */ mcpOff?: readonly string[]; mcpSeen?: readonly string[]; /** On for it over its workspace's default; and that default. */ mcpOn?: readonly string[]; workspaceMcpOff?: readonly string[]; /** Its app MCP servers (Tynn #1033), each with its address as read; and what its workspace offers. */ appMcp?: readonly (AppMcpEntry & { address?: string })[]; appMcpCandidates?: readonly AppMcpCandidate[]; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -490,6 +491,8 @@ export interface GenieBridge {
         setDrivePages(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** One MCP server on or off for this agent (Tynn #628); it applies at the agent's next session start. */
         setMcpServer(agentId: string, name: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** One app MCP server added or removed for this agent (Tynn #1033); it applies at its next session start. */
+        setAppMcp(agentId: string, change: { add: { name?: string; site?: string; path?: string; url?: string } } | { remove: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What the agent hears from IssueWatch (Tynn #806). */
         setIssueWatch(agentId: string, setting: IssueWatchSetting): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What a Claude agent may do: all tools, ask before shell commands, or edits only. Refused for a Codex agent. */

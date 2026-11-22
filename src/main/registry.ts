@@ -14,6 +14,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  */
 export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'beginRestore' | 'restoreStarted' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
+import type { AppMcpEntry } from '../core/app-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { envFileName } from '../core/dotenv.js';
@@ -808,6 +809,14 @@ export class Registry {
     /** The MCP servers switched off for this agent (Tynn #628); read when its next session starts. */
     async setMcpOff(agentId: AgentId, mcpOff: readonly string[], mcpOn: readonly string[] = []): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, mcpOff: [...mcpOff], mcpOn: [...mcpOn] }));
+    }
+
+    /** Its app MCP servers (Tynn #1033, core/app-mcp.ts), already checked; read when its next session starts. Empty = the field goes. */
+    async setAppMcp(agentId: AgentId, appMcp: readonly AppMcpEntry[]): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => {
+            const { appMcp: _previous, ...rest } = a;
+            return appMcp.length > 0 ? { ...rest, appMcp: [...appMcp] } : rest;
+        });
     }
 
     /** What one of its sessions reported, added to what its Settings can list. Writes only when it adds a name. */

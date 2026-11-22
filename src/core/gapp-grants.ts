@@ -56,6 +56,8 @@ export const PERSON_ONLY_TOOLS: ReadonlySet<string> = new Set([
     'manageTerminals', 'services', 'sites', 'processes', 'pages',
     'plan', 'flows', 'mail', 'thumbsUp',
     'playwright',
+    // agentMcp (Tynn #1033): another agent's MCP servers, the default agent's, waiting on the person's approval.
+    'agentMcp',
 ]);
 
 /** Why an app may never be granted this element, or null: `grantable: false`, or gated by the person's approval. */

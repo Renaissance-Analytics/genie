@@ -54,6 +54,8 @@ export interface HostMcpPorts {
      * AGENT.md, its registry — genie-host.ts wires createThroughAddAgent). Absent = this host cannot, and the tool says so.
      */
     readonly createAgent?: import('./mcp-tools-agents.js').AgentToolsDeps['create'];
+    /** `agentMcp` (Tynn #1033): the sites and offers it reads and the host's own writes (`agents.setAppMcp`, `agents.setMcpServer`). Absent = no such tool. */
+    readonly agentMcp?: import('./genie-tool-deps.js').GenieToolParts['agentMcp'];
     /** The host's own registry (P3.2): a workspace's path, its default agent, the address slugs. */
     readonly registry: Pick<import('./host-registry.js').HostRegistry, 'workspace' | 'workspaceSlugs' | 'defaultAgentOf' | 'setNames'> & Partial<Pick<import('./host-registry.js').HostRegistry, 'mailRefusal'>>;
     readonly probe: (agentId: AgentId) => Parameters<typeof livenessOf>[0];
@@ -196,6 +198,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
             // createAgent runs HERE (Tynn #1015): the person approves in the host's queue, the host's Add agent makes it.
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), create: ports.createAgent ?? noCreate },
+            // agentMcp runs HERE (Tynn #1033): the person approves in the host's queue, the host's own agents.* write it.
+            ...(ports.agentMcp ? { agentMcp: ports.agentMcp } : {}),
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));

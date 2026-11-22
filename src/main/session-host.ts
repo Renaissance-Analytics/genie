@@ -609,6 +609,7 @@ export class SessionHost {
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
     readonly #workspaceMcpOffFor: ((record: AgentRecord) => readonly string[]) | undefined;
+    readonly #appMcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
@@ -718,6 +719,12 @@ export class SessionHost {
         endToolCalls?: (agentId: AgentId, intent: CancelIntent) => number;
         /** The MCP servers this agent's workspace has off by default (Tynn #628). Asked before each launch. Absent = none. */
         workspaceMcpOffFor?: (record: AgentRecord) => readonly string[];
+        /**
+         * THE AGENT'S APP MCP SERVERS (Tynn #1033; core/app-mcp.ts appMcpServersFor): what the apps in its workspace serve, as
+         * the person or its default agent chose, resolved now. Asked at each launch; handed after the servers above and never
+         * in place of one of them. Absent = none.
+         */
+        appMcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own words are in this agent's thread now (`AgentRecord.genieWordsInThread`). */
         markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
@@ -808,6 +815,7 @@ export class SessionHost {
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
         this.#workspaceMcpOffFor = options.workspaceMcpOffFor;
+        this.#appMcpServersFor = options.appMcpServersFor;
         this.#untrustedNow = options.untrustedNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
@@ -1145,7 +1153,12 @@ export class SessionHost {
             if (found && reason === null) account = found;
             if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
         }
-        const mcpServers = this.#mcpServersFor?.(record) ?? [];
+        // The agent's app MCP servers after Genie's own (Tynn #1033), read once per launch; a name already handed keeps its server.
+        const apps = this.#appMcpServersFor?.(record) ?? [];
+        const withApps = (servers: readonly McpServer[]): readonly McpServer[] => {
+            return apps.length === 0 ? servers : [...servers, ...apps.filter((a) => !servers.some((s) => s.name === a.name))];
+        };
+        const mcpServers = withApps(this.#mcpServersFor?.(record) ?? []);
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
         // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
         const startPhase = (phase: AgentStartPhase): void => { const run = this.#running.get(record.id)?.run; if (run !== undefined) this.#lifecycle?.phase?.(record.id, run, phase); };
@@ -1156,7 +1169,7 @@ export class SessionHost {
         const driverFactory = deferred ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
+            const prepared = this.#prepareMcpServers ? withApps(await this.#prepareMcpServers(record, cwd, signal)) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const factory = this.#driverFor(record, cwd, record.threadId, { ...(account ? { account } : {}), mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');

@@ -7,6 +7,7 @@ import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.j
 import { buildCarryOver, type CarryOver } from '../core/carry-over.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import { withMcpServer } from '../core/agent-mcp.js';
+import { parseAppMcpEntry, withAppMcp, withoutAppMcp, type AppMcpEntry, type AppSite } from '../core/app-mcp.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
@@ -43,10 +44,14 @@ export interface AgentOpsPorts {
         setMcpOff(id: AgentRecord['id'], mcpOff: readonly string[], mcpOn?: readonly string[]): Promise<AgentRecord | null>;
         /** What its workspace has off by default. Absent = a registry with no workspace defaults. */
         workspaceMcpOff?(workspaceId: string): readonly string[];
+        /** Its app MCP servers (Tynn #1033), already checked. Absent = a registry that keeps none, and setAppMcp says so. */
+        setAppMcp?(id: AgentRecord['id'], appMcp: readonly AppMcpEntry[]): Promise<AgentRecord | null>;
         setIssueWatch(id: AgentRecord['id'], setting: IssueWatchSetting): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
     };
+    /** A workspace's Genie sites (Tynn #1033): what an app MCP server's `site` names. Absent = none here. */
+    appSites?(workspaceId: string): readonly AppSite[];
     host: {
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(id: AgentRecord['id']): boolean | Promise<boolean>;
@@ -519,6 +524,32 @@ export async function setMcpServer(ports: AgentOpsPorts, agentId: string, name: 
     const changed = withMcpServer(record, name, on, ports.registry.workspaceMcpOff?.(record.workspaceId) ?? []);
     if (!changed.ok) return changed;
     const updated = await ports.registry.setMcpOff(record.id, changed.record.mcpOff ?? [], changed.record.mcpOn ?? []);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/**
+ * ONE APP MCP SERVER ADDED TO OR REMOVED FROM ONE AGENT (Tynn #1033; core/app-mcp.ts): the person's own change, from its
+ * settings (`agents.setAppMcp`), or the default agent's once the person approved (`agentMcp`). Checked against its
+ * workspace's sites (local only, no secrets) and kept on its record; its session is handed it from its next start, so
+ * nothing restarts here.
+ */
+export type AppMcpChange = { readonly add: unknown } | { readonly remove: unknown };
+export async function setAppMcp(ports: AgentOpsPorts, agentId: string, change: unknown): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    if (!ports.registry.setAppMcp) return { ok: false, reason: 'this Genie keeps no app MCP servers' };
+    const c = (change !== null && typeof change === 'object' ? change : {}) as Record<string, unknown>;
+    let next: { ok: true; list: AppMcpEntry[] } | Refusal;
+    if ('add' in c) {
+        const parsed = parseAppMcpEntry(c.add, ports.appSites?.(record.workspaceId) ?? []);
+        next = parsed.ok ? withAppMcp(record.appMcp, parsed.entry) : parsed;
+    } else if ('remove' in c) {
+        next = withoutAppMcp(record.appMcp, c.remove);
+    } else {
+        return { ok: false, reason: 'say what to add or which to remove' };
+    }
+    if (!next.ok) return next;
+    const updated = await ports.registry.setAppMcp(record.id, next.list);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

@@ -43,7 +43,7 @@ describe('the host keeps its own tools; the rest are the window\'s', () => {
         // processes joined in P3.3c (the book, its scheduler and the supervisor are the host's), flows in P3.3d, manageTerminals in P3.3e,
         // sites and services with Tynn #444 (P5a moved the sites, the supervisor and the engines into the host), createAgent
         // with Tynn #1015 (the host's approval queue and registry).
-        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'createAgent', 'flows', 'imDone', 'knowledge', 'lists', 'manageTerminals', 'mail', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp'].sort());
+        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentMcp', 'agentinbox', 'createAgent', 'flows', 'imDone', 'knowledge', 'lists', 'manageTerminals', 'mail', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp'].sort());
     });
 
     it('a host-native tool runs in the host, window or not', async () => {

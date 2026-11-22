@@ -45,7 +45,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'agents.delete': ['agent_a', 'unmount', [], false], 'agents.switchDriver': ['agent_a', 'codex'],
     'agents.setBudget': ['agent_a', null], 'agents.setMode': ['agent_a', 'manual'],
     'agents.setAccessScope': ['agent_a', 'self'], 'agents.setAccessAgents': ['agent_a', null], 'agents.setAutoApprove': ['agent_a', false],
-    'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false], 'agents.setMcpServer': ['agent_a', 'slack', false],
+    'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false], 'agents.setMcpServer': ['agent_a', 'slack', false], 'agents.setAppMcp': ['agent_a', { remove: 'shop' }],
     activity: ['work'], 'agents.setIssueWatch': ['agent_a', null], 'agents.setPermissions': ['agent_a', 'ask'],
     'agents.setModel': ['agent_a', null], 'agents.models': ['agent_a', false], 'agents.diagnose': ['agent_a'], 'agents.toolOutput': ['agent_a', 'call_1'], 'agents.attachment': ['agent_a', '0123456789abcdef0123456789abcdef'], 'agents.typing': ['agent_a', 'hello', 'window-1'],
     'workspaces.previewAdd': [ROOT], 'workspaces.confirmAdd': [ROOT],

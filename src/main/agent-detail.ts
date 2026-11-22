@@ -1,5 +1,6 @@
 import { chatCommsOf } from '../core/chat-view.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
+import { appMcpAddress, type AppMcpCandidate, type AppSite } from '../core/app-mcp.js';
 import type { InboxMessage } from './inbox-store.js';
 import { issueWatchPrefsFor } from '../core/issue-watch.js';
 import type { TakeOverProbe } from '../core/observed.js';
@@ -30,6 +31,8 @@ export interface AgentDetailPorts {
     readonly mail?: (id: AgentId, limit: number) => readonly InboxMessage[];
     /** Whether the provider's CLI last said it is signed in (Tynn #698, the health book); absent = not measured here. */
     readonly providerSignedIn?: (provider: string) => boolean;
+    /** Its workspace's sites and what they and its processes offer as app MCP servers (Tynn #1033); absent = none here. */
+    readonly appMcp?: { sites(workspaceId: string): readonly AppSite[]; candidates(workspaceId: string, record: AgentRecord): readonly AppMcpCandidate[] };
 }
 
 export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): AgentDetail | null {
@@ -63,6 +66,9 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
             ...(record.mcpOff && record.mcpOff.length > 0 ? { mcpOff: record.mcpOff } : {}),
             ...(record.mcpSeen && record.mcpSeen.length > 0 ? { mcpSeen: record.mcpSeen } : {}),
             ...(record.mcpOn && record.mcpOn.length > 0 ? { mcpOn: record.mcpOn } : {}),
+            // Its app MCP servers, each with the address a person reads, and what its workspace offers to add (Tynn #1033).
+            ...((record.appMcp ?? []).length > 0 ? { appMcp: record.appMcp!.map((e) => ({ ...e, address: appMcpAddress(e, ports.appMcp?.sites(record.workspaceId) ?? []) })) } : {}),
+            ...(ports.appMcp ? { appMcpCandidates: ports.appMcp.candidates(record.workspaceId, record) } : {}),
             // What its workspace has off by default, which it inherits where it made no choice.
             ...((ports.registry.workspaceMcpOff?.(record.workspaceId) ?? []).length > 0 ? { workspaceMcpOff: ports.registry.workspaceMcpOff!(record.workspaceId) } : {}),
             // What it hears from IssueWatch now: its own setting, or the default its place in the workspace gives it (Tynn #806).

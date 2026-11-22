@@ -79,6 +79,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('agents.setManageTabs', 'allow', [A, true], [[B, true]]),
         row('agents.setDrivePages', 'allow', [A, true], [[B, true]]),
         row('agents.setMcpServer', 'allow', [A, 'genie', false], [[B, 'genie', false]]),
+        // Its app MCP servers (Tynn #1033): this link's own agent only, as its switches.
+        row('agents.setAppMcp', 'allow', [A, { remove: 'shop' }], [[B, { remove: 'shop' }]]),
         row('agents.setIssueWatch', 'allow', [A, {}], [[B, {}]]),
         row('agents.setPermissions', 'allow', [A, 'ask'], [[B, 'ask']]),
         row('agents.setModel', 'allow', [A, null], [[B, null]]),

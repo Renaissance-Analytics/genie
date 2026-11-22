@@ -1,6 +1,7 @@
 import { Button, Switch } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { MCP_WORDS, type McpRow } from '../../core/agent-mcp.js';
+import { APP_MCP_WORDS, type AppMcpCandidate, type AppMcpEntry } from '../../core/app-mcp.js';
 import { commandGroups, type ProviderExtensions } from '../../core/provider-commands.js';
 
 /**
@@ -48,6 +49,74 @@ export function McpServerSwitches({ rows, agentName, workspace = false, onSet, i
                     </li>
                 ))}
             </ul>
+        </section>
+    );
+}
+
+/** A change to an agent's app MCP servers, as `agents.setAppMcp` takes it (Tynn #1033). */
+export type AppMcpChangeInput = { add: { name?: string; site?: string; path?: string; url?: string } } | { remove: string };
+
+/**
+ * AN AGENT'S APP MCP SERVERS (Tynn #1033; core/app-mcp.ts): the MCP servers the apps in its workspace serve, for this
+ * agent alone. What it has, each with Remove; what the workspace offers that it has not (each site's /mcp, each process
+ * with a port), each with Add; and a field for a local address. A change shows progress, then that it is saved and when
+ * it applies, or the refusal in its words (not local, a key in it). `onChange` absent: the list alone.
+ */
+export function AppMcpServers({ agentName, entries, candidates, onChange }: { agentName: string; entries: readonly (AppMcpEntry & { address?: string })[]; candidates: readonly AppMcpCandidate[]; onChange?: ((change: AppMcpChangeInput) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined }) {
+    const [busy, setBusy] = useState<string | null>(null);
+    const [outcome, setOutcome] = useState<{ key: string; ok: boolean; text: string } | null>(null);
+    const [url, setUrl] = useState('');
+    const run = (key: string, change: AppMcpChangeInput, after?: () => void) => {
+        if (!onChange || busy !== null) return;
+        setBusy(key);
+        setOutcome(null);
+        void onChange(change)
+            .then((r) => { setOutcome({ key, ok: r.ok, text: r.ok ? APP_MCP_WORDS.saved(agentName) : r.reason }); if (r.ok) after?.(); }, (e: unknown) => setOutcome({ key, ok: false, text: e instanceof Error ? e.message : String(e) }))
+            .finally(() => setBusy(null));
+    };
+    const addressOf = (e: AppMcpEntry & { address?: string }) => e.address ?? ('url' in e ? e.url : `${candidates.find((c) => c.site === e.site)?.label ?? e.site}${e.path}`);
+    const said = (key: string) => (busy === key
+        ? <span data-app-mcp-busy="" role="status" className="text-[11px] text-[var(--fg-3)]">Saving…</span>
+        : outcome?.key === key
+            ? outcome.ok
+                ? <span data-app-mcp-outcome="saved" role="status" className="min-w-0 text-[11px] text-[var(--fg-2)]">{outcome.text}</span>
+                : <span data-app-mcp-outcome="failed" role="alert" className="min-w-0 text-[11px] text-[var(--danger)]">{outcome.text}</span>
+            : null);
+    const offers = candidates.filter((c) => !c.added);
+    return (
+        <section data-rail="app-mcp" className="mb-5 min-w-0">
+            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">{APP_MCP_WORDS.title}</h3>
+            <p data-app-mcp-note="" className="mb-2 max-w-[80ch] text-[11px] leading-normal text-[var(--fg-3)]">{APP_MCP_WORDS.note(agentName)}</p>
+            <ul data-app-mcp-servers={entries.length} className="flex flex-col">
+                {entries.length === 0 ? <li className="py-1 text-[11px] text-[var(--fg-3)]">{APP_MCP_WORDS.none}</li> : null}
+                {entries.map((e) => (
+                    <li key={e.name} data-app-mcp={e.name} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--border-1)]/50 py-1.5 text-[12px]">
+                        <span className="min-w-0 break-all font-mono text-[var(--fg-1)]">{e.name}</span>
+                        <span className="min-w-0 break-all text-[11px] text-[var(--fg-3)]">{addressOf(e)}</span>
+                        {onChange ? <Button size="xs" type="button" disabled={busy !== null} onClick={() => run(`remove:${e.name}`, { remove: e.name })} className="ml-auto shrink-0">{APP_MCP_WORDS.remove}</Button> : null}
+                        {said(`remove:${e.name}`)}
+                    </li>
+                ))}
+            </ul>
+            {onChange && offers.length > 0 ? (
+                <ul data-app-mcp-candidates={offers.length} className="mt-2 flex flex-col">
+                    {offers.map((c) => (
+                        <li key={`${c.kind}:${c.name}:${c.url}`} data-app-mcp-candidate={c.name} data-app-mcp-kind={c.kind} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[12px]">
+                            <span className="min-w-0 break-all text-[var(--fg-2)]">{c.label}</span>
+                            <span className="min-w-0 break-all font-mono text-[11px] text-[var(--fg-3)]">{c.url}</span>
+                            <Button size="xs" type="button" disabled={busy !== null} onClick={() => run(`add:${c.name}`, { add: c.kind === 'site' && c.site ? { name: c.name, site: c.site } : { name: c.name, url: c.url } })} className="ml-auto shrink-0">{APP_MCP_WORDS.add}</Button>
+                            {said(`add:${c.name}`)}
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
+            {onChange ? (
+                <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(ev) => { ev.preventDefault(); if (url.trim() !== '') run('add-url', { add: { url: url.trim() } }, () => setUrl('')); }}>
+                    <input data-field="app-mcp-url" type="url" aria-label={APP_MCP_WORDS.urlLabel} value={url} placeholder={APP_MCP_WORDS.urlPlaceholder} onChange={(ev) => setUrl(ev.target.value)} className="w-72 max-w-full rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 font-mono text-[12px]" />
+                    <Button size="xs" type="submit" disabled={busy !== null || url.trim() === ''}>{APP_MCP_WORDS.add}</Button>
+                    {said('add-url')}
+                </form>
+            ) : null}
         </section>
     );
 }

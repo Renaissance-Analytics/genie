@@ -130,7 +130,7 @@ describe('Genie\'s own tools that act as the person are never granted', () => {
         const genie = genieCatalog();
         // `lists` too (the coordinator's ruling, 2026-11-08): its items put work in front of the person; start conservative.
         // `playwright` too (Tynn #846): its install can wait on the person's approval.
-        expect([...PERSON_ONLY_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'createAgent', 'flows', 'imDone', 'lists', 'mail', 'manageTerminals', 'pages', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp', 'workspaceTabs'].sort());
+        expect([...PERSON_ONLY_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentMcp', 'agentinbox', 'createAgent', 'flows', 'imDone', 'lists', 'mail', 'manageTerminals', 'pages', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp', 'workspaceTabs'].sort());
         for (const id of PERSON_ONLY_TOOLS) {
             expect(genie.get(id)?.payload.grantable, id).toBe(false);
             const r = installReview(request({ uses: [id] }), (x) => genie.get(x));
