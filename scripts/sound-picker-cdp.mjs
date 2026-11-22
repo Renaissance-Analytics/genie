@@ -241,7 +241,8 @@ async function dragRange(cdp, selector, from, to) {
         const r = el.getBoundingClientRect();
         const y = r.top + r.height / 2;
         const reach = (f) => { const hit = document.elementFromPoint(r.left + r.width * f, y); return hit === el ? 'input' : hit ? hit.outerHTML.slice(0, 100) : null; };
-        return { left: r.left, width: r.width, y, rect: [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 10) / 10), reachFrom: reach(${from}), reachTo: reach(${to}) };
+        const row = el.closest('[data-sound-master], [data-sound-level]');
+        return { left: r.left, width: r.width, height: r.height, row: row ? row.getBoundingClientRect().width : 0, y, rect: [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 10) / 10), reachFrom: reach(${from}), reachTo: reach(${to}) };
     })()`);
     if (!at) return null;
     console.log(`  ${selector}: rect ${JSON.stringify(at.rect)}, the mouse at ${from} reaches ${at.reachFrom}, at ${to} reaches ${at.reachTo}`);
@@ -257,7 +258,7 @@ async function dragRange(cdp, selector, from, to) {
     }
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x(to), y: at.y, button: 'left', buttons: 0, clickCount: 1 });
     await sleep(200);
-    return { width: at.width, reaches: at.reachFrom === 'input' && at.reachTo === 'input', before, pressed, after: await valueOf(cdp, selector) };
+    return { width: at.width, height: at.height, row: at.row, reaches: at.reachFrom === 'input' && at.reachTo === 'input', before, pressed, after: await valueOf(cdp, selector) };
 }
 const valueOf = (cdp, selector) => cdp.evaluate(`Number(document.querySelector(${JSON.stringify(selector)})?.value ?? NaN)`);
 async function volumeProof(cdp) {
@@ -273,6 +274,9 @@ async function volumeProof(cdp) {
     const m = await dragRange(cdp, MASTER, 0.7, 0.4);
     check(m !== null && m.width >= 120, 'V3. the master slider draws a track wide enough to aim at (>= 120 px)', String(m?.width));
     check(m !== null && m.reaches, 'V3b. the mouse on that track reaches the range input itself, not a wrapper');
+    // What the layout fix is FOR (job 1122-021227-3c98b4: the old layout passed V3 with a fixed 129 x 8 px input in a 958 px row).
+    check(m !== null && m.row > 0 && m.width >= m.row * 0.5, 'V3d. the track fills its row (>= half its width), not a fixed native width', `${Math.round(m?.width ?? 0)} of ${Math.round(m?.row ?? 0)} px`);
+    check(m !== null && m.height >= 16, 'V3e. its hit box is at least 16 px tall, not the 8 px line', `${m?.height} px`);
     check(m !== null && m.pressed >= 63 && m.pressed <= 77, 'V3c. a mouse PRESS at 70% of it sets about 70%', String(m?.pressed));
     const master = await valueOf(cdp, MASTER);
     check(master >= 33 && master <= 47, 'V4. and a mouse DRAG, held, to 40% leaves it at about 40%', String(master));
@@ -304,6 +308,7 @@ async function volumeProof(cdp) {
     const LEVEL = '[data-sound-level="finished"] input[type="range"]';
     const l = await dragRange(cdp, LEVEL, 0.2, 0.5);
     check(l !== null && l.width >= 120 && l.reaches, 'V15. "An agent finishes" draws a track the mouse reaches (>= 120 px, the input itself)', `${l?.width} px`);
+    check(l !== null && l.row > 0 && l.width >= (l.row - 256) * 0.5 && l.height >= 16, 'V15c. a level track fills the row beside its label, and its hit box is >= 16 px tall', `${Math.round(l?.width ?? 0)} of ${Math.round(l?.row ?? 0)} px (label 256), ${l?.height} px tall`);
     check(l !== null && l.pressed >= 13 && l.pressed <= 27, 'V15b. a mouse press at 20% of it sets about 20%', String(l?.pressed));
     const level = await valueOf(cdp, LEVEL);
     check(level >= 43 && level <= 57, 'V16. and a mouse drag to 50% leaves it at about 50%', String(level));
