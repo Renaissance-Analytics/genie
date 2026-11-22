@@ -92,21 +92,31 @@ describe('the master control', () => {
     });
 });
 
-describe('a slider a mouse can reach (the first VM proof: in a narrow Settings pane the master slider collapsed to nothing beside its two fixed buttons, and a press at 40% of it landed on its wrapper div)', () => {
-    const sliders = () => [...host.querySelectorAll('[data-react-fancy-slider]')] as HTMLElement[];
-    it('every slider — master and each level — keeps a minimum width, never min-w-0 (COUNTED: 1 + 26)', () => {
+describe('a slider a mouse can reach (the first VM proof: the master slider collapsed to nothing and a press at 40% of it landed on its wrapper div)', () => {
+    /**
+     * react-fancy's Slider, given a label, wraps itself in a Field that does NOT take the Slider's className, and that
+     * Field is what sits in the row: a `flex-1` on the Slider never reached the flex item, and a w-full range input gives
+     * its Field no width of its own. So each Slider sits in a track of OURS, the row's flex item, which the Field fills.
+     */
+    const sliders = () => [...host.querySelectorAll('[data-volume-track]')] as HTMLElement[];
+    it('every slider — master and each level — sits in its own track: the row’s flex item, growing, with a minimum width (COUNTED: 1 + 26)', () => {
         render({});
         click(q('[data-action="sound-levels-toggle"]')!);
         expect(sliders()).toHaveLength(1 + ALERT_KINDS.length);
+        expect(host.querySelectorAll('[data-react-fancy-slider]')).toHaveLength(1 + ALERT_KINDS.length);
         for (const s of sliders()) {
+            expect(s.querySelector('[data-react-fancy-slider] input[type="range"]')).not.toBeNull();
+            // The track is a direct child of its row, so it IS the flex item.
+            expect(s.parentElement!.matches('[data-sound-master], [data-sound-level]')).toBe(true);
             expect(s.className).toContain('min-w-40');
+            expect(s.className).toContain('flex-1');
             expect(s.className).not.toContain('min-w-0');
         }
     });
     it('the range input’s hit box is taller than its drawn track (h-5), so a press near the line still lands on it', () => {
         render({});
         click(q('[data-action="sound-levels-toggle"]')!);
-        for (const s of sliders()) expect(s.className).toContain('[&_input[type=range]]:h-5');
+        for (const s of sliders()) expect(s.className).toContain('[&_input]:h-5');
     });
     it('a row wraps rather than squeezing its slider: the master row and each level row are flex-wrap', () => {
         render({});
