@@ -501,10 +501,11 @@ function ChatFlyoutBody({
     const heldFiles = useRef(new Map<string, File>());
     // The message back in its chat's composer (core/send-grace.ts `putBackUndone`): its whole draft when the composer gave
     // one, else its words. Only the person's own Undo or Esc focuses it.
-    const putBack = (h: HeldSend, focus: boolean): void => {
-        putBackUndone(composerRefs.current, h.chat, h.draft ?? h.text, focus,
-            keeper && h.chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
+    const putBackInto = (chat: string, undone: string | ChatDraft, focus: boolean): void => {
+        putBackUndone(composerRefs.current, chat, undone, focus,
+            keeper && chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
     };
+    const putBack = (h: HeldSend, focus: boolean): void => putBackInto(h.chat, h.draft ?? h.text, focus);
     const putBackRef = useRef(putBack);
     putBackRef.current = putBack;
     const [grace] = useState(() => new SendGrace((h: HeldSend) => {
@@ -644,7 +645,7 @@ function ChatFlyoutBody({
             pressed, promptId: m.promptId, text: m.text,
             composer: () => composerRefs.current.get(chat)?.getDraft() ?? (keeper && chat !== '' ? keeper.initial(chat) ?? null : null),
             resolve: onResolveQueued,
-            putBack: (text, focus) => putBack(chat, text, focus),
+            putBack: (text, focus) => putBackInto(chat, text, focus),
         }).then((r) => {
             setQueuedBusy((b) => { const next = new Set(b); next.delete(messageId); return next; });
             if (!r.ok) setQueuedProblems((p) => ({ ...p, [messageId]: r.reason }));

@@ -93,15 +93,18 @@ try {
     await page.send('Page.enable');
 
     const CHAT = `[data-chat="pinned"][data-chat-subject="${atlas.id}"]`;
-    const FIELD = `${CHAT} [data-react-fancy-prompt-input] textarea, ${CHAT} [data-react-fancy-prompt-input] [contenteditable="true"]`;
+    // The composer ON SCREEN: ChatComposers keeps other chats' composers mounted and hidden (one for '' from before the
+    // thread loaded comes first), and only the active one carries data-chat-composer.
+    const BOX = `${CHAT} [data-chat-composer] [data-react-fancy-prompt-input]`;
+    const FIELD = `${BOX} textarea, ${BOX} [contenteditable="true"]`;
     const shot = async (name) => { const s = await page.send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(OUT, `${name}.png`), Buffer.from(s.data, 'base64')); console.log(`SHOT ${name}.png`); };
     const key = async (k, code, vk) => { for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }); };
     const esc = () => key('Escape', 'Escape', 27);
     const focusField = () => page.evaluate(`(() => { const f = document.querySelector(${JSON.stringify(FIELD)}); f?.focus(); return document.activeElement === f; })()`);
     const typeText = async (text) => { demand(await focusField(), 'the composer takes focus'); await page.send('Input.insertText', { text }); };
-    const clickSend = () => page.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(`${CHAT} [data-react-fancy-prompt-input-send]`)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
+    const clickSend = () => page.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(`${BOX} [data-react-fancy-prompt-input-send]`)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
     const attachPng = (name) => page.evaluate(`(() => {
-        const input = document.querySelector(${JSON.stringify(`${CHAT} [data-react-fancy-prompt-input] input[type="file"]`)});
+        const input = document.querySelector(${JSON.stringify(`${BOX} input[type="file"]`)});
         if (!input) return false;
         const bytes = Uint8Array.from(atob(${JSON.stringify(PNG)}), (c) => c.charCodeAt(0));
         const dt = new DataTransfer(); dt.items.add(new File([bytes], ${JSON.stringify(name)}, { type: 'image/png' }));
@@ -109,7 +112,7 @@ try {
     const state = () => page.evaluate(`(() => {
         const chat = document.querySelector(${JSON.stringify(CHAT)}), f = document.querySelector(${JSON.stringify(FIELD)});
         const text = f ? (f.tagName === 'TEXTAREA' ? f.value : f.textContent) : null;
-        const chips = [...(chat?.querySelectorAll('[data-react-fancy-prompt-input-attachment]') ?? [])].map((c) => c.textContent.trim());
+        const chips = [...(document.querySelector(${JSON.stringify(BOX)})?.querySelectorAll('[data-react-fancy-prompt-input-attachment]') ?? [])].map((c) => c.textContent.trim());
         const held = [...(chat?.querySelectorAll('[data-chat-held]') ?? [])].map((h) => ({ text: h.querySelector('[data-chat-user-text]')?.textContent ?? '', hint: h.querySelector('[data-unsend-hint]')?.textContent ?? null, files: [...h.querySelectorAll('[data-chat-held-file]')].map((x) => x.textContent) }));
         const thread = [...(chat?.querySelectorAll('[data-chat-message]') ?? [])].map((m) => m.textContent);
         return { busy: chat?.getAttribute('data-chat-busy') ?? null, text, chips, held, threadHasMark: thread.some((t) => t.includes(${JSON.stringify(MARK)})), fieldFocused: document.activeElement === f, agentSurface: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')) };

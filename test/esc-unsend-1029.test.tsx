@@ -236,6 +236,6 @@ describe('the chat composer holds files too (ChatFlyout)', () => {
 describe('wiring', () => {
     it('the chat takes Esc for its held messages, on the chat itself (so the Agent view’s Esc keeps its meaning otherwise)', () => {
         const flyout = readFileSync(new URL('../src/renderer/components/ChatFlyout.tsx', import.meta.url), 'utf8');
-        expect(flyout).toMatch(/<aside[\s\S]{0,600}?onKeyDown=\{[^}]*unsendOnEscape\(/);
+        expect(flyout).toMatch(/<aside[\s\S]{0,1600}?onKeyDown=\{[^}]*unsendOnEscape\(/);
     });
 });

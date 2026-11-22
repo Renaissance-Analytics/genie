@@ -38,10 +38,10 @@ export interface HeldSend {
 export interface HeldFile {
     readonly id: string;
     readonly name: string;
-    readonly bytes?: number | undefined;
-    readonly type?: string | undefined;
-    readonly file?: File | undefined;
-    readonly ref?: string | undefined;
+    readonly bytes?: number;
+    readonly type?: string;
+    readonly file?: File;
+    readonly ref?: string;
 }
 
 /** Whether this send is held for the grace window: a busy agent's, files and all (Tynn #1029). */
