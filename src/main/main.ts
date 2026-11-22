@@ -48,7 +48,7 @@ import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
 import { hostHashOf } from '../core/update-kind.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
-import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
+import { ActivationLedger, bringUp, onceShowable, showWhenReady, traceFirstShow, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { settleStaleLegacyPairing, tynnPairingSource } from './tynn-account.js';
@@ -933,6 +933,9 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
     // Paint when there is something to paint. A visible empty frame that then fills in is the
     // app looking broken for the length of a load. Start minimised (or a `--hidden` sign-in launch)
     // keeps it in the tray: the tray's Open shows it.
+    // THE FIRST SHOW, TIMED (Tynn #1032): its load, `show()`, its first focus, and a window shown and never focused, said.
+    // On Wayland a window the compositor does not show gets no frames: the page runs and nothing drawn on a frame draws.
+    if (show) traceFirstShow(win, search ? 'remote' : 'main', { log: (line) => console.log(line) });
     // Shown active: this is the launch the person made (boot) or the remote window they asked for (genie#1235).
     if (show) onceShowable(win, process.platform, () => showWhenReady(win, { activation: 'user-gesture', reason: search ? 'remote window' : 'launch', ledger: activationLedger, label: search ? 'remote' : 'main' }));
 

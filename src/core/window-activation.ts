@@ -217,3 +217,37 @@ export class FirstShowTrace {
         return this.#focused || this.#reported;
     }
 }
+
+/** The slice of a new Electron BrowserWindow `traceFirstShow` listens on: its load, first paint, show and first focus. */
+export interface TracedWindow {
+    once(event: 'ready-to-show', listener: () => void): unknown;
+    once(event: 'show', listener: () => void): unknown;
+    once(event: 'focus', listener: () => void): unknown;
+    readonly webContents: { once(event: 'did-finish-load', listener: () => void): unknown };
+}
+
+export interface TraceFirstShowOptions {
+    readonly log: (line: string) => void;
+    readonly now?: () => number;
+    /** A repeating timer; returns its stop. Defaults to a 1 s unref'd interval. */
+    readonly every?: (fn: () => void) => () => void;
+}
+
+/**
+ * The trace on a window's own events (Tynn #1032). Call it BEFORE `onceShowable`: listeners run in the order they were
+ * added, so the trace sees the load before the `show` that load causes. It only listens: it shows and focuses nothing.
+ */
+export function traceFirstShow(win: TracedWindow, label: string, options: TraceFirstShowOptions): void {
+    const now = options.now ?? Date.now;
+    const trace = new FirstShowTrace(label, now(), options.log);
+    let first: string | null = null;
+    win.webContents.once('did-finish-load', () => { first ??= 'did-finish-load'; trace.note('did-finish-load', now()); });
+    win.once('ready-to-show', () => { first ??= 'ready-to-show'; trace.note('ready-to-show', now()); });
+    win.once('show', () => { trace.shown(first ?? 'neither the load nor the first paint', now()); });
+    win.once('focus', () => { trace.note('focus', now()); });
+    const every = options.every ?? ((fn) => { const t = setInterval(fn, 1_000); t.unref?.(); return () => clearInterval(t); });
+    const stop = every(() => {
+        trace.check(now());
+        if (trace.done) stop();
+    });
+}
