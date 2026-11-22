@@ -225,6 +225,8 @@ function judge(seen, theme, chosen, n) {
 
 console.log('\nTHE SOUND PICKER — what a person sees, in the real app\n');
 const TRIGGER = '[data-surface="settings"] [data-sound-picker]';
+/** In the page: the address is this workstation's own Settings (`genie://<workstation>/settings…`), not the bare route. */
+const SETTLED_SETTINGS = `(() => { const h = decodeURIComponent(window.location.hash); const rest = h.startsWith('#genie://') ? h.slice(9).split(/[?#]/)[0].split('/') : []; return rest.length >= 2 && rest[0] !== 'settings' && rest[1] === 'settings'; })()`;
 let app = launch();
 let cdp = null;
 try {
@@ -238,6 +240,10 @@ try {
     await cdp.evaluate(`window.location.hash = '#genie://settings'; true`);
     await forceWhatsNewOpenForProbe((expression) => cdp.evaluate(expression));
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-settings-nav="notifications"]'))`, 30_000), '1. Settings is open, with its Notifications section');
+    // The app rewrites `genie://settings` to this workstation's own address once it has its snapshot, from the address it
+    // last rendered (App.tsx rewrittenAddress): a click before that is overwritten (gate rerun 1122-013356-260f53: the
+    // click landed, the page stayed on General). A person clicks a page that has settled; so does this run (Tynn #1009).
+    check(await waitFor(cdp, SETTLED_SETTINGS, 30_000), '1b. the address settled on this workstation’s own Settings page', await cdp.evaluate('window.location.hash'));
     check(await click(cdp, '[data-settings-nav="notifications"]'), '2. Notifications takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(TRIGGER)}))`, 15_000), '3. the page has a sound button');
     const before = await cdp.evaluate(`document.querySelector(${JSON.stringify(TRIGGER)})?.textContent ?? ''`);
@@ -263,13 +269,16 @@ try {
     await sleep(300);
     const wasDark = await cdp.evaluate(`document.documentElement.classList.contains('dark')`);
     for (const theme of ['light', 'dark']) {
-        await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'}); document.documentElement.setAttribute('data-theme', '${theme}'); true`);
+        await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'}); document.documentElement.setAttribute('data-theme', '${theme}'); document.getAnimations().forEach((a) => { try { a.finish(); } catch { /* an endless one */ } }); true`);
+        // ^ The switch's own transitions finished at once (Tynn #1009): gate 1122-000850-5f70c8 read 13c/14c mid-way (light
+        //   read the dark colour) although two readings 300 ms apart agreed: a software-rendered window can hold one still.
         // Button's own transition-all (200 ms; slower on the VM's software renderer) and the mouse left on the row it
         // clicked can be read mid-change (measured: a light reading of 58,122,240 at 1.69:1 while the screenshot taken
         // just after showed the settled colours). The mouse rests on the group heading, and the reading is taken once two
         // in a row agree.
         const heading = await cdp.evaluate(`(() => { const h = document.querySelector('[data-sound-popover] [data-sound-group] > div'); if (!h) return null; const r = h.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
         if (heading) await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: heading.x, y: heading.y, button: 'none', clickCount: 0 });
+        await cdp.evaluate(`document.getAnimations().forEach((a) => { try { a.finish(); } catch { /* an endless one */ } }); true`);
         let raw = await cdp.evaluate(MEASURE);
         for (let i = 0, prev = null; i < 15 && raw !== prev; i++) { prev = raw; await sleep(300); raw = await cdp.evaluate(MEASURE); }
         const seen = JSON.parse(raw);
