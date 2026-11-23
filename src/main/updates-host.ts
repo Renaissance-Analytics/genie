@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, relative, isAbsolute } from 'node:path';
 import { channelFrom, type UpdateChannel } from '../core/update-channel.js';
 import type { AgentId } from '../core/identity.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
@@ -147,13 +147,19 @@ export function helperLaunch(launch: HelperLaunch): HelperLaunch {
  * folder this host runs from, which is its own copy under `<home>/host/`. With none (a host started in place, a dev run),
  * the host's own folder.
  */
-export function hostInstallDir(_env: Readonly<Record<string, string | undefined>>, _execPath: string): string {
-    throw new Error('P6-1: not built yet');
+export function hostInstallDir(env: Readonly<Record<string, string | undefined>>, execPath: string): string {
+    const install = env.GENIE_INSTALL_EXEC;
+    return dirname(typeof install === 'string' && install.length > 0 ? install : execPath);
 }
 
 /** Whether this host runs from its own copy, not from the install an update replaces (Tynn #1036 P6-1). */
-export function hostRunsFromCopy(_env: Readonly<Record<string, string | undefined>>, _execPath: string): boolean {
-    throw new Error('P6-1: not built yet');
+export function hostRunsFromCopy(env: Readonly<Record<string, string | undefined>>, execPath: string, caseInsensitive = process.platform === 'win32'): boolean {
+    const install = env.GENIE_INSTALL_EXEC;
+    if (typeof install !== 'string' || install.length === 0) return false;
+    const fold = (p: string) => (caseInsensitive ? p.toLowerCase() : p);
+    const inside = relative(fold(dirname(install)), fold(dirname(execPath)));
+    // Under the install (or the install itself): not a copy. Anywhere else (its copy under <home>/host/): a copy.
+    return !(inside === '' || (!inside.startsWith('..') && !isAbsolute(inside)));
 }
 
 export function updaterDefaultLaunch(env: Readonly<Record<string, string | undefined>>, execPath: string): HelperLaunch {

@@ -101,7 +101,7 @@ import { KeptProcessLogs } from './kept-process-logs.js';
 import { nudgeOnRoster } from './scheduled-nudge.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from './engine-launch.js';
-import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, remoteUpdatesPort, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { clearUpdateFailed, helperLaunch, hostDrainAgents, hostInstallDir, hostRunsFromCopy, readUpdateFailed, relaunchSpec, remoteUpdatesPort, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
 import { shareLinksOver } from './tynn-share-links.js';
 import { AgentShutdownDrain } from '../core/agent-shutdown-drain.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
@@ -900,14 +900,15 @@ async function main(): Promise<void> {
     const updatesService = new UpdatesService({
         ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
         host: {
-            installDir: dirname(process.execPath),
+            // The install the updater replaces, never this host's own copy (Tynn #1036 P6-1).
+            installDir: hostInstallDir(process.env, process.execPath),
             ownPid: process.pid,
             processes: listProcessesAsync,
             kill: killProcessAsync,
             channel: channelFrom(settings.snapshot().update_channel),
             runningVersion,
             // Which host this is (Tynn #413): an update carrying this very host is client-only, and this host keeps running.
-            running: { build, protocol: ENGINE_PROTOCOL },
+            running: { build, protocol: ENGINE_PROTOCOL, fromCopy: hostRunsFromCopy(process.env, process.execPath) },
             releases: async () => {
                 const memory = await proxyMemory;
                 const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say });
