@@ -142,6 +142,20 @@ export function helperLaunch(launch: HelperLaunch): HelperLaunch {
  * electron-updater installs over the app it runs from. The window, which runs from the install, names its executable to the
  * host as GENIE_INSTALL_EXEC; with none (a host started in place, a dev run) the host's own executable, as before.
  */
+/**
+ * THE INSTALL THE UPDATER REPLACES (Tynn #1036 P6-1): the folder of the window's executable (GENIE_INSTALL_EXEC), never the
+ * folder this host runs from, which is its own copy under `<home>/host/`. With none (a host started in place, a dev run),
+ * the host's own folder.
+ */
+export function hostInstallDir(_env: Readonly<Record<string, string | undefined>>, _execPath: string): string {
+    throw new Error('P6-1: not built yet');
+}
+
+/** Whether this host runs from its own copy, not from the install an update replaces (Tynn #1036 P6-1). */
+export function hostRunsFromCopy(_env: Readonly<Record<string, string | undefined>>, _execPath: string): boolean {
+    throw new Error('P6-1: not built yet');
+}
+
 export function updaterDefaultLaunch(env: Readonly<Record<string, string | undefined>>, execPath: string): HelperLaunch {
     const install = env.GENIE_INSTALL_EXEC;
     return { file: typeof install === 'string' && install.length > 0 ? install : execPath, args: ['--updater'] };

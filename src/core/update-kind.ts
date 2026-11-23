@@ -13,6 +13,11 @@ export interface RunningHost {
     /** The running host's build: `<version>+<12 hex of its bundle>` (engine-launch.ts `hostBuild`). */
     readonly build: string;
     readonly protocol: number;
+    /**
+     * Whether it runs from its own copy under `<home>/host/` (Tynn #1036 P6-1). False: it runs from the install an update
+     * replaces, so no update can leave it running. Absent: an older host's answer, read as before.
+     */
+    readonly fromCopy?: boolean;
 }
 
 export type UpdateScope = { readonly kind: 'client-only' } | { readonly kind: 'full'; readonly why: string };
