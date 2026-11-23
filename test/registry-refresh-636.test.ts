@@ -1,24 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HostRegistryStore, storeReplicas } from '../src/main/agent-stores-replica.js';
-import type { StoresDump } from '../src/main/agent-stores-host.js';
+import type { OwnCallAnswer } from '../src/main/own-protocol-client.js';
 import { watchRegistryRefresh } from '../src/main/registry-refresh.js';
+import { openWindowRegistryStore, registryChanges } from '../src/main/window-registry-store.js';
 
-// Real replica change/reconnect notifications and real HostRegistryStore reads; no Electron, files or host process.
-const dump: StoresDump = { inbox: { messages: [], cursors: {} }, attention: { lists: [], questions: [], finished: [] }, approvals: { deck: [], auto: [], cancelled: [] }, settings: null, registryDropped: [] };
+// Main's real registry store (registry.read over its own client) and its real change source (registryChanges over
+// registry.watch, which says the view at each write and again at each reconnect); no Electron, files or host process.
 const drain = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
-function rig(report?: (error: unknown) => void) {
+async function rig(report?: (error: unknown) => void) {
     let respond: (method: string) => Promise<unknown> = async () => [];
     const calls: string[] = []; const errors: unknown[] = [];
-    const source = storeReplicas(async (store, method) => { expect(store).toBe('registry'); calls.push(method); return respond(method); });
-    const store = new HostRegistryStore(source);
+    const views = new Set<(view: unknown) => void>();
+    const own = {
+        call: async (method: string, args: unknown[]): Promise<OwnCallAnswer> => {
+            expect(method).toBe('registry.read');
+            const read = String(args[0]);
+            if (read === 'dropped') return { ok: true, value: [] };
+            calls.push(read);
+            try { return { ok: true, value: await respond(read) }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+        },
+        watchRegistry: (onView: (view: unknown) => void) => { views.add(onView); return () => { views.delete(onView); }; },
+    };
+    const store = await openWindowRegistryStore(own as never);
+    const source = registryChanges(own);
     const registry = { refresh: vi.fn(async () => { await store.readWorkspaces(); await store.readAgents(); }) };
     const stop = watchRegistryRefresh(source, registry, report ?? ((error) => { errors.push(error); }));
-    return { calls, errors, registry, stop, respond: (read: typeof respond) => { respond = read; }, changed: () => source.apply({ store: 'registry', kind: 'written' }), reconnect: () => source.rebase(dump) };
+    const say = () => { for (const v of [...views]) v({ dropped: [] }); };
+    return { calls, errors, registry, stop, respond: (read: typeof respond) => { respond = read; }, changed: say, reconnect: say };
 }
 
 describe('the window owns its registry refresh promise (#636)', () => {
-    it('reads the registry through its real host proxy when the replica announces a change', async () => {
-        const w = rig();
+    it('reads the registry through main’s real store when genie-host says it changed', async () => {
+        const w = await rig();
         try {
             w.changed(); await drain();
             expect(w.calls).toEqual(['readWorkspaces', 'readAgents']);
@@ -28,10 +40,10 @@ describe('the window owns its registry refresh promise (#636)', () => {
     });
 
     it('handles a closed-link read, waits for the actual reconnect, and reads again without replaying any write', async () => {
-        const w = rig(); const closed = new Error("Genie's agent host is not connected; it is being restarted. Try again in a moment.");
+        const w = await rig(); const closed = new Error("Genie's agent host is not connected; it is being restarted. Try again in a moment.");
         try {
             w.respond(async () => { throw closed; }); w.changed(); await drain();
-            expect(w.errors).toEqual([closed]);
+            expect(w.errors.map((e) => (e as Error).message)).toEqual([closed.message]);
             expect(w.calls).toEqual(['readWorkspaces']);
             await drain(); expect(w.registry.refresh).toHaveBeenCalledTimes(1);
             w.respond(async () => []); w.reconnect(); await drain();
@@ -41,7 +53,7 @@ describe('the window owns its registry refresh promise (#636)', () => {
     });
 
     it('coalesces notifications while a read is pending into one later refresh, without overlapping calls', async () => {
-        const w = rig(); let release!: () => void; let first = true;
+        const w = await rig(); let release!: () => void; let first = true;
         const held = new Promise<unknown>((resolve) => { release = () => resolve([]); });
         w.respond(async () => { if (first) { first = false; return held; } return []; });
         try {
@@ -54,19 +66,19 @@ describe('the window owns its registry refresh promise (#636)', () => {
     });
 
     it('reports an unexpected failure of the second read rather than pretending the refresh succeeded', async () => {
-        const w = rig(); const denied = new Error('synthetic read permission denied');
+        const w = await rig(); const denied = new Error('synthetic read permission denied');
         try {
             w.respond(async (method) => { if (method === 'readAgents') throw denied; return []; });
             w.changed(); await drain();
             expect(w.calls).toEqual(['readWorkspaces', 'readAgents']);
-            expect(w.errors).toEqual([denied]);
+            expect(w.errors.map((e) => (e as Error).message)).toEqual([denied.message]);
             await drain(); expect(w.registry.refresh).toHaveBeenCalledTimes(1);
         } finally { w.stop(); }
     });
 
     it('contains a synchronous refresh throw and a failing reporter, then allows a later refresh', async () => {
         const failed = new Error('synthetic synchronous failure');
-        const report = vi.fn(() => { throw new Error('synthetic log unavailable'); }); const w = rig(report);
+        const report = vi.fn(() => { throw new Error('synthetic log unavailable'); }); const w = await rig(report);
         try {
             w.registry.refresh.mockImplementationOnce(() => { throw failed; });
             w.changed(); await drain();
@@ -78,13 +90,13 @@ describe('the window owns its registry refresh promise (#636)', () => {
     });
 
     it('CONTROL: disposal stops later change and reconnect notifications from starting work', async () => {
-        const w = rig(); w.stop(); w.stop(); w.changed(); w.reconnect(); await drain();
+        const w = await rig(); w.stop(); w.stop(); w.changed(); w.reconnect(); await drain();
         expect(w.registry.refresh).not.toHaveBeenCalled();
         expect(w.calls).toEqual([]); expect(w.errors).toEqual([]);
     });
 
     it('CONTROL: installing the listener alone performs no unsolicited reads or writes', async () => {
-        const w = rig();
+        const w = await rig();
         try { await drain(); expect(w.registry.refresh).not.toHaveBeenCalled(); expect(w.calls).toEqual([]); }
         finally { w.stop(); }
     });

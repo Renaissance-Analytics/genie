@@ -88,7 +88,7 @@ describe('the process book and its scheduler are genie-host\'s (P3.3c)', () => {
 });
 
 describe('flows are genie-host\'s (P3.3d)', () => {
-    it('the host opens the flows and runs their engine; a window with a host uses the replica, its own engine only on the emergency path', () => {
+    it('the host opens the flows and runs their engine; a window has none, and compose starts its own only for the tests\' composition', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/await FlowStore\.open\(home\)/);
         expect(host).toMatch(/startFlowsEngine\(\{/);

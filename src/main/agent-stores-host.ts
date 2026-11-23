@@ -36,15 +36,6 @@ export interface ApprovalsView {
     readonly cancelled: ReadonlyArray<{ action: string; detail: string; reason: string }>;
 }
 
-export interface StoresDump {
-    readonly inbox: { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>>; readonly filtered?: true };
-    readonly attention: AttentionData;
-    readonly approvals: ApprovalsView;
-    readonly settings: SettingsData | null;
-    /** What the host's store dropped reading the registry's files (a window shows its faults). */
-    readonly registryDropped: readonly string[];
-}
-
 export type StoresEvent =
     | {
         readonly store: 'inbox';
@@ -119,12 +110,6 @@ export class AgentStoresService {
 
     get stores(): AgentStores {
         return this.#stores;
-    }
-
-    /** Everything a window that just connected needs to read before anything else. */
-    dump(): StoresDump {
-        const mail = this.#stores.inbox.snapshot();
-        return { inbox: mail, attention: this.#stores.attention.snapshot(), approvals: this.#approvalsView(), settings: this.#stores.settings?.data() ?? null, registryDropped: [...(this.#stores.registry?.store.dropped ?? [])] };
     }
 
     onEvent(listener: (event: StoresEvent) => void): () => void {

@@ -61,11 +61,6 @@ import { isPromptAction } from '../core/prompt-delivery.js';
 
 type HostOptions = ConstructorParameters<typeof SessionHost>[0];
 
-/** Only declared method names belong in timing logs, never a call's arguments. */
-function timingLabel(method: EngineMethod): string {
-    return method;
-}
-
 /** What the session host is built with, from this server: its owner's half of the options. */
 export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
@@ -471,7 +466,7 @@ export class SessionEngineServer {
     async #call(conn: Connection, id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: { ok: true; value: unknown } | { ok: false; reason: string };
         // A notification (id 0: a spawn frame, a keystroke) is not a call anyone waits on: not timed.
-        const timed = id === 0 ? undefined : this.#options.timeCall?.(timingLabel(method));
+        const timed = id === 0 ? undefined : this.#options.timeCall?.(method); // its method name alone, never its arguments
         try {
             reply = { ok: true, value: await this.#dispatch(conn, method, args) };
         } catch (error) {
