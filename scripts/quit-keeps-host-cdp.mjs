@@ -13,7 +13,13 @@
  *
  * HOW IT RUNS. It launches Genie itself, from the
  * root of a built and SEEDED tree (smoke-seed.mjs), with nothing of Genie's on the debugger port: vm-smoke stops its own
- * Electron first. Launch flags follow the caller's session: `--no-sandbox` on Linux, `--ozone-platform=$XDG_SESSION_TYPE`
+ * Electron first. AS A CI ROW (`quit-keeps-host` in scripts/ci/linux.sh and windows.ps1, Tynn #1036) it is given
+ * QUIT_CDP_OWN_HOME=1: a NEW home (HOME, USERPROFILE, APPDATA, LOCALAPPDATA, XDG_CONFIG_HOME), seeded here with
+ * smoke-seed.mjs before any Genie path is read, so its Genie has a single-instance lock, a genie-host and a ~/.genie of its
+ * own beside the run's shared app; its ports (CDP_PORT, QUIT_CDP_INSPECT) and QUIT_CDP_OUT for its logs come from the row.
+ * Electron is started by its own path, never through npx (a moved home has no npm cache, and mise's shims refuse it), and
+ * the page it attaches to is Genie's MAIN window (cdp-main-window.mjs), never the "Starting Genie's host…" window that
+ * opens first. Launch flags follow the caller's session: `--no-sandbox` on Linux, `--ozone-platform=$XDG_SESSION_TYPE`
  * when that is x11 or wayland, anything else in QUIT_CDP_ARGS. Providers are the stub app server (scripts/stub-codex.mjs)
  * in its TICKER mode — `tick <n> pid <pid>` four times a second, so each agent's ledger names the process streaming for it —
  * switched on by a marker file holding THIS script's pid (a marker whose pid is dead is ignored by the stub, so a run that
@@ -33,16 +39,21 @@
  * (default 360 s, under the batch's 420) naming the step it was in. Whatever ends the run, the cleanup runs, bounded: the
  * agents are stopped, its Electron ended, and a host it could not shut down through the quit is ended by signal.
  *
- * SAFETY: it launches Electron, so it refuses to run anywhere but a test machine — CI, the test VM (Linux user `genie`), or
- * QUIT_CDP_ALLOW=1 (the Windows VM's runner). Never on the owner's desktop.
+ * SAFETY: it launches Electron, so it refuses to run anywhere but a test machine — CI, the test VM (Linux user `genie`),
+ * GENIE_TEST_MACHINE=1 (the CI scripts' statement) or QUIT_CDP_ALLOW=1 (the Windows VM's runner). Never on the owner's desktop.
+ *
+ * ON WINDOWS ITS RUN ENDS THROUGH scripts/end-own-tree.mjs (Tynn #1031), as every row that starts its own Genie: the app's
+ * tree, its genie-host and what this run started, ended, waited for and named; anything left fails the run.
  *
  * Exit: 0 every check passed; 1 a check failed (or a deadline was missed); 2 cannot run here.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
-import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 
 const T0 = Date.now();
 const since = () => `${((Date.now() - T0) / 1000).toFixed(1)}s`;
@@ -54,6 +65,35 @@ function step(id, what) {
 }
 
 step('0.1', 'reading the settings');
+const WIN = process.platform === 'win32';
+step('0.2', 'is this a test machine? (CI, GENIE_TEST_MACHINE=1, user genie, or QUIT_CDP_ALLOW=1)');
+const user = process.env.USER ?? process.env.LOGNAME ?? process.env.USERNAME ?? '';
+const testMachine = process.env.CI === 'true' || process.env.GENIE_TEST_MACHINE === '1' || process.env.QUIT_CDP_ALLOW === '1' || (process.platform === 'linux' && user === 'genie');
+if (!testMachine) refuse(`it launches Electron, so it runs only on a test machine (CI, GENIE_TEST_MACHINE=1, the test VM as user \`genie\`, or QUIT_CDP_ALLOW=1); user is "${user}"`);
+step('0.3', `is this the root of a Genie tree? (${process.cwd()})`);
+if (!existsSync('package.json') || !existsSync('scripts/stub-codex.mjs')) refuse(`run it from the root of a built Genie tree (${process.cwd()})`);
+// The stub provider is started by its path through its `#!/usr/bin/env node` line, and git holds it without the execute bit
+// (a CI tree is a fresh copy): made executable here, by the script that names it as the provider (linux.sh's need_app does too).
+if (!WIN) chmodSync('scripts/stub-codex.mjs', 0o755);
+/**
+ * A HOME OF ITS OWN (QUIT_CDP_OWN_HOME=1, the CI row): a new directory is HOME, USERPROFILE, APPDATA, LOCALAPPDATA and
+ * XDG_CONFIG_HOME for this script and everything it starts, and smoke-seed.mjs writes its workspace there. Node's own
+ * directory goes first on PATH, so the stub provider's `#!/usr/bin/env node` finds node without a shim that reads the real
+ * home (linux.sh's need_app, for the same reason). Bounded; a seed that fails is "cannot run here", said with its words.
+ */
+function ownHome() {
+    const root = mkdtempSync(join(tmpdir(), 'genie-quit-home-'));
+    const env = { HOME: root, USERPROFILE: root, APPDATA: join(root, 'AppData', 'Roaming'), LOCALAPPDATA: join(root, 'AppData', 'Local'), XDG_CONFIG_HOME: join(root, '.config') };
+    for (const dir of [env.APPDATA, env.LOCALAPPDATA, env.XDG_CONFIG_HOME]) mkdirSync(dir, { recursive: true });
+    Object.assign(process.env, env);
+    delete process.env.GENIE_HOME;
+    process.env.PATH = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`;
+    step('0.3h', `a home of its own, seeded (smoke-seed.mjs, ≤ 60 s): ${root}`);
+    const seeded = spawnSync(process.execPath, ['scripts/smoke-seed.mjs'], { encoding: 'utf8', timeout: 60_000, env: process.env, windowsHide: true });
+    if (seeded.status !== 0) refuse(`the seed could not be written in ${root}: ${String(seeded.stderr || seeded.stdout || seeded.error?.message || `exit ${seeded.status}`).trim().split(/\r?\n/).pop()}`);
+    return root;
+}
+if (process.env.QUIT_CDP_OWN_HOME === '1') ownHome();
 let PORT = Number(process.env.CDP_PORT ?? 9222);
 let INSPECT = Number(process.env.QUIT_CDP_INSPECT ?? 9229);
 const CLOSED_MS = Number(process.env.QUIT_CDP_CLOSED_MS ?? 12_000);
@@ -67,8 +107,7 @@ const GENIE_HOME = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ?
 const HOST_RECORD = join(GENIE_HOME, 'runtime', 'host.json');
 const LIFECYCLE = join(GENIE_HOME, 'runtime', 'lifecycle.log');
 const HOST_LOG = join(GENIE_HOME, 'logs', 'genie-host.log');
-const OUT = join(process.cwd(), 'smoke-out');
-const WIN = process.platform === 'win32';
+const OUT = process.env.QUIT_CDP_OUT ? resolve(process.env.QUIT_CDP_OUT) : join(process.cwd(), 'smoke-out');
 /** Bounds for the process calls this script makes synchronously: none may block a run. */
 const SYNC_MS = 15_000;
 
@@ -165,7 +204,8 @@ async function targetOn(port, kind, ms) {
     const found = await until(async () => {
         try {
             const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3_000) })).json();
-            const t = targets.find((x) => (kind === 'page' ? x.type === 'page' : true) && x.webSocketDebuggerUrl);
+            // Genie's MAIN window by its URL (cdp-main-window.mjs): the host-wait window opens first and has no window.genie.
+            const t = kind === 'page' ? mainWindow(targets) : targets.find((x) => x.webSocketDebuggerUrl);
             if (!t) last = `no ${kind} yet (${targets.length} targets)`;
             return t ?? null;
         } catch (e) { last = String(e?.message ?? e); return null; }
@@ -218,21 +258,23 @@ function launchArgs() {
     for (const a of (process.env.QUIT_CDP_ARGS ?? '').split(/\s+/)) if (a && !args.includes(a)) args.push(a);
     return args;
 }
+/** Electron's binary, by its own path (node_modules/electron's answer): never npx, which reads npm's cache under the home. */
+const electronBinary = () => createRequire(import.meta.url)('electron');
 function launch(label) {
     mkdirSync(OUT, { recursive: true });
     const log = join(OUT, `quit-keeps-host-${label}.log`);
     const out = openSync(log, 'a');
-    const argv = ['electron', `--inspect=${INSPECT}`, '.', `--remote-debugging-port=${PORT}`, ...launchArgs()];
+    const argv = [`--inspect=${INSPECT}`, '.', `--remote-debugging-port=${PORT}`, ...launchArgs()];
     // GENIE_TRAY_PROBE=1: main.ts's read-only tray probe exists only in a launch that asks for it (this proof's).
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', argv, { detached: !WIN, stdio: ['ignore', out, out], shell: WIN, windowsHide: true, env: { ...process.env, GENIE2_CODEX_BINARY: process.env.GENIE2_CODEX_BINARY || join(process.cwd(), 'scripts', 'stub-codex.mjs'), GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
+    const child = spawn(electronBinary(), argv, { detached: !WIN, stdio: ['ignore', out, out], windowsHide: false, env: { ...process.env, GENIE2_CODEX_BINARY: process.env.GENIE2_CODEX_BINARY || join(process.cwd(), 'scripts', 'stub-codex.mjs'), GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
     let gone = false;
     const exited = new Promise((r) => {
         child.once('exit', (code, signal) => { gone = true; r({ code, signal }); });
         child.once('error', (error) => { gone = true; r({ code: null, signal: null, error: String(error) }); });
     });
-    console.log(`  launched (${label}) pid ${child.pid}: npx ${argv.join(' ')}  → ${log}`);
+    console.log(`  launched (${label}) pid ${child.pid}: electron ${argv.join(' ')}  → ${log}`);
     return {
-        log, exited,
+        log, exited, pid: child.pid ?? null,
         get gone() { return gone; },
         kill() {
             if (gone || !child.pid) return;
@@ -375,7 +417,8 @@ async function reopened(first, label, id) {
 function launchSecond() {
     mkdirSync(OUT, { recursive: true });
     const out = openSync(join(OUT, 'quit-keeps-host-second-launch.log'), 'a');
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['electron', '.', ...launchArgs()], { stdio: ['ignore', out, out], shell: WIN, windowsHide: true });
+    const child = spawn(electronBinary(), ['.', ...launchArgs()], { stdio: ['ignore', out, out], windowsHide: false });
+    if (Number.isInteger(child.pid)) secondPid = child.pid;
     return new Promise((r) => { child.once('exit', (code, signal) => r({ code, signal })); child.once('error', (e) => r({ error: String(e) })); });
 }
 
@@ -397,6 +440,9 @@ let a = null;
 let b = null;
 const agents = [];
 let hostPid = null;
+/** The terminal this run opened, and its second launch: what the Windows cleanup is given beside the app and the host. */
+let terminalPid = null;
+let secondPid = null;
 let shutDownProven = false;
 let cleaned = false;
 async function cleanup(why) {
@@ -417,9 +463,24 @@ async function cleanup(why) {
     for (const s of [a, b]) {
         if (!s) continue;
         s.cdp?.close(); s.inspector?.close();
-        s.app.kill();
+        if (!WIN) s.app.kill();
     }
-    if (!shutDownProven) {
+    if (WIN) {
+        // THE WINDOWS CLEANUP (Tynn #1031): the app's tree, the host in this run's own record, the providers, the terminal and
+        // the second launch, by the helper every row that starts its own Genie uses: the process table read before anything
+        // is ended, every taskkill's answer kept, waited for until nothing of this run is in the table, and what is left NAMED.
+        // A proven shutdown still goes through it: what "Shut down everything" left behind is this row's failure.
+        let endOwnRun = null;
+        try { ({ endOwnRun } = await import('./end-own-tree.mjs')); } catch (error) { check(false, 'the Windows cleanup: scripts/end-own-tree.mjs (Tynn #1031) is not in this tree', String(error?.message ?? error).slice(0, 160)); }
+        if (endOwnRun) {
+            const others = [...agents.map((ag) => ag.pid), terminalPid, secondPid].filter((pid) => Number.isInteger(pid) && pid > 0);
+            const ended = await endOwnRun({ app: a?.app ?? null, hostPid: Number.isInteger(hostPid) ? hostPid : (hostRecord()?.pid ?? null), others, since: T0, log: (line) => { console.log(`  ${line}`); } });
+            check(ended.ok, 'nothing of this run is left running by its own cleanup', ended.ok ? '' : `LEFT RUNNING by this run's own cleanup: ${ended.words}`);
+        } else {
+            for (const s of [a, b]) s?.app.kill();
+        }
+    }
+    if (!shutDownProven && !WIN) {
         // A host this run could not end through "Shut down everything" is ended by signal: SIGTERM (its graceful shutdown,
         // which stops its sessions), then SIGKILL; then any provider of ours still standing.
         if (alive(hostPid)) {
@@ -470,12 +531,6 @@ const watchdog = setTimeout(() => {
     void cleanup('watchdog').finally(finish);
 }, DEADLINE_MS);
 
-step('0.2', 'is this a test machine? (CI, user genie, or QUIT_CDP_ALLOW=1)');
-const user = process.env.USER ?? process.env.LOGNAME ?? process.env.USERNAME ?? '';
-const testMachine = process.env.CI === 'true' || process.env.QUIT_CDP_ALLOW === '1' || (process.platform === 'linux' && user === 'genie');
-if (!testMachine) refuse(`it launches Electron, so it runs only on a test machine (CI, the test VM as user \`genie\`, or QUIT_CDP_ALLOW=1); user is "${user}"`);
-step('0.3', `is this the root of a Genie tree? (${process.cwd()})`);
-if (!existsSync('package.json') || !existsSync('scripts/stub-codex.mjs')) refuse(`run it from the root of a built Genie tree (${process.cwd()})`);
 /**
  * A port the previous Genie should have let go of (batch L3: 9222 "accepts but does not answer" right after vm-smoke ended
  * its window). Named — `ss` and each owner's command line — given 30 s to come free (a window still dying), named again,
@@ -572,6 +627,7 @@ try {
     // A TERMINAL: "Shut down everything" must end it (genie#1508).
     step('9t', 'a terminal open');
     const terminal = await a.cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(workspaceId)}, {}).then((t) => ({ id: t.id, pid: t.pid }))`, 30_000);
+    terminalPid = Number.isInteger(terminal?.pid) ? terminal.pid : null;
     check(alive(terminal?.pid), '9t. CONTROL: a terminal is open, its pid alive', JSON.stringify(terminal));
 
     // -------------------------------------------------------------------------------- "Just close the UI": the tray stays
