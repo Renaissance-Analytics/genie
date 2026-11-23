@@ -443,6 +443,12 @@ export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: str
     return { ok: true, id, kind: 'empty', stamped: null };
 }
 
+/** A workspace whose folder is gone starts nothing (host split P7): the one sentence, for every start (startRefusal, and genie-host's trust restart). */
+export function missingFolderRefusal(missing: { pathIfMissing(workspaceId: string): string | null } | undefined, record: Pick<AgentRecord, 'workspaceId' | 'name'>): string | null {
+    const gone = missing?.pathIfMissing(record.workspaceId) ?? null;
+    return gone === null ? null : `${record.workspaceId}'s folder is not there (${gone}): locate it from the Dashboard before starting ${record.name}`;
+}
+
 export function startRefusal(ports: {
     readonly registry: { workspace(id: string): { readonly id: string; readonly asleep?: boolean | undefined } | null };
     /** The workspaces whose folder is not there now (missing-workspaces.ts). Absent: this caller keeps no such flag. */
@@ -451,8 +457,8 @@ export function startRefusal(ports: {
     const workspace = ports.registry.workspace(record.workspaceId);
     if (workspace?.asleep) return `${workspace.id} is hibernating; wake it before starting ${record.name}`;
     // A workspace whose folder is gone starts nothing (host split P7): said in words, before anything spawns.
-    const gone = ports.missing?.pathIfMissing(record.workspaceId) ?? null;
-    if (gone !== null) return `${record.workspaceId}'s folder is not there (${gone}): locate it from the Dashboard before starting ${record.name}`;
+    const gone = missingFolderRefusal(ports.missing, record);
+    if (gone !== null) return gone;
     // §6.1 caps: a start past the cap is refused with the number and the setting named — never queued, never silent.
     if (load && load.running >= load.cap) return `${record.workspaceId} is at its cap of ${load.cap} running agents; stop one or raise agent_cap in the workspace settings before starting ${record.name}`;
     return null;

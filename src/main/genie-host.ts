@@ -137,7 +137,7 @@ import { GAppPreviews } from './gapp-previews.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
-import { startRefusal } from './workspace-ops-host.js';
+import { missingFolderRefusal, startRefusal } from './workspace-ops-host.js';
 import { agentCapFrom, HUMAN } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
@@ -1762,6 +1762,9 @@ async function main(): Promise<void> {
     const trustRestart = async (id: AgentId): Promise<{ ok: true } | { ok: false; reason: string | null }> => {
         const record = hostRegistry.find(id);
         if (!record) return { ok: false, reason: null };
+        // Its workspace's folder is gone (P7): refused before the stop, so a running agent is left as it was.
+        const gone = missingFolderRefusal(missingWorkspaces, record);
+        if (gone !== null) return { ok: false, reason: gone };
         host.stop(id);
         const verdict = await host.ended(id);
         if (verdict && !verdict.verified && verdict.survivors.length > 0) return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
