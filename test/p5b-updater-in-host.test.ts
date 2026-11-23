@@ -376,7 +376,8 @@ describe('the install order', () => {
         await tick();
         expect(told).toBe(1);
         const main = strip('src/main/main.ts');
-        expect(main).toMatch(/onInstalling\(\(\) => \{[\s\S]{0,400}quit\.markRecorded\(\)[\s\S]{0,200}quit\.choose\('shut-down'\)[\s\S]{0,300}app\.quit\(\)/);
+        // How it quits follows the install's scope (P6-1, Tynn #1036; test/p6-1-install-quit-keeps-host.test.ts): a full one shuts down.
+        expect(main).toMatch(/onInstalling\(\(scope\) => \{[\s\S]{0,100}const how = installQuit\(scope\);[\s\S]{0,400}quit\.markRecorded\(\)[\s\S]{0,200}quit\.choose\(how\)[\s\S]{0,300}app\.quit\(\)/);
     });
 });
 
