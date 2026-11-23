@@ -143,7 +143,8 @@ describe('S3: host launch and resume', () => {
 });
 
 describe('S3: login and its status carry no home (Tynn #753)', () => {
-    it.each(['claude', 'codex', DESIGN_LOGIN])('%s opens the terminal and runs the completion status in the normal provider home', async provider => {
+    // Claude's sign-in is the browser one now (Tynn #1011, no terminal): pinned in test/claude-browser-sign-in-1011.test.ts.
+    it.each(['codex', DESIGN_LOGIN])('%s opens the terminal and runs the completion status in the normal provider home', async provider => {
         const scratch = await directory();
         const a = account(provider === 'codex' ? 'codex' : 'claude');
         let current = a, exit: ((id: string, code: number) => void) | undefined;
@@ -217,7 +218,7 @@ describe('S3: an unset legacy home stays unset at every provider entry point', (
         noHome(f.seen[0]!.env);
         expect(f.seen[0]!.env.DB_PORT).toBe('4312');
     });
-    it.each(['claude', 'codex'] as const)('%s legacy login and completion status keep the home unset', async provider => {
+    it.each(['codex'] as const)('%s legacy login and completion status keep the home unset', async provider => {
         const a = inherited(provider), scratch = await directory();
         const opened: Array<{ env?: Env | undefined }> = [], statuses: Env[] = [];
         let exit: ((id: string, code: number) => void) | undefined;

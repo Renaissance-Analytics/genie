@@ -24,6 +24,26 @@ export interface ClaudeAccountsLivePorts {
 
 const sameEmail = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
+/**
+ * WHETHER CLAUDE CODE SAYS AN ACCOUNT IS SIGNED IN NOW, asked fresh for a Switch (the review of #2139): never the popover's
+ * last view, which may be seconds old or not read yet. An account with a folder of its own is asked there. The default home
+ * holds ONE sign-in: it is a default-home account's when it reports that account's email, or, for the account nobody has
+ * named yet, when it is no other default-home account's (the rule the book uses for who signed in, `recordSignedIn`).
+ * `null` when Claude Code could not be asked: the caller says so and guesses nothing.
+ */
+export async function claudeSignedInNow(account: AccountRecord, ports: Pick<ClaudeAccountsLivePorts, 'accounts' | 'defaultDir'> & { readonly describe: (configDir: string | null) => Promise<{ readonly signedIn: boolean; readonly email?: string | null }> }): Promise<boolean | null> {
+    try {
+        if (account.configDir !== undefined) return (await ports.describe(account.configDir)).signedIn;
+        const status = await ports.describe(ports.defaultDir());
+        if (!status.signedIn) return false;
+        const home = ports.accounts().filter((a) => a.provider === 'claude' && a.configDir === undefined);
+        const owner = home.find((a) => sameEmail(a.identity.email, status.email)) ?? home.find((a) => a.identity.email === null);
+        return owner?.id === account.id;
+    } catch {
+        return null;
+    }
+}
+
 export class ClaudeAccountsLive {
     readonly #p: ClaudeAccountsLivePorts;
     #view: Readonly<Record<string, ClaudeAccountLive>> = {};

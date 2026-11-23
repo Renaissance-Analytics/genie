@@ -243,7 +243,7 @@ try {
             rightIds: right ? [...right.querySelectorAll('[data-account]')].map((s) => s.getAttribute('data-account')) : [],
             rightRanks: right ? [...right.querySelectorAll('[data-account]')].map((s) => s.getAttribute('data-switch-rank')) : [],
             rightTops: right ? [...right.querySelectorAll('[data-account]')].map((s) => s.getBoundingClientRect().top) : [],
-            switches: right ? right.querySelectorAll('[data-action="account-switch"]').length : 0,
+            switches: right ? [...right.querySelectorAll('[data-account]')].filter((s) => s.querySelectorAll('[data-action="account-switch"], [data-action="account-sign-in"]').length === 1).length : 0,
             plans: [...pop.querySelectorAll('[data-account-plan]')].map((p) => p.textContent),
             sparePlan: Boolean(pop.querySelector('[data-account="${SPARE}"] [data-account-plan]')),
             another: box(another),
@@ -262,7 +262,7 @@ try {
     check(JSON.stringify(seen.rightIds) === JSON.stringify(EXPECTED_RIGHT), '12. the right column is in switch-next order: Soon, Lab, Spare, Old', JSON.stringify(seen.rightIds));
     check(JSON.stringify(seen.rightRanks) === JSON.stringify(['1', '2', '3', '4']), '13. ranked 1..4', JSON.stringify(seen.rightRanks));
     check(seen.rightTops.every((t, i) => i === 0 || t > seen.rightTops[i - 1]), '14. stacked in a column, top to bottom', JSON.stringify(seen.rightTops.map(Math.round)));
-    check(seen.switches === 4, '15. each other account has its Switch', String(seen.switches));
+    check(seen.switches === 4, '15. each other account has its ONE action: Switch, or (not signed in now) Sign in in the browser (Tynn #1011)', String(seen.switches));
     check(!seen.sparePlan && !seen.plans.includes('unknown'), '16. no "unknown" plan chip: an account with no plan has none', JSON.stringify(seen.plans));
     check(seen.plans.includes('pro'), '17. CONTROL: a known plan does draw its chip', JSON.stringify(seen.plans));
     check(Boolean(seen.another && seen.another.width > 0 && seen.another.bottom <= seen.pop.bottom + 1), '18. Use another account is there, inside the popover', JSON.stringify(seen.another));
