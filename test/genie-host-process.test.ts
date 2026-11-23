@@ -12,6 +12,10 @@ import { connectSocket, pidAlive } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SpawnHostClient } from '../src/main/spawn-host-client.js';
 import type { FilesHubEvent } from '../src/main/files-watch-hub.js';
+import { ownProtocolClient, type OwnCallAnswer, type OwnProtocolClient } from '../src/main/own-protocol-client.js';
+import { tunnelDoor, tunnelLinkOf } from '../src/main/window-tunnel.js';
+import type { HostedProcess } from '../src/main/process-book.js';
+import type { FeatureData } from '../src/renderer/features.js';
 
 // By its whole address: on Windows a process entry moves to the home folder first (process-start.ts), where a bare 'tsx' does not resolve for what the host starts.
 const TSX = import.meta.resolve('tsx');
@@ -58,6 +62,33 @@ async function window(): Promise<{ client: SessionEngineClient; transport: Clien
     const connected = await client.connect(transport, token);
     expect(connected).toMatchObject({ ok: true });
     return { client, transport };
+}
+
+/**
+ * MAIN'S OWN PROTOCOL CLIENT OVER THIS WINDOW'S ENGINE LINK, tunnelled exactly as main.ts does it
+ * (`tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true })`): what a window asks of genie-host
+ * — features.act/snapshot, registry.write, deck.watch — goes over the one protocol, never the engine link's replicas.
+ */
+function ownOver(client: SessionEngineClient): { own: OwnProtocolClient; dispose(): void } {
+    const own = ownProtocolClient();
+    const bridge = tunnelDoor(own.door, tunnelLinkOf(client), { own: true });
+    return { own, dispose: () => bridge.dispose() };
+}
+
+/** One call, asked again while genie-host is still opening the part that answers it (its process book, at boot). */
+async function ask(own: OwnProtocolClient, method: Parameters<OwnProtocolClient['call']>[0], args: unknown[]): Promise<OwnCallAnswer> {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+        const answer = await own.call(method, args);
+        if (answer.ok || !/still (starting|opening)/.test(answer.reason) || Date.now() > deadline) return answer;
+        await sleep(200);
+    }
+}
+
+/** The kept processes the window is shown: the features snapshot's hosting.processes. */
+async function keptProcesses(own: OwnProtocolClient): Promise<readonly HostedProcess[]> {
+    const answer = await own.call('features.snapshot', []);
+    return answer.ok ? ((answer.value as FeatureData).hosting?.processes ?? []) : [];
 }
 
 /** The provider processes the host recorded for its agents (the spawn ledger, `runtime/children.json`). */
@@ -175,8 +206,9 @@ describe('genie-host as its own process', () => {
         const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'teller' });
         const first = await window();
-        // genie-host reads its own registry for records (Tynn #954, 2g-3): the window pushes none.
-        expect(await first.client.call('engine.stores', ['registry', 'writeAgents', [[agent]]])).toMatchObject({ ok: true });
+        const firstOwn = ownOver(first.client);
+        // genie-host reads its own registry for records (Tynn #954, 2g-3): main writes it over the protocol's registry.write.
+        expect(await ask(firstOwn.own, 'registry.write', ['writeAgents', [[agent]]])).toMatchObject({ ok: true });
         // A Take Over terminal's agent: genie-host starts its TUI and mints the id it calls Genie's tools by over HTTP. No
         // window says whose terminal it is (Tynn #1044: the window view carries no callers).
         expect(await first.client.takeOvers().start(agent.id)).toMatchObject({ ok: true });
@@ -195,6 +227,7 @@ describe('genie-host as its own process', () => {
         // POSITIVE CONTROL: with the window here, the host's tool answers (the gauge can see a success).
         expect((await call('knowledge', { action: 'add', title: 'Before', body: 'with a window', scope: 'workspace' })).isError).toBe(false);
 
+        firstOwn.dispose();
         first.transport.close(); // the window goes
         await sleep(500);
 
@@ -218,53 +251,77 @@ describe('genie-host as its own process', () => {
         expect(JSON.parse(siteStatus.text)).toEqual({ ok: false, error: 'no site "teller" in this workspace; `sites list` shows them' });
         // A window tool: refused AT ONCE, in words (timed: a hang would be the failure).
         const t0 = Date.now();
-        // checkIssues: a window tool, open to every agent (workspaceTabs is offered only to a workspace's default agent, so its
-        // call is refused before any handler). `sites open` is genie-host's since Tynn #1046 D2, with the rest of `sites`.
-        const refused = await call('checkIssues', {});
+        // openFileForUser: a window tool, open to every agent (workspaceTabs is offered only to a workspace's default agent, so
+        // its call is refused before any handler). `sites open` is genie-host's since Tynn #1046 D2, with the rest of `sites`.
+        const refused = await call('openFileForUser', { path: 'README.md' });
         expect(refused.isError).toBe(true);
         // This host runs on plain Node under the test (tsx, no Electron), so hostCapabilities() gives it no window: the window
         // tool says it is not available on this host (P10.1d). An Electron host's "window, which is closed" wording is pinned
         // in mcp-host-tools.test.ts.
-        expect(refused.text).toBe(notAvailableHere('checkIssues', 'a Genie window'));
+        expect(refused.text).toBe(notAvailableHere('openFileForUser', 'a Genie window'));
         expect(Date.now() - t0).toBeLessThan(5_000);
+        // checkIssues IS THE HOST'S (Tynn #934 task #1474): with no window it answers from this host's own IssueWatch. This
+        // workspace is linked to no Tynn project, and it says so in the tool's own words; nothing is forwarded.
+        const issues = await call('checkIssues', {});
+        expect(issues.isError).toBe(false);
+        expect(JSON.parse(issues.text)).toEqual({ ok: false, reason: 'this workspace is not linked to a Tynn project (project.json tynn.projectId)' });
 
-        // The next window: the question waits, the mail is there, the endpoint is the one agents were configured with.
+        // The next window, over the protocol: the question waits on the Deck genie-host says (deck.watch), the mail is in
+        // its inbox (the features snapshot), the knowledge is found (knowledge.search), the endpoint is the one agents have.
         const second = await window();
-        expect(second.client.stores().attention.pending().map((q) => q.id)).toContain(questionId);
-        expect(second.client.stores().inbox.unread('human').map((m) => m.text)).toContain('shipped while you were away');
-        expect((await second.client.stores().knowledge.search({ query: 'no window', scopes: 'all' } as never)).hits.length).toBeGreaterThan(0);
-        expect((await second.client.mcpStatus())?.endpoint).toEqual(endpoint);
+        const secondOwn = ownOver(second.client);
+        let deck: readonly { id: string }[] = [];
+        const stopDeck = secondOwn.own.watchDeck((items) => { deck = items; });
+        try {
+            await until('the question on the Deck the next window hears', () => deck.some((item) => item.id === questionId), 30_000);
+            const snapshot = await ask(secondOwn.own, 'features.snapshot', []);
+            expect(snapshot).toMatchObject({ ok: true });
+            expect(((snapshot as { value: FeatureData }).value.inbox?.unread ?? []).map((m) => m.text)).toContain('shipped while you were away');
+            const found = await ask(secondOwn.own, 'features.act', [{ kind: 'knowledge.search', query: 'no window' }]);
+            expect(found).toMatchObject({ ok: true });
+            expect(((found as { value: FeatureData }).value.knowledge.hits ?? []).map((h) => h.title)).toContain('After');
+            expect((await second.client.mcpStatus())?.endpoint).toEqual(endpoint);
+        } finally { stopDeck(); secondOwn.dispose(); }
         second.transport.close();
     }, 120_000);
 
-    it('THE HOST KEEPS ALIVE WHAT THE PERSON LEFT RUNNING (P3.3b): with no window, a killed `restart: always` worker is started again by the host; the next window sees it; Stop from a window ends it for good', async () => {
+    it('THE HOST KEEPS ALIVE WHAT THE PERSON LEFT RUNNING (P3.3b): a `restart: always` process kept over the protocol is started again by the host when it is killed with no window; the next window sees it; Stop from a window ends it for good', async () => {
         await writeFile(join(workspace, 'worker.cjs'), `setInterval(() => console.log('working ' + process.pid), 200);\n`);
-        const spec = { id: 'proc:worker', workspaceId: 'ws', name: 'worker', command: `"${process.execPath}" worker.cjs`, cwd: workspace, restart: 'always' as const };
         const first = await window();
-        first.client.supervisor().start(spec);
-        const firstPid = await until('the worker running with a pid', () => first.client.supervisor().status('proc:worker')?.pid ?? null, 30_000);
+        const firstOwn = ownOver(first.client);
+        // The person's "keep this running", as the Hosting tab sends it: features.act hosting.createProcess.
+        expect(await ask(firstOwn.own, 'features.act', [{ kind: 'hosting.createProcess', workspaceId: 'ws', workspacePath: workspace, name: 'worker', command: `"${process.execPath}" worker.cjs`, restart: 'always' }])).toMatchObject({ ok: true });
+        const worker = async (own: OwnProtocolClient) => (await keptProcesses(own)).find((p) => p.workspaceId === 'ws' && p.name === 'worker') ?? null;
+        const kept = await until('the worker running with a pid, in the snapshot', async () => { const p = await worker(firstOwn.own); return p && p.state === 'running' && p.pid !== null ? p : null; }, 30_000);
+        const firstPid = kept.pid!;
         expect(pidAlive(firstPid)).toBe(true); // CONTROL: the gauge sees the worker alive
 
+        firstOwn.dispose();
         first.transport.close(); // the window goes
         await sleep(500);
         process.kill(firstPid, 'SIGKILL'); // the worker crashes, with nobody watching
 
-        // The host's restart policy, with no window: a new worker comes up.
+        // The host's restart policy, with no window: a new worker comes up, and the next window is shown it.
         const second = await window();
-        const secondPid = await until('a new worker pid', () => {
-            const s = second.client.supervisor().status('proc:worker');
-            return s && s.state === 'running' && s.pid !== null && s.pid !== firstPid ? s.pid : null;
+        const secondOwn = ownOver(second.client);
+        const restarted = await until('a new worker pid, in the snapshot', async () => {
+            const p = await worker(secondOwn.own);
+            return p && p.id === kept.id && p.state === 'running' && p.pid !== null && p.pid !== firstPid ? p : null;
         }, 30_000);
+        const secondPid = restarted.pid!;
         expect(pidAlive(secondPid)).toBe(true);
-        expect(second.client.supervisor().status('proc:worker')!.restarts).toBeGreaterThanOrEqual(1);
+        expect(restarted.restarts).toBeGreaterThanOrEqual(1);
 
-        // Stop from the window: ended, and NOT started again by the host.
-        expect(second.client.supervisor().stop('proc:worker')).toBe(true);
+        // Stop from the window, as its Stop button sends it: ended, and NOT started again by the host.
+        expect(await ask(secondOwn.own, 'features.act', [{ kind: 'hosting.stopProcess', processId: kept.id }])).toMatchObject({ ok: true });
         await until('the worker to end', () => !pidAlive(secondPid), 15_000);
         await sleep(3_000); // longer than the first restart backoff (1 s): a restart would have come by now
-        const after = second.client.supervisor().status('proc:worker');
+        const after = await worker(secondOwn.own);
         expect(after?.state).toBe('stopped');
         expect(after?.pid === null || after?.pid === secondPid).toBe(true);
+        // Kept, and stopped by the person: removed so the next tests' hosts start nothing of it.
+        expect(await ask(secondOwn.own, 'features.act', [{ kind: 'hosting.removeProcess', processId: kept.id }])).toMatchObject({ ok: true });
+        secondOwn.dispose();
         second.transport.close();
     }, 120_000);
 
@@ -288,12 +345,15 @@ describe('genie-host as its own process', () => {
 
     it('A WORKSPACE JUST ADDED IS NEVER REFUSED: a window writes it and starts an agent in it straight away, against the real host', async () => {
         const first = await window();
+        const firstOwn = ownOver(first.client);
         const added = await mkdtemp(join(tmpdir(), 'genie-host-added-'));
-        // Not awaited, and on the same socket as the start, as an add and a click can be: the host runs the two concurrently.
-        const written = first.client.call('engine.stores', ['registry', 'writeWorkspaces', [[{ id: 'ws', path: workspace }, { id: 'added', path: added }]]]);
+        // Main's add, as its window registry writes it: registry.write over its own client (window-registry-store.ts). The add
+        // is answered before the workspace is shown, so the click to start comes after it: at once, as here. (A start that
+        // reaches genie-host while the write is still in flight waits for it: host-tynn-recovery.test.ts pins that race.)
+        expect(await ask(firstOwn.own, 'registry.write', ['writeWorkspaces', [[{ id: 'ws', path: workspace }, { id: 'added', path: added }]]])).toMatchObject({ ok: true });
+        firstOwn.dispose();
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'added', provider: 'codex', name: 'newcomer' });
         expect(await first.client.start(agent, added)).toEqual({ ok: true });
-        expect(await written).toMatchObject({ ok: true });
         await until('the agent to take a prompt', () => first.client.promptable(agent.id) !== null, 60_000);
         expect(first.client.refusals.has(agent.id)).toBe(false);
         expect(JSON.stringify(first.client.rowsFor(agent.id))).not.toMatch(/workspace or Tynn project link is unavailable/);

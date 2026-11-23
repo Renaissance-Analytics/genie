@@ -2,7 +2,6 @@ import { sameFlowWindow } from '../core/route.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
 import { guestAskNotice, newGuestAsks } from '../core/pair-confirm.js';
-import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import { MainErrorBook, installMainErrorPolicy, retryHostCopy } from '../core/main-errors.js';
@@ -39,6 +38,7 @@ import { windowFrontDoor } from './window-front-door.js';
 import { EMPTY_FRONT_DOOR_WATCH, type FrontDoorWatchView } from '../core/front-door-watch.js';
 import { windowApprovals } from './approvals-gate-protocol.js';
 import { readThingSignal } from '../core/thing-sounds.js';
+import { readIssueWatchSound } from '../core/issue-watch-signal.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
@@ -155,12 +155,9 @@ import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import type { OpenInBrowser } from './hosting-actions.js';
 import { TERMINAL_NEEDS_YOU } from '../core/terminal-surface.js';
 import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
-import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
-import { IssueWatchReplica } from './issue-watch-replica.js';
 import { followWorkspaceColors, WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { installContextMenu, type MenuWebContents } from './context-menu.js';
-import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
 
 /**
  * THE MAIN PROCESS.
@@ -472,44 +469,6 @@ let registry: Registry | null = null;
 let workspaceColors: WorkspaceColors | null = null;
 /** Save to repo (Tynn #756): this workspace's project.json and repo files, saved against upstream. */
 const NO_OFFERS = { ok: false as const, reason: 'Genie’s host is not running, so nothing is watching the repo' };
-/**
- * ISSUEWATCH (Tynn #806; the host split, P5c): genie-host hears Tynn and holds the state — the latest entry per project,
- * when it arrived, what happened lately, the repo switches, the client's state. This window reads it through the replica
- * (issue-watch-replica.ts): what `checkIssues`, imDone's count line and the GitHub panel read for a workspace (its
- * project.json `tynn.projectId`).
- */
-let issueWatchNow: IssueWatchReplica | null = null;
-/**
- * THE LIVE BOARD (genie#1295 row B4; the host split, P5c): genie-host follows each open Tynn tab per view — one socket for
- * every board, released with this window's link — and its rings and live state come back for the views watching. Since P4
- * family 12 (Tynn #561) a view's watch is its local connection's (`tynn.watch` on the door, remote-host.ts), released with
- * it, and its signals reach only that connection.
- */
-let tynnBoardDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
-/** Issues subscriptions belong to the host connection, just like the live board's. */
-let tynnIssuesDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
-/** Features subscriptions (row F1) belong to the host connection, like the Issues queue's; no host, no live page. */
-let tynnFeaturesDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
-/** The Tynn tab's live signals, to the local door's watch port (P4 family 12): never broadcast to every window. */
-const tynnLive = new Set<(event: TynnWatchEvent) => void>();
-const emitTynn = (kind: TynnWatchKind, workspaceId: string, signal: unknown): void => { for (const l of [...tynnLive]) l({ kind, workspaceId, signal }); };
-const tynnDoorOf = (kind: TynnWatchKind) => (kind === 'board' ? tynnBoardDoor : kind === 'issues' ? tynnIssuesDoor : tynnFeaturesDoor);
-/** The host API's Tynn watch port: one view per local window's watch; a board is followed only when it is linked. */
-const tynnWatchPort: TynnWatchPort = {
-    watch: async (kind, viewId, workspaceId) => {
-        const door = tynnDoorOf(kind);
-        if (door === null || (kind === 'board' && tynnProjectFor(workspaceId) === null)) return false;
-        return door.watch(viewId, workspaceId);
-    },
-    unwatch: (kind, viewId) => { tynnDoorOf(kind)?.unwatch(viewId); },
-    subscribe: (listener) => { tynnLive.add(listener); return () => { tynnLive.delete(listener); }; },
-};
-function tynnProjectFor(workspaceId: string): string | null {
-    const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
-    let manifest: string | null = null;
-    if (workspace) { try { manifest = readFileSync(join(workspace.path, 'project.json'), 'utf8'); } catch { manifest = null; } }
-    return tynnProjectIdOf(manifest);
-}
 /** The workspace folders this run has already moved AGENT.md front matter out of (Tynn #694). */
 const agentConfigsMoved = new Set<string>();
 async function moveAgentConfigs(workspaces: readonly { id: string; path: string }[]): Promise<void> {
@@ -525,25 +484,6 @@ async function moveAgentConfigs(workspaces: readonly { id: string; path: string 
             console.warn(`[genie] agent config for ${w.id}: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
-}
-/** Every workspace's GitHub panel (Tynn #806), as the features snapshot carries it. */
-function issueWatchPanels(): Record<string, IssueWatchPanelView> {
-    return issueWatchNow?.panels(registry?.snapshot().workspaces ?? [], tynnProjectFor, Date.now()) ?? {};
-}
-/** Have Tynn read a workspace's repos now (its project.json `tynn.projectId`): the host's call. */
-async function issueWatchRefreshFor(workspaceId: string): Promise<IssueWatchRefreshAnswer> {
-    if (tynnProjectFor(workspaceId) === null) return { ok: false, reason: 'this workspace is not linked to a Tynn project' };
-    if (!issueWatchNow) return { ok: false, reason: 'IssueWatch is not running' };
-    return issueWatchNow.refresh(workspaceId);
-}
-/** A Watched repos checkbox: Tynn's switch, set by the host, which reads the switches again (Tynn pushes the changed feed itself). */
-async function issueWatchSetRepoFor(workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }): Promise<unknown> {
-    if (tynnProjectFor(workspaceId) === null || !issueWatchNow) return { ok: false, reason: 'IssueWatch is not running for this workspace' };
-    return issueWatchNow.setRepo(workspaceId, owner, repo, change);
-}
-function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
-    const projectId = tynnProjectFor(workspaceId);
-    return issueWatchNow?.summaryFor(projectId) ?? { state: 'stopped', linked: projectId !== null };
 }
 /**
  * WHAT GENIE-HOST RUNS, AS IT LAST SAID (Tynn #953, 2g-2): its live terminals, armed flows and scheduled tasks, kept by
@@ -1318,6 +1258,9 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }
             // What genie-host runs, each change with its sound (Tynn #766 C2b; genie-host says them since Tynn #1045): only what reads goes on.
             else if (signal.kind === 'thing') { const thing = readThingSignal((raw as { thing?: unknown }).thing); if (thing) broadcast('genie:action', thing); }
+            // A batch of IssueWatch (Tynn #806; a tool signal since Tynn #934 task #1474): genie-host hears Tynn and says each sound;
+            // only one of its four sound rows goes on, played by its row like any action.
+            else if (signal.kind === 'issuewatch') { const sound = readIssueWatchSound(raw); if (sound) broadcast('genie:action', { agentId: null, kind: sound }); }
             // An agent's `sites open` in genie-host's browser (Tynn #1046 D2): the site's workspace pulses for the person (genie#1265).
             else if (signal.kind === 'site-opened' && typeof signal.workspaceId === 'string') showToPerson({ activation: 'background', workspaceId: signal.workspaceId, reason: 'sites open' });
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
@@ -1859,7 +1802,7 @@ async function boot(): Promise<void> {
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
             thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
-            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId), recheckSignIn: () => { void ownProtocol.call('tynn.recheck', []); } },
+            // checkIssues is genie-host's own tool, on its own IssueWatch (Tynn #934 task #1474): never run here.
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
             openFile: async ({ workspaceId, path, line }) => { attractMainWindow('openFileForUser'); showToPerson({ activation: 'background', workspaceId, file: path, line, reason: 'openFileForUser' }); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
@@ -1950,22 +1893,10 @@ async function boot(): Promise<void> {
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     // The same code as genie-host's own answers (host-owner-ops.ts, Tynn #898 step 2d-3b), over this window's replicas.
-    // ISSUEWATCH AND THE LIVE BOARD (Tynn #806, genie#1295 B4; the host split, P5c): genie-host's. It hears Tynn on its own
-    // account and tells the linked workspace's agents through its own wake, window or no window; this window reads the state,
-    // plays the sounds the host says to play now, and follows its boards per view.
-    {
-        const engineClient = agentEngineLink.client;
-        issueWatchNow = engineClient.issueWatch();
-        tynnBoardDoor = { watch: (viewId, workspaceId) => engineClient.tynnBoardWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnBoardUnwatch(viewId); } };
-        engineClient.onTynnBoardEvent((event) => { emitTynn('board', event.workspaceId, event.signal); });
-        tynnIssuesDoor = { watch: (viewId, workspaceId) => engineClient.tynnIssuesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnIssuesUnwatch(viewId); } };
-        engineClient.onTynnIssuesEvent((event) => { emitTynn('issues', event.workspaceId, event.signal); });
-        tynnFeaturesDoor = { watch: (viewId, workspaceId) => engineClient.tynnFeaturesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnFeaturesUnwatch(viewId); } };
-        engineClient.onTynnFeaturesEvent((event) => { emitTynn('features', event.workspaceId, event.signal); });
-    }
-    // The panel follows the host's state; a batch's sounds (one per kind, core/alerts.ts) are played by the window like any action.
-
-    issueWatchNow?.onSound((kind) => { broadcast('genie:action', { agentId: null, kind }); });
+    // ISSUEWATCH AND THE LIVE BOARD (Tynn #806, genie#1295 B4; the host split, P5c) are genie-host's whole (Tynn #934 task
+    // #1474): it hears Tynn on its own account, tells the linked workspace's agents through its own wake, answers `checkIssues`
+    // itself, follows each Tynn tab's views under its own owner (`tynn.watch`), and says a batch's sounds as tool signals
+    // (onToolSignal, above). This window keeps none of it.
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.
 

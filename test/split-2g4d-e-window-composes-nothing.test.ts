@@ -42,12 +42,13 @@ describe('1. the window composes nothing', () => {
 });
 
 describe('2. no engine replica of the stores, supervisor, hosting or flows is read in the window', () => {
-    it('their rows are gone: only the Tynn watches are still to move (G-1, #934)', () => {
-        const rows = WINDOW_ENGINE_INVENTORY.filter(([, verdict]) => verdict === 'move:2g').map(([use]) => use);
-        for (const gone of ['flows', 'hosting', 'stores', 'supervisor']) expect(rows, gone).not.toContain(gone);
+    it('their rows are gone, and nothing is still to move: the Tynn watches left in #934 task #1474', () => {
+        const uses = WINDOW_ENGINE_INVENTORY.map(([use]) => use);
+        for (const gone of ['flows', 'hosting', 'stores', 'supervisor']) expect(uses, gone).not.toContain(gone);
+        expect(WINDOW_ENGINE_INVENTORY.filter(([, verdict]) => verdict.startsWith('move:'))).toEqual([]);
         // CONTROL: the same read sees the rows that are still there.
-        expect(rows).toContain('issueWatch');
-        expect(rows.every((use) => use === 'issueWatch' || /^(on)?[Tt]ynn/.test(use))).toBe(true);
+        expect(uses).toContain('welcome');
+        expect(uses).toContain('browserCall');
     });
 
     it('main reads no stores(), supervisor(), hosting() or flows() off any engine client', () => {

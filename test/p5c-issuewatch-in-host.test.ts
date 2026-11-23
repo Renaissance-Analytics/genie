@@ -7,13 +7,15 @@ import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src
 import { tynnProjectIdOf } from '../src/core/issue-watch.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
+import type { TynnWatchEvent } from '../src/core/local-tynn-watch.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import { wireHostMailWake } from '../src/main/host-mail-wake.js';
+import { HOST_LOCAL_OWNER, hostTynnWatch } from '../src/main/host-local-watches.js';
 import { HostRegistry } from '../src/main/host-registry.js';
 import { InboxStore } from '../src/main/inbox-store.js';
 import type { SocketLike } from '../src/main/issue-watch-client.js';
-import { IssueWatchService, TynnBoardHub, type HostTynn, type TynnBoardHubEvent } from '../src/main/issue-watch-host.js';
+import { IssueWatchService, TynnBoardHub, type HostTynn } from '../src/main/issue-watch-host.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
@@ -24,8 +26,10 @@ import { Store } from '../src/main/store.js';
  * P5c: ISSUEWATCH AND THE LIVE BOARD IN GENIE-HOST. They were built in the window's main: with no window nobody listened to
  * Tynn, a GitHub change waited for the next window, and no agent was told. The host holds the Tynn account (P3.4), the
  * agents and the inbox wake (P3.2), so it listens: IssueWatch's notices reach the linked workspace's agents through the
- * host's ONE wake, the state reaches LOCAL windows in their dump, the sounds are events an open window plays, and the board
- * is followed per view, one socket for every board, released with the connection.
+ * host's ONE wake, the sounds are tool signals an open window plays, and the board is followed per view, one socket for
+ * every board. Since Tynn #934 task #1474 none of it rides the engine link: genie-host's own tools (checkIssues, imDone's
+ * count line) read its IssueWatch directly, its feature machine holds the panel, and the board's views are its own owner's
+ * (the Tynn tab's `tynn.watch`; who may watch and a closing connection's release are pinned in p4-family12-tynn.test.ts).
  *
  * Tynn here is a fake: its routes answer as tynn.ai's do, and its sockets are recorded so a test pushes a frame on them.
  */
@@ -228,81 +232,90 @@ describe('with no window, a GitHub change reaches the linked workspace’s agent
     });
 });
 
-/** A window on the host's endpoint (local) or another path (not local), linked over the real engine protocol. */
-async function windowOn(server: SessionEngineServer, local = true) {
+/** A window linked over the real engine protocol, hearing genie-host's tool signals as main does (its IssueWatch sounds). */
+async function windowOn(server: SessionEngineServer) {
+    const { readIssueWatchSound } = await import('../src/core/issue-watch-signal.js');
     const [h, raw] = memoryPair();
-    server.accept(h, { local });
+    server.accept(h, { local: true });
     const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-    const client = new SessionEngineClient({});
-    expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
     const sounds: string[] = [];
-    client.issueWatch().onSound((s) => { sounds.push(s); });
-    const board: TynnBoardHubEvent[] = [];
-    client.onTynnBoardEvent((e) => { board.push(e); });
-    return { client, sounds, board, close: () => t.close() };
+    const signals: unknown[] = [];
+    const client = new SessionEngineClient({ onToolSignal: (signal) => { signals.push(signal); const sound = readIssueWatchSound(signal); if (sound) sounds.push(sound); } });
+    expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
+    return { client, sounds, signals, close: () => t.close() };
 }
 
+/** genie-host's IssueWatch as its tools and its windows get it (Tynn #934 task #1474): the tools' port, and the sound signal. */
 async function serverRig() {
     const r = await hostRig();
-    const boardTynn = fakeTynn();
-    let server: SessionEngineServer | null = null;
-    const board = new TynnBoardHub({ tynn: () => boardTynn.account, socket: boardTynn.socket, schedule, projectFor: r.projectFor, send: (owner, event) => server?.tynnBoardEvent(owner, event) });
-    server = new SessionEngineServer({ token: TOKEN, build: 't', issueWatch: r.issueWatch, tynnBoard: board });
+    const { hostIssueWatchTools, sayIssueWatchSounds } = await import('../src/main/issue-watch-tools.js');
+    const server = new SessionEngineServer({ token: TOKEN, build: 't' });
     server.attach(new SessionHost({ userData: await mkdtemp(join(tmpdir(), 'p5c-sh-')), driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() }));
-    return { ...r, server, boardTynn };
+    const rechecks: number[] = [];
+    const tools = hostIssueWatchTools({ issueWatch: r.issueWatch, projectFor: r.projectFor, recheckSignIn: () => { rechecks.push(1); } });
+    sayIssueWatchSounds(r.issueWatch, (signal) => { server.callback({ name: 'toolSignal', signal }); });
+    return { ...r, server, tools, rechecks };
 }
 
-describe('the window reads the host’s IssueWatch (local links only) and asks it by call', () => {
-    it('a local window’s dump equals the host’s, with what Tynn pushed; a non-local link is sent none of it', async () => {
+describe('genie-host’s tools read its IssueWatch directly, and ask it by call (Tynn #934 task #1474)', () => {
+    it('the summary for a workspace is the host’s own state, with what Tynn pushed; a workspace linked to no project is said so', async () => {
         const r = await serverRig();
         r.issueWatch.start();
         await settle();
         await r.tynn.live(r.tynn.sockets[0]!);
         r.tynn.pushNewPr(r.tynn.sockets[0]!);
         await settle(40);
-        const local = await windowOn(r.server);
-        const remote = await windowOn(r.server, false);
-        await settle();
         expect(r.issueWatch.dump().projects[PROJECT]?.recent.map((e) => e.kind)).toEqual(['pr.new']);
-        expect(local.client.issueWatch().dump()).toEqual(r.issueWatch.dump());
-        expect(local.client.issueWatch().summaryFor(PROJECT)).toMatchObject({ state: 'live', linked: true });
-        const panels = local.client.issueWatch().panels([{ id: 'acme' }, { id: 'loose' }], r.projectFor, Date.now());
-        expect(panels.acme?.linked).toBe(true);
-        expect(panels.loose?.linked).toBe(false);
-        // The service variables rule (P5a.2), for IssueWatch too: what a non-local link is sent is nothing at all.
-        expect(remote.client.issueWatch().dump()).toEqual({ state: 'stopped', projects: {} });
+        const acme = r.tools.forWorkspace('acme');
+        expect(acme).toMatchObject({ state: 'live', linked: true });
+        expect(acme.entry).toEqual(r.issueWatch.dump().projects[PROJECT]?.entry);
+        expect(acme.entry?.items.map((i) => i.kind).sort()).toEqual(['issue', 'pr']);
+        expect(acme.deliveredAt).toBe(r.issueWatch.dump().projects[PROJECT]?.deliveredAt);
+        expect(r.tools.forWorkspace('loose')).toEqual({ state: 'live', linked: false });
     });
 
-    it('a change after the window linked reaches it as an event', async () => {
+    it('a change is read at once: before Tynn pushed, the list is the reconciled one; after, the pushed one', async () => {
         const r = await serverRig();
         r.issueWatch.start();
         await settle();
-        const local = await windowOn(r.server);
         await r.tynn.live(r.tynn.sockets[0]!);
+        await settle(40);
+        const before = r.tools.forWorkspace('acme').entry?.items.map((i) => i.kind) ?? [];
+        expect(before).not.toContain('pr');
         r.tynn.pushNewPr(r.tynn.sockets[0]!);
         await settle(40);
-        expect(local.client.issueWatch().dump()).toEqual(r.issueWatch.dump());
-        expect(local.client.issueWatch().dump().state).toBe('live');
+        expect(r.tools.forWorkspace('acme').entry?.items.map((i) => i.kind)).toContain('pr');
     });
 
-    it('Refresh and the repo switches are calls the host makes to Tynn; a non-local link is refused', async () => {
+    it('Refresh is a call the host makes to Tynn; an unlinked workspace is refused in words and Tynn is not asked for it', async () => {
         const r = await serverRig();
         r.issueWatch.start();
         await settle();
-        const local = await windowOn(r.server);
-        await expect(local.client.issueWatch().refresh('acme')).resolves.toMatchObject({ ok: true, refreshed: true });
-        expect(r.tynn.requests).toContainEqual({ method: 'POST', path: '/api/v1/user/issue-watch/refresh', body: { project_id: PROJECT } });
-        await expect(local.client.issueWatch().setRepo('acme', 'acme', 'app', { enabled: false })).resolves.toMatchObject({ ok: true });
+        await expect(r.tools.refresh('acme')).resolves.toMatchObject({ ok: true, refreshed: true });
+        const refreshes = () => r.tynn.requests.filter((q) => q.path === '/api/v1/user/issue-watch/refresh');
+        expect(refreshes()).toEqual([{ method: 'POST', path: '/api/v1/user/issue-watch/refresh', body: { project_id: PROJECT } }]);
+        await expect(r.tools.refresh('loose')).resolves.toEqual({ ok: false, reason: 'this workspace is not linked to a Tynn project' });
+        expect(refreshes()).toHaveLength(1);
+    });
+
+    it('the repo switches are the feature machine’s call on the same service, read again into the host’s state', async () => {
+        const r = await serverRig();
+        r.issueWatch.start();
+        await settle();
+        await expect(r.issueWatch.call('setRepo', ['acme', 'acme', 'app', { enabled: false }])).resolves.toMatchObject({ ok: true });
         expect(r.tynn.requests).toContainEqual({ method: 'POST', path: `/api/v1/user/issue-watch/${PROJECT}/repositories/acme/app`, body: { enabled: false } });
         await settle();
-        // The switches read again after the change, into the host's state and so the window's.
-        expect(local.client.issueWatch().dump().projects[PROJECT]?.watched).toMatchObject({ state: 'ok', repos: [{ slug: 'acme/app' }] });
-        await expect(local.client.issueWatch().refresh('loose')).resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/not linked/) });
-        const remote = await windowOn(r.server, false);
-        await expect(remote.client.issueWatch().refresh('acme')).resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/local window/) });
+        expect(r.issueWatch.dump().projects[PROJECT]?.watched).toMatchObject({ state: 'ok', repos: [{ slug: 'acme/app' }] });
+        await expect(r.issueWatch.call('setRepo', ['loose', 'acme', 'app', { enabled: false }])).resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/not running for this workspace/) });
     });
 
-    it('sounds: an open local window is told to play one per kind; one that links later is told nothing (nothing queued)', async () => {
+    it('asking Tynn again about the sign-in is the host’s own account’s, when a tool finds it signed out', async () => {
+        const r = await serverRig();
+        r.tools.recheckSignIn();
+        expect(r.rechecks).toHaveLength(1);
+    });
+
+    it('sounds: an open window is told to play one per kind, as a tool signal; one that links later is told nothing (nothing queued)', async () => {
         const r = await serverRig();
         r.issueWatch.start();
         await settle();
@@ -311,11 +324,13 @@ describe('the window reads the host’s IssueWatch (local links only) and asks i
         r.tynn.pushNewPr(r.tynn.sockets[0]!);
         await settle(40);
         expect(open.sounds).toEqual(['ghpr']);
+        expect(open.signals).toEqual([{ kind: 'issuewatch', sound: 'ghpr' }]);
         const later = await windowOn(r.server);
         await settle();
         expect(later.sounds).toEqual([]);
-        // CONTROL: the later window has the change itself, in its dump; only the sound was not kept.
-        expect(later.client.issueWatch().dump().projects[PROJECT]?.recent.map((e) => e.kind)).toEqual(['pr.new']);
+        expect(later.signals).toEqual([]);
+        // CONTROL: the change itself is in the host's state; only the sound was not kept.
+        expect(r.issueWatch.dump().projects[PROJECT]?.recent.map((e) => e.kind)).toEqual(['pr.new']);
     });
 
     it('with no window open the host plays nothing and keeps no sound for later', async () => {
@@ -328,12 +343,26 @@ describe('the window reads the host’s IssueWatch (local links only) and asks i
         const first = await windowOn(r.server);
         await settle();
         expect(first.sounds).toEqual([]);
-        expect(first.client.issueWatch().dump().projects[PROJECT]?.recent).toHaveLength(1);
+        expect(r.issueWatch.dump().projects[PROJECT]?.recent).toHaveLength(1);
     });
 });
 
-describe('the live board in the host, followed per view', () => {
-    const boardLive = async (r: Awaited<ReturnType<typeof serverRig>>, s: FakeSocket) => {
+/** The board hub as genie-host wires it: its own owner's events to its watch port (host-local-watches.ts), no other's anywhere. */
+async function boardRig() {
+    const r = await hostRig();
+    const boardTynn = fakeTynn();
+    const idleTynn = fakeTynn();
+    let watches: ReturnType<typeof hostTynnWatch> | null = null;
+    const board = new TynnBoardHub({ tynn: () => boardTynn.account, socket: boardTynn.socket, schedule, projectFor: r.projectFor, send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) watches?.deliver('board', event); } });
+    const idle = () => new TynnBoardHub({ tynn: () => idleTynn.account, socket: idleTynn.socket, schedule, projectFor: r.projectFor, send: () => {} });
+    watches = hostTynnWatch({ hubs: { board, issues: idle(), features: idle() } });
+    const heard: TynnWatchEvent[] = [];
+    watches.port.subscribe((event) => heard.push(event));
+    return { ...r, board, boardTynn, idleTynn, port: watches.port, heard };
+}
+
+describe('the live board in the host, followed per view under genie-host’s own owner', () => {
+    const boardLive = async (r: Awaited<ReturnType<typeof boardRig>>, s: FakeSocket) => {
         r.boardTynn.established(s);
         await settle();
         s.emit({ event: 'pusher_internal:subscription_succeeded', channel: BOARD_CHANNEL, data: '{}' });
@@ -341,72 +370,48 @@ describe('the live board in the host, followed per view', () => {
     };
 
     it('two views of one board share ONE socket; the first unwatch keeps it, the last closes it', async () => {
-        const r = await serverRig();
-        const w = await windowOn(r.server);
-        expect(await w.client.tynnBoardWatch('view-1', 'acme')).toBe(true);
-        expect(await w.client.tynnBoardWatch('view-2', 'acme')).toBe(true);
+        const r = await boardRig();
+        expect(await r.port.watch('board', 'view-1', 'acme')).toBe(true);
+        expect(await r.port.watch('board', 'view-2', 'acme')).toBe(true);
         await settle();
         expect(r.boardTynn.sockets).toHaveLength(1);
-        await w.client.tynnBoardUnwatch('view-1');
+        r.port.unwatch('board', 'view-1');
         await settle();
         expect(r.boardTynn.sockets[0]!.closed).toBe(false);
-        await w.client.tynnBoardUnwatch('view-2');
+        r.port.unwatch('board', 'view-2');
         await settle();
         expect(r.boardTynn.sockets[0]!.closed).toBe(true);
         expect(r.boardTynn.sockets).toHaveLength(1);
+        // The board's watch dialled nothing for the Issues queue or the Features page.
+        expect(r.idleTynn.sockets).toEqual([]);
     });
 
-    it('rings and states go to the connection watching that workspace, and no other', async () => {
-        const r = await serverRig();
-        const watching = await windowOn(r.server);
-        const other = await windowOn(r.server);
-        expect(await watching.client.tynnBoardWatch('view-1', 'acme')).toBe(true);
+    it('rings and states reach the watch port by kind and workspace', async () => {
+        const r = await boardRig();
+        expect(await r.port.watch('board', 'view-1', 'acme')).toBe(true);
         await settle();
         await boardLive(r, r.boardTynn.sockets[0]!);
         r.boardTynn.sockets[0]!.emit({ event: 'task.updated', channel: BOARD_CHANNEL, data: JSON.stringify({ id: 'task_9' }) });
         await settle();
-        expect(watching.board).toContainEqual({ workspaceId: 'acme', signal: { state: 'live' } });
-        expect(watching.board.some((e) => 'ring' in e.signal && e.signal.ring.catchUp === false)).toBe(true);
-        expect(other.board).toEqual([]);
+        expect(r.heard).toContainEqual({ kind: 'board', workspaceId: 'acme', signal: { state: 'live' } });
+        expect(r.heard.some((e) => e.kind === 'board' && 'ring' in (e.signal as object) && (e.signal as { ring: { catchUp: boolean } }).ring.catchUp === false)).toBe(true);
+        expect(r.heard.every((e) => e.kind === 'board' && e.workspaceId === 'acme')).toBe(true);
     });
 
-    it('a window that goes away releases its views: the socket closes with its last watcher', async () => {
-        const r = await serverRig();
-        const w = await windowOn(r.server);
-        expect(await w.client.tynnBoardWatch('view-1', 'acme')).toBe(true);
+    it('a view under any other owner is told nowhere: no engine link carries a board event. CONTROL: genie-host’s own view beside it is told', async () => {
+        const r = await boardRig();
+        expect(r.board.watch('a-window-link', 'view-w', 'acme')).toBe(true);
         await settle();
-        expect(r.boardTynn.sockets).toHaveLength(1);
-        w.close();
-        await settle();
-        expect(r.boardTynn.sockets[0]!.closed).toBe(true);
-    });
-
-    /*
-     * LOCAL ONLY (P4 rule 4: what moves starts local-only). A non-local connection may be a share-link guest; following the
-     * board would hand it the owner's private board, read with the owner's own account.
-     */
-    it('a NON-LOCAL connection’s watch is refused in words and dials nothing; it gets no board events. CONTROL: a local one watches and gets them', async () => {
-        const r = await serverRig();
-        const remote = await windowOn(r.server, false);
-        await expect(remote.client.call('engine.tynnBoardWatch', ['view-r', 'acme'])).resolves.toEqual({ ok: false, reason: 'The Tynn board is followed from a local window only.' });
-        await expect(remote.client.call('engine.tynnBoardUnwatch', ['view-r'])).resolves.toEqual({ ok: false, reason: 'The Tynn board is followed from a local window only.' });
-        expect(await remote.client.tynnBoardWatch('view-r2', 'acme')).toBe(false);
-        await settle();
-        expect(r.boardTynn.sockets).toEqual([]);
-        // The control, on the same host: a local window's watch dials, and its events reach it — and still not the guest.
-        const local = await windowOn(r.server);
-        expect(await local.client.tynnBoardWatch('view-l', 'acme')).toBe(true);
-        await settle();
-        expect(r.boardTynn.sockets).toHaveLength(1);
         await boardLive(r, r.boardTynn.sockets[0]!);
-        expect(local.board).toContainEqual({ workspaceId: 'acme', signal: { state: 'live' } });
-        expect(remote.board).toEqual([]);
+        expect(r.heard).toEqual([]);
+        expect(await r.port.watch('board', 'view-1', 'acme')).toBe(true);
+        await settle();
+        expect(r.heard.length).toBeGreaterThan(0);
     });
 
     it('a workspace not linked to a Tynn project is not followed, and dials nothing', async () => {
-        const r = await serverRig();
-        const w = await windowOn(r.server);
-        expect(await w.client.tynnBoardWatch('view-1', 'loose')).toBe(false);
+        const r = await boardRig();
+        expect(await r.port.watch('board', 'view-1', 'loose')).toBe(false);
         await settle();
         expect(r.boardTynn.sockets).toEqual([]);
     });

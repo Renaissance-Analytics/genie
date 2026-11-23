@@ -233,8 +233,8 @@ describe('the window’s engine inventory', () => {
 
     it('has no row for the host tools’ forward or the Files watch', () => {
         for (const use of ['runHostTool', 'onFilesEvent', 'filesWatch', 'filesUnwatch']) expect(row(use), use).toBeNull();
-        // CONTROL: a row that stays is found (supervisor left in 2g-4d E; the Tynn watches go in G-1, #934).
-        expect(row('issueWatch')).toBe('move:2g');
+        // CONTROL: a row that stays is found (supervisor left in 2g-4d E; IssueWatch and the Tynn watches in #934 task #1474).
+        expect(row('browserCall')).toBe('window:feature-effect');
     });
 });
 

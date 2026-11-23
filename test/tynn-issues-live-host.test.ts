@@ -1,34 +1,27 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
-import { parseEngineFrame } from '../src/core/engine-protocol.js';
-import { memoryPair } from '../src/core/line-transport.js';
+import { expect, it } from 'vitest';
+import { isEngineMethod } from '../src/core/engine-protocol.js';
+import type { TynnWatchEvent } from '../src/core/local-tynn-watch.js';
+import { HOST_LOCAL_OWNER, hostTynnWatch } from '../src/main/host-local-watches.js';
 import { TynnBoardHub, type TynnBoardHubEvent } from '../src/main/issue-watch-host.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
 import { TYNN_ISSUES_FEED } from '../src/main/tynn-issues-live.js';
 
-const TOKEN = 'f'.repeat(64);
-type IssuesClient = SessionEngineClient & {
-    tynnIssuesWatch(viewId: string, workspaceId: string): Promise<boolean>;
-    tynnIssuesUnwatch(viewId: string): Promise<boolean>;
-    onTynnIssuesEvent(listener: (event: TynnBoardHubEvent) => void): () => void;
-};
-type IssuesServer = SessionEngineServer & { tynnIssuesEvent(owner: string, event: TynnBoardHubEvent): void };
-const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
+/**
+ * THE LIVE ISSUES QUEUE, IN GENIE-HOST. genie-host follows the queue's own channel, `private-project-issues.{id}`, with one
+ * socket shared by every view, and says its rings to its OWN owner's watch port (host-local-watches.ts), which the Tynn
+ * tab's `tynn.watch` reads over the protocol. Nothing of it rides the engine link since Tynn #934 task #1474: the window's
+ * main held a second road to this hub that nothing read. Who may watch (this machine's own window) and a closing
+ * connection releasing its views are RemoteHost's, pinned in p4-family12-tynn.test.ts and p4-family12-kept-contract-561.test.ts.
+ */
 const settle = async () => { for (let i = 0; i < 8; i += 1) await new Promise((r) => setTimeout(r, 0)); };
 
-async function rig() {
-    const dir = await mkdtemp(join(tmpdir(), 'genie-issues-live-host-'));
+function rig() {
     const requests: Array<{ path: string; body?: unknown }> = [];
     const sockets: Array<{ closed: boolean; sent: string[]; emit(frame: unknown): void }> = [];
-    let server: IssuesServer;
-    const ports = {
-        feed: TYNN_ISSUES_FEED,
-        projectFor: (id: string) => id === 'work' ? 'host-project' : null,
+    const strangers: Array<[string, TynnBoardHubEvent]> = [];
+    let watches: ReturnType<typeof hostTynnWatch> | null = null;
+    const hubOf = (feed?: typeof TYNN_ISSUES_FEED) => new TynnBoardHub({
+        ...(feed ? { feed } : {}),
+        projectFor: (id: string) => (id === 'work' ? 'host-project' : null),
         tynn: () => ({ userId: () => 'owner', request: async (path: string, init: { method: 'GET' | 'POST'; body?: unknown }) => {
             requests.push({ path, ...(init.body ? { body: init.body } : {}) });
             return { ok: true, status: 200, json: async () => path === '/api/v1/broadcasting-config'
@@ -48,43 +41,26 @@ async function rig() {
             return socket;
         },
         schedule: (_fn: () => void, _ms: number) => () => {},
-        send: (owner: string, event: TynnBoardHubEvent) => server.tynnIssuesEvent(owner, event),
-    };
-    const hub = new TynnBoardHub(ports);
-    const options = { token: TOKEN, build: 'test', tynnIssues: hub };
-    server = new SessionEngineServer(options) as IssuesServer;
-    const host = new SessionHost({ userData: dir, driverFor: () => { throw new Error('following Issues must start no provider'); }, processTree: { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) }, ...server.hostOptions() });
-    server.attach(host);
-    cleanups.push(async () => { await host.stopAll(); await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
-    const connect = async (client: IssuesClient, local: boolean) => {
-        const [h, w] = memoryPair();
-        server.accept(h, { local });
-        expect(await client.connect(w, TOKEN)).toMatchObject({ ok: true });
-        return () => w.close();
-    };
-    const window = async (local = true) => {
-        const client = new SessionEngineClient() as IssuesClient;
-        const close = await connect(client, local);
-        cleanups.push(async () => { client.disconnect(); });
-        return { client, close };
-    };
-    return { window, connect, sockets, requests };
+        // As genie-host wires it: its own owner's events to its watch port, and no other owner's anywhere.
+        send: (owner: string, event: TynnBoardHubEvent) => { if (owner === HOST_LOCAL_OWNER) watches?.deliver('issues', event); else strangers.push([owner, event]); },
+    });
+    const hub = hubOf(TYNN_ISSUES_FEED);
+    watches = hostTynnWatch({ hubs: { board: hubOf(), issues: hub, features: hubOf() } });
+    const events: TynnWatchEvent[] = [];
+    watches.port.subscribe((event) => events.push(event));
+    return { port: watches.port, hub, events, sockets, requests, strangers };
 }
 
-function hasIssuesWatchProtocol() {
-    for (const method of ['engine.tynnIssuesWatch', 'engine.tynnIssuesUnwatch']) {
-        expect(parseEngineFrame(JSON.stringify({ kind: 'call', id: 1, method, args: ['view', 'work'] }))).toMatchObject({ ok: true });
-    }
-}
+it('the engine link has no Issues watch: its two methods are not engine methods (Tynn #934 task #1474)', () => {
+    for (const method of ['engine.tynnIssuesWatch', 'engine.tynnIssuesUnwatch']) expect(isEngineMethod(method), method).toBe(false);
+    // CONTROL: a method the link keeps is one.
+    expect(isEngineMethod('engine.heartbeat')).toBe(true);
+});
 
-it('the host signs only the Issues channel, shares its socket between views, and sends only issue rings', async () => {
-    hasIssuesWatchProtocol();
-    const r = await rig();
-    const w = await r.window();
-    const events: TynnBoardHubEvent[] = [];
-    w.client.onTynnIssuesEvent((event) => events.push(event));
-    expect(await w.client.tynnIssuesWatch('view1', 'work')).toBe(true);
-    expect(await w.client.tynnIssuesWatch('view2', 'work')).toBe(true);
+it('the host signs only the Issues channel, shares its socket between views, and sends only issue rings, to its own watch port', async () => {
+    const r = rig();
+    expect(await r.port.watch('issues', 'view1', 'work')).toBe(true);
+    expect(await r.port.watch('issues', 'view2', 'work')).toBe(true);
     await settle();
     expect(r.sockets).toHaveLength(1);
     const socket = r.sockets[0]!;
@@ -95,50 +71,54 @@ it('the host signs only the Issues channel, shares its socket between views, and
     socket.emit({ event: 'issue.updated', channel: 'private-project-issues.host-project', data: JSON.stringify({ issue: { id: 'i1' } }) });
     socket.emit({ event: 'story.updated', channel: 'private-project-issues.host-project', data: JSON.stringify({ story: { id: 's1' } }) });
     await settle();
-    expect(events.filter((e) => 'ring' in e.signal)).toEqual([
-        { workspaceId: 'work', signal: { ring: { ids: [], catchUp: true } } },
-        { workspaceId: 'work', signal: { ring: { ids: ['i1'], catchUp: false } } },
+    expect(r.events.filter((e) => 'ring' in (e.signal as object))).toEqual([
+        { kind: 'issues', workspaceId: 'work', signal: { ring: { ids: [], catchUp: true } } },
+        { kind: 'issues', workspaceId: 'work', signal: { ring: { ids: ['i1'], catchUp: false } } },
     ]);
-    expect(await w.client.tynnIssuesUnwatch('view1')).toBe(true);
+    r.port.unwatch('issues', 'view1');
     expect(socket.closed).toBe(false);
-    expect(await w.client.tynnIssuesUnwatch('view2')).toBe(true);
+    r.port.unwatch('issues', 'view2');
     expect(socket.closed).toBe(true);
 });
 
-it('a non-local engine connection cannot watch the owner queue; an unlinked workspace asks nothing', async () => {
-    hasIssuesWatchProtocol();
-    const r = await rig();
-    const remote = await r.window(false);
-    expect(await remote.client.tynnIssuesWatch('remote', 'work')).toBe(false);
-    const local = await r.window();
-    expect(await local.client.tynnIssuesWatch('loose', 'unlinked')).toBe(false);
+it('an unlinked workspace is not followed and asks nothing; another kind’s watch does not dial the Issues channel', async () => {
+    const r = rig();
+    expect(await r.port.watch('issues', 'loose', 'unlinked')).toBe(false);
+    await settle();
     expect(r.requests).toEqual([]);
     expect(r.sockets).toEqual([]);
+    // CONTROL: the linked workspace beside it is followed, and dials.
+    expect(await r.port.watch('issues', 'view', 'work')).toBe(true);
+    await settle();
+    expect(r.sockets).toHaveLength(1);
 });
 
-it('losing the watching connection releases its host views and closes the last socket', async () => {
-    hasIssuesWatchProtocol();
-    const r = await rig();
-    const w = await r.window();
-    expect(await w.client.tynnIssuesWatch('view', 'work')).toBe(true);
+it('after the last view goes the socket is closed, and a view that watches again dials a new one', async () => {
+    const r = rig();
+    expect(await r.port.watch('issues', 'view', 'work')).toBe(true);
     await settle();
     expect(r.sockets[0]!.closed).toBe(false);
-    w.close();
+    r.port.unwatch('issues', 'view');
     await settle();
     expect(r.sockets[0]!.closed).toBe(true);
-});
-
-it('a reconnected window restores its intended Issues watches on the host', async () => {
-    hasIssuesWatchProtocol();
-    const r = await rig();
-    const w = await r.window();
-    expect(await w.client.tynnIssuesWatch('view', 'work')).toBe(true);
-    await settle();
-    w.close();
-    await settle();
-    expect(r.sockets[0]!.closed).toBe(true);
-    await r.connect(w.client, true);
+    expect(await r.port.watch('issues', 'view', 'work')).toBe(true);
     await settle();
     expect(r.sockets).toHaveLength(2);
     expect(r.sockets[1]!.closed).toBe(false);
+});
+
+it('only genie-host’s own owner’s views are told here: a view under any other owner reaches no watcher of the port', async () => {
+    const r = rig();
+    expect(r.hub.watch('some-other-owner', 'view', 'work')).toBe(true);
+    await settle();
+    const socket = r.sockets[0]!;
+    socket.emit({ event: 'pusher:connection_established', data: JSON.stringify({ socket_id: '1.2' }) });
+    await settle();
+    socket.emit({ event: 'pusher_internal:subscription_succeeded', channel: 'private-project-issues.host-project', data: '{}' });
+    socket.emit({ event: 'issue.updated', channel: 'private-project-issues.host-project', data: JSON.stringify({ issue: { id: 'i1' } }) });
+    await settle();
+    expect(r.events).toEqual([]);
+    // CONTROL: the hub did signal that owner; it is only this port that is not told.
+    expect(r.strangers.length).toBeGreaterThan(0);
+    expect(r.strangers.every(([owner]) => owner === 'some-other-owner')).toBe(true);
 });
