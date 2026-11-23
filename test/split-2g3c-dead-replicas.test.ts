@@ -74,7 +74,8 @@ describe('the engine link carries no account, keyring, registration, secret, plu
         // 2g-4e (#1007): the scanner follows main's aliases of the engine client, and the uses it found joined the list
         // (tasks on #955 and G-1 #934); the rows are exactly these.
         // 2g-4d-A (#1043): runHostTool and the Files watch left, and the exec route (spawnLink, onSpawnFrame) is `link`.
-        expect(rows).toEqual(['flows', 'hosting', 'issueWatch', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'stores', 'supervisor', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch']);
+        // flows, hosting, stores and supervisor left in 2g-4d E (#955). The Tynn watches go in G-1 (#934).
+        expect(rows).toEqual(['issueWatch', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch']);
         expect(rows).not.toContain('catalog');
         expect(rows).not.toContain('plugins');
     });
