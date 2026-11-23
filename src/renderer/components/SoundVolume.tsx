@@ -50,14 +50,14 @@ function defaultPreview(values: Values): (kind: AlertKind, volume: number) => vo
 
 export function SoundVolume({ values, onAction, onPreview }: {
     values: Values | null;
-    onAction: (action: SetAction) => void;
+    onAction?: ((action: SetAction) => void) | undefined; // RED STUB (Tynn #1022, client setting): still the host's
     /** What a row's play button does; the default plays the kind's chosen sound through the one player. */
     onPreview?: ((kind: AlertKind, volume: number) => void) | undefined;
 }) {
     const v: Values = values ?? {};
     const muted = v[SOUND_MUTED_SETTING] === true;
     const [open, setOpen] = useState(false);
-    const [master, moveMaster] = useLevel(masterLevel(v), (n) => onAction({ kind: 'settings.set', key: SOUND_VOLUME_SETTING, value: String(n) }));
+    const [master, moveMaster] = useLevel(masterLevel(v), (n) => onAction?.({ kind: 'settings.set', key: SOUND_VOLUME_SETTING, value: String(n) }));
     // The latest saved map, so two rows moved one after the other each keep the other's level.
     const levelsRaw = useRef(v[SOUND_LEVELS_SETTING]);
     levelsRaw.current = v[SOUND_LEVELS_SETTING];
@@ -79,7 +79,7 @@ export function SoundVolume({ values, onAction, onPreview }: {
                     aria-label={muted ? 'Unmute sounds' : 'Mute sounds'}
                     title={muted ? 'Unmute' : 'Mute'}
                     className={`shrink-0 border border-[var(--border-1)] ${muted ? INVERTED : ''}`}
-                    onClick={() => onAction({ kind: 'settings.set', key: SOUND_MUTED_SETTING, value: !muted })}
+                    onClick={() => onAction?.({ kind: 'settings.set', key: SOUND_MUTED_SETTING, value: !muted })}
                 >
                     <Icon name={muted ? 'volume-x' : 'volume-2'} size="sm" />
                 </Button>
@@ -114,7 +114,7 @@ export function SoundVolume({ values, onAction, onPreview }: {
                                         label={k.label}
                                         saved={eventLevel(k.kind, v)}
                                         playable={previewSound(k.kind, v[`sound_${k.kind}`], v[`sound_${k.kind}_custom`]) !== null}
-                                        commit={(n) => onAction({ kind: 'settings.set', key: SOUND_LEVELS_SETTING, value: withEventLevel(levelsRaw.current, k.kind, n) })}
+                                        commit={(n) => onAction?.({ kind: 'settings.set', key: SOUND_LEVELS_SETTING, value: withEventLevel(levelsRaw.current, k.kind, n) })}
                                         onPlay={(level) => preview(k.kind, previewVolume(k.kind, { ...live, [SOUND_LEVELS_SETTING]: withEventLevel(levelsRaw.current, k.kind, level) }))}
                                     />
                                 ))}

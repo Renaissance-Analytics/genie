@@ -2,20 +2,23 @@
 /**
  * SOUND VOLUME IN SETTINGS → NOTIFICATIONS, AND IN THE PLAYER (Tynn #1022). A master slider with a mute, and an Advanced
  * disclosure listing every alert kind with its own level and a play button. What plays is master × event, applied by the
- * one player (renderer/alert-sound.ts) to a file's `Audio.volume` and to the chime's gain. Writes are host settings.
+ * one player (renderer/alert-sound.ts) to a file's `Audio.volume` and to the chime's gain.
+ *
+ * A CLIENT SETTING (the owner's ruling: "activity sounds is a client setting"): the levels are kept by THIS client, in its
+ * own store (renderer/client-sound-settings.ts, the renderer's localStorage), never written to the host. The sound CHOSEN
+ * per kind is still read from the settings the block is given.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALERT_KINDS } from '../src/core/alerts.js';
 import { playAlertSound, playPreviewSound, stopPreviewSound } from '../src/renderer/alert-sound.js';
+import { CLIENT_SOUND_KEY, clientSoundValues, setClientSound, subscribeClientSound } from '../src/renderer/client-sound-settings.js';
 import { SoundVolume } from '../src/renderer/components/SoundVolume.js';
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 let host: HTMLDivElement;
 let root: Root;
-type Action = { kind: string; key?: string; value?: unknown };
-const actions: Action[] = [];
 const previews: Array<{ kind: string; volume: number }> = [];
 
 beforeEach(() => {
@@ -23,20 +26,25 @@ beforeEach(() => {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
-    actions.length = 0;
     previews.length = 0;
+    localStorage.clear();
 });
 afterEach(() => {
     act(() => root.unmount());
     host.remove();
     document.body.innerHTML = '';
+    localStorage.clear();
     vi.useRealTimers();
     vi.unstubAllGlobals();
 });
 
-function render(values: Record<string, boolean | string>): void {
-    act(() => root.render(<SoundVolume values={values} onAction={(a) => actions.push(a as Action)} onPreview={(kind, volume) => previews.push({ kind, volume })} />));
+/** The block, with THIS client's levels already kept (`client`) and the host's settings it reads the chosen sounds from (`values`). */
+function render(client: Record<string, boolean | string> = {}, values: Record<string, boolean | string> = {}): void {
+    if (Object.keys(client).length > 0) localStorage.setItem(CLIENT_SOUND_KEY, JSON.stringify(client));
+    act(() => root.render(<SoundVolume values={values} onPreview={(kind, volume) => previews.push({ kind, volume })} />));
 }
+/** What this client keeps, as stored. */
+const kept = (): Record<string, unknown> => JSON.parse(localStorage.getItem(CLIENT_SOUND_KEY) ?? '{}') as Record<string, unknown>;
 const q = (sel: string) => host.querySelector(sel) as HTMLElement | null;
 const click = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
 /** A person moving a range input: React reads the value through the native setter, then the input event. */
@@ -48,10 +56,44 @@ function slide(input: HTMLInputElement, value: number): void {
 }
 const range = (sel: string) => q(`${sel} input[type="range"]`) as HTMLInputElement;
 
+describe('the client keeps its own levels', () => {
+    it('nothing kept reads as no levels (100%, not muted); what is kept reads back', () => {
+        expect(clientSoundValues()).toEqual({});
+        setClientSound('alert_volume', '35');
+        setClientSound('alert_muted', true);
+        setClientSound('alert_levels', '{"mail":20}');
+        expect(clientSoundValues()).toEqual({ alert_volume: '35', alert_muted: true, alert_levels: '{"mail":20}' });
+        expect(kept()).toEqual({ alert_volume: '35', alert_muted: true, alert_levels: '{"mail":20}' });
+    });
+    it('a broken store, or a value of the wrong type, reads as nothing kept, never a throw', () => {
+        localStorage.setItem(CLIENT_SOUND_KEY, 'not json');
+        expect(clientSoundValues()).toEqual({});
+        localStorage.setItem(CLIENT_SOUND_KEY, JSON.stringify({ alert_volume: 35, alert_muted: 'yes', alert_levels: '{}', other: 'x' }));
+        expect(clientSoundValues()).toEqual({ alert_levels: '{}' });
+    });
+    it('a change is told to whoever listens — in this window, and from another window of this client (the storage event)', () => {
+        const heard: number[] = [];
+        const off = subscribeClientSound(() => heard.push(1));
+        setClientSound('alert_volume', '40');
+        expect(heard).toHaveLength(1);
+        localStorage.setItem(CLIENT_SOUND_KEY, JSON.stringify({ alert_volume: '20' }));
+        window.dispatchEvent(new StorageEvent('storage', { key: CLIENT_SOUND_KEY }));
+        expect(heard).toHaveLength(2);
+        // CONTROL: another key's change is not this store's.
+        window.dispatchEvent(new StorageEvent('storage', { key: 'something-else' }));
+        expect(heard).toHaveLength(2);
+        off();
+        setClientSound('alert_volume', '10');
+        expect(heard).toHaveLength(2);
+    });
+});
+
 describe('the master control', () => {
-    it('is a react-fancy slider at the saved level (100 when never set), beside a mute Button', () => {
-        render({});
+    it('is a react-fancy slider at this client’s level (100 when never set), beside a mute Button', () => {
+        render();
         expect(range('[data-sound-master]').value).toBe('100');
+        act(() => root.unmount());
+        root = createRoot(host);
         render({ alert_volume: '35' });
         expect(range('[data-sound-master]').value).toBe('35');
         expect(q('[data-sound-master] [data-react-fancy-slider]')).not.toBeNull();
@@ -61,20 +103,30 @@ describe('the master control', () => {
         expect(mute.getAttribute('aria-pressed')).toBe('false');
     });
 
-    it('moving it writes alert_volume to the host once the hand settles (one write per move, not per pixel)', () => {
+    it('moving it keeps the level on THIS client once the hand settles (one write per move, not per pixel)', () => {
         vi.useFakeTimers();
-        render({ alert_volume: '100' });
+        render();
         const input = range('[data-sound-master]');
         slide(input, 80);
         slide(input, 61);
         slide(input, 60);
         expect(input.value).toBe('60');
-        expect(actions.filter((a) => a.key === 'alert_volume')).toEqual([]);
+        expect(kept().alert_volume).toBeUndefined();
         act(() => { vi.advanceTimersByTime(400); });
-        expect(actions.filter((a) => a.key === 'alert_volume')).toEqual([{ kind: 'settings.set', key: 'alert_volume', value: '60' }]);
+        expect(kept()).toEqual({ alert_volume: '60' });
     });
 
-    it('mute is an icon button, INVERTED while on; a click writes alert_muted; the slider stays where it was', () => {
+    it('a change kept by another window of this client shows here at once', () => {
+        render({ alert_volume: '70' });
+        expect(range('[data-sound-master]').value).toBe('70');
+        act(() => {
+            localStorage.setItem(CLIENT_SOUND_KEY, JSON.stringify({ alert_volume: '25' }));
+            window.dispatchEvent(new StorageEvent('storage', { key: CLIENT_SOUND_KEY }));
+        });
+        expect(range('[data-sound-master]').value).toBe('25');
+    });
+
+    it('mute is an icon button, INVERTED while on; a click keeps alert_muted on this client; the slider stays where it was', () => {
         render({ alert_muted: true, alert_volume: '70' });
         const mute = q('[data-action="sound-mute"]')!;
         expect(mute.getAttribute('aria-pressed')).toBe('true');
@@ -82,13 +134,14 @@ describe('the master control', () => {
         expect(mute.querySelector('svg')).not.toBeNull();
         expect(range('[data-sound-master]').value).toBe('70');
         click(mute);
-        expect(actions).toContainEqual({ kind: 'settings.set', key: 'alert_muted', value: false });
-        render({ alert_muted: false });
+        expect(kept().alert_muted).toBe(false);
         const unmuted = q('[data-action="sound-mute"]')!;
         // CONTROL: not muted, not inverted.
+        expect(unmuted.getAttribute('aria-pressed')).toBe('false');
         expect(unmuted.className).not.toContain('bg-[var(--selected-bg)]');
         click(unmuted);
-        expect(actions).toContainEqual({ kind: 'settings.set', key: 'alert_muted', value: true });
+        expect(kept().alert_muted).toBe(true);
+        expect(range('[data-sound-master]').value).toBe('70');
     });
 });
 
@@ -145,7 +198,7 @@ describe('Advanced: a level per event', () => {
         }
     });
 
-    it('a kind shows its saved level; moving it writes alert_levels with that kind and keeps the others', () => {
+    it('a kind shows this client’s level; moving it keeps alert_levels on this client with that kind, the others kept', () => {
         vi.useFakeTimers();
         render({ alert_levels: '{"mail":20,"finished":40}' });
         click(q('[data-action="sound-levels-toggle"]')!);
@@ -153,9 +206,7 @@ describe('Advanced: a level per event', () => {
         expect(range('[data-sound-level="question"]').value).toBe('100');
         slide(range('[data-sound-level="finished"]'), 75);
         act(() => { vi.advanceTimersByTime(400); });
-        const write = actions.find((a) => a.key === 'alert_levels')!;
-        expect(write.kind).toBe('settings.set');
-        expect(JSON.parse(String(write.value))).toEqual({ mail: 20, finished: 75 });
+        expect(JSON.parse(String(kept().alert_levels))).toEqual({ mail: 20, finished: 75 });
     });
 
     it('a play button previews that kind at master × its level, even while muted', () => {
@@ -168,7 +219,7 @@ describe('Advanced: a level per event', () => {
     });
 
     it('a kind set to None has nothing to preview: its play button is disabled (CONTROL: a kind with a sound is not)', () => {
-        render({ sound_finished: 'off' });
+        render({}, { sound_finished: 'off' });
         click(q('[data-action="sound-levels-toggle"]')!);
         expect((q('[data-sound-level-play="finished"]') as HTMLButtonElement).disabled).toBe(true);
         expect((q('[data-sound-level-play="question"]') as HTMLButtonElement).disabled).toBe(false);

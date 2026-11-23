@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { ALERT_KINDS } from '../src/core/alerts.js';
-import { splitSettings } from '../src/core/remote.js';
 import { SETTINGS } from '../src/core/settings.js';
 import { sectionOf } from '../src/core/settings-nav.js';
 import { SOUND_LEVELS_SETTING, SOUND_MUTED_SETTING, SOUND_VOLUME_SETTING, alertVolume, eventLevel, masterLevel, previewVolume, withEventLevel } from '../src/core/sound-volume.js';
@@ -8,28 +7,24 @@ import { SOUND_LEVELS_SETTING, SOUND_MUTED_SETTING, SOUND_VOLUME_SETTING, alertV
 /**
  * SOUND VOLUME (Tynn #1022; the owner, 2026-11-22: "can we add volume control to the sound system? And an advanced Volume
  * control for setting levels per event."). A master level with a mute, and a level per alert kind; what plays is the
- * master times the event's level. The levels are HOST settings, so every client of a host hears the same levels.
+ * master times the event's level.
+ *
+ * A CLIENT SETTING (the owner's ruling: "activity sounds is a client setting"). Every key in SETTINGS is stored in the
+ * HOST's one settings.json whatever its declared scope (settings-store.ts; a remote client writes the host's copy), so the
+ * levels are NOT in that registry at all: each client keeps its own (renderer/client-sound-settings.ts).
  */
 
 describe('the settings', () => {
-    it('master, mute and the per-event levels are host-scoped, hidden (drawn by their own block), on Notifications', () => {
-        const byKey = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
-        expect(byKey[SOUND_VOLUME_SETTING]).toMatchObject({ scope: 'host', type: 'string', default: '100', hidden: true });
-        expect(byKey[SOUND_MUTED_SETTING]).toMatchObject({ scope: 'host', type: 'boolean', default: false, hidden: true });
-        expect(byKey[SOUND_LEVELS_SETTING]).toMatchObject({ scope: 'host', type: 'string', default: '{}', hidden: true });
-        for (const k of [SOUND_VOLUME_SETTING, SOUND_MUTED_SETTING, SOUND_LEVELS_SETTING]) expect(sectionOf(k), k).toBe('notifications');
+    it('master, mute and the per-event levels are NOT host settings: none is in the registry a host stores and shares', () => {
+        const keys = SETTINGS.map((s) => s.key);
+        for (const k of [SOUND_VOLUME_SETTING, SOUND_MUTED_SETTING, SOUND_LEVELS_SETTING]) {
+            expect(keys, k).not.toContain(k);
+            expect(sectionOf(k), k).toBeNull();
+        }
     });
 
     it('stay OUT of the sound_<kind> namespace, which holds exactly one choice per alert kind (alerts.test pins it)', () => {
         for (const k of [SOUND_VOLUME_SETTING, SOUND_MUTED_SETTING, SOUND_LEVELS_SETTING]) expect(k, k).not.toMatch(/^sound_/);
-    });
-
-    it('they are the host’s, never kept locally by a client (so every client hears the same levels)', () => {
-        const split = splitSettings(SETTINGS);
-        for (const k of [SOUND_VOLUME_SETTING, SOUND_MUTED_SETTING, SOUND_LEVELS_SETTING]) {
-            expect(split.hostOnly, k).toContain(k);
-            expect(split.clientLocal, k).not.toContain(k);
-        }
     });
 });
 
@@ -103,6 +98,15 @@ describe('every alert plays at its volume (the call sites)', () => {
         const src = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
         const calls = src.split('\n').filter((l) => l.includes('playAlertSound(') && !l.trim().startsWith('import') && !l.trim().startsWith('//') && !l.trim().startsWith('*'));
         expect(calls).toHaveLength(4);
-        for (const line of calls) expect(line, line.trim()).toMatch(/playAlertSound\((?:alertSound|limitAlertSound)\([^;]*\), alertVolume\(/);
+        // The levels are this CLIENT's: read from its own store at play time, never from the host's settings.
+        for (const line of calls) expect(line, line.trim()).toMatch(/playAlertSound\((?:alertSound|limitAlertSound)\([^;]*\), alertVolume\([^;]*clientSoundValues\(\)\)\);/);
+    });
+
+    it('each preview in Settings plays at THIS client’s levels too (COUNTED: two — a sound row and a rate-limit alert)', async () => {
+        const { readFileSync } = await import('node:fs');
+        const src = readFileSync(new URL('../src/renderer/components/FeatureSurfaces.tsx', import.meta.url), 'utf8');
+        const calls = src.split('\n').filter((l) => l.includes('playPreviewSound(') && !l.trim().startsWith('import') && !l.trim().startsWith('//') && !l.trim().startsWith('*'));
+        expect(calls).toHaveLength(2);
+        for (const line of calls) expect(line, line.trim()).toMatch(/previewVolume\([^;]*clientSoundValues\(\)\)/);
     });
 });
