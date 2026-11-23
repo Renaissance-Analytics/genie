@@ -11,7 +11,7 @@ import { fitRemoteFrame } from '../core/remote-frame.js';
  *
  * One socket to `<relay>/ws/host`, opened with a Tynn-ticketed hello signed by this machine's enrolled key. For each
  * member the relay opens (`control open {grant}`): the grant is checked (Tynn's signature, audience, expiry, still
- * active), the member must prove the key the grant is bound to (a control grant MUST be bound), the grant must map to a
+ * active), the member must prove the key the grant is bound to (every grant MUST be bound, read-only too), the grant must map to a
  * Genie principal — and only then does RemoteHost get a connection, already authenticated as that principal (its
  * `relay` hello takes it). Frames that arrive before admission wait, a few, in order. Every admitted session is
  * re-checked on a timer: a revoked grant ends it, in words.
@@ -60,6 +60,9 @@ export interface RelayHostLink extends ServerTransport {
 }
 
 const MAX_PENDING_FRAMES = 64;
+
+/** What a member whose grant names no key is told (audit M-f). It reaches the person as the reason the connection closed. */
+export const UNBOUND_GRANT = 'this grant is not bound to a key, so nothing proves who holds it (no proof-of-possession binding, cnf). Nothing was sent. Connect again from a current Genie.';
 
 interface Session {
     /** The grant in use: replaced by a renewal (genie#1401), re-checked on the timer. */
@@ -218,9 +221,8 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         }
         const grant = check.grant;
         if (!grant.confirmationKeyThumbprint) {
-            // A read-only grant may skip the proof; control may not.
-            if (grant.capability === 'control') reject(sid, 'control grant missing required proof-of-possession binding (cnf)');
-            else accept(sid, grant, token);
+            // EVERY GRANT PROVES ITS KEY (audit M-f, Tynn #423): read-only too. Unbound, it is a bearer token the relay could replay.
+            reject(sid, UNBOUND_GRANT);
             return;
         }
         const nonce = randomBytes(32).toString('hex');

@@ -45,6 +45,19 @@ describe('main enforces it, not the window', () => {
         expect(handler.slice(0, handler.indexOf('\n'))).toContain('outboundDialRefusal(hostSummaryNow.workstationRole');
     });
 
+    // P9.1 (audit M-b): the third way out. A Take Over window on another machine dials that machine too.
+    it('opening a Take Over window on another machine asks outboundDialRefusal before any window opens', () => {
+        const at = main.indexOf("ipcMain.handle('genie:remote-takeover-open'");
+        expect(at).toBeGreaterThan(-1);
+        const handler = main.slice(at, main.indexOf('ipcMain.handle(', at + 1));
+        const asked = handler.indexOf('const refused = outboundDialRefusal(hostSummaryNow.workstationRole, url);');
+        const opened = handler.indexOf('openRemoteTakeOverWindow(');
+        expect(asked).toBeGreaterThan(-1);
+        expect(handler.slice(asked, opened)).toContain('if (refused) return { ok: false, reason: refused };');
+        // CONTROL: the window IS opened here, after the refusal, so the order above means something.
+        expect(opened).toBeGreaterThan(asked);
+    });
+
     it('the app windows’ session cancels a WebSocket main refuses', () => {
         expect(main).toMatch(/session\.defaultSession\.webRequest\.onBeforeRequest\([^\n]*outboundDialRefusal\(hostSummaryNow\.workstationRole, details\.url\)/);
     });
