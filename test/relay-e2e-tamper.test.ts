@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, sign, verify, type KeyObject } from 'node:crypto';
-import { PassThrough } from 'node:stream';
+import type { Socket } from 'node:net';
+import { Duplex } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ServerConnection } from '../src/core/remote-protocol.js';
 import { verifyMemberGrant, type TynnJwk } from '../src/main/relay-grant.js';
@@ -51,6 +52,13 @@ const OLD_MEMBER = 'The Genie on the machine you are connecting from is too old 
 const CHANGED = `The connection to ${NAME} was changed on the way, so it was closed. Connect again.`;
 const CHANGED_AT_HOST = 'the encrypted connection was changed on the way, so this workstation closed it';
 
+/** One end of a byte stream that does not echo (a front door, or a browser): what was written to it, and a way to make it speak. */
+function endpoint() {
+    const got: Buffer[] = [];
+    const socket = new Duplex({ read() {}, write(chunk: Buffer, _encoding, done) { got.push(chunk); done(); } });
+    return { socket, got, say: (text: string) => { socket.push(Buffer.from(text)); } };
+}
+
 const links: Array<ReturnType<typeof relayHostLink>> = [];
 afterEach(() => { for (const l of links.splice(0)) l.close(); });
 
@@ -58,7 +66,7 @@ async function rig(tamper: RelayTamper = {}, opts: { hostSigns?: KeyObject } = {
     const relay = fakeRelay(verifyHost, tamper);
     const hostLog: string[] = [];
     const dialed: string[] = [];
-    const frontDoors: PassThrough[] = [];
+    const frontDoors: Array<ReturnType<typeof endpoint>> = [];
     const link = relayHostLink({
         socket: relay.socket,
         relayUrl: 'wss://relay.example.com',
@@ -71,7 +79,7 @@ async function rig(tamper: RelayTamper = {}, opts: { hostSigns?: KeyObject } = {
         reconnect: { minMs: 0, maxMs: 0 },
         popTimeoutMs: 200,
         log: (m) => hostLog.push(m),
-        site: { dial: async (host) => { dialed.push(host); const socket = new PassThrough(); frontDoors.push(socket); return { ok: true, socket }; }, ca: () => 'HOST CA' },
+        site: { dial: async (host) => { dialed.push(host); const door = endpoint(); frontDoors.push(door); return { ok: true, socket: door.socket as unknown as Socket }; }, ca: () => 'HOST CA' },
     });
     links.push(link);
     /** What RemoteHost would be handed, and what it would read. */
@@ -158,18 +166,22 @@ describe('an honest relay (the control for every row below)', () => {
         expect(opened).toMatchObject({ ok: true, ca: 'HOST CA' });
         expect(r.dialed).toEqual(['app.gen']);
         if (!opened.ok) return;
-        const browser = new PassThrough();
-        const out: Buffer[] = [];
-        r.frontDoors[0]!.on('data', (c: Buffer) => out.push(c));
-        opened.pipe(browser);
-        browser.write('SITE-BYTES-MARKER-91ab');
+        const browser = endpoint();
+        opened.pipe(browser.socket);
+        browser.say('SITE-BYTES-MARKER-91ab');
         await settle();
+        r.frontDoors[0]!.say('SITE-ANSWER-MARKER-44f0');
+        await settle();
+        // The bytes crossed, both ways.
+        expect(Buffer.concat(r.frontDoors[0]!.got).toString()).toBe('SITE-BYTES-MARKER-91ab');
+        expect(Buffer.concat(browser.got).toString()).toBe('SITE-ANSWER-MARKER-44f0');
         const all = r.relay.wire.map((w) => w.text).join('\n');
         expect(r.seen('member', 'site').length).toBeGreaterThanOrEqual(2);
         expect(r.seen('host', 'site').length).toBeGreaterThanOrEqual(1);
         expect(all).not.toContain('app.gen');
         expect(all).not.toContain('HOST CA');
         expect(all).not.toContain(Buffer.from('SITE-BYTES-MARKER-91ab').toString('base64'));
+        expect(all).not.toContain(Buffer.from('SITE-ANSWER-MARKER-44f0').toString('base64'));
         expect(t.closedBecause()).toBeNull();
     });
 

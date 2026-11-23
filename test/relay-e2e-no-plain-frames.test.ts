@@ -146,9 +146,9 @@ describe('the guard itself (it can see what it names)', () => {
 describe('the two relay ends', () => {
     it.each(FILES)('%s writes only control frames and sealed frames', (file) => {
         const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+        expect(plainWrites(source, file)).toEqual([]);
         // CONTROL: the file does write frames (so an empty list is not an empty file or a renamed function).
         expect(source.match(/encodeFrame[(]/g)?.length ?? 0).toBeGreaterThan(1);
-        expect(plainWrites(source, file)).toEqual([]);
     });
 
     it.each(FILES)('%s takes its seal from relay-e2e and opens what it reads', (file) => {

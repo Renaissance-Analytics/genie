@@ -34,6 +34,7 @@ const WS_ID = 'ws_host_1';
 const tynnKey = generateKeyPairSync('ed25519');
 const tynnJwk = { ...(tynnKey.publicKey.export({ format: 'jwk' }) as { kty: string; crv: string; x: string }), kid: 'tynn-1', alg: 'EdDSA' } as TynnJwk;
 const hostKey = generateKeyPairSync('ed25519');
+const HOST_PUBLIC_KEY = (hostKey.publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64');
 const hostFingerprint = createHash('sha256').update(hostKey.publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
 
 /** RFC 7638 thumbprint of an Ed25519 OKP JWK — written out, not imported. */
@@ -97,6 +98,7 @@ beforeEach(async () => {
         relayUrl: 'wss://relay.example.com',
         workstationId: WS_ID,
         hello: async () => { tickets++; return buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey) }); },
+        fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey),
         signedInHere: () => 'user_1',
         validateGrant: async (token) => {
             const check = verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID });
@@ -125,7 +127,7 @@ afterEach(async () => {
 async function member(claims: Record<string, unknown>, opts: { bind?: boolean; prove?: PopKeypair } = {}) {
     const pop = PopKeypair.generate();
     const bound = opts.bind === false ? {} : { cnf: { jkt: thumbprint(pop.publicJwk) } };
-    const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: mintGrant({ ...bound, ...claims }), pop: opts.prove ?? pop });
+    const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: mintGrant({ ...bound, ...claims }), hostPublicKey: HOST_PUBLIC_KEY, pop: opts.prove ?? pop });
     return opened;
 }
 
@@ -162,11 +164,9 @@ describe('a member over the relay', () => {
 
     // The same write by a CONTROL grant to the same workspace goes through (the test above) — so this refusal is read-only's.
     it('a DRONE host (Tynn says so in the grant): an invite is refused over the relay, the owner from a paired machine is not', async () => {
+        // Refused before the connection opens (P9.2: nobody is admitted, and nothing of Genie's own is exchanged, before the grant seats).
         const guest = await member({ src: 'invite', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
-        const gt = (guest as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
-        void wireClient(gt).hello({ kind: 'relay' });
-        await settle();
-        expect(gt.closedBecause()).toMatch(/drone/);
+        expect(guest).toEqual({ ok: false, reason: expect.stringMatching(/drone/) });
         const owner = await member({ src: 'owner', src_ws: 'ws_pilot', cap: 'control', scope: ['host:all'], aud_role: 'drone' });
         expect(owner.ok).toBe(true);
         const c = wireClient((owner as { transport: ClientTransport }).transport);
@@ -191,14 +191,11 @@ describe('a member over the relay', () => {
 
     it('a DRONE host refuses a MEMBER share over the relay: links only (owner 2026-10-28)', async () => {
         const opened = await member({ src: 'share', share_origin: 'member', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
-        const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
-        void wireClient(t).hello({ kind: 'relay' });
-        await settle();
-        expect(t.closedBecause()).toMatch(/share link/);
+        expect(opened).toEqual({ ok: false, reason: expect.stringMatching(/share link/) });
     });
 
     it('a READ-ONLY grant: reads work, a write is refused', async () => {
-        const opened = await member({ src: 'invite', cap: 'readonly', scope: ['workspace:tynn'] }, { bind: false });
+        const opened = await member({ src: 'invite', cap: 'readonly', scope: ['workspace:tynn'] });
         const c = wireClient((opened as { transport: ClientTransport }).transport);
         await c.hello({ kind: 'relay' });
         expect(await c.call('snapshot')).toMatchObject({ ok: true });
@@ -222,11 +219,7 @@ describe('a member over the relay', () => {
 
     it('a grant naming SEVERAL workspaces is refused in words (this Genie scopes a guest to one)', async () => {
         const opened = await member({ src: 'invite', cap: 'control', scope: ['workspace:tynn', 'workspace:fancy'] });
-        const c = wireClient((opened as { transport: ClientTransport }).transport);
-        const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
-        void c.hello({ kind: 'relay' });
-        await settle();
-        expect(t.closedBecause()).toMatch(/one workspace/);
+        expect(opened).toEqual({ ok: false, reason: expect.stringMatching(/one workspace/) });
     });
 
     it.each([
@@ -235,26 +228,18 @@ describe('a member over the relay', () => {
         ['expired', () => mintGrant({ src: 'owner', cap: 'control', scope: ['host:all'], exp: Math.floor(Date.now() / 1000) - 3600 }), 'grant expired'],
     ])('a grant %s is refused before Genie’s protocol is reached', async (_name, grant, reason) => {
         const pop = PopKeypair.generate();
-        const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: grant(), pop });
-        const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
-        const c = wireClient(t);
-        void c.hello({ kind: 'relay' });
-        await settle();
-        expect(t.closedBecause()).toBe(reason);
+        const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: grant(), hostPublicKey: HOST_PUBLIC_KEY, pop });
+        expect(opened).toEqual({ ok: false, reason });
     });
 
     it('the WRONG key proved: refused (the grant alone is not enough)', async () => {
         const opened = await member({ src: 'owner', cap: 'control', scope: ['host:all'] }, { prove: PopKeypair.generate() });
-        const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
-        await settle();
-        expect(t.closedBecause()).toBe('proof key does not match the grant binding');
+        expect(opened).toEqual({ ok: false, reason: 'proof key does not match the grant binding' });
     });
 
     it('a CONTROL grant with no key binding is refused', async () => {
         const opened = await member({ src: 'owner', cap: 'control', scope: ['host:all'] }, { bind: false });
-        const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
-        await settle();
-        expect(t.closedBecause()).toMatch(/proof-of-possession/);
+        expect(opened).toEqual({ ok: false, reason: expect.stringMatching(/proof-of-possession/) });
     });
 
     it('a grant REVOKED in Tynn ends the session at the next revalidation', async () => {

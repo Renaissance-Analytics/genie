@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, sign, verify, type KeyObject } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, diffieHellman, generateKeyPairSync, hkdfSync, sign, verify, type KeyObject } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { acceptMember, frameCipher, hostKeyOf, RelayE2eError, startMember, transcriptHash, E2E_FRAME_LIMIT } from '../src/main/relay-e2e.js';
 import type { Frame } from '../src/main/relay-wire.js';
@@ -131,8 +131,8 @@ describe('the handshake, byte for byte', () => {
         c.setAAD(referenceAad(frame, 1));
         const ct = Buffer.concat([c.update(Buffer.from(JSON.stringify({ r: 'refused' }), 'utf8')), c.final(), c.getAuthTag()]);
         expect(memberCipher.open({ ...frame, payload: { e2e: 1, n: 1, c: ct.toString('base64') } })).toEqual({ ...frame, reason: 'refused' });
-        // And the host's own seal opens at the member (the same direction's next number).
-        expect(memberCipher.open(hostCipher.seal({ kind: 'data', channel: 'site', sid: SID, reqId: 'site_1', payload: { t: 'open', ca: 'PEM' } }))).toEqual({ kind: 'data', channel: 'site', sid: SID, reqId: 'site_1', payload: { t: 'open', ca: 'PEM' } });
+        // And the host's own seal opens at the member (on rest: the hand-made frame above took the site channel's first number).
+        expect(memberCipher.open(hostCipher.seal(rest('{"kind":"welcome"}')))).toEqual(rest('{"kind":"welcome"}'));
     });
 
     it('what a frame said in words (reason, code) travels inside the seal, not beside it', async () => {
@@ -224,7 +224,7 @@ describe('who the other end is', () => {
         const w = world();
         const read = hostKeyOf(w.hostSpki);
         expect(read?.fingerprint).toBe(w.hostFingerprint);
-        expect(read?.key.equals(createPublicKey(w.host.publicKey))).toBe(true);
+        expect(read?.key.equals(w.host.publicKey)).toBe(true);
     });
 
     it.each([

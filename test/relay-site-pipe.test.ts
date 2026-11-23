@@ -31,6 +31,8 @@ const WS_ID = 'ws_host_1';
 const tynnKey = generateKeyPairSync('ed25519');
 const tynnJwk = { ...(tynnKey.publicKey.export({ format: 'jwk' }) as { kty: string; crv: string; x: string }), kid: 'tynn-1', alg: 'EdDSA' } as TynnJwk;
 const hostKey = generateKeyPairSync('ed25519');
+const HOST_PUBLIC_KEY = (hostKey.publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64');
+const hostFingerprint = createHash('sha256').update(Buffer.from(HOST_PUBLIC_KEY, 'base64')).digest('hex');
 const thumbprint = (jwk: { crv: string; kty: string; x: string }) =>
     createHash('sha256').update(`{"crv":"${jwk.crv}","kty":"${jwk.kty}","x":"${jwk.x}"}`, 'utf8').digest('base64url');
 function mintGrant(claims: Record<string, unknown>, key: KeyObject = tynnKey.privateKey): string {
@@ -112,6 +114,7 @@ beforeEach(async () => {
         relayUrl: 'wss://relay.example.com',
         workstationId: WS_ID,
         hello: async () => buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: 'fp', sign: (d) => sign(null, d, hostKey.privateKey) }),
+        fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey),
         signedInHere: () => 'user_1',
         validateGrant: async (token) => verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID }),
         reconnect: { minMs: 0, maxMs: 0 },
@@ -135,7 +138,7 @@ async function memberDoor(claims: Record<string, unknown>, opts: { bind?: boolea
     const { siteDoor } = await relaySite();
     const pop = PopKeypair.generate();
     const bound = opts.bind === false ? {} : { cnf: { jkt: thumbprint(pop.publicJwk) } };
-    const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: mintGrant({ ...bound, ...claims }), pop });
+    const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: mintGrant({ ...bound, ...claims }), hostPublicKey: HOST_PUBLIC_KEY, pop });
     if (!opened.ok) throw new Error(opened.reason);
     await settle();
     const transport = opened.transport as typeof opened.transport & { openSite(host: string): Promise<unknown> };

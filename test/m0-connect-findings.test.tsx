@@ -148,7 +148,7 @@ describe('3. a refusal on a drone says it is a drone — the role read again fro
 
     it('CONTROL: success, or a failure that is not Tynn refusing, never re-reads the role', async () => {
         const reread = vi.fn(async () => 'drone' as const);
-        const ok = { ok: true as const, token: 't', relayEndpoint: 'ws://r' };
+        const ok = { ok: true as const, token: 't', relayEndpoint: 'ws://r', hostPublicKey: null };
         expect(await wordTynnRefusal(ok, reread)).toBe(ok);
         const down = { ok: false as const, reason: 'Tynn could not be reached' };
         expect(await wordTynnRefusal(down, reread)).toBe(down);
