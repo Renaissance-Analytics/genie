@@ -19,6 +19,7 @@
  * the end), proof.json (what the DOM held). Exit 0 all proven; 1 a check failed; 2 cannot run here.
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -229,8 +230,9 @@ try {
     // WHAT'S NEW FIRST: a fresh home may open with it over the window. Closed the way a person closes it.
     const whatsNew = await waitFor("the What's new window (if it shows)", `Boolean(document.querySelector('[data-action="whats-new-close"]'))`, 15_000);
     if (whatsNew) {
-        await click('[data-action="whats-new-close"]');
-        check("0b. the What's new window was shown and is closed with its Close button", await waitFor("What's new gone", `!document.querySelector('[data-whats-new]')`, 10_000));
+        // Through the shared helper (scripts/cdp-whats-new.mjs): it throws if the dialog will not close, so no click goes through it.
+        const closed = await closeWhatsNew(ev);
+        check("0b. the What's new window was shown and is closed with its Close button", closed.closed);
     } else proof.notes.push("no What's new window was shown on this home");
 
     const seen = JSON.parse(await ev(`window.genieTest.snapshot().then((s) => JSON.stringify({ agents: (s.agents ?? []).filter((a) => a.name !== 'genie').length }))`));
