@@ -215,7 +215,9 @@ describe('wired: every Windows row that starts its own Genie ends it through thi
     it('the packaged-launcher row ends its app and host through the same helper, and fails when it cannot', () => {
         const ps1 = readFileSync('scripts/ci/windows.ps1', 'utf8');
         const body = ps1.slice(ps1.indexOf('function Row-packaged-launcher'));
-        const fn = body.slice(0, body.indexOf('\nfunction ', 10));
+        // The function alone, to its closing brace: the comment block after it (the row ceilings) speaks of taskkill too.
+        const fn = body.slice(0, body.search(/^\}\r?$/m));
+        expect(fn).toMatch(/Start-Process -FilePath \(Resolve-Path "release\\win-unpacked\\Genie\.exe"\) -PassThru/);
         expect(fn).toMatch(/node scripts\/end-own-tree\.mjs/);
         expect(fn).not.toMatch(/taskkill/);
         expect(fn).toMatch(/left running by the row's own cleanup/);
