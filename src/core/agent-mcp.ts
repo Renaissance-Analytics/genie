@@ -45,6 +45,29 @@ export const FANCY_UI_MCP: BuiltInMcpServer = { type: 'http', name: 'fancy-ui', 
  * all (main/session-host.ts start, builtInMcpFor), so they take no context.
  */
 export const BUILT_IN_MCP_SERVERS: readonly BuiltInMcpServer[] = [FANCY_UI_MCP];
+
+/** An MCP address as compared: scheme and host in lower case (URL's own reading), no trailing slash, no fragment. */
+function mcpAddress(url: unknown): string | null {
+    if (typeof url !== 'string') return null;
+    try {
+        const u = new URL(url);
+        return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * IS A SERVER ALREADY HANDED THE ONE GENIE WOULD ADD? By name, or by ADDRESS: a workspace's own entry for the same
+ * registry under another name is the same server, and handing both gives an agent every tool twice. Only servers Genie
+ * hands itself can be compared this way: one a provider's own plugin loads never passes through Genie, which learns its
+ * name (never its address) only once a session reports it.
+ */
+export function sameMcpServer(handed: { readonly name: string; readonly url?: unknown }, builtIn: BuiltInMcpServer): boolean {
+    if (handed.name === builtIn.name) return true;
+    const address = mcpAddress(handed.url);
+    return address !== null && address === mcpAddress(builtIn.url);
+}
 const BUILT_IN_MCP: readonly string[] = BUILT_IN_MCP_SERVERS.map((s) => s.name);
 
 export interface McpRow {

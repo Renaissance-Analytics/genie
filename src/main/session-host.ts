@@ -19,7 +19,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
-import { mcpOffFor } from '../core/agent-mcp.js';
+import { mcpOffFor, sameMcpServer } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
 import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
 import { accountSwitchNote } from '../core/account-switch.js';
@@ -1156,7 +1156,7 @@ export class SessionHost {
         // Genie's provided servers after the rest (Tynn #1017), unless off for this agent or its workspace, read per launch.
         const withBuiltIn = (servers: readonly McpServer[]): readonly McpServer[] => {
             const off = new Set(mcpOffFor(record, this.#workspaceMcpOffFor?.(record) ?? []));
-            return [...servers, ...this.#builtInMcpServers.filter((b) => !off.has(b.name) && !servers.some((s) => s.name === b.name))];
+            return [...servers, ...this.#builtInMcpServers.filter((b) => !off.has(b.name) && !servers.some((s) => sameMcpServer(s, b)))];
         };
         const mcpServers = withBuiltIn(this.#mcpServersFor?.(record) ?? []);
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
