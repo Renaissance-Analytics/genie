@@ -106,12 +106,8 @@ export const ENGINE_METHODS = [
     'engine.tynnFeaturesUnwatch',
     // Other Tynn pages are read on this host's pairing and workspace registry, for local windows only.
     'engine.tynnPage',
-    // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
-    // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
-    'engine.stores',
-    // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
-    // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
-    'engine.supervisor',
+    // The stores, the process supervisor and the flows went from the engine link in 2g-4d E2a (Tynn #955): a window reads and
+    // writes them over the protocol (features.act/snapshot, registry.write, chatDrafts.*); genie-host keeps them in-process.
     // The host's hosting (P5a: hosting-host.ts): `[method, args]` — a window's write. Its whole readable state is sent as
     // `hosting.dump` before `engine.ready` (the front door's port and CA with it), and again as `hosting.event` on change.
     'engine.hosting',
@@ -149,9 +145,7 @@ export const ENGINE_METHODS = [
     // the `catalog.snapshot` event before `engine.ready`; every change is pushed as `catalog.changed` (upserts and
     // removals from a base revision; a window that missed one asks for the snapshot again). `catalog.docs [kind, id]`
     // answers one element's definition, or null.
-    // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
     'engine.browser',
-    'engine.flows',
     // The host's terminals (P3.3e): `[method, args]`. Their list and scrollback are sent as `terminals.dump` before
     // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.
     'engine.terminals',
