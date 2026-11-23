@@ -3,6 +3,7 @@ import { accountsActionOf } from '../src/core/account-settings.js';
 import type { AccountRecord } from '../src/core/accounts.js';
 import { isClaudeSignInUrl } from '../src/core/claude-accounts.js';
 import { claudeAccountNamed, claudeSignedInActive, ClaudeSignIns, type ClaudeLoginOptions, type ClaudeSignInPorts } from '../src/main/claude-sign-ins.js';
+import { claudeSignedInNow } from '../src/main/claude-accounts-live.js';
 import { hostSignIns } from '../src/main/host-sign-ins.js';
 import { LoginHost } from '../src/main/login-host.js';
 
@@ -278,7 +279,7 @@ describe('Sign out and remove never pulls a folder from under a running agent (r
     it('a folder that will not go completely: the account is KEPT (never forgotten first), said, and the same button finishes it', async () => {
         let tries = 0;
         const calls: string[] = [];
-        const w = world({ removeDir: (dir) => { tries += 1; calls.push(`remove ${dir}`); return tries === 1 ? { ok: false, reason: 'The account\'s folder could not be removed completely: EBUSY' } : { ok: true }; } });
+        const w = world({ removeDir: (dir) => { tries += 1; calls.push(`remove ${dir}`); return tries === 1 ? { ok: false, partial: true, reason: 'The account\'s folder could not be removed completely: EBUSY' } : { ok: true }; } });
         expect(await w.s.signOut(OWN.id)).toEqual({ ok: true });
         expect(calls).toEqual([`remove ${OWN.configDir}`]);
         expect(w.calls.filter((c) => c.startsWith('forget'))).toEqual([]);
@@ -564,5 +565,51 @@ describe('a sign-in that worked is never left half told (review finding 7)', () 
         w.book.set(OWN.id, { ...OWN, identity: { name: null, email: 'first.last+tag@sub.example.invalid', plan: null } });
         await w.s.signIn(OWN.id, ctx);
         expect(w.current().options.email).toBe('first.last+tag@sub.example.invalid');
+    });
+});
+
+describe('whether Claude Code says an account is signed in now: what Switch asks before it does anything (review finding 2)', () => {
+    const PLACEHOLDER: AccountRecord = { ...HOME, id: 'account_legacy_claude', legacy: true, label: 'Account 1', labelEdited: false, identity: { name: null, email: null, plan: null } };
+    const ask = (account: AccountRecord, answers: Record<string, { signedIn: boolean; email?: string } | Error>, all: readonly AccountRecord[] = [OWN, HOME, PLACEHOLDER]) => {
+        const asked: Array<string | null> = [];
+        const result = claudeSignedInNow(account, {
+            accounts: () => all, defaultDir: () => null,
+            describe: async (dir) => { asked.push(dir); const a = answers[dir ?? 'default']!; if (a instanceof Error) throw a; return a; },
+        });
+        return { result, asked };
+    };
+
+    it('an account with a folder of its own is asked there, and the answer is Claude Code\'s', async () => {
+        const yes = ask(OWN, { [OWN.configDir!]: { signedIn: true, email: 'team@example.invalid' } });
+        expect(await yes.result).toBe(true);
+        expect(yes.asked).toEqual([OWN.configDir]);
+        expect(await ask(OWN, { [OWN.configDir!]: { signedIn: false } }).result).toBe(false);
+    });
+
+    it('the default home holds ONE sign-in: it is a default-home account\'s only when it reports that account\'s email', async () => {
+        const home = ask(HOME, { default: { signedIn: true, email: 'HOME@example.invalid' } });
+        expect(await home.result).toBe(true);
+        expect(home.asked).toEqual([null]);
+        expect(await ask(HOME, { default: { signedIn: true, email: 'someone-else@example.invalid' } }).result).toBe(false);
+        expect(await ask(HOME, { default: { signedIn: false } }).result).toBe(false);
+    });
+
+    it('the account nobody has named yet is the one signed in there when no other default-home account is', async () => {
+        expect(await ask(PLACEHOLDER, { default: { signedIn: true, email: 'new@example.invalid' } }).result).toBe(true);
+        expect(await ask(PLACEHOLDER, { default: { signedIn: true, email: 'home@example.invalid' } }).result).toBe(false);
+    });
+
+    it('Claude Code could not be asked: unknown, never a guess', async () => {
+        expect(await ask(OWN, { [OWN.configDir!]: new Error('the CLI did not answer') }).result).toBeNull();
+        expect(await ask(HOME, { default: new Error('the CLI did not answer') }).result).toBeNull();
+    });
+});
+
+describe('Sign out and remove: a folder Genie will not remove at all is not a removal to finish later', () => {
+    it('the account kept its own history: signed out, forgotten in Genie, its folder left and said', async () => {
+        const w = world({ removeDir: () => ({ ok: false, reason: 'This account kept its own conversation history, so its folder is left on disk for you to keep or delete.' }) });
+        expect(await w.s.signOut(OWN.id)).toEqual({ ok: true });
+        expect(w.book.has(OWN.id)).toBe(false);
+        expect(w.notices.at(-1)).toMatch(/signed out and removed from Genie\. This account kept its own conversation history/);
     });
 });

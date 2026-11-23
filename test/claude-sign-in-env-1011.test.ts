@@ -45,7 +45,9 @@ afterEach(() => { vi.unstubAllEnvs(); });
 describe('the CLI a Claude sign-in runs: no home variable from the host\'s environment', () => {
     it('the gauge reads one: the host\'s environment does carry them here, and an allow-list that names one lets it through', () => {
         expect(homes(process.env).length).toBeGreaterThan(0);
-        expect(homes(given({ allowEnv: ['CLAUDE_CONFIG_DIR'] }))).toEqual(['CLAUDE_CONFIG_DIR']);
+        // prism-acp's allow-list takes a name in any spelling (measured on Linux, Azure job 1123-133523-c10aa9: the lowercase
+        // one came through beside it), so the gauge asks only that the name allowed is there.
+        expect(homes(given({ allowEnv: ['CLAUDE_CONFIG_DIR'] }))).toContain('CLAUDE_CONFIG_DIR');
     });
 
     it('realClaudeCliOptions lets none through', () => {
