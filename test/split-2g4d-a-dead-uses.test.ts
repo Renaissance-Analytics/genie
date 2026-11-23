@@ -64,23 +64,22 @@ describe('PROOF: no host tool’s call leaves the window for genie-host, and no 
     }) as unknown as Registration);
     const run = windowToolRunner(() => registrations, new Map());
 
-    it('a call genie-host forwards for one of its own tools is refused here unless it is that tool’s window action; the action runs the plain handler', async () => {
+    it('a call genie-host forwards for one of its own tools is refused here, `sites open` too since 2g-4d D2 (Tynn #1046); a window tool runs the plain handler', async () => {
         ran.length = 0;
         // What genie-host's MCP server forwards (mcp-host-tools.ts): a window tool, or a host tool's window action.
         expect((await run({ name: 'manageTerminals', args: { action: 'create' }, headers: {}, caller: null })).isError).toBe(true);
         expect((await run({ name: 'flows', args: { action: 'run' }, headers: {}, caller: null })).isError).toBe(true);
         expect((await run({ name: 'sites', args: { action: 'list' }, headers: {}, caller: null })).isError).toBe(true);
         expect(ran).toEqual([]);
-        // `sites open` and a window tool run the handler main registered, with no forward in between.
-        expect((await run({ name: 'sites', args: { action: 'open' }, headers: {}, caller: null })).text).toBe('sites ran here');
+        // `sites open` is genie-host's own now (its browser); a window tool runs the handler main registered.
+        expect((await run({ name: 'sites', args: { action: 'open' }, headers: {}, caller: null })).isError).toBe(true);
         expect((await run({ name: 'pages', args: { action: 'list' }, headers: {}, caller: null })).text).toBe('pages ran here');
-        expect(ran).toEqual(['sites:open', 'pages:list']);
+        expect(ran).toEqual(['pages:list']);
     });
 
-    it('the only window action of a host tool is `sites open`, so no other host tool’s handler in the window can run', () => {
-        expect(Object.fromEntries(Object.entries(WINDOW_ACTIONS).map(([tool, actions]) => [tool, [...actions]]))).toEqual({ sites: ['open'] });
-        for (const tool of HOST_NATIVE_TOOLS) for (const action of ['create', 'list', 'run', 'send', undefined]) {
-            if (tool === 'sites') continue;
+    it('no host tool has a window action (`sites open` was the last, until 2g-4d D2), so no host tool’s handler in the window can run', () => {
+        expect(WINDOW_ACTIONS).toEqual({});
+        for (const tool of HOST_NATIVE_TOOLS) for (const action of ['create', 'list', 'run', 'send', 'open', undefined]) {
             expect(runsInWindow(tool, action === undefined ? {} : { action }), `${tool} ${action}`).toBe(false);
         }
         // CONTROL: a window tool always runs in the window.

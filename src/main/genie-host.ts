@@ -272,6 +272,7 @@ import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
 import { hostWindowView, v1DatabaseFrom } from './host-window-view.js';
+import { browserDoorOf, hostOpensSite } from './host-browser.js';
 
 /**
  * GENIE-HOST — the per-user host process (the host split, phase 1: `.ai/plans/genie-2-host-split-2026-10-31.md`).
@@ -846,6 +847,18 @@ async function main(): Promise<void> {
         const here = () => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); };
         startOwnDetached('genie browser', launch, process.env, 'genie-browser.log', false, here);
     } });
+    // WHAT THE GENIE BROWSER NEEDS OF THIS HOST'S FRONT DOOR (Tynn #1046 D2): its port, Genie's CA, the hosts and each site's
+    // workspace and label, said by this host from its own hosting, with or without a window, again when the front door
+    // changes (frontDoorWatch) or a workspace's name may have (a registry write). A window says only how to start it.
+    if (hostingStack) {
+        const sayBrowserDoor = (view = frontDoorWatch.now()): void => {
+            const workspaceNames = Object.fromEntries(hostRegistry.listWorkspaces().map((w) => [w.id, workspaceNameFor(w.path)]));
+            browserService.door(browserDoorOf({ ...view, workspaceNames }));
+        };
+        frontDoorWatch.subscribe((view) => { sayBrowserDoor(view); });
+        stores.onEvent((event) => { if (event.store === 'registry') sayBrowserDoor(); });
+        sayBrowserDoor();
+    }
     // A keyring unlocked while the Genie browser runs (Tynn story #388): that browser is restarted to use it, and the SCREEN says so.
     const keyringNotices: Array<(text: string | null) => void> = [];
     void keychainOpening.then(({ keyring }) => {
@@ -2425,6 +2438,13 @@ async function main(): Promise<void> {
         serviceExec: makeServiceExec(systemProcessTree, processSupervisor, (id, run) => { host.commandStarted(id as AgentId, run); }),
         // The agents' `sites` / `services` act only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
         workspaceTrusted: (workspaceId) => !hostUntrustedNow({ workspaceId }),
+        // An agent's `sites open` (Tynn #1046 D2): in this host's browser, in the background; every window pulses the site's
+        // workspace for the person (a `site-opened` tool signal). With no window it opens all the same.
+        openInBrowser: hostOpensSite({
+            open: (url) => browserService.call('open', [url, 'background'], 'genie-host'),
+            sites: () => hostingStack?.sites.list() ?? [],
+            signal: (signal) => { engine.callback({ name: 'toolSignal', signal }); },
+        }),
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,

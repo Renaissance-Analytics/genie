@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { BrowserService, type BrowserEvent, type BrowserFacts } from '../src/main/browser-service.js';
+import { BrowserService, type BrowserDoor, type BrowserEvent, type BrowserFacts } from '../src/main/browser-service.js';
 
 /**
  * THE GENIE BROWSER'S PROCESS, AS THE HOST SEES IT (the host split, P2b; decision 5: "its own process, not dependent on the
- * workspace UX"). The window and the browser never talk directly: each is a client of the host. The window says what the
- * browser needs and what to open; the host holds it until a browser is linked. The front door is the window's until P5.
+ * workspace UX"). The window and the browser never talk directly: each is a client of the host. genie-host says what the
+ * browser needs of its own front door (`door`, Tynn #1046 D2); a window says how to start the browser (its launch) and what
+ * to open; the host holds it until a browser is linked.
  */
 
-const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], workspaceOf: { 'moic.gen': 'ws' }, launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
+const DOOR: BrowserDoor = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], workspaceOf: { 'moic.gen': 'ws' } };
+const LAUNCH = { file: 'Genie.exe', args: ['--genie-browser'] };
+const FACTS: BrowserFacts = { ...DOOR, launch: LAUNCH };
+/** genie-host's door, and a window saying how to start the browser. */
+async function say(service: BrowserService, from = 'window'): Promise<void> {
+    service.door(DOOR);
+    await service.call('publish', [{ launch: LAUNCH }], from);
+}
 
 function setup(ports: ConstructorParameters<typeof BrowserService>[0] = {}) {
     const service = new BrowserService(ports);
@@ -73,31 +81,42 @@ describe('starting a browser', () => {
     it('an open with no browser starts one, as the window said to', async () => {
         const c = counted();
         const { service } = setup(c.ports);
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         await service.call('open', ['https://moic.gen/', 'background'], 'window');
-        expect(c.started).toEqual([FACTS.launch]);
+        expect(c.started).toEqual([LAUNCH]);
     });
 
     it('one held open before the window has said how: started when it says', async () => {
         const c = counted();
         const { service } = setup(c.ports);
+        service.door(DOOR);
         await service.call('open', ['https://moic.gen/', 'background'], 'window');
         expect(c.started).toEqual([]);
-        await service.call('publish', [FACTS], 'window');
-        expect(c.started).toEqual([FACTS.launch]);
+        await service.call('publish', [{ launch: LAUNCH }], 'window');
+        expect(c.started).toEqual([LAUNCH]);
+    });
+
+    it('CONTROL: a launch and something to open, but no door yet from genie-host: nothing is started', async () => {
+        const c = counted();
+        const { service } = setup(c.ports);
+        await service.call('publish', [{ launch: LAUNCH }], 'window');
+        await service.call('open', ['https://moic.gen/', 'background'], 'window');
+        expect(c.started).toEqual([]);
+        service.door(DOOR);
+        expect(c.started).toEqual([LAUNCH]);
     });
 
     it('CONTROL: publishing with nothing to open starts nothing', async () => {
         const c = counted();
         const { service } = setup(c.ports);
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         expect(c.started).toEqual([]);
     });
 
     it('not twice while one is on its way; again if it never linked', async () => {
         const c = counted();
         const { service } = setup(c.ports);
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         await service.call('open', ['https://a.gen/', 'background'], 'window');
         await service.call('open', ['https://b.gen/', 'background'], 'window');
         expect(c.started).toHaveLength(1);
@@ -109,7 +128,7 @@ describe('starting a browser', () => {
     it('a browser linked: nothing started', async () => {
         const c = counted();
         const { service } = setup(c.ports);
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         await service.call('register', [], 'browser');
         await service.call('open', ['https://a.gen/', 'background'], 'window');
         expect(c.started).toEqual([]);
@@ -134,24 +153,25 @@ describe('the host ending', () => {
 });
 
 describe('what the browser needs', () => {
-    it('published by the window, handed to a browser that links later', async () => {
+    it('genie-host’s door and the window’s launch, handed to a browser that links later', async () => {
         const { service, events } = setup();
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS, doorUp: true });
-        expect(events).toContainEqual({ kind: 'facts', facts: FACTS });
+        expect(events).toContainEqual({ kind: 'facts', facts: DOOR });
     });
 
-    it('nothing published yet: the browser hears null, and hears the facts when they come', async () => {
+    it('nothing said yet: the browser hears null, and hears the facts when genie-host says its door', async () => {
         const { service, events } = setup();
         expect(await service.call('register', [], 'browser')).toEqual({ facts: null, doorUp: false });
-        await service.call('publish', [FACTS], 'window');
-        expect(events).toContainEqual({ kind: 'facts', facts: FACTS });
+        service.door(DOOR);
+        expect(events).toContainEqual({ kind: 'facts', facts: DOOR });
     });
 
-    it('the facts have to be whole: a bad publish changes nothing', async () => {
+    it('a window’s publish has to be a launch, and only that: a bad one changes nothing', async () => {
         const { service } = setup();
-        await service.call('publish', [FACTS], 'window');
-        await expect(service.call('publish', [{ frontDoorPort: 'x' }], 'window')).rejects.toThrow(/facts/);
+        await say(service);
+        await expect(service.call('publish', [{ frontDoorPort: 'x' }], 'window')).rejects.toThrow(/how to start the browser/);
+        await expect(service.call('publish', [{ launch: { file: 7, args: [] } }], 'window')).rejects.toThrow(/how to start the browser/);
         expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS, doorUp: true });
     });
 });
@@ -171,29 +191,28 @@ describe('a browser leaving', () => {
         expect(await service.call('open', ['https://moic.gen/', 'background'], 'window2')).toEqual({ browserUp: true });
     });
 
-    it('the window that published going means the front door is gone: the browser hears it, in time to say so', async () => {
+    it('the front door is genie-host’s (Tynn #1046 D2): the window that said the launch going says nothing about it', async () => {
         const { service, events } = setup();
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         await service.call('register', [], 'browser');
+        const before = events.length;
         service.dropped('window');
-        expect(events.at(-1)).toEqual({ kind: 'door', up: false });
-        await service.call('publish', [FACTS], 'window2');
-        expect(events).toContainEqual({ kind: 'door', up: true });
+        expect(events).toHaveLength(before);
     });
 
-    it('CONTROL: another client going says nothing about the door', async () => {
+    it('CONTROL: another client going says nothing about the door either', async () => {
         const { service, events } = setup();
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         const before = events.length;
         service.dropped('someone-else');
         expect(events).toHaveLength(before);
     });
 
-    it('a browser linking after the window went hears that too', async () => {
+    it('a browser linking after the window went still finds the door up, with the launch it said', async () => {
         const { service } = setup();
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         service.dropped('window');
-        expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS, doorUp: false });
+        expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS, doorUp: true });
     });
 
     it('a method it does not know is refused', async () => {
@@ -215,7 +234,7 @@ describe('a host with no Genie browser', () => {
 
     it('an open is refused with why, and starts nothing, even once the facts are published', async () => {
         const r = rig();
-        await r.service.call('publish', [FACTS], 'window');
+        await say(r.service);
         await expect(r.service.call('open', ['https://moic.gen/', 'user-gesture'], 'window')).rejects.toThrow(WHY);
         await expect(r.service.call('open', [null], 'window')).rejects.toThrow(WHY);
         expect(r.started).toEqual([]);
@@ -224,7 +243,7 @@ describe('a host with no Genie browser', () => {
 
     it('a pop-out is refused with why, and starts nothing', async () => {
         const r = rig();
-        await r.service.call('publish', [FACTS], 'window');
+        await say(r.service);
         await expect(r.service.call('popOut', ['panel-1', 'moic.gen'], 'window')).rejects.toThrow(WHY);
         expect(r.started).toEqual([]);
         expect(await r.service.call('popped', [], 'window')).toEqual([]);
@@ -238,8 +257,8 @@ describe('a host with no Genie browser', () => {
     it('CONTROL: the same calls on a host that has one are held and start it, as above', async () => {
         const started: unknown[] = [];
         const { service } = setup({ startBrowser: (launch) => { started.push(launch); } });
-        await service.call('publish', [FACTS], 'window');
+        await say(service);
         expect(await service.call('open', ['https://moic.gen/', 'user-gesture'], 'window')).toEqual({ browserUp: false });
-        expect(started).toEqual([FACTS.launch]);
+        expect(started).toEqual([LAUNCH]);
     });
 });
