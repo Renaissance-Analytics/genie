@@ -99,6 +99,12 @@ probe "host-follows-mail" src/main/agent-stores-host.ts \
     "        this.#emit({ store: 'inbox', kind: 'delta', appended, updated, removed, cursors: { ...mail.cursors }, ...(mail.filtered ? { filtered: true } : {}) });" "" \
     test/ghost-replica-394.test.ts "story394"
 
+# P3.2: the settings are the host's. Each change is said by AgentStoresService (genie-host's feature machine and its
+# phones' push follow it); the engine link's settings replica left in 2g-4d E2a (Tynn #955).
+probe "settings-change-is-said" src/main/agent-stores-host.ts \
+    "        stores.settings?.onChange((key, value, workspaceId) => this.#emit({ store: 'settings', kind: 'changed', key, value, workspaceId: workspaceId ?? null, data: stores.settings!.data() }));" "" \
+    test/split-2g4d-e2a-settings-push.test.ts "a workstation write"
+
 probe "registry-write-reaches-windows" src/main/agent-stores-host.ts \
     "                    this.#emit({ store: 'registry', kind: 'written' });" "" \
     test/registry-host-contract.test.ts "two windows see one registry"
@@ -692,7 +698,7 @@ probe "a-hostile-provider-is-refused" src/main/login-host.ts \
     test/shell-line-callers.test.ts "refused, and no terminal opens"
 
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/ghost-replica-394.test.ts test/process-supervisor.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/split-2g4d-e2a-settings-push.test.ts test/ghost-replica-394.test.ts test/process-supervisor.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
