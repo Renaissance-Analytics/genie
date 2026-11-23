@@ -160,9 +160,7 @@ export const ENGINE_METHODS = [
     // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.
     'engine.terminals',
     // What Genie's MCP server in the host needs of the window until P3.2 (host-mcp.ts `WindowView`); the first one starts it.
-    'engine.windowView',
     // Genie 1's database, where only the window knows it is: the host takes its memories and AgentInbox history once.
-    'engine.v1Import',
     // The MCP server's endpoint, whether it verified, and its tools (the window's Deck and terminal env read them).
     'engine.mcpStatus',
     // One of the host's own tools for a caller the window knows (a flow's step): `[ForwardedToolCall]`.

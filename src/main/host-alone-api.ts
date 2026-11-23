@@ -104,7 +104,7 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
     // A remote window's transport to another machine, owned by the calling connection (Tynn #941, 2f-2).
     'deviceLink.open', 'deviceLink.openRelay', 'deviceLink.send', 'deviceLink.close', 'deviceLink.openBrowser',
     // What an older Genie sealed, into genie-host's own keychain; Tynn asked again (Tynn #959, 2g-3b).
-    'keychain.adoptLegacy', 'tynn.recheck', 'approvals.gate',
+    'keychain.adoptLegacy', 'tynn.recheck', 'approvals.gate', 'window.view',
 ]);
 
 /** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
@@ -152,6 +152,7 @@ export interface HostAlonePorts {
     /** What an older Genie sealed, adopted into this host's keychain (Tynn #959, 2g-3b). Absent = refused. */
     readonly legacySecrets?: HostApiDeps['legacySecrets'];
     readonly approvalsGate?: HostApiDeps['approvalsGate'];
+    readonly windowView?: HostApiDeps['windowView'];
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
     readonly tynnRecheck?: HostApiDeps['tynnRecheck'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
@@ -307,6 +308,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.settingsWatch ? { settingsWatch: ports.settingsWatch } : {}),
         ...(ports.legacySecrets ? { legacySecrets: ports.legacySecrets } : {}),
         ...(ports.approvalsGate ? { approvalsGate: ports.approvalsGate } : {}),
+        ...(ports.windowView ? { windowView: ports.windowView } : {}),
         ...(ports.tynnRecheck ? { tynnRecheck: ports.tynnRecheck } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,

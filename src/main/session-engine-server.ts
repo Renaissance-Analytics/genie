@@ -138,8 +138,6 @@ export interface EngineServerOptions {
         status(): unknown;
         runNative(call: never): Promise<unknown>;
     };
-    /** Genie 1's database path from the window: the host takes its memories and mail once. */
-    readonly v1Import?: (databasePath: string) => Promise<void>;
     /**
      * genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): each window's `engine.heartbeat` by its connection, and
      * the connection dropping. Absent = a beat is ignored.
@@ -154,6 +152,8 @@ export interface EngineServerOptions {
     /** The host's app door and its keys (P5a.2). Absent = `engine.appInbox` is refused. Local windows only, like the hosting. */
     readonly appInbox?: AppInboxHost;
     /** Takes the window's environment into this host's (`engine.windowEnv`, and with each start); `adoptWindowEnv` on `process.env` by default. */
+    /** An agent's service variables (DB_URL and the rest), from genie-host's own engines (Tynn #1044). Absent = none. */
+    readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
@@ -252,7 +252,6 @@ export class SessionEngineServer {
     #host: SessionHost | null = null;
     readonly #marketplaceReviews = new WeakMap<Connection, MarketplaceSession>();
     readonly #gappSessionOwners = new WeakMap<Connection, GAppSessionOwner>();
-    readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
     /** The updater helper's links (P5b), apart from the windows': nothing a window is sent or counted for reaches them. */
     readonly #helpers = new Set<Connection>();
@@ -314,7 +313,7 @@ export class SessionEngineServer {
     hostOptions(): EngineHostOptions {
         return {
             // Handed over with each start (the window's engines know the workspace's variables); read inside `start`.
-            serviceEnvFor: (workspaceId) => this.#env.get(workspaceId) ?? {},
+            serviceEnvFor: (workspaceId) => this.#options.serviceEnvFor?.(workspaceId) ?? {},
             // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's own Tynn server, which the
             // host prepares, window or no window (host-agent-keys.ts). What it could not hand out, it says why in the agent's chat.
             prepareMcpServers: async (record, cwd, signal) => {
@@ -342,7 +341,7 @@ export class SessionEngineServer {
 
     /** The workspace variables (DB_*, REDIS_URL…) the last window handed over with a start, for what the host starts itself. */
     serviceEnvFor(workspaceId: string): Readonly<Record<string, string>> {
-        return this.#env.get(workspaceId) ?? {};
+        return this.#options.serviceEnvFor?.(workspaceId) ?? {};
     }
 
     /** Whether a window is connected now (the MCP server forwards window tools only then). The browser's link is none. */
@@ -602,8 +601,6 @@ export class SessionEngineServer {
             case 'engine.start': {
                 const record = args[0] as AgentRecord;
                 if (!record || typeof record.id !== 'string') throw new Error('engine.start needs a record');
-                const env = args[2];
-                this.#env.set(record.workspaceId, env && typeof env === 'object' ? (env as Record<string, string>) : {});
                 const windowEnv = args[3];
                 if (windowEnv && typeof windowEnv === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(windowEnv as Record<string, string>);
                 return host.start(record, str(1));
@@ -721,14 +718,6 @@ export class SessionEngineServer {
                 this.#options.files.subscribe(conn.id, str(0), { id: ws.id, path: ws.path }, { ...(want.git === true ? { git: true } : {}), ...(repos.length > 0 ? { repos } : {}) });
                 return true;
             }
-            case 'engine.windowView':
-                if (!this.#options.mcp) return false;
-                await this.#options.mcp.setView(args[0]);
-                return true;
-            case 'engine.v1Import':
-                if (!this.#options.v1Import) return false;
-                await this.#options.v1Import(str(0));
-                return true;
             case 'engine.runTool':
                 if (!this.#options.mcp) throw new Error('This host runs no MCP server.');
                 return this.#options.mcp.runNative(args[0] as never);
