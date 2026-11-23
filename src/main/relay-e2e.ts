@@ -367,13 +367,14 @@ export async function acceptMember(input: {
 
 /** A machine with no name we know. */
 const shown = (name: string | null | undefined): string => (typeof name === 'string' && name.trim() !== '' ? name.trim() : 'the workstation you asked for');
-const sentence = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+/** The same, where it starts a sentence. A machine's own name is never re-cased. */
+const shownFirst = (name: string | null | undefined): string => (typeof name === 'string' && name.trim() !== '' ? name.trim() : 'The workstation you asked for');
 
 /** What a person connecting is told (the member's side). */
 export const e2eWords = {
     notProved: (name?: string | null): string => `This workstation could not prove it is ${shown(name)}. Nothing was sent. If ${shown(name)} was set up again, wait until it has signed in to Tynn, then connect again.`,
     noKey: (name?: string | null): string => `Tynn has no key on record for ${shown(name)}, so this workstation could not prove it is ${shown(name)}. Nothing was sent. Open Genie on ${shown(name)} and sign in to Tynn there, then connect again.`,
-    oldHost: (name?: string | null): string => sentence(`${shown(name)} runs an older Genie that cannot make an encrypted connection. Update Genie on ${shown(name)}. Nothing was sent.`),
+    oldHost: (name?: string | null): string => `${shownFirst(name)} runs an older Genie that cannot make an encrypted connection. Update Genie on ${shown(name)}. Nothing was sent.`,
     changed: (name?: string | null): string => `The connection to ${shown(name)} was changed on the way, so it was closed. Connect again.`,
     limit: (name?: string | null): string => `This connection to ${shown(name)} carried as much as one connection may, so it was closed. Connect again.`,
 } as const;

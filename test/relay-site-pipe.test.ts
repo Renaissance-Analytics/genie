@@ -206,7 +206,8 @@ describe('only the owner’s control link may browse', () => {
     for (const [who, claims, bind] of [
         ['a guest of the whole host', { src: 'grant', cap: 'control', scope: ['host:all'] }, true],
         ['a guest of one workspace', { src: 'invite', cap: 'control', scope: ['workspace:tynn'] }, true],
-        ['the owner, read-only', { src: 'owner', cap: 'readonly', scope: ['host:all'] }, false],
+        // Bound, like every grant that gets a connection now (P9.2): the refusal below is read-only's, not the missing key's.
+        ['the owner, read-only', { src: 'owner', cap: 'readonly', scope: ['host:all'] }, true],
     ] as const) {
         it(`${who}: 502 in words, and the host’s front door is never dialed (counted)`, async () => {
             const { door } = await memberDoor(claims, { bind });

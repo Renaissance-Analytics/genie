@@ -220,6 +220,14 @@ describe('who the other end is', () => {
         expect(refusal(() => startMember({ ...w.memberInput, hostPublicKey: value as string })).code).toBe('no-host-key');
     });
 
+    it('the words name the machine as it is written, and say something when no name is known', async () => {
+        const { e2eWords } = await import('../src/main/relay-e2e.js');
+        expect(e2eWords.oldHost('alphar')).toBe('alphar runs an older Genie that cannot make an encrypted connection. Update Genie on alphar. Nothing was sent.');
+        expect(e2eWords.oldHost(null)).toBe('The workstation you asked for runs an older Genie that cannot make an encrypted connection. Update Genie on the workstation you asked for. Nothing was sent.');
+        expect(e2eWords.notProved('alphar')).toBe('This workstation could not prove it is alphar. Nothing was sent. If alphar was set up again, wait until it has signed in to Tynn, then connect again.');
+        expect(e2eWords.notProved('  ')).toMatch(/^This workstation could not prove it is the workstation you asked for[.] Nothing was sent[.]/);
+    });
+
     it('CONTROL: an Ed25519 SPKI key from Tynn is read, with the fingerprint the host itself reports', () => {
         const w = world();
         const read = hostKeyOf(w.hostSpki);
@@ -300,10 +308,11 @@ describe('a frame the relay touched', () => {
     });
 
     it('a frame that is not sealed at all is refused: there is no plain path', async () => {
-        const { hostCipher, memberCipher } = await session();
-        expect(refusal(() => hostCipher.open(rest('{"kind":"hello"}'))).code).toBe('plain');
-        expect(refusal(() => memberCipher.open({ kind: 'data', channel: 'site', sid: SID, reqId: 'site_1', payload: { t: 'open', ca: 'RELAY CA' } })).code).toBe('plain');
-        expect(refusal(() => memberCipher.open({ kind: 'close', channel: 'site', sid: SID, reqId: 'site_1' })).code).toBe('plain');
+        const fresh = { a: await session(), b: await session(), c: await session() };
+        // A session each: a cipher that refused once refuses everything after (the row below), so each plain frame meets a live one.
+        expect(refusal(() => fresh.a.hostCipher.open(rest('{"kind":"hello"}'))).code).toBe('plain');
+        expect(refusal(() => fresh.b.memberCipher.open({ kind: 'data', channel: 'site', sid: SID, reqId: 'site_1', payload: { t: 'open', ca: 'RELAY CA' } })).code).toBe('plain');
+        expect(refusal(() => fresh.c.memberCipher.open({ kind: 'close', channel: 'site', sid: SID, reqId: 'site_1' })).code).toBe('plain');
     });
 
     it('a frame delivered twice is refused the second time', async () => {
