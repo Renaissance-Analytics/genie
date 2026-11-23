@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -6,7 +6,7 @@ import type { ClaudeSharedSessionsRefusal } from '@particle-academy/prism-acp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { AccountsHost } from '../src/main/accounts-host.js';
-import { prepareAccountDir, SHARED_SESSIONS_REFUSALS, sharedSessionsWords, syncCleanupPeriod } from '../src/main/claude-account-dirs.js';
+import { prepareAccountDir, SHARED_SESSIONS_REFUSALS, sharedSessionsWords, signInFolderRefusal, syncCleanupPeriod } from '../src/main/claude-account-dirs.js';
 import { realDriverFor } from '../src/main/session-host.js';
 
 /**
@@ -94,6 +94,66 @@ describe('cleanupPeriodDays: one value for every account that shares the store, 
         await writeFile(join(home(), 'settings.json'), JSON.stringify({ cleanupPeriodDays: 14 }));
         book.syncClaudeDirs();
         expect((await settings(added.configDir!)).cleanupPeriodDays).toBe(14);
+    });
+});
+
+/**
+ * BEFORE A SIGN-IN RUNS IN AN ACCOUNT'S FOLDER, ITS HISTORY IS MADE THE SHARED ONE AGAIN (the review of #2139). "Sign out and
+ * remove" can stop half-way (a file in use on Windows): the folder is still there and its `projects` link may be gone. Signed
+ * in again as it is, Claude Code would make a `projects` of its own there, and that account would grow a history no other
+ * account can resume. So the same step that made the folder ready when it was added runs again before every sign-in.
+ */
+describe('an account\'s folder is made ready again before a sign-in', () => {
+    const home = () => join(dir, 'home', '.claude');
+    const open = () => AccountsHost.open({ root: join(dir, 'genie'), legacyHomes: { claude: home(), codex: join(dir, 'home', '.codex') } });
+    const unlink = (path: string) => { try { unlinkSync(path); } catch { rmdirSync(path); } };
+
+    it('a folder whose shared-history link is gone gets it back, pointing at the one store', async () => {
+        const book = await open();
+        const added = await book.addClaude({ method: 'subscription' });
+        const link = join(added.configDir!, 'projects');
+        // The gauge reads a link first, then none: what a removal that stopped half-way leaves.
+        expect((await lstat(link)).isSymbolicLink()).toBe(true);
+        unlink(link);
+        expect(existsSync(link)).toBe(false);
+        expect(book.prepareClaudeDir(added.configDir!)).toEqual({ ok: true });
+        expect((await lstat(link)).isSymbolicLink()).toBe(true);
+        expect(resolve(await readlink(link))).toBe(resolve(join(home(), 'projects')));
+    });
+
+    it('a folder removed entirely is made again, linked', async () => {
+        const book = await open();
+        const added = await book.addClaude({ method: 'console' });
+        unlink(join(added.configDir!, 'projects'));
+        await rm(added.configDir!, { recursive: true, force: true });
+        expect(book.prepareClaudeDir(added.configDir!)).toEqual({ ok: true });
+        expect((await lstat(join(added.configDir!, 'projects'))).isSymbolicLink()).toBe(true);
+    });
+
+    it('only a folder of an account in the book: any other path is refused and nothing is made there', async () => {
+        const book = await open();
+        const other = join(dir, 'elsewhere');
+        expect(book.prepareClaudeDir(other).ok).toBe(false);
+        expect(existsSync(other)).toBe(false);
+    });
+
+    it('an account that already keeps its OWN history is left exactly as it is, and may still sign in; a link that cannot be made stops the sign-in', async () => {
+        const book = await open();
+        const added = await book.addClaude({ method: 'subscription' });
+        const projects = join(added.configDir!, 'projects');
+        unlink(projects);
+        await mkdir(projects);
+        await writeFile(join(projects, 'keep.jsonl'), 'history');
+        const prepared = book.prepareClaudeDir(added.configDir!);
+        expect(prepared).toMatchObject({ ok: false, code: 'realFolder' });
+        expect(await readFile(join(projects, 'keep.jsonl'), 'utf8')).toBe('history');
+        expect(signInFolderRefusal(prepared)).toBeNull();
+        expect(signInFolderRefusal({ ok: true })).toBeNull();
+        expect(signInFolderRefusal({ ok: false, code: 'linkedElsewhere', reason: sharedSessionsWords('linkedElsewhere') })).toBeNull();
+        for (const code of ['linkFailed', 'storeMissing', 'storeInvalid', 'configDirInvalid', 'occupied', 'unexpectedLink'] as const) {
+            expect(signInFolderRefusal({ ok: false, code, reason: sharedSessionsWords(code) }), code).toBe(sharedSessionsWords(code));
+        }
+        expect(signInFolderRefusal({ ok: false, code: 'unknown', reason: 'The folder for this account could not be made ready: EACCES' })).toBe('The folder for this account could not be made ready: EACCES');
     });
 });
 

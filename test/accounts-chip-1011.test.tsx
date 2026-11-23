@@ -171,3 +171,84 @@ describe('Settings → Accounts: "Sign out and remove" (prism-acp logout(), no w
         expect(onAct).toHaveBeenCalledWith({ kind: 'sign-out', id: C });
     });
 });
+
+/**
+ * THE REVIEW OF #2139, findings 2 and 7e. Switch acts on the account's ID: the host is asked to switch to THAT account, and it
+ * is the host that makes it active when Claude Code says it is signed in, and signs it in only when it is not. Sign in is
+ * offered only for an account Claude Code SAID is signed out; while its state is not known yet, the button is Switch.
+ */
+describe('Switch names the account by its id; Sign in only for an account known to be signed out', () => {
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    let host: HTMLDivElement;
+    let root: Root;
+    beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host); });
+    afterEach(() => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ''; });
+    type Act = (action: AccountsAction) => Promise<AccountsActResult>;
+    const click = (el: Element | null) => { act(() => { el!.dispatchEvent(new MouseEvent('click', { bubbles: true })); }); };
+    // C's state has not been read yet (a describe still running, or one that failed): no `live` for it.
+    const UNKNOWN_C = accountsView(KNOWN, [], { claude: A }, { [A]: LIVE[A]!, [B]: LIVE[B]! })[0]!;
+    const D = `account_${'d'.repeat(32)}`;
+    // Two accounts with ONE email: the default-home one and one with a folder of its own.
+    const TWINS = [...KNOWN, { id: D, provider: 'claude', label: 'Lab (home)', identity: { email: 'lab@example.invalid', plan: 'pro' } }];
+
+    it('the chip: an account whose state is not known yet offers Switch, never Sign in, and Switch asks the host for THAT account', () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
+        act(() => root.render(<AccountsChip view={UNKNOWN_C} offer={null} now={NOW} onSwitch={onSwitch} onAccountsAct={onAct} />));
+        click(host.querySelector('[data-account-chip="claude"]'));
+        const row = document.querySelector(`[data-account-popover="claude"] [data-account="${C}"]`)!;
+        expect(row.querySelector('[data-action="account-sign-in"]')).toBeNull();
+        click(row.querySelector('[data-action="account-switch"]'));
+        expect(onAct.mock.calls).toEqual([[{ kind: 'switch', id: C }]]);
+        expect(onSwitch).not.toHaveBeenCalled();
+        // CONTROL, same popover: the one Claude Code said is signed out still offers Sign in.
+        expect(document.querySelector(`[data-account-popover="claude"] [data-account="${B}"] [data-action="account-sign-in"]`)).not.toBeNull();
+    });
+
+    it('the chip: the offer\'s Switch asks the host for the account it suggests, by id', () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
+        const offer = { id: 'switch-offer:a:5h:1', provider: 'claude', accountId: A, label: 'Work', window: '5h' as const, leftPct: 8, over: false, resetsAtMs: NOW + 3_600_000,
+            targets: [{ accountId: C, label: 'Lab', room: 'unknown' as const, leftPct: null, resetsAtMs: null }] };
+        act(() => root.render(<AccountsChip view={VIEW} offer={offer} now={NOW} onSwitch={onSwitch} onAccountsAct={onAct} />));
+        click(host.querySelector('[data-account-chip="claude"]'));
+        click(document.querySelector('[data-action="switch-offer-switch"]'));
+        expect(onAct.mock.calls).toEqual([[{ kind: 'switch', id: C }]]);
+        expect(onSwitch).not.toHaveBeenCalled();
+    });
+
+    it('Settings: Switch on a Claude account asks the host for that account by id (never a login by its email), also when two share an email', () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
+        const snapshot = { providers: accountsView(TWINS, [], { claude: A }, LIVE), offers: [] };
+        act(() => root.render(<AccountsSettings snapshot={snapshot} offerWindows="both" onSetOfferWindows={() => {}} onSwitch={onSwitch} onAct={onAct} />));
+        const row = (id: string) => host.querySelector(`[data-settings-account="${id}"]`)!;
+        click(row(C).querySelector('[data-action="account-switch"]'));
+        click(row(D).querySelector('[data-action="account-switch"]'));
+        click(row(B).querySelector('[data-action="account-switch"]'));
+        expect(onAct.mock.calls).toEqual([[{ kind: 'switch', id: C }], [{ kind: 'switch', id: D }], [{ kind: 'switch', id: B }]]);
+        expect(onSwitch).not.toHaveBeenCalled();
+    });
+
+    it('Settings: what the host refuses is said on that account\'s row', async () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: false, reason: 'Genie could not ask Claude Code whether Lab is signed in. Try again in a moment.' }));
+        const snapshot = { providers: accountsView(KNOWN, [], { claude: A }, LIVE), offers: [] };
+        act(() => root.render(<AccountsSettings snapshot={snapshot} offerWindows="both" onSetOfferWindows={() => {}} onSwitch={() => {}} onAct={onAct} />));
+        await act(async () => { host.querySelector(`[data-settings-account="${C}"] [data-action="account-switch"]`)!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+        expect(host.querySelector(`[data-settings-account="${C}"]`)!.textContent).toContain('Genie could not ask Claude Code whether Lab is signed in.');
+    });
+
+    it('CONTROL: another provider\'s Switch is still its own login, naming the account', () => {
+        const onAct = vi.fn<Act>(async () => ({ ok: true }));
+        const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
+        const X = `account_${'e'.repeat(32)}`, Y = `account_${'f'.repeat(32)}`;
+        const snapshot = { providers: accountsView([
+            { id: X, provider: 'codex', label: 'First', identity: { email: 'first@example.invalid', plan: null } },
+            { id: Y, provider: 'codex', label: 'Second', identity: { email: 'second@example.invalid', plan: null } },
+        ], [], { codex: X }), offers: [] };
+        act(() => root.render(<AccountsSettings snapshot={snapshot} offerWindows="both" onSetOfferWindows={() => {}} onSwitch={onSwitch} onAct={onAct} />));
+        click(host.querySelector(`[data-settings-account="${Y}"] [data-action="account-switch"]`));
+        expect(onSwitch.mock.calls).toEqual([['codex', 'second@example.invalid']]);
+        expect(onAct).not.toHaveBeenCalled();
+    });
+});

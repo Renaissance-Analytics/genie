@@ -154,11 +154,14 @@ describe('S11: the Accounts block in Settings → Providers', () => {
         await click(row(B).querySelector('[data-action="account-rename-save"]')!);
         expect(p.onAct).toHaveBeenCalledWith({ kind: 'rename', id: B, label: 'Personal Pro' });
     });
-    it('Switch on another account is one click and names it; the signed-in one has none', async () => {
+    it('Switch on another account is one click and names it BY ITS ID; the signed-in one has none', async () => {
+        // A Claude account is switched to by the host, by id (the review of #2139, finding 2): never a login by its email,
+        // which started a new browser sign-in for an account already signed in and could land on another with that email.
         const p = render();
         expect(row(A).querySelector('[data-action="account-switch"]')).toBeNull();
         await click(row(B).querySelector('[data-action="account-switch"]')!);
-        expect(p.onSwitch).toHaveBeenCalledWith('claude', 'ada@example.invalid');
+        expect(p.onAct).toHaveBeenCalledWith({ kind: 'switch', id: B });
+        expect(p.onSwitch).not.toHaveBeenCalled();
     });
     it('the offer-window choice offers 5 h / Weekly / Both and saves it', async () => {
         expect(SWITCH_OFFER_WINDOW_CHOICES.map((c) => c.value)).toEqual(['5h', 'weekly', 'both']);
