@@ -108,9 +108,13 @@ describe('Trust and Untrust over the protocol: the owner’s own Genie and devic
     for (const [name, who] of [['a share link to this workspace, with write access', SHARE_WORKSPACE], ['a share link to the whole host, with write access', SHARE_HOST]] as const) {
         it(`${name}: Trust is refused in words, nothing is written, the verdict is unchanged`, async () => {
             const c = await admit(who, 'relay');
+            // The trust record itself, at the store (envelope-sites' book), before the call: nothing of it may move.
+            const recordBefore = JSON.stringify(f.hosting.envelopeSites.trustRecord());
             const answer = await c.call('features.act', trust());
             expect(answer).toMatchObject({ ok: false });
             expect((answer as { reason: string }).reason).toMatch(/only its owner can|a shared workspace cannot/);
+            expect(JSON.stringify(f.hosting.envelopeSites.trustRecord())).toBe(recordBefore);
+            expect(f.hosting.envelopeSites.trustRecord().workspaces.work).toBeUndefined();
             expect(trustOf(f)).toBe(false);
             expect(f.order).toEqual([]);
             expect(f.trust).not.toHaveBeenCalled();
