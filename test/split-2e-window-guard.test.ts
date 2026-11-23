@@ -161,9 +161,9 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         flows: '2g', hosting: '2g',
         // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955).
         // pushWindowView and v1Import left in 2g-4d B (#1044).
-        onSpawnFrame: '2g', runHostTool: '2g', spawnLink: '2g',
-        // The Files watch (#955 task #1472); IssueWatch and the Tynn panels' watches (G-1, #934 task #1474).
-        onFilesEvent: '2g', filesWatch: '2g', filesUnwatch: '2g',
+        // spawnLink and onSpawnFrame are the link's own since 2g-4d-A (#1043: the processes child's exec route is live);
+        // runHostTool and the Files watch (onFilesEvent, filesWatch, filesUnwatch) left with it: nothing in the window read them.
+        // IssueWatch and the Tynn panels' watches (G-1, #934 task #1474).
         issueWatch: '2g', tynnBoardWatch: '2g', tynnBoardUnwatch: '2g', onTynnBoardEvent: '2g', tynnIssuesWatch: '2g', tynnIssuesUnwatch: '2g',
         onTynnIssuesEvent: '2g', tynnFeaturesWatch: '2g', tynnFeaturesUnwatch: '2g', onTynnFeaturesEvent: '2g',
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.

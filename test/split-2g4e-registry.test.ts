@@ -352,9 +352,11 @@ describe('wired: main’s registry is genie-host’s over the protocol, the engi
         expect(at('await registry.load({ name: hostname(), healthy: true });')).toBeLessThan(at('await importFromV1(theRegistry);'));
     });
 
-    it('the host tools go to genie-host by the one member they use, never the whole engine client', () => {
-        expect(main).toMatch(/withHostTools\(signalled, \{ runHostTool: \(call\) => engineLink\.runHostTool\(call\) \}, resolveCaller\)/);
-        expect(code(src('src/main/window-tools.ts'))).toMatch(/host: \{ runHostTool\(call: ForwardedToolCall\): Promise<McpToolResult> \}/);
+    it('main hands its tools no engine client at all: the host tools’ forward left in 2g-4d-A (Tynn #1043)', () => {
+        expect(main).not.toMatch(/withHostTools|runHostTool/);
+        expect(code(src('src/main/window-tools.ts'))).not.toMatch(/withHostTools|runHostTool/);
+        // CONTROL: what genie-host forwards still runs here.
+        expect(main).toMatch(/windowToolRun = windowToolRunner\(\(\) => registrations, vouchedCallers\);/);
     });
 
     it('genie-host feeds registry.watch from its store’s writes, and answers main’s registry from the start: hostRemoteApi’s own ports, not its late-built answers', () => {

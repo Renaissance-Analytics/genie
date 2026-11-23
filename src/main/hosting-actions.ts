@@ -309,11 +309,3 @@ export function serviceLogs(s: HostingServices, id: string, tail?: number): Prom
     return s.engines.logs(id, tail);
 }
 
-/**
- * The env a workspace's terminal gets — the Terminals tab's and an agent's `manageTerminals create` alike: the
- * workspace's service engines (DB_*, REDIS_URL…), like its processes, then Genie's MCP endpoint (§6.9). The agent path
- * once opened terminals with neither, so a shell an agent opened could not reach the database the person's could.
- */
-export function terminalEnvFor(services: { readonly engines: Pick<HostingServices['engines'], 'envFor'> } | null, workspaceId: string, mcpEnv: Readonly<Record<string, string>>): Record<string, string> {
-    return { ...(services?.engines.envFor(workspaceId) ?? {}), ...mcpEnv };
-}

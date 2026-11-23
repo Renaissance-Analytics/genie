@@ -27,7 +27,6 @@ import { tunnelDoor, tunnelLinkOf, windowOpsHandler } from './window-tunnel.js';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl } from '../core/whats-new.js';
 import { appMenuTemplate } from './app-menu.js';
-import { realFancyTermPort } from './fancy-term-port.js';
 import { FilesWindows } from './files-windows.js';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
@@ -76,7 +75,6 @@ import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js'
 import { RECOVER_REPORT, RECOVER_RESTART, pageMemorySampler, recoverRenderer, rendererErrorPage, type RendererNotice } from './renderer-recovery.js';
 import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
 import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.js';
-import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
 import { getHeapStatistics } from 'node:v8';
 import { Session as InspectorSession } from 'node:inspector';
@@ -142,15 +140,13 @@ import { restoreAfterRelaunch } from './relaunch-restore.js';
 import { WindowSafeMode } from './window-safe-mode.js';
 import { recordShutdown } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
-import { type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
-import { FilesTreeKeeper } from './files-tree-keeper.js';
 import { fileExporter } from './file-export.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { withActionSignal } from './mcp-signal.js';
 import type { Verification } from './mcp-server.js';
-import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
+import { hostOnly, windowToolRunner } from './window-tools.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import { EMPTY_HOST_SUMMARY, type HostSummary } from '../core/host-summary.js';
 import { workspaceNameFor } from './workspace-names.js';
@@ -162,10 +158,9 @@ import type { InboxStore } from './inbox-store.js';
 import type { AttentionStore } from './attention-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
-import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { gappWindowsElectron } from './gapp-windows-electron.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
-import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
+import type { OpenInBrowser } from './hosting-actions.js';
 import { TERMINAL_NEEDS_YOU } from '../core/terminal-surface.js';
 import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
@@ -300,10 +295,6 @@ let stallProfiler: { capture(ms: number): void; stop(): void } | null = null;
  * `docker events`, and the supervisor's ptys (sites, workers, the front door). Started at boot; stopped last at quit.
  */
 let spawnHostNow: SpawnHostClient | null = null;
-/** The interactive terminals' spawn host (the host split, P2.1): genie-host's `terminals` child; null = this process's engine. */
-let spawnTerminalsNow: SpawnHostClient | null = null;
-/** Live ptys a previous window started, found under genie-host at boot: the terminals' to adopt (supervised processes are the host's own since P3.3b). */
-let adoptablePtys: ListedPty[] = [];
 /** The route the main window shows (its URL after `#`), or `null`: what a stall line and a heartbeat (#711) say. */
 function mainRoute(): string | null {
     const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
@@ -587,12 +578,6 @@ const SETTINGS_BOOT_DEADLINE_MS = 10_000;
 /** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
 let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
-/**
- * THE FILE WATCHER'S VIEWS (the host split, P2.2; plan §11b): genie-host's hub over the engine link, or — only when no host
- * could start — a hub of this window's own. The local protocol owns every renderer view's registration.
- */
-let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
-const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
 let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
 /**
@@ -1140,7 +1125,6 @@ const sessionCallers = new CallerBook();
 function sessionCaller(key: string): Caller | null {
     return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir(genieRoot())) : null;
 }
-const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
 /** Installed apps' windows (Tynn #595): this process opens them, on sessions the host mints. */
 let gappWindowsNow: ReturnType<typeof gappWindowsElectron> | null = null;
@@ -1478,17 +1462,14 @@ async function boot(): Promise<void> {
         // own (P3.3b, P3.3e): their state comes by replica, so nothing here is taken back after a loss.
         const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
         engineLink.onSpawnFrame('processes', (frame) => processes.linkFrame(frame));
-        const reconcile = (): Promise<ListedPty[]> => processes.linkUp();
+        const reconcile = (): Promise<unknown> => processes.linkUp();
         engineLink.onLink(
             () => { void reconcile().catch((error: unknown) => lifecycleLog(`spawn host reconcile failed reason=${error instanceof Error ? error.message : String(error)}`)); },
             (why) => { processes.linkDown(why); },
         );
-        // The link is already up (it came up in connectAgentEngine): the first reconcile is now, before anything starts.
-        adoptablePtys = await reconcile().catch((error: unknown) => {
-            lifecycleLog(`spawn host list failed reason=${error instanceof Error ? error.message : String(error)}`);
-            return [];
-        });
-        if (adoptablePtys.length > 0) lifecycleLog(`spawn host found running=${adoptablePtys.length} (${adoptablePtys.map((p) => p.tag?.kind === 'process' ? p.tag.processId : p.tag?.kind ?? 'untagged').join(', ')})`);
+        // The link is already up (it came up in connectAgentEngine): the first reconcile is now, before any command runs.
+        // What it lists is genie-host's own to keep (P3.3b, P3.3e): this window adopts no pty (Tynn #1043).
+        await reconcile().catch((error: unknown) => { lifecycleLog(`spawn host list failed reason=${error instanceof Error ? error.message : String(error)}`); });
         spawnHostNow = processes;
     }
     routeExecThroughSpawnHost(spawnHostNow);
@@ -1516,14 +1497,6 @@ async function boot(): Promise<void> {
     await reapV1Runtime(importBoot);
     registry.setProbe((id) => host?.probe(id) ?? null);
 
-    /*
-     * TERMINALS — for shells, builds, services and hosted sites. No agent has one.
-     *
-     * The engine is fancy-term-host behind the PtyPort seam. It saves no scrollback (the owner, 2026-11-02).
-     */
-    // ONE pty engine, shared by the terminal host and the composition root's supervisor.
-    // The engine gates its cwd hook on GENIE'S settings, read live (§6.5).
-    const ptyPort = realFancyTermPort(() => settingsNow.snapshot());
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
     // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
     // the open ones a previous window left running are taken back with what they printed.
@@ -1547,28 +1520,8 @@ async function boot(): Promise<void> {
             return fileEventsOf(host.rowsFor(record.id), { id: record.id, name: record.name });
         },
     });
-    /*
-     * WHAT CHANGED ON DISK, AND GIT, PUSHED (the host split, P2.2): the watcher and git run in genie-host (files-watch-hub.ts);
-     * here a batch is recorded for `state()` and handed to the local protocol — the panel re-lists once and re-reads the open file only
-     * if it changed (genie#921) — and git's result goes to the views that asked for it, which no longer run git per batch.
-     */
-    // genie-host sends a window only the git tree's changes after the first (Tynn #524): the whole tree is kept here.
-    const treeKeeper = new FilesTreeKeeper(lifecycleLog);
-    const onFilesEvent = (received: FilesHubEvent): void => {
-        const event = treeKeeper.accept(received);
-        if (event.kind === 'changed') filesHost?.recordDiskChanges(event.workspaceId, event.changes);
-        for (const listener of filesEventListeners) listener(event);
-    };
-    {
-        const link = agentEngineLink.client;
-        link.onFilesEvent(onFilesEvent);
-        filesWatch = {
-            // A known view is retained by the engine client even while offline, then replayed on reconnect.
-            watch: (viewId, workspace, want) => { void link.filesWatch(viewId, workspace, want); return true; },
-            unwatch: (viewId) => { void link.filesUnwatch(viewId); },
-            close: () => {},
-        };
-    }
+    // WHAT CHANGED ON DISK, AND GIT, are genie-host's to watch and say (host-local-watches.ts): the Files panel hears them
+    // over the one protocol, and this window keeps no watch of its own (Tynn #1043).
     // The popped-out panels (§4.3): tracked here, pushed as the whole list.
     // The Files panel's pop-out button: the person's click (genie#1235).
     filesWindows = new FilesWindows({ openWindow: (route) => openFilesWindow(route, 'user-gesture'), closeWindow: closeWindowAt });
@@ -1773,12 +1726,6 @@ async function boot(): Promise<void> {
         safeModeLeft: (listener) => { windowSafe?.onChange((view) => { if (!view.active) listener(); }); },
         // Said in the remote welcome (P10.1e): the same build the host's engine welcome says.
         build: hostBuild(app.getVersion(), join(here, 'host.js')),
-        pty: ptyPort,
-        // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
-        // main's own engine takes them only if the spawn host cannot start.
-        processPty: spawnHostNow ? spawnHostNow.ptyPort(ptyPort) : ptyPort,
-        // What a previous window left running under genie-host: adopted before any site or kept process starts.
-        adoptPtys: adoptablePtys,
         // THE PROCESS SUPERVISOR IS GENIE-HOST'S (P3.3b): sites, workers and the front door run — and restart — there, with
         // or without this window; a window restart neither starts them twice nor stops them.
         supervisor: agentEngineLink.client.supervisor(),
@@ -1821,7 +1768,6 @@ async function boot(): Promise<void> {
         v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],
         frontDoorPort: 0,
         mcpEndpoint: () => mcpEndpointNow(),
-        hostConfigSync: () => agentEngineLink?.client ?? null,
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
@@ -1968,17 +1914,16 @@ async function boot(): Promise<void> {
     // GENIE'S OWN MCP SERVER (§6.9): every tool registered, the loopback listening, the boot probe recorded.
     {
         // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.
-        // A FLOW calling Genie's tools as a step (genie#1204, main/flow-tools.ts) is a caller too: its own key, its workspace.
-        const flowCallers = new FlowCallers((id) => registry?.workspace(id)?.path ?? null);
+        // A flow's tool steps run in genie-host, under its own callers (genie-host.ts `flowCallers`): none is resolved here.
         // A caller genie-host vouched for, for a tool it forwarded here (P3.1): its session keys are the host's now.
         const vouchedCallers = new Map<string, Caller>();
-        const resolveCaller = (terminalId: string) => vouchedCallers.get(terminalId) ?? flowCallers.callerFor(terminalId) ?? sessionCaller(terminalId);
+        const resolveCaller = (terminalId: string) => vouchedCallers.get(terminalId) ?? sessionCaller(terminalId);
         // The stores agents write to: genie-host's when it runs — its own tools write them there, and in this window they
         // are never reached (hostOnly says so if anything tries).
         // Every agent, the OS agent included: a tool finds its caller here (genie-tool-deps.ts `toolRoster`, Tynn story #385).
         const roster = () => toolRoster(registry!);
         // ONE builder for the tools' wiring (genie-tool-deps.ts) — doctor mode builds its agent's tools with it too.
-        const signalled = withActionSignal(allGenieTools(genieToolDeps({
+        const registrations = withActionSignal(allGenieTools(genieToolDeps({
             // agentinbox list: whether each peer is running, read-only — never started by asking (core/liveness.ts).
             liveness: (id) => livenessOf(host?.probe(id as AgentId) ?? null, host?.rowsFor(id as AgentId).at(-1)?.at ?? null),
             inbox: hostOnly<InboxStore>('the AgentInbox'),
@@ -2018,8 +1963,6 @@ async function boot(): Promise<void> {
             // manageTerminals, processes and flows are genie-host's own tools, never run here (mcp-host-tools.ts HOST_NATIVE_TOOLS;
             // Tynn #953): their stores are the host's, said so if anything here ever asks.
             terminals: hostOnly<TerminalsPort>('the terminals'),
-            // An agent's terminal gets the env the Terminals tab gives the person's (service engines + Genie's endpoint).
-            terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
             // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
             hosting: composed,
             // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235)
@@ -2032,13 +1975,9 @@ async function boot(): Promise<void> {
             // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window.
             plugins: { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
-        // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
+        // The host's own tools run in genie-host, a flow's steps among them: of those only `sites open` runs here (Tynn #1043).
         const engineLink = agentEngineLink?.client ?? null;
-        // By the one member it uses, so the engine-use list sees it (Tynn #1007): never the whole engine client.
-        const registrations = engineLink ? withHostTools(signalled, { runHostTool: (call) => engineLink.runHostTool(call) }, resolveCaller) : signalled;
         mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
-        // Flows' tool steps call these very registrations, as the flow (genie#1204).
-        composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
         if (engineLink) {
             /*
              * GENIE'S MCP SERVER IS GENIE-HOST'S (the host split, P3.1; plan §11d): agents keep its tools when this window
@@ -2584,7 +2523,6 @@ const quitPorts: QuitPorts = {
         void spawnHostNow?.stop();
         localDoor.dispose();
         void filesHost?.close();
-        filesWatch?.close();
         clearGenieRunning(genieRoot());
     },
     drained: () => host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve(),

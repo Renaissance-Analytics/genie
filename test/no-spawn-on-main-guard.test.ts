@@ -74,9 +74,9 @@ describe('no process is created on Electron main (genie#1397)', () => {
         expect(spawning).toContain('src/main/spawn-exec.ts');
     });
 
-    it('main.ts routes execFileRunner through the spawn host and gives the supervisor its ptys', () => {
+    it('main.ts routes execFileRunner through the spawn host, and makes no pty of its own (the supervisor is genie-host’s: Tynn #1043)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/routeExecThroughSpawnHost\(/);
-        expect(main).toMatch(/processPty:\s*spawnHost/);
+        expect(main).toMatch(/routeExecThroughSpawnHost\(spawnHostNow\);/);
+        expect(main).not.toMatch(/processPty|realFancyTermPort/);
     });
 });

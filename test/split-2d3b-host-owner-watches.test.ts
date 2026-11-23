@@ -365,9 +365,9 @@ describe('local uploads on genie-host', () => {
 describe('the wiring', () => {
     const host = () => readFileSync('src/main/genie-host.ts', 'utf8');
 
-    it('genie-host\'s files hub and its three Tynn hubs send its own owner\'s events here, through one route', () => {
+    it('genie-host\'s files hub sends its own owner\'s events here and no other owner\'s anywhere (Tynn #1043); its three Tynn hubs send theirs here, through one route', () => {
         const src = host();
-        expect(src).toMatch(/files = new FilesWatchHub\(\{[^\n]*send: ownerRoute\(/);
+        expect(src).toMatch(/files = new FilesWatchHub\(\{[^\n]*send: \(owner, event\) => \{ if \(owner === HOST_LOCAL_OWNER\) hostFilesWatches\.deliver\(event\); \},/);
         for (const kind of ['board', 'issues', 'features']) expect(src).toContain(`send: ownerRoute((event) => hostTynnWatches.deliver('${kind}', event)`);
     });
 
