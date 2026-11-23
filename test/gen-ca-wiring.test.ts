@@ -21,6 +21,7 @@ describe('main wires the CA', () => {
     // proof is in test/split-2g4b1-settings-watch.test.ts). The person's Deck, with its Trust item, is genie-host's.
     it('main refreshes no Deck of its own on a front-door change; genie-host’s Deck carries the Trust item', () => {
         expect(main).not.toMatch(/composed\.onFrontDoorChange\(\(\)\s*=>\s*registry\?\.touch\(\)\)/);
-        expect(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8')).toMatch(/trust: hostingStack\?\.trustDeckItems\(\) \?\? \[\],/);
+        // Its hosting's own items (the Trust ask among them), beside what waits for a window (2g-4d E2b).
+        expect(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8')).toMatch(/trust: \[\.\.\.\(hostingStack\?\.trustDeckItems\(\) \?\? \[\]\), \.\.\.hostingElevation\.deckItems\(\)\],/);
     });
 });
