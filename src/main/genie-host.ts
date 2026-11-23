@@ -45,9 +45,9 @@ import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, exitRecordOf, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
 import { claudeLaunchConfigDir, providerBinary, realClaudeCliOptions, realDescribeClaude, realListModels, SessionHost } from './session-host.js';
-import { ClaudeAccountsLive } from './claude-accounts-live.js';
-import { ClaudeSignIns, realClaudeLogin } from './claude-sign-ins.js';
-import { removeAccountDir } from './claude-account-dirs.js';
+import { ClaudeAccountsLive, claudeSignedInNow } from './claude-accounts-live.js';
+import { claudeAccountNamed, claudeSignedInActive, ClaudeSignIns, realClaudeLogin } from './claude-sign-ins.js';
+import { removeAccountDir, signInFolderRefusal } from './claude-account-dirs.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
@@ -1328,18 +1328,42 @@ async function main(): Promise<void> {
         platform: process.platform,
         ...realClaudeLogin(() => realClaudeCliOptions()),
         describe: (configDir) => realDescribeClaude(configDir),
+        // "Sign out and remove" never takes a folder a run is still in (after a switch an agent stays there until its turn ends).
+        inUse: (configDir) => host.runningIn(configDir),
+        // A Switch asks Claude Code about THAT account, fresh: active at once when signed in, a sign-in only when not.
+        signedInNow: (account) => claudeSignedInNow(account, { accounts: () => accounts.list(), describe: (dir) => realDescribeClaude(dir), defaultDir: () => claudeLaunchConfigDir({}) }),
+        // Its history is the shared one again before the CLI runs in it (a removal that stopped half-way).
+        prepare: (configDir) => { const refusal = signInFolderRefusal(accounts.prepareClaudeDir(configDir)); if (refusal !== null) throw new Error(refusal); },
+        // The folder is free: the launches the sign-in refused start, and a move that waited on it is asked again.
+        ended: () => { host.launchUnblocked(); },
+        // The account every agent runs on has just been signed in: read again, and its signed-out agents come back.
+        signedInActive: claudeSignedInActive({
+            attribution: (provider) => { readingAttribution.signedIn(provider); },
+            refreshHealth: (provider) => { void providerHealth.refresh(provider); },
+            refreshLive: () => { void claudeLive.refresh(); },
+            signedOutAgents: (provider, id) => host.signedOutAgents(provider, id),
+            restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+            resumeLimit: (provider, id) => { host.resumeLimit(provider, id); },
+        }),
     });
     // The sign-ins that used to open a terminal (Tynn #1011): `choose` undefined from an agent's Log in signs the ACTIVE account
-    // in; from a switch it is Use another account; a named one (its email, else its label) is signed in and made active.
+    // in; from a switch it is Use another account. A named one (its email, else its label: a caller with no id; the windows
+    // send the id, `accounts.act` switch) is switched to as by id, and words that name more than one account are said so,
+    // never resolved to the first (two accounts may share an email).
     const claudeSignInFor = async (choose: string | undefined, context: CallContext | undefined, switching: boolean): Promise<AccountsActResult> => {
         if (choose === undefined) return switching ? claudeSignIns.useAnother('subscription', context) : claudeSignIns.signIn(accounts.activeFor('claude').id, context);
-        const named = accounts.list().find((a) => a.provider === 'claude' && (a.identity.email?.toLowerCase() === choose.toLowerCase() || a.label === choose));
-        return named ? claudeSignIns.signIn(named.id, context, { activate: true }) : claudeSignIns.useAnother('subscription', context);
+        const named = claudeAccountNamed(accounts.list(), choose);
+        if (named === 'several') return { ok: false, reason: `More than one Claude account answers to "${choose}". Switch to the one you mean in the Claude account menu.` };
+        if (named === null) return claudeSignIns.useAnother('subscription', context);
+        const switched = await claudeSignIns.switchTo(named.id, context);
+        accountsChangedNow?.();
+        return switched;
     };
     const accountsAct = async (action: AccountsAction, context?: CallContext): Promise<AccountsActResult> => {
         try {
             if (action.kind === 'rename') await accounts.rename(action.id, action.label);
             else if (action.kind === 'sign-in') return await claudeSignIns.signIn(action.id, context);
+            else if (action.kind === 'switch') { const switched = await claudeSignIns.switchTo(action.id, context); accountsChangedNow?.(); return switched; }
             else if (action.kind === 'use-another') return await claudeSignIns.useAnother(action.method, context);
             else if (action.kind === 'cancel-sign-in') { claudeSignIns.cancel(action.id); }
             else if (action.kind === 'submit-code') { if (!claudeSignIns.submitCode(action.requestId, action.code)) return { ok: false, reason: 'That sign-in is no longer waiting for a code.' }; }

@@ -13,6 +13,11 @@ export type AccountsAction =
     | { readonly kind: 'add-claude'; readonly method: 'subscription' | 'console'; readonly label?: string }
     /** Tynn #1011: make it the provider's active account; every agent draws on it from its next turn, on the same thread. */
     | { readonly kind: 'set-active'; readonly id: string }
+    /**
+     * Switch to THIS account, by its id (the review of #2139): the host makes it active when Claude Code says it is signed in,
+     * and signs it in in the browser (active once it is) only when it is not.
+     */
+    | { readonly kind: 'switch'; readonly id: string }
     /** Tynn #1011: sign in in the browser (prism-acp login()); never a terminal. */
     | { readonly kind: 'sign-in'; readonly id: string }
     | { readonly kind: 'cancel-sign-in'; readonly id: string }
@@ -55,7 +60,7 @@ export function accountsActionOf(value: unknown): AccountsAction | null {
     }
     if (typeof v['id'] !== 'string' || v['id'] === '') return null;
     if (v['kind'] === 'sign-in' || v['kind'] === 'cancel-sign-in' || v['kind'] === 'sign-out') return { kind: v['kind'], id: v['id'] };
-    if (v['kind'] === 'set-active') return { kind: 'set-active', id: v['id'] };
+    if (v['kind'] === 'set-active' || v['kind'] === 'switch') return { kind: v['kind'], id: v['id'] };
     if (v['kind'] === 'forget') return { kind: 'forget', id: v['id'] };
     if (v['kind'] === 'rename' && typeof v['label'] === 'string') return { kind: 'rename', id: v['id'], label: v['label'] };
     return null;

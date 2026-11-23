@@ -115,6 +115,17 @@ export function isClaudeSignInUrl(value: string): boolean {
     return url.protocol === 'https:' && SIGN_IN_HOSTS.has(url.hostname.toLowerCase()) && url.username === '' && url.password === '';
 }
 
+/**
+ * THE EMAIL A SIGN-IN MAY PREFILL (prism-acp 0.47.0 `login({ email })`, which rejects anything but a plain address: no space,
+ * no second @, none of ' " ` $ ; & | < > ( ) \ % ! ^, at most 254 characters). An address that is real but holds one of those
+ * would make every sign-in of its account fail before it starts, so it is not sent: the sign-in runs without the hint and
+ * the person types the address on Anthropic's page. `undefined` = send none.
+ */
+const PLAIN_EMAIL = /^[^\s@'"`$;&|<>()\\%!^]+@[^\s@'"`$;&|<>()\\%!^]+$/;
+export function claudeEmailHint(email: string | null | undefined): string | undefined {
+    return typeof email === 'string' && email.length <= 254 && PLAIN_EMAIL.test(email) ? email : undefined;
+}
+
 /** A sign-in Genie is running for an account (Tynn #1011): the browser is open on it, or the CLI asked for a pasted code. */
 export interface ClaudeSignInView {
     readonly accountId: string;

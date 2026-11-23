@@ -83,8 +83,17 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
      */
     const choose = (a: AccountView): { kind: 'switch' | 'sign-in'; run: () => void } => {
         if (a.live?.signedIn === true) return { kind: 'switch', run: () => { void onAccountsAct?.({ kind: 'set-active', id: a.id }); } };
-        if (provider === 'claude' && onAccountsAct) return { kind: 'sign-in', run: () => { void onAccountsAct({ kind: 'sign-in', id: a.id }); } };
+        // Sign in only for an account Claude Code SAID is signed out (the review of #2139).
+        if (provider === 'claude' && onAccountsAct && a.live?.signedIn === false) return { kind: 'sign-in', run: () => { void onAccountsAct({ kind: 'sign-in', id: a.id }); } };
+        // Its state is not known yet (not read, or the read failed): Switch, by id, and the host asks Claude Code itself,
+        // makes it active when it is signed in and signs it in only when it is not.
+        if (provider === 'claude' && onAccountsAct) return { kind: 'switch', run: () => { void onAccountsAct({ kind: 'switch', id: a.id }); } };
         return { kind: 'switch', run: () => switchTo(chooseWords(a)) };
+    };
+    // The offer's Switch: for Claude, the account it suggests BY ID (two accounts may share an email); else the provider's login.
+    const switchToOffer = () => {
+        if (provider === 'claude' && onAccountsAct && firstTarget) void onAccountsAct({ kind: 'switch', id: firstTarget.accountId });
+        else switchTo(offerChoose);
     };
     return (
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
@@ -125,7 +134,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                                 ? <p className="text-[var(--fg-3)]">Room: {offer.targets.map(targetWords).join(', ')}</p>
                                 : <p className="text-[var(--fg-3)]">No other {name} account has room.</p>}
                             <div className="mt-1.5 flex gap-1.5">
-                                {offer.targets.length > 0 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="switch-offer-switch" onClick={() => switchTo(offerChoose)}>Switch</Button> : null}
+                                {offer.targets.length > 0 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="switch-offer-switch" onClick={switchToOffer}>Switch</Button> : null}
                                 <Button type="button" size="xs" variant="ghost" data-action="switch-offer-dismiss" onClick={() => onDismissOffer?.(offer.id)}>Not now</Button>
                             </div>
                         </Callout>

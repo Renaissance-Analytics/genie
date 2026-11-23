@@ -4,7 +4,7 @@ import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.j
 import { accountIdentityOf, accountLabel, accountLabelOf, legacyAccountId, unknownAccountIdentity, type AccountIdentity, type AccountRecord } from '../core/accounts.js';
 import { forgetRefusal } from '../core/account-settings.js';
 import { isClaudeLoginMethod } from '../core/claude-accounts.js';
-import { prepareAccountDir, syncCleanupPeriod } from './claude-account-dirs.js';
+import { prepareAccountDir, syncCleanupPeriod, type PreparedAccountDir } from './claude-account-dirs.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -151,11 +151,27 @@ export class AccountsHost {
      * default account's, so no account prunes the shared store sooner than the default does. A directory that refuses is left
      * as it is; its account still works on its own history.
      */
-    syncClaudeDirs(busy: (configDir: string) => boolean = () => false): void {
-        for (const a of this.#accounts) {
-            // Never while a sign-in runs in that folder (prism-acp: one process per folder at a time).
-            if (a.provider !== 'claude' || a.configDir === undefined || busy(a.configDir)) continue;
-            try { prepareAccountDir(a.configDir, this.#sharedStore()); syncCleanupPeriod(a.configDir, this.#options.legacyHomes.claude); } catch { /* left as it is */ }
+    syncClaudeDirs(): void {
+        // At the host's start only, before any sign-in can be running in one of them.
+        for (const a of this.#accounts) if (a.provider === 'claude' && a.configDir !== undefined) this.prepareClaudeDir(a.configDir);
+    }
+
+    /**
+     * ONE ACCOUNT'S DIRECTORY MADE READY AGAIN: before a sign-in runs in it (the review of #2139), so a folder whose removal
+     * stopped half-way has its shared-history link back and the account never grows a history of its own. Only the directory
+     * of an account in this book; anything else is refused and nothing is made. Never throws: a refusal comes back in words.
+     */
+    prepareClaudeDir(configDir: string): PreparedAccountDir {
+        if (!this.#accounts.some((a) => a.provider === 'claude' && a.configDir === configDir)) {
+            return { ok: false, code: 'unknown', reason: 'That is not the folder of an account Genie knows, so Genie leaves it as it is.' };
+        }
+        try {
+            const prepared = prepareAccountDir(configDir, this.#sharedStore());
+            // Its cleanup period follows the default account's either way (a directory that is not there is left alone).
+            try { syncCleanupPeriod(configDir, this.#options.legacyHomes.claude); } catch { /* left as it is */ }
+            return prepared;
+        } catch (error) {
+            return { ok: false, code: 'unknown', reason: `The folder for this account could not be made ready: ${error instanceof Error ? error.message : String(error)}` };
         }
     }
 

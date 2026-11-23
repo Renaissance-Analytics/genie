@@ -49,6 +49,17 @@ export function prepareAccountDir(configDir: string, store: string): PreparedAcc
     }
 }
 
+/**
+ * WHETHER A FOLDER'S STATE STOPS A SIGN-IN IN IT (the review of #2139). The folder is made ready again before every sign-in,
+ * so an account whose removal stopped half-way never signs in without its shared-history link. An account that already keeps
+ * a history of its own, or whose history points somewhere else, is the person's arrangement: left exactly as it is, and it
+ * may sign in. Anything else (the link could not be made, the store is not there) stops the sign-in, in those words.
+ */
+export function signInFolderRefusal(prepared: PreparedAccountDir): string | null {
+    if (prepared.ok || prepared.code === 'realFolder' || prepared.code === 'linkedElsewhere') return null;
+    return prepared.reason;
+}
+
 /** Claude Code's own default for `cleanupPeriodDays` (code.claude.com settings reference). */
 export const CLAUDE_CLEANUP_DEFAULT_DAYS = 30;
 
@@ -112,7 +123,7 @@ function removeTree(path: string): void {
  * directory Genie made (`<accounts root>/account_<id>`) is ever touched; one that kept its OWN history (a real `projects`)
  * is not removed, since that history is the person's. No file's contents are read.
  */
-export function removeAccountDir(configDir: string, accountsRoot: string): { ok: true } | { ok: false; reason: string } {
+export function removeAccountDir(configDir: string, accountsRoot: string): { ok: true } | { ok: false; reason: string; partial?: boolean } {
     const dir = resolve(configDir);
     if (dirname(dir) !== resolve(accountsRoot) || !ACCOUNT_DIR.test(basename(dir))) {
         return { ok: false, reason: 'That is not a folder Genie made for an account, so Genie leaves it as it is.' };
@@ -128,6 +139,8 @@ export function removeAccountDir(configDir: string, accountsRoot: string): { ok:
         removeTree(dir);
         return { ok: true };
     } catch (error) {
-        return { ok: false, reason: `The account's folder could not be removed completely: ${error instanceof Error ? error.message : String(error)}` };
+        // `partial`: started and not finished (a file in use, on Windows). The same removal can finish it later, so whoever
+        // asked keeps the account until it has (never a forgotten account with half a folder nobody will come back for).
+        return { ok: false, partial: true, reason: `The account's folder could not be removed completely: ${error instanceof Error ? error.message : String(error)}` };
     }
 }
