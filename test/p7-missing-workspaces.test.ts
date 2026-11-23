@@ -373,7 +373,10 @@ describe('never dropped, and nothing written by the look', () => {
         await e.registry.refresh();
         expect(writeWorkspaces).not.toHaveBeenCalled();
         expect(writeAgents).not.toHaveBeenCalled();
-        expect(readFileSync(e.store.workspacesFile, 'utf8')).not.toContain('missing');
+        // No RECORD has the key (the text itself may: a temp folder's own name said `missing` on the first run).
+        const onDisk = JSON.parse(readFileSync(e.store.workspacesFile, 'utf8')) as Array<Record<string, unknown>>;
+        expect(onDisk.map((w) => w['id'])).toEqual(['gone', 'here']);
+        expect(onDisk.filter((w) => 'missing' in w)).toEqual([]);
         // Positive control: the spy sees a real write.
         await e.registry.addWorkspace({ id: 'third', path: join(e.dir, 'third') });
         expect(writeWorkspaces).toHaveBeenCalledTimes(1);
