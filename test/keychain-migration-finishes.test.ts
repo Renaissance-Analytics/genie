@@ -361,7 +361,12 @@ describe('the book decides nothing about a sign-in', () => {
         const names = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? names(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []));
         const readers = names('src').filter((file) => /keychain-migration\.json|fileMigrationBook/.test(readFileSync(file, 'utf8'))).map((file) => file.split(/[\\/]/).pop());
         // genie-host opens the one book for its adopter (Tynn #959, 2g-3b); the adopter and the engine are the only readers.
-        expect(readers.sort()).toEqual(['genie-host.ts', 'host-legacy-adopt.ts', 'keychain-migration.ts']);
+        // data-root.ts NAMES the file and reads nothing (P7.2, Tynn #418): its table lists every file under the root as state or machine.
+        expect(readers.sort()).toEqual(['data-root.ts', 'genie-host.ts', 'host-legacy-adopt.ts', 'keychain-migration.ts']);
+        const table = readFileSync('src/main/data-root.ts', 'utf8');
+        expect(table).not.toMatch(/fileMigrationBook/);
+        expect(table.split('keychain-migration.json').length - 1).toBe(1);
+        expect(table).toContain("state('keychain-migration.json', false, ");
     });
 
     it('wired: what is set aside is said where someone can read it', () => {
