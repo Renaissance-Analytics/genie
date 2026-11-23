@@ -41,12 +41,13 @@ describe('the name of genie-host’s executable', () => {
         expect(hostExecutableName('darwin')).toBe('genie-host');
     });
 
-    for (const platform of ['win32', 'linux'] as const) {
-        it(`${platform}: the copy is runtime-<electron>-host/${hostExecutableName(platform)}, the install’s binary byte for byte, and the host is started from it`, async () => {
+    // The names written out, not asked of the code: a title that called it would fail the whole file, not each test.
+    for (const [platform, name] of [['win32', 'genie-host.exe'], ['linux', 'genie-host']] as const) {
+        it(`${platform}: the copy is runtime-<electron>-host/${name}, the install’s binary byte for byte, and the host is started from it`, async () => {
             const input = install(platform);
             const got = await materializeHostRuntime(input);
             expect(got.error).toBeNull();
-            expect(got.execPath).toBe(join(input.genieHome, 'host', 'runtime-45.2.2-host', hostExecutableName(platform)));
+            expect(got.execPath).toBe(join(input.genieHome, 'host', 'runtime-45.2.2-host', name));
             expect(basename(got.execPath)).not.toBe(basename(input.execPath));
             expect(readFileSync(got.execPath, 'utf8')).toBe('binary');
             // Beside it, by folder: what Electron reads to run.
