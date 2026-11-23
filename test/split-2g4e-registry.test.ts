@@ -12,6 +12,7 @@ import { OWN_CLIENT_LABEL, ownProtocolClient, type OwnCallAnswer } from '../src/
 import { Registry } from '../src/main/registry.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
+import { hostRemoteApi } from '../src/main/remote-access-host.js';
 import { Store } from '../src/main/store.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 
@@ -37,6 +38,7 @@ type RegistryProtocol = {
     readRegistryWrite(args: unknown[]): { method: string; args: unknown[] } | Refusal;
     readRegistryWatch(raw: unknown): { revision: number; dropped: readonly string[] };
     registryWatchFeed(ports: { dropped(): readonly string[]; onWritten(listener: () => void): () => void }): { now(): { revision: number; dropped: readonly string[] }; subscribe(listener: (view: { revision: number; dropped: readonly string[] }) => void): () => void };
+    hostRegistryAnswers(files: { call(method: string, args: unknown[]): Promise<unknown>; dropped(): readonly string[] }, feed: ReturnType<RegistryProtocol['registryWatchFeed']>): { files: unknown; own: Record<string, (args: unknown[], context?: unknown) => Promise<unknown>>; registry: { read(method: string): Promise<unknown>; watch: unknown } };
 };
 type WindowRegistryStore = {
     openWindowRegistryStore(own: { call(method: string, args: unknown[]): Promise<OwnCallAnswer> }): Promise<import('../src/main/registry.js').RegistryStore>;
@@ -196,7 +198,7 @@ describe('genie-host says registry.watch and registry.read to main’s own clien
     });
 });
 
-describe('genie-host’s host API: registry.write from main’s own client only; the reads and the watch beside it', () => {
+describe('genie-host’s host API: registry.write from main’s own client only, through the one answer', () => {
     const base = { connectionId: 'c1', origin: 'local-window', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: OWN_CLIENT_LABEL } as const;
     const deps = (registryFiles?: { call(method: string, args: unknown[]): Promise<unknown>; dropped(): readonly string[] }) =>
         ({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, ...(registryFiles ? { registryFiles } : {}) }) as unknown as HostApiDeps;
@@ -213,13 +215,6 @@ describe('genie-host’s host API: registry.write from main’s own client only;
         expect(await buildHostApi(deps()).invoke(WRITE, ['writeWorkspaces', [[WS]]], { ...base, own: true })).toMatchObject({ ok: false });
     });
 
-    it('its reads go to the host’s registry, what it dropped from the store', async () => {
-        const call = vi.fn(async (method: string) => (method === 'readAgents' ? [{ id: 'a1' }] : []));
-        const api = buildHostApi(deps({ call, dropped: () => ['agents.json: row 2'] })) as HostApi & { registryRead?(method: string): Promise<unknown> };
-        expect(await api.registryRead!('readAgents')).toEqual([{ id: 'a1' }]);
-        expect(call).toHaveBeenCalledWith('readAgents', []);
-        expect(await api.registryRead!('dropped')).toEqual(['agents.json: row 2']);
-    });
 });
 
 describe('main’s side: a registry store over its own client', () => {
@@ -285,7 +280,7 @@ describe('main’s side: a registry store over its own client', () => {
         expect(stop).toHaveBeenCalledTimes(1);
     });
 
-    it('END TO END: a window Registry over main’s own client, through RemoteHost and genie-host’s API, writes genie-host’s files; another write is heard', async () => {
+    it('END TO END, AS GENIE-HOST BUILDS IT: a window Registry over main’s own client, through RemoteHost and hostRemoteApi with genie-host’s own answers NOT yet built, writes genie-host’s files, and another write is heard (gate 1123-021408-46f518: no window came up)', async () => {
         const w = await windowStore();
         const p = await protocol();
         const home = await mkdtemp(join(tmpdir(), 'genie-2g4e-files-'));
@@ -300,16 +295,9 @@ describe('main’s side: a registry store over its own client', () => {
                 if (method.startsWith('write')) written();
                 return out;
             };
-            const built = buildHostApi({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, registryFiles: { call, dropped: () => files.dropped }, registryWatch: feed } as unknown as HostApiDeps) as HostApi & { registryRead?(m: string): Promise<unknown>; registryWatch?(): unknown };
-            let emit: (channel: string, payload: unknown) => void = () => {};
-            feed.subscribe((view) => emit(LOCAL_EVENTS.registry, view));
-            const api = {
-                invoke: (m: RemoteMethod, a: unknown[], c: never) => built.invoke(m, a, c),
-                onEvent: (l: typeof emit) => { emit = l; return () => {}; },
-                workspaceOfAgent: () => null,
-                registryRead: (m: string) => built.registryRead!(m),
-                registryWatch: () => built.registryWatch!(),
-            } as unknown as HostApi;
+            const answers = p.hostRegistryAnswers({ call, dropped: () => files.dropped }, feed);
+            // genie-host's own answers (host-alone-api) are built late in its boot; main's registry loads before that.
+            const api = hostRemoteApi({ hostName: 'alphar', own: { ...answers.own }, alone: () => null, registry: answers.registry } as never);
             const client = ownProtocolClient() as ReturnType<typeof ownProtocolClient> & { watchRegistry(onView: (view: unknown) => void): () => void };
             new RemoteHost({ api, hostName: 'alphar', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now, random: () => 0.4 }), confirm: allowEveryPairing, transport: client.door });
             const registry = new Registry(await w.openWindowRegistryStore(client as never));
@@ -319,9 +307,29 @@ describe('main’s side: a registry store over its own client', () => {
             await registry.addWorkspace(WS);
             expect((await files.readWorkspaces()).map((x) => x.id)).toContain('ws_a');
             await settle();
+            // The watch's answer, then a revision for each write: heard with genie-host's own answers still unbuilt.
             expect(views.length).toBeGreaterThan(1);
+            // CONTROL: anything else still waits for genie-host's own answers.
+            expect(await client.call('snapshot', [])).toMatchObject({ ok: false, reason: expect.stringMatching(/still starting/) });
             stop();
         } finally { await devices.flushed(); await rm(home, { recursive: true, force: true }); await rm(devHome, { recursive: true, force: true }); }
+    });
+
+    it('genie-host’s own registry.write keeps its gate: a page in this machine’s window is refused, and the files never written', async () => {
+        const p = await protocol();
+        const call = vi.fn(async () => undefined);
+        const answers = p.hostRegistryAnswers({ call, dropped: () => [] }, p.registryWatchFeed({ dropped: () => [], onWritten: () => () => {} }));
+        const base = { connectionId: 'c1', origin: 'local-window', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'this Genie window' } as const;
+        expect(await answers.own['registry.write']!(['writeWorkspaces', [[WS]]], base as never)).toMatchObject({ ok: false });
+        expect(await answers.own['registry.write']!(['nope', []], { ...base, own: true } as never)).toMatchObject({ ok: false });
+        expect(call).not.toHaveBeenCalled();
+        // CONTROL: main's own client writes.
+        expect(await answers.own['registry.write']!(['writeWorkspaces', [[WS]]], { ...base, own: true } as never)).toBeUndefined();
+        expect(call).toHaveBeenCalledWith('writeWorkspaces', [[WS]]);
+        // Its reads: the files, and what the store dropped.
+        expect(await answers.registry.read('dropped')).toEqual([]);
+        await answers.registry.read('readAgents');
+        expect(call).toHaveBeenLastCalledWith('readAgents', []);
     });
 });
 
@@ -349,10 +357,18 @@ describe('wired: main’s registry is genie-host’s over the protocol, the engi
         expect(code(src('src/main/window-tools.ts'))).toMatch(/host: \{ runHostTool\(call: ForwardedToolCall\): Promise<McpToolResult> \}/);
     });
 
-    it('genie-host feeds registry.watch from its store’s writes, and its host API says it on local-registry', () => {
+    it('genie-host feeds registry.watch from its store’s writes, and answers main’s registry from the start: hostRemoteApi’s own ports, not its late-built answers', () => {
         const host = code(src('src/main/genie-host.ts'));
         expect(host).toMatch(/const registryWatch = registryWatchFeed\(\{ dropped: \(\) => registryStore\.dropped, onWritten: \(listener\) => stores\.onEvent\(\(event\) => \{ if \(event\.store === 'registry'\) listener\(\); \}\) \}\);/);
-        expect(host).toMatch(/registryFiles: \{ call: \(method, args\) => stores\.call\('registry', method, args\), dropped: \(\) => registryStore\.dropped \},/);
-        expect(code(src('src/main/host-api.ts'))).toMatch(/deps\.registryWatch\?\.subscribe\(\(view\) => listener\(LOCAL_EVENTS\.registry, view\)\)/);
+        expect(host).toMatch(/const registryAnswers = hostRegistryAnswers\(\{ call: \(method, args\) => stores\.call\('registry', method, args\), dropped: \(\) => registryStore\.dropped \}, registryWatch\);/);
+        expect(host).toMatch(/\.\.\.registryAnswers\.own/);
+        expect(host).toMatch(/registry: registryAnswers\.registry,/);
+        expect(host).toMatch(/registryFiles: registryAnswers\.files,/);
+        // Built before the RemoteHost that answers with them.
+        expect(host.indexOf('const registryAnswers = hostRegistryAnswers(')).toBeLessThan(host.indexOf('const remoteAccessHost = await RemoteAccessHost.open({'));
+        const remote = code(src('src/main/remote-access-host.ts'));
+        expect(remote).toMatch(/ports\.registry\?\.watch\.subscribe\(\(view\) => listener\(LOCAL_EVENTS\.registry, view\)\)/);
+        // The late-built answers say nothing of the registry: one source, so no event twice.
+        expect(code(src('src/main/host-api.ts'))).not.toMatch(/registryWatch|registryRead/);
     });
 });
