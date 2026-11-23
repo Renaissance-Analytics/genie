@@ -73,7 +73,7 @@ describe('scripts/plan-popover-cdp.mjs runs on both platforms', () => {
 
     it('ends what it started on Windows by pid with its tree (taskkill /T), and never reads `ps` there', () => {
         expect(script).toMatch(/taskkill', \['\/PID', String\([a-zA-Z.]+\), '\/T', '\/F'\]/);
-        expect(script).toMatch(/WIN \? \[\] : .*spawnSync\('ps'/);
+        expect(script).toMatch(/WIN \? '' : .*spawnSync\('ps'/);
     });
 
     it('gives the app a profile of its own on Windows too, and joins PATH with the platform\'s separator', () => {

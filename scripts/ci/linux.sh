@@ -41,7 +41,7 @@ SETUP="$OUT/setup"
 ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
-    seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag
+    seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
     trust-step accounts-popover claude-accounts sound-picker site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
     flows zip64 host-plain-node mailpit
     package package-fuse
@@ -528,6 +528,8 @@ row_artboard() { need_app && timeout 360 node scripts/artboard-cdp.mjs --trace-m
 row_ui-lag() { need_app && timeout 420 node scripts/ui-lag-cdp.mjs --budget; }
 
 # These start the app themselves, on a home and ports of their own.
+# The Dashboard's plan popover, capped to the screen and scrolling, on a 77-step plan from a stub agent (Tynn #1021).
+row_plan-popover() { need_build && need_display && on_display timeout 420 node scripts/plan-popover-cdp.mjs; }
 row_trust-step() { need_build && need_display && on_display timeout 300 node scripts/trust-step-cdp.mjs; }
 row_accounts-popover() { need_build && need_display && on_display timeout 240 node scripts/accounts-popover-cdp.mjs; }
 # Claude accounts of their own (Tynn #1011): live state, one-click switch, add, sign in, in the real app (a stand-in CLI).
@@ -668,6 +670,7 @@ ceiling() {
         seed) echo 300 ;;
         no-pty|smoke|layout|local-door-break|local-door|gapp-open|trust-step) echo 360 ;;
         accounts-popover) echo 300 ;;
+        plan-popover) echo 480 ;;
         claude-accounts) echo 300 ;;
         sound-picker) echo 300 ;;
         files-watch) echo 240 ;;
@@ -868,7 +871,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step accounts-popover claude-accounts sound-picker site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

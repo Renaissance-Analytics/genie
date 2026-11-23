@@ -2,7 +2,8 @@
 /**
  * THE DASHBOARD'S PLAN POPOVER SCROLLS (Tynn #1021), proven in a real window on a TEST MACHINE, never a desktop.
  *
- *   node scripts/plan-popover-cdp.mjs [out-dir]     (the Azure queue job does this; it refuses anywhere else)
+ *   node scripts/plan-popover-cdp.mjs [out-dir]     (the `plan-popover` row of scripts/ci/linux.sh and windows.ps1; it
+ *                                                    refuses anywhere but CI or a test machine)
  *
  * The owner's report: the per-agent plan popover ("27/77" and its steps) grew past the bottom of the screen, with no scroll.
  * This opens the built app on a seeded workspace with one stub-codex agent (scripts/stub-codex.mjs, PLAN MODE) whose turn
@@ -23,12 +24,12 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 process.env.GENIE_PAGE_PROBE ??= '1';
 if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
-if (process.platform !== 'linux') { console.error('Linux only'); process.exit(2); }
+const WIN = process.platform === 'win32';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = resolve(process.argv[2] ?? join(ROOT, 'ci-out', 'plan-popover'));
@@ -46,6 +47,8 @@ const genieHome = join(home, '.genie');
 const runtime = join(genieHome, 'runtime');
 mkdirSync(runtime, { recursive: true });
 mkdirSync(data, { recursive: true });
+mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
+mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
 
 // THE SEED. Fixture names only (no person).
 const WS = { id: 'orbitapi', name: 'orbit-api' };
@@ -107,21 +110,30 @@ const nodeDir = dirname(process.execPath);
 const env = {
     ...process.env,
     HOME: home, USERPROFILE: home, GENIE_HOME: genieHome,
+    APPDATA: join(home, 'AppData', 'Roaming'),
+    LOCALAPPDATA: join(home, 'AppData', 'Local'),
     XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'),
     GENIE2_CODEX_BINARY: stub, GENIE_PAGE_PROBE: '1',
-    PATH: `${nodeDir}:${process.env.PATH ?? ''}`,
+    PATH: `${nodeDir}${delimiter}${process.env.PATH ?? ''}`,
 };
 const electron = createRequire(import.meta.url)('electron');
 const logFd = openSync(join(OUT, 'electron.log'), 'a');
-const app = spawn(electron, ['.', '--no-sandbox', '--password-store=basic', `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { cwd: ROOT, env, stdio: ['ignore', logFd, logFd], detached: true });
+const app = spawn(electron, ['.', ...(WIN ? [] : ['--no-sandbox', '--password-store=basic']), `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { cwd: ROOT, env, stdio: ['ignore', logFd, logFd], detached: !WIN, windowsHide: false });
 
-const processes = () => (spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).stdout ?? '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(' '); return { pid: Number(l.slice(0, i)), args: l.slice(i + 1) }; });
+// Windows has no `ps`: there, what this run started is ended by pid with its tree (the window's, then the host's own record).
+const processes = () => (WIN ? '' : spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).stdout ?? '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(' '); return { pid: Number(l.slice(0, i)), args: l.slice(i + 1) }; });
 function endEverything() {
     rmSync(PLAN_MARKER, { force: true });
     let hostPid = null;
     try { hostPid = JSON.parse(readFileSync(join(runtime, 'host.json'), 'utf8')).pid; } catch { /* none */ }
     for (const p of processes()) if (p.args.includes(data) || p.args.includes(genieHome) || p.pid === hostPid) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
-    try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ }
+    if (WIN) {
+        // The host is detached and outlives the window; its tree holds the stub agent. Each by pid, with its tree.
+        try { spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
+        if (hostPid !== null) { try { spawnSync('taskkill', ['/PID', String(hostPid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ } }
+    } else {
+        try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ }
+    }
     try { rmSync(root, { recursive: true, force: true }); } catch { /* the VM is deleted anyway */ }
 }
 const finish = (code) => { endEverything(); process.exit(code); };
@@ -156,7 +168,8 @@ async function sizeWindow(width) {
     const w = await browser.send('Browser.getWindowForTarget', { targetId: page.id });
     if (w.result?.windowId) await browser.send('Browser.setWindowBounds', { windowId: w.result.windowId, bounds: { windowState: 'normal', left: 0, top: 0, width, height: HEIGHT } });
     browser.close();
-    const hypr = (...args) => spawnSync('hyprctl', args, { encoding: 'utf8', env: process.env });
+    // Hyprland (the Linux test VM) tiles the window: float it, then size it. Elsewhere the bounds above are enough.
+    const hypr = (...args) => (WIN ? { status: 1, stdout: '' } : spawnSync('hyprctl', args, { encoding: 'utf8', env: process.env }));
     const active = hypr('activewindow', '-j');
     if (active.status === 0) {
         try { if (JSON.parse(active.stdout).floating === false) hypr('dispatch', 'togglefloating'); } catch { /* not json */ }
