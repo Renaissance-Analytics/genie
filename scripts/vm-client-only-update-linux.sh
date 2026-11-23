@@ -62,10 +62,17 @@ echo "display: XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-} WAYLAND_DISPLAY=$WAYLAND_D
 # electron-builder's AppImage runtime loads libfuse.so.2 (measured, 1123-201245-948f6a: "dlopen(): error loading
 # libfuse.so.2" with fusermount3 present): fuse2 is what a person installs for any AppImage on Arch.
 if { ! command -v fusermount3 >/dev/null 2>&1 && ! command -v fusermount >/dev/null 2>&1; } || ! ldconfig -p 2>/dev/null | grep -q 'libfuse[.]so[.]2'; then
-    echo "no fusermount or no libfuse.so.2: installing fuse3 and fuse2"
-    sudo -n pacman -S --needed --noconfirm fuse3 fuse2 >fuse-install.log 2>&1 || { tail -20 fuse-install.log; fail 'FUSE could not be installed'; }
+    echo "no fusermount or no libfuse.so.2: installing fuse2"
+    # The VM's package database is not synced (measured, 1123-205944-a119e0: "target not found: fuse3"): -Sy for it.
+    if ! sudo -n pacman -Sy --needed --noconfirm fuse2 >fuse-install.log 2>&1; then
+        tail -20 fuse-install.log
+        # Not mountable here: the AppImage's own extract-and-run (the same payload, unpacked under /tmp, the same APPIMAGE
+        # the updater replaces). Said, because a person's machine mounts it.
+        echo 'FUSE 2 could not be installed: the AppImage runs with APPIMAGE_EXTRACT_AND_RUN=1 (not a FUSE mount)'
+        export APPIMAGE_EXTRACT_AND_RUN=1
+    fi
 fi
-[ -e /dev/fuse ] || fail 'no /dev/fuse: an AppImage cannot mount itself here'
+[ -n "${APPIMAGE_EXTRACT_AND_RUN:-}" ] || [ -e /dev/fuse ] || fail 'no /dev/fuse: an AppImage cannot mount itself here'
 echo "fuse: $(command -v fusermount3 || command -v fusermount); $(ldconfig -p 2>/dev/null | grep -m1 'libfuse[.]so[.]2' | sed 's/^[[:space:]]*//')"
 
 started_at() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//'; }
