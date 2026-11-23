@@ -4,7 +4,7 @@ import { type AccountRecord, type ProviderAccountHome } from '../core/accounts.j
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
-import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
 import { LiveReadings, planStepsOf } from '../core/live-readings.js';
@@ -20,7 +20,9 @@ import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPor
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
 import { mcpOffFor } from '../core/agent-mcp.js';
-import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
+import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
+import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
+import { accountSwitchNote } from '../core/account-switch.js';
 
 /**
  * Whether an agent can ask for approval — the DRIVER's published claim (`permissionRequests`), read from prism-acp's
@@ -137,7 +139,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries, type PromptAction, type PromptDelivery } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
-import { sessionsDir } from './paths.js';
+import { sessionsDir, userHome } from './paths.js';
 
 /**
  * THE RUNNING AGENTS — one place that owns sessions, and counts them.
@@ -418,7 +420,18 @@ export function listModelsOptionsFor(
     account?: ProviderAccountHome,
 ): ListModelsOptions {
     if (account && account.provider !== provider) throw new Error('The model probe needs an account of its provider');
-    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
+    // The models the ACTIVE account offers (Tynn #1011): a Claude account's own directory, as its launches use it.
+    const dir = provider === 'claude' && account ? claudeDriverAccountOptions(account, env) : {};
+    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: userHome(), timeoutMs: MODEL_LIST_TIMEOUT_MS, ...dir };
+}
+
+/**
+ * WHAT IS SIGNED IN, IN ONE CLAUDE DIRECTORY (Tynn #1011): prism-acp's `describe`, with the CLI a launch would run, from the
+ * home folder (no project's settings choose for it). It reads no file; the CLI's own status carries no credential.
+ */
+export function realDescribeClaude(configDir: string | null): ReturnType<typeof claudeAccounts.describe> {
+    const o = listModelsOptionsFor('claude', process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
+    return claudeAccounts.describe(configDir, { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}), cwd: userHome() });
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
@@ -484,6 +497,27 @@ export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] |
     return disabled.length > 0 ? { disabledMcpServers: disabled } : {};
 }
 
+/**
+ * WHICH CLAUDE ACCOUNT A LAUNCH USES (Tynn #1011): prism-acp's `ClaudeDriver({ configDir })`. An account with a directory of its
+ * own launches in it; the default account launches in the CLI's default (`null`), or, when Genie's own environment names one
+ * with CLAUDE_CONFIG_DIR, in that one: the home `legacyProviderHomes` calls the default, so nothing about it changes. With no
+ * account book (a bare host), the option is left out: the old behaviour.
+ */
+export function claudeDriverAccountOptions(account: { readonly legacy: boolean; readonly configDir?: string } | undefined, env: Readonly<Record<string, string | undefined>> = process.env): { configDir?: string | null } {
+    if (account === undefined) return {};
+    return { configDir: claudeLaunchConfigDir(account, env) };
+}
+
+/** The directory a launch on that account is in: its own, or the default's (see `claudeDriverAccountOptions`). */
+export function claudeLaunchConfigDir(account: { readonly configDir?: string }, env: Readonly<Record<string, string | undefined>> = process.env): string | null {
+    return account.configDir ?? (env.CLAUDE_CONFIG_DIR || null);
+}
+
+/** prism-acp's own answer to "is this thread in that account's store" (it looks for the file; it reads none). */
+export function realThreadInAccount(threadId: string, configDir: string | null): 'present' | 'absent' | 'indeterminate' {
+    return probeSessionStore(threadId, { configDir: configDir ?? join(userHome(), '.claude') }).existence;
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     // Said in Genie's words, naming the file, before the driver refuses in its own.
     const problem = providerStartProblem(record.provider);
@@ -497,7 +531,7 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeDriverAccountOptions(extras?.account),...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         case 'codex':
             return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
@@ -546,6 +580,14 @@ interface Running {
     numbered: { base: number; n: number; rows: TimedEvent[] } | null;
     /** The ledger last served, for the history it was served with: ONE array per run, grown in place as rows arrive (see `rowAdded`); `null` = rebuild it. */
     ledger: { history: object | null; rows: TimedEvent[] } | null;
+    /** The account this run was launched on (Tynn #1011), and its Claude directory; absent when no book is composed. */
+    account?: AccountRecord;
+    launchedConfigDir?: string | null;
+    /** A move to a new active account (Tynn #1011): the account it came from, to go back to if this run does not come up. */
+    movedFrom?: AccountRecord;
+    /** The record and folder this run was started with: what a move to another account starts again (Tynn #1011). */
+    startRecord?: AgentRecord;
+    cwd?: string;
 }
 
 /** A stopped agent's ledger before its history is read: one empty array, so two reads are the same ledger. */
@@ -558,6 +600,11 @@ export class SessionHost {
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
     readonly #activeAccount: ((provider: string) => AccountRecord | null) | undefined;
+    readonly #threadInAccount: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
+    /** Agents being moved to the active account now (Tynn #1011): one move at a time per agent. */
+    readonly #moving = new Set<AgentId>();
+    /** The account each agent was last told it could not move to: told once per account, not on every turn. */
+    readonly #toldStayed = new Map<AgentId, string>();
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
@@ -700,6 +747,11 @@ export class SessionHost {
          * (an interrupt the provider did not confirm). The plan keepalive nudges both; a reply is `onAction`'s `replied`.
          */
         onTurnEnd?: (agentId: AgentId, cause: 'interrupted' | 'restarted') => void;
+        /**
+         * WHETHER A THREAD CAN BE RESUMED UNDER AN ACCOUNT (Tynn #1011): prism-acp's `probeSessionStore(threadId, { configDir })`
+         * by default. Asked before an agent is moved to a new active account; anything but `present` keeps it where it is.
+         */
+        threadInAccount?: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -751,6 +803,7 @@ export class SessionHost {
         this.#store = options.store ?? (() => (shared ??= openDurableStore(sessionsDir(this.#userData))));
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#activeAccount = options.activeAccount;
+        this.#threadInAccount = options.threadInAccount ?? realThreadInAccount;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -1050,7 +1103,7 @@ export class SessionHost {
         for (const [id, entry] of this.#running) { entry.session.releaseWork(); this.#emit(id); }
     }
 
-    start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
+    start(record: AgentRecord, cwd: string, how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord } = {}): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
         // A setting/crash replacement of an existing identity must still get its session in the
@@ -1085,8 +1138,8 @@ export class SessionHost {
         const held = this.#heldElsewhere?.(record) ?? null;
         if (held !== null) return { ok: false, reason: held };
 
-        let account: AccountRecord | undefined;
-        if (this.#activeAccount) {
+        let account: AccountRecord | undefined = how.account;
+        if (account === undefined && this.#activeAccount) {
             const found = this.#activeAccount(record.provider);
             const reason: string | null = !found || found.provider !== record.provider ? 'This provider has no active account; choose its account before starting.' : null;
             if (found && reason === null) account = found;
@@ -1186,7 +1239,9 @@ export class SessionHost {
         const rows: TimedEvent[] = [];
         const startedAt = this.#clock();
         const runId = randomUUID();
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId), ...(how.quiet === true ? { quiet: true } : {}) }, at: startedAt }, numbered: null, ledger: null,
+            ...(account ? { account, launchedConfigDir: claudeLaunchConfigDir(account) } : {}), ...(how.movedFrom ? { movedFrom: how.movedFrom } : {}),
+            startRecord: record, cwd };
 
         // The plan kept from before this run: shown at once, until the run reports its own (identity.ts `plan`).
         if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
@@ -1211,13 +1266,15 @@ export class SessionHost {
             onStartSettled: (ok) => {
                 if (startReport !== null) clearTimeout(startReport);
                 if (this.#running.get(record.id)?.session === session) startPhase(ok ? 'ready' : 'failed');
+                // A move to a new account that did not come up goes back to the account it came from, same thread (Tynn #1011).
+                if (!ok && entry.movedFrom && this.#running.get(record.id)?.session === session) this.#moveBack(record, cwd, entry.movedFrom, entry.account);
             },
             onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             onRateLimit: (readings, message) => this.#limitReport(this.#loginFor(record.provider), readings, message),
-            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: this.#activeId(record.provider), runId }) } : {}),
+            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: this.#readingAccount(entry), runId }) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             ...(this.#onDesignAuth && record.provider === 'claude' ? { onDesignAuth: (event: import('../core/design-auth.js').DesignAuthEvent) => this.#onDesignAuth!(record.id, event) } : {}),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
@@ -1260,6 +1317,9 @@ export class SessionHost {
                     }
                     entry.sounded.clear();
                 }
+                // If the active account changed under it, the agent moves once it is quiet (Tynn #1011): after its turn and
+                // the Cooling wait, which this change may be the end of.
+                if (this.#awaitsMove(entry)) this.#scheduleMove(record.id);
                 this.#emit(record.id);
             },
             /*
@@ -1397,9 +1457,130 @@ export class SessionHost {
         }
 
         this.#emit(record.id);
-        // It started (Tynn #766 C): its own sound, if the person chose one.
-        this.#onAction?.(record.id, 'started');
+        // It started (Tynn #766 C): its own sound, if the person chose one. A move to the active account is not a start (Tynn #1011).
+        if (how.quiet !== true) this.#onAction?.(record.id, 'started');
         return { ok: true };
+    }
+
+    /**
+     * THE ACTIVE ACCOUNT OF A PROVIDER CHANGED (Tynn #1011). The owner: "agents keep running when we switch. provider accounts
+     * never dictate agent operations, only rate limits." Each running agent of the provider draws on the new account from its
+     * next clean idle: one idle now moves now; one in a turn, a tool, an approval or with work queued moves when that is over.
+     */
+    accountChanged(provider: string): void {
+        for (const [id, entry] of this.#running) if (entry.provider === provider) this.#scheduleMove(id);
+    }
+
+    /**
+     * A SWITCH TELLS EVERY AGENT ITS NEW ROOM (Tynn #1011; the owner: "whenever we have an account switch make sure to post the
+     * updated rate limit status so agents know it is reset"). At once: the new account's last reading is published as the
+     * provider's headroom (fresh: no earlier window carried over), the provider is asked for a live one where it can answer,
+     * the new account's hold opens unless its own reading says it is spent, and every running agent of the provider has its
+     * headroom replaced (no stale "N% until you hit your rate limit"), a line naming the account and its room ahead of its next
+     * turn, and any limit hold lifted.
+     */
+    accountSwitched(provider: string, input: { readonly account: AccountRecord; readonly headroom: Headroom | null }): void {
+        const now = this.#clock();
+        const note = accountSwitchNote(input.account.label, input.headroom, now);
+        if (input.headroom) this.#onHeadroom?.(provider, input.headroom, { accountId: input.account.id, runId: 'account-switch', fresh: true });
+        const login = this.#loginOf(provider, input.account.id);
+        if (!this.#gate.limitedByReading(login, now)) this.#gate.resumeNow(login);
+        let reader: Running | null = null;
+        for (const [id, entry] of this.#running) {
+            if (entry.provider !== provider) continue;
+            entry.session.accountSwitched(note, input.headroom);
+            if (reader === null && entry.session.canReadRateLimits) reader = entry;
+            this.#emit(id);
+        }
+        reader?.session.readRateLimits()?.catch(() => { /* no reading: the published one stands */ });
+        this.#wake();
+    }
+
+    /**
+     * WHOSE READING IT IS (Tynn #478/#751, #1011). In ONE directory the account can change under a running process (a sign-in
+     * again in the default home, #753), so a reading there is the active account's. A run in a directory of its OWN keeps
+     * its account until it moves, so a reading from it is that account's, whichever is active now.
+     */
+    #readingAccount(entry: Running): string {
+        const active = this.#activeAccount?.(entry.provider);
+        if (entry.account && active && entry.launchedConfigDir !== undefined && claudeLaunchConfigDir(active) !== entry.launchedConfigDir) return entry.account.id;
+        return this.#activeId(entry.provider);
+    }
+
+    /** Cheap, for every state change: a Claude run on another account than the active one, not already moving. */
+    #awaitsMove(entry: Running): boolean {
+        if (entry.provider !== 'claude' || entry.account === undefined || entry.session.quiet !== true) return false;
+        const active = this.#activeAccount?.(entry.provider);
+        if (active === null || active === undefined || claudeLaunchConfigDir(active) === (entry.launchedConfigDir ?? null)) return false;
+        // Told it cannot move to this account: not asked again on every change (a switch, `accountChanged`, asks again).
+        return this.#toldStayed.get(entry.session.agentId as AgentId) !== active.id;
+    }
+
+    /** After the turn's own end handling (what was queued is handed over first), see whether the agent moves. */
+    #scheduleMove(agentId: AgentId): void {
+        setTimeout(() => { void this.#considerMove(agentId); }, 0);
+    }
+
+    async #considerMove(agentId: AgentId): Promise<void> {
+        const entry = this.#running.get(agentId);
+        if (!entry || entry.provider !== 'claude' || entry.account === undefined || this.#moving.has(agentId)) return;
+        const active = this.#activeAccount?.(entry.provider);
+        if (!active || active.provider !== entry.provider) return;
+        const activeConfigDir = claudeLaunchConfigDir(active);
+        const record = this.#currentRecord?.(agentId) ?? entry.startRecord ?? null;
+        const threadId = record?.threadId ?? entry.session.cliSessionId ?? null;
+        const session = entry.session;
+        const base = {
+            launchedConfigDir: entry.launchedConfigDir ?? null, activeConfigDir,
+            // QUIET (core/session.ts): promptable, not held, and past Cooling, in which Claude may still open a turn for a
+            // prompt it took mid-turn. A move while it is not would cut that prompt's work.
+            inTurn: session.inTurn || session.starting || !session.quiet, pendingApproval: session.pendingApproval !== null,
+            // A question to the person parks as an approval (`pendingApproval`); an answer arrives as queued work.
+            pendingQuestion: false,
+            backgroundRunning: session.runningCall !== null || entry.background.count(entry.rows) > 0,
+            queued: session.queuedPromptIds.length + (session.workWaiting ? 1 : 0), threadId,
+        };
+        const first = respawnDecision({ ...base, store: 'absent' });
+        if (first.kind === 'stay' || first.kind === 'wait') return;
+        // Only now is the store asked: it is the one look before anything is stopped.
+        const decision = threadId === null ? first : respawnDecision({ ...base, store: this.#threadInAccount(threadId, activeConfigDir) });
+        if (decision.kind === 'note') { this.#tellStayed(agentId, entry.account, active, decision.text); return; }
+        if (decision.kind !== 'respawn') return;
+        const from = entry.account;
+        const cwd = entry.cwd;
+        if (record === null || cwd === undefined) return;
+        // The SAME thread, always: the one the provider reported, if the record has not caught up with it yet.
+        const runRecord: AgentRecord = { ...record, threadId };
+        this.#moving.add(agentId);
+        try {
+            this.stop(agentId, { graceful: false });
+            const verdict = await this.ended(agentId);
+            if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
+            const started = this.start(runRecord, cwd, { account: active, quiet: true, movedFrom: from });
+            if (!started.ok) { this.#moveBack(runRecord, cwd, from, active); return; }
+            this.#toldStayed.delete(agentId);
+            await this.deliverOwed(agentId);
+        } finally {
+            this.#moving.delete(agentId);
+        }
+    }
+
+    /** A move that did not come up: the agent runs again on the account it came from, on its thread, and is told. */
+    #moveBack(record: AgentRecord, cwd: string, from: AccountRecord, to: AccountRecord | undefined): void {
+        const id = record.id;
+        setTimeout(() => {
+            void (async () => {
+                if (this.#running.get(id)) { this.stop(id, { graceful: false }); await this.ended(id); }
+                const again = this.start(this.#currentRecord?.(id) ?? record, cwd, { account: from, quiet: true });
+                if (again.ok && to) this.#tellStayed(id, from, to, `it could not start on ${to.label}`, true);
+            })().catch(() => { /* the refusal is on the agent's row (start says why) */ });
+        }, 0);
+    }
+
+    #tellStayed(agentId: AgentId, from: AccountRecord, to: AccountRecord, why: string, always = false): void {
+        if (!always && this.#toldStayed.get(agentId) === to.id) return;
+        this.#toldStayed.set(agentId, to.id);
+        this.#running.get(agentId)?.session.notice(stayedWords({ from: from.label, to: to.label, why }));
     }
 
     /**
@@ -2091,7 +2272,10 @@ export class SessionHost {
         if (entry.ledger !== null && entry.ledger.history === loaded) return entry.ledger.rows;
         // Where this run begins: said once, when there is something before it to tell it from — recorded rows, or a
         // conversation the provider resumed (which it remembers even when Genie recorded none of it).
-        const marker: TimedEvent[] = history.length > 0 || entry.resumed ? [entry.marker] : [];
+        // A move to the active account (Tynn #1011) says nothing: it is the same conversation, between two of its turns, and it
+        // only happens at a clean idle (no shell, tool, approval or queued message a run boundary would end).
+        const quiet = entry.marker.event.kind === 'run' && entry.marker.event.quiet === true;
+        const marker: TimedEvent[] = !quiet && (history.length > 0 || entry.resumed) ? [entry.marker] : [];
         // This run's turns number on from the history's — once it is read; until then they keep the session's own numbers.
         let run: readonly TimedEvent[] = entry.rows;
         if (loaded) {
@@ -2379,3 +2563,4 @@ export interface EngineLiveness {
 export function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
     return { collaborators: c?.collaborators ?? null, commsAgeSeconds: c?.commsAgeSeconds ?? null, links: c?.links ?? null };
 }
+

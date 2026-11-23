@@ -41,6 +41,12 @@ export interface WorkspaceRecord {
     governs?: string[];
     /** Its DEFAULT AGENT (Genie 1's): one of its own agents, the one an action uses when it names none. Absent = none. */
     defaultAgentId?: string;
+    /**
+     * The default was given AUTOMATICALLY (Tynn #1015, the owner: "the first or only agent in a workspace is automatically
+     * the default agent"), not chosen. A chosen one (the person, project.json on adopt or restore, Genie 1's import)
+     * replaces it; nothing automatic replaces a chosen one. Absent = chosen (or none).
+     */
+    defaultAgentAuto?: true;
     /** MCP servers off by default for every agent here (Tynn #628); an agent's own switch wins. Absent = none. */
     mcpOff?: string[];
     /**

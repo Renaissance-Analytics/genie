@@ -168,7 +168,7 @@ export type StreamEvent =
      * recorded). `resumed`: the provider was asked to continue its conversation, which it remembers in full —
      * including anything from before Genie recorded it.
      */
-    | { kind: 'run'; resumed: boolean }
+    | { kind: 'run'; resumed: boolean; /** A move to the active account (Tynn #1011): not shown, it is the same conversation. */ quiet?: true }
     /**
      * The ledger's history was cut to its most recent rows: `count` earlier recorded rows are not shown, `turns` of them
      * turn markers — what the turns shown number on from (core/turn-numbers.ts).

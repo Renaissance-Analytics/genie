@@ -454,8 +454,12 @@ export class Registry {
         if (input.workspaceId === OS_WORKSPACE) throw new Error('The built-in Genie identity is reserved; agents belong to a regular workspace');
         const record = agentRecord({ id: mintAgentId(), ...input });
         this.#agents = [...this.#agents, record];
-        const writing = this.#store.writeAgents(this.#agents);
-        // Refresh also waits for an already-started creation: its in-memory row precedes durable storage.
+        // THE FIRST AGENT IS THE DEFAULT (Tynn #1015): a workspace with none gets this one, automatically.
+        const first = this.#workspaces.some((w) => w.id === input.workspaceId && w.defaultAgentId === undefined);
+        if (first) this.#workspaces = this.#withDefault(this.#workspaces, input.workspaceId, record.id, true);
+        const workspaces = this.#workspaces;
+        const writing = this.#store.writeAgents(this.#agents).then(() => (first ? this.#store.writeWorkspaces(workspaces) : undefined));
+        // Refresh also waits for an already-started creation: its in-memory rows precede durable storage.
         // A failed write still rejects register(), while refresh must remain able to read the actual store.
         this.#registrations = Promise.allSettled([this.#registrations, writing]).then(() => {});
         await writing;
@@ -529,14 +533,58 @@ export class Registry {
         return this.listAgents().filter((a) => a.workspaceId === workspaceId);
     }
 
-    /** The workspace's default agent (Genie 1's), or `null` — none designated is a normal state. */
+    /**
+     * The workspace's default agent (Genie 1's), or `null` when it has no agents. The first or only agent is the default
+     * automatically (Tynn #1015): registering records it, and assignMissingDefaults records it for workspaces from before.
+     */
     defaultAgentOf(workspaceId: string): string | null {
         if (this.#isHibernated(workspaceId)) return null;
-        return this.#workspaces.find((w) => w.id === workspaceId)?.defaultAgentId ?? null;
+        const w = this.#workspaces.find((x) => x.id === workspaceId);
+        if (!w) return null;
+        // Not recorded yet (a workspace from before, until genie-host's boot records it): its first agent, as the host says.
+        return w.defaultAgentId ?? this.#agents.find((a) => a.workspaceId === workspaceId)?.id ?? null;
+    }
+
+    /** The default someone CHOSE (the person, project.json, Genie 1's import), or `null` — an automatic one is not. */
+    chosenDefaultAgentOf(workspaceId: string): string | null {
+        const w = this.#workspaces.find((x) => x.id === workspaceId);
+        return w === undefined || w.defaultAgentAuto === true || this.#isHibernated(workspaceId) ? null : w.defaultAgentId ?? null;
     }
 
     /**
-     * Designate one of the workspace's OWN agents its default, or clear it with `null` (Genie 1's setWorkspaceDefaultAgent).
+     * Every workspace with agents and NO default recorded gets its first agent (by registration order), automatically
+     * (Tynn #1015: six of the owner's workspaces had none, so nothing that asks for the default found one). Idempotent: a
+     * second pass finds nothing to do and writes nothing. genie-host, the one writer, runs it at boot. The ids it gave.
+     */
+    async assignMissingDefaults(): Promise<string[]> {
+        let next = this.#workspaces;
+        const given: string[] = [];
+        for (const w of this.#workspaces) {
+            if (w.defaultAgentId !== undefined) continue;
+            const first = this.#agents.find((a) => a.workspaceId === w.id);
+            if (!first) continue;
+            next = this.#withDefault(next, w.id, first.id, true);
+            given.push(w.id);
+        }
+        if (given.length === 0) return given;
+        this.#workspaces = next;
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return given;
+    }
+
+    #withDefault(workspaces: readonly WorkspaceRecord[], workspaceId: string, agentId: string | null, automatic: boolean): WorkspaceRecord[] {
+        return workspaces.map((w) => {
+            if (w.id !== workspaceId) return w;
+            const { defaultAgentId: _previous, defaultAgentAuto: _auto, ...rest } = w;
+            if (agentId === null) return rest;
+            return automatic ? { ...rest, defaultAgentId: agentId, defaultAgentAuto: true } : { ...rest, defaultAgentId: agentId };
+        });
+    }
+
+    /**
+     * Designate one of the workspace's OWN agents its default (Genie 1's setWorkspaceDefaultAgent), or with `null` go back
+     * to the automatic one: its first agent (Tynn #1015).
      * An agent of another workspace is refused: it would be the default of a workspace it does not belong to.
      */
     async setDefaultAgent(workspaceId: string, agentId: string | null): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -546,11 +594,12 @@ export class Registry {
             if (!agent) return { ok: false, reason: `no agent ${agentId}` };
             if (agent.workspaceId !== workspaceId) return { ok: false, reason: `${agent.name} is an agent of ${agent.workspaceId}, not of ${workspaceId}` };
         }
-        this.#workspaces = this.#workspaces.map((w) => {
-            if (w.id !== workspaceId) return w;
-            const { defaultAgentId: _previous, ...rest } = w;
-            return agentId === null ? rest : { ...rest, defaultAgentId: agentId };
-        });
+        // A CHOSEN default: an automatic one never replaces it (Tynn #1015). `null` is no choice: back to the first agent,
+        // automatically, or none when the workspace has no agents.
+        const first = this.#agents.find((a) => a.workspaceId === workspaceId)?.id ?? null;
+        this.#workspaces = agentId === null
+            ? this.#withDefault(this.#workspaces, workspaceId, first, true)
+            : this.#withDefault(this.#workspaces, workspaceId, agentId, false);
         await this.#store.writeWorkspaces(this.#workspaces);
         this.#emit();
         return { ok: true };
@@ -649,13 +698,12 @@ export class Registry {
         if (!this.#agents.some((a) => a.id === agentId)) return false;
         this.#agents = dropChosen(this.#agents.filter((a) => a.id !== agentId), new Set([agentId]));
         await this.#store.writeAgents(this.#agents);
-        // A designation never points at nothing: the forgotten default leaves its workspace with none.
-        if (this.#workspaces.some((w) => w.defaultAgentId === agentId)) {
-            this.#workspaces = this.#workspaces.map((w) => {
-                if (w.defaultAgentId !== agentId) return w;
-                const { defaultAgentId: _gone, ...rest } = w;
-                return rest;
-            });
+        // A designation never points at nothing: the forgotten default's workspace takes its first agent left,
+        // automatically (Tynn #1015), or none when it has no agents left.
+        const owning = this.#workspaces.find((w) => w.defaultAgentId === agentId);
+        if (owning) {
+            const first = this.#agents.find((a) => a.workspaceId === owning.id);
+            this.#workspaces = this.#withDefault(this.#workspaces, owning.id, first?.id ?? null, true);
             await this.#store.writeWorkspaces(this.#workspaces);
         }
         this.#emit();

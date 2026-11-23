@@ -97,7 +97,7 @@ async function normalGenie(): Promise<Registration[]> {
     return allGenieTools(genieToolDeps({
         inbox: never, attention: never, knowledge: never, settings: never, approve: never, roster: () => [], resolveCaller: () => null,
         userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,
-        agents: { defaultAgentOf: () => null, register: never },
+        agents: { defaultAgentOf: () => null, create: never },
         workspaceTabs: { write: () => {}, sites: () => [] },
         pages: { open: () => [] },
         plugins: { tools: () => plugins.tools(), guard: (id) => plugins.guard(id), run: never },

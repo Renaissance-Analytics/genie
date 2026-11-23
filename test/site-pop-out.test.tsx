@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { BrowserService, type BrowserEvent, type BrowserFacts } from '../src/main/browser-service.js';
+import { BrowserService, type BrowserEvent } from '../src/main/browser-service.js';
 import { SingleSiteWindow } from '../src/renderer/components/SingleSiteWindow.js';
 import { SitePanel } from '../src/renderer/components/SitePanel.js';
 import { siteWebviewLayer } from '../src/renderer/site-webview-layer.js';
@@ -12,7 +12,9 @@ import { siteWebviewLayer } from '../src/renderer/site-webview-layer.js';
  * fresh. The host holds which panels are out, so a window that comes back knows.
  */
 
-const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], workspaceOf: { 'moic.gen': 'ws' }, launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
+// genie-host's door and the window's launch (Tynn #1046 D2).
+const LAUNCH = { file: 'Genie.exe', args: ['--genie-browser'] };
+const DOOR = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], workspaceOf: { 'moic.gen': 'ws' } };
 
 function serviceWith() {
     const service = new BrowserService();
@@ -24,7 +26,7 @@ function serviceWith() {
 describe('the host', () => {
     it('popping out opens the site alone in the browser, and remembers the panel', async () => {
         const { service, events } = serviceWith();
-        await service.call('publish', [FACTS], 'window');
+        service.door(DOOR); await service.call('publish', [{ launch: LAUNCH }], 'window');
         await service.call('register', [], 'browser');
         await service.call('popOut', ['ws:t:0', 'moic.gen'], 'window');
         expect(events.at(-1)).toEqual({ kind: 'openSingle', panelKey: 'ws:t:0', url: 'https://moic.gen/' });
@@ -63,7 +65,7 @@ describe('the host', () => {
 
     it('CONTROL: the window going leaves it out: the browser outlives the window', async () => {
         const { service } = serviceWith();
-        await service.call('publish', [FACTS], 'window');
+        service.door(DOOR); await service.call('publish', [{ launch: LAUNCH }], 'window');
         await service.call('register', [], 'browser');
         await service.call('popOut', ['ws:t:0', 'moic.gen'], 'window');
         service.dropped('window');
