@@ -12,9 +12,9 @@ import type { Store } from './store.js';
  * THE STORES AGENTS WRITE TO, OWNED BY GENIE-HOST (the host split, P3.1: plan §11d).
  *
  * The inbox, attention (questions, imDone, the lists), the approval queue and the knowledge graph each have ONE writer:
- * this host. Agents reach them through Genie's MCP server here, with or without a window. A window holds replicas
- * (agent-stores-replica.ts): it is sent the whole state when it connects (`dump`) and every change after (`onEvent`), and
- * writes through `call` — only the methods named below, so a window cannot reach what it has no business with.
+ * this host. Agents reach them through Genie's MCP server here, with or without a window. genie-host follows every
+ * change (`onEvent`) and writes through `call` — only the methods named below. A window holds no replica since Tynn #955
+ * (2g-4d E2a): it reaches them over the protocol.
  */
 
 export interface AgentStores {

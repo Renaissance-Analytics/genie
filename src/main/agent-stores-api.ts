@@ -7,8 +7,8 @@ import type { KnowledgeStore } from './knowledge-store.js';
 import type { SettingsStore } from './settings-store.js';
 
 /**
- * WHAT THE WINDOW USES OF THE STORES AGENTS WRITE TO (the host split, P3.1). In engine mode these are the replicas of
- * genie-host's stores (agent-stores-replica.ts); on the emergency path they are the stores themselves. Compose, the Deck,
+ * WHAT THE WINDOW USES OF THE STORES AGENTS WRITE TO (the host split, P3.1). They are the stores themselves:
+ * genie-host's, and the composition the tests build (compose.ts); a window reaches them only over the protocol. Compose, the Deck,
  * the snapshots and the person's actions are written against these, never against a store class, so either fits.
  */
 export type InboxApi = Pick<InboxStore, 'onSend' | 'onRead' | 'onMessagesChanged' | 'involving' | 'all' | 'hasWritten' | 'unread' | 'unreadCount' | 'receipts' | 'send' | 'receive' | 'markDelivered' | 'recordDeliveryRefusal' | 'deleteThread' | 'attachmentForPerson'>;

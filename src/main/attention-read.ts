@@ -4,8 +4,8 @@ import type { AskedRecord, AttentionData, Finished, PendingQuestion } from './at
 
 /**
  * ATTENTION'S READS, over its data (the host split, P3.1). One implementation for the store that owns it
- * (main/attention-store.ts, in genie-host) and the window's replica (main/agent-stores-replica.ts), so the Deck's
- * questions, the person's list and "Last finished" read the same on both sides.
+ * (main/attention-store.ts, in genie-host) and whatever reads its data, so the Deck's questions, the person's list and
+ * "Last finished" read the same everywhere.
  */
 
 export function pendingOf(data: AttentionData): readonly PendingQuestion[] {
