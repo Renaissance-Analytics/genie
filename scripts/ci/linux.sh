@@ -42,7 +42,7 @@ ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
-    trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
+    trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash rebuilt-machine
     flows zip64 host-plain-node mailpit
     package package-fuse
     toolchain
@@ -555,6 +555,8 @@ row_spawn-host() {
 row_safe-mode() { need_build && need_display && on_display timeout 540 node scripts/safe-mode-cdp.mjs; }
 row_hang() { need_build && need_display && on_display timeout 540 node scripts/hang-cdp.mjs; }
 row_renderer-crash() { need_build && need_display && on_display timeout 420 node scripts/renderer-crash-cdp.mjs; }
+# A data root attached to a rebuilt machine (host split P7.3, Tynn #419): a real genie-host on a real Secret Service, no window.
+row_rebuilt-machine() { need_install && need_keyring && timeout 600 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/rebuilt-machine.mjs; }
 
 # WHETHER THE CHANGE TOUCHES A SUITE. scripts/flows-paths.mjs and scripts/zip64-paths.mjs decide, from the code (every
 # file the suite's subject is made of, by import, plus the suite, its config and the deciding script itself): the same
