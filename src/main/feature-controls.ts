@@ -1,6 +1,6 @@
 import { classifyNavigation } from '../core/browser-policy.js';
 import type { FeatureAction } from '../renderer/features.js';
-import type { WindowServices } from './compose.js';
+import type { WindowServices } from './host-services.js';
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import { githubAccountOf } from './feature-machine.js';
 

@@ -114,9 +114,11 @@ describe('the Caddy that RUNS is a per-user copy, refreshed only when the bundle
 describe('main runs the per-user copy (main.ts is Electron, so its lines are read)', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-    it('the bundled Caddy is copied under ~/.genie/runtime/caddy-bin — once — and composeServices is handed THAT path, not the install’s', () => {
-        expect(main.match(/await userCaddyCopy\(bundledCaddy, join\(runtimeDir\(genieRoot\(\)\), 'caddy-bin'\)\)/g) ?? []).toHaveLength(1);
-        expect(main.match(/caddyBin: caddyCopy\?\.path \?\? null,/g) ?? []).toHaveLength(1);
-        expect(main).not.toMatch(/caddyBin: caddyBinPath\(/);
+    it('the bundled Caddy is copied under ~/.genie/runtime/caddy-bin — once, by genie-host’s hosting — and THAT path is the hosting’s, not the install’s', () => {
+        // genie-host's hosting inputs copy it (hosting-inputs.ts); the window composes nothing and copies none (Tynn #955).
+        const inputs = readFileSync(new URL('../src/main/hosting-inputs.ts', import.meta.url), 'utf8');
+        expect(inputs.match(/await userCaddyCopy\(bundled, join\(runtimeDir\(paths\.home\), 'caddy-bin'\)\)/g) ?? []).toHaveLength(1);
+        expect(inputs).toMatch(/caddyBin = copy\.path;/);
+        expect(main).not.toMatch(/userCaddyCopy|caddyBin:/);
     });
 });
