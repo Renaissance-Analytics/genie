@@ -154,7 +154,7 @@ import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import { EMPTY_HOST_SUMMARY, type HostSummary } from '../core/host-summary.js';
 import { workspaceNameFor } from './workspace-names.js';
-import { HostRegistryStore } from './agent-stores-replica.js';
+import { openWindowRegistryStore, registryChanges } from './window-registry-store.js';
 import { watchRegistryRefresh } from './registry-refresh.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -1032,7 +1032,7 @@ function attractMainWindow(reason: string): void {
  * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
  */
 /** The Tynn and GitHub accounts, the keyring card and this machine's registration are genie-host's (Tynn #959, 2g-3b): main holds none. */
-/** Late-bound: main's own protocol client is tunnelled to genie-host. genie:// links wait for it (it reaches genie-host's account). */
+/** Late-bound: main's boot has reached its own client's watches; genie:// links wait for it (they reach genie-host's account). */
 let ownProtocolTunnelled = false;
 /** What Tynn says this machine is (genie#1278 W5) is genie-host's, in its summary (hostSummaryNow, Tynn #954): a drone until said. */
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
@@ -1462,10 +1462,18 @@ async function boot(): Promise<void> {
      */
     {
         const engineLink = agentEngineLink.client;
-        // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them through the host, and
-        // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
-        theRegistry.useStore(new HostRegistryStore(engineLink.stores()));
-        watchRegistryRefresh(engineLink.stores(), theRegistry, (error) => console.error('[registry] Background refresh failed; waiting for the next host update.', error));
+        // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
+        // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
+        // `own`: genie-host admits this door's connections as main's own client, the only caller keychain.adoptLegacy takes.
+        // Tunnelled here, before the registry loads (Tynn #1007, 2g-4e): the registry is read and written over it.
+        tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
+        // The settings this window reads, from genie-host, as soon as its own client can ask (Tynn #998, 2g-4b1).
+        settingsNow.start();
+        // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them over the one protocol (Tynn
+        // #1007, 2g-4e: registry.read, registry.write), and re-reads them when registry.watch says another window (or the host)
+        // wrote: two windows, one registry. Before its load and the Genie 1 import, below, which write through genie-host.
+        theRegistry.useStore(await openWindowRegistryStore(ownProtocol));
+        watchRegistryRefresh(registryChanges(ownProtocol), theRegistry, (error) => console.error('[registry] Background refresh failed; waiting for the next host update.', error));
         // This window reaches the `processes` child (exec and streams). Supervised processes and terminals are the host's
         // own (P3.3b, P3.3e): their state comes by replica, so nothing here is taken back after a loss.
         const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
@@ -1853,12 +1861,7 @@ async function boot(): Promise<void> {
             return contents && contents.id === window?.webContents.id ? rendererNotice : null;
         },
     });
-    // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
-    // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
-    // `own`: genie-host admits this door's connections as main's own client, the only caller keychain.adoptLegacy takes.
-    tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
-    // The settings this window reads, from genie-host, as soon as its own client can ask (Tynn #998, 2g-4b1).
-    settingsNow.start();
+    // main's own client was tunnelled before the registry loaded, and its settings watch started there (Tynn #1007, 2g-4e).
     // What genie-host runs, as the tray and the quit read it, kept as it changes (Tynn #953, 2g-2).
     // ...and this machine's role and its Tynn account (Tynn #954, 2g-3a): another account (or none) closes the relay windows
     // opened under the last one, which hold its grants (M0 finding 2).
@@ -2031,7 +2034,8 @@ async function boot(): Promise<void> {
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
-        const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
+        // By the one member it uses, so the engine-use list sees it (Tynn #1007): never the whole engine client.
+        const registrations = engineLink ? withHostTools(signalled, { runHostTool: (call) => engineLink.runHostTool(call) }, resolveCaller) : signalled;
         mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));

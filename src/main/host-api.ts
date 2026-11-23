@@ -41,6 +41,7 @@ import { isPromptAction } from '../core/prompt-delivery.js';
 import { answerAccounts, isAccountsMethod, type AccountsPort } from './accounts-protocol.js';
 import { readGateRequest } from './approvals-gate-protocol.js';
 import { readWindowView } from './host-window-view.js';
+import { answerRegistryWrite } from './registry-protocol.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -177,6 +178,8 @@ export interface HostApiDeps {
     /** What this machine's window says of the person: whether they are at the computer (host-window-view.ts; Tynn #1044). */
     windowView?: { userActive(active: boolean): void };
     approvalsGate?: (caller: import('./mcp-tools.js').Caller, action: string, detail: string, forwardedCallId: string | null) => Promise<'allowed' | 'denied' | 'expired'>;
+    /** genie-host's registry, read and written by main's window registry (registry-protocol.ts; Tynn #1007). Absent = refused. */
+    registryFiles?: import('./registry-protocol.js').RegistryFiles;
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
     tynnRecheck?: () => Promise<void>;
     takeOver?: {
@@ -807,6 +810,11 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if ('ok' in request) return request;
                 return deps.approvalsGate(request.caller, request.action, request.detail, request.forwardedCallId);
             }
+            // A WRITE TO GENIE-HOST'S REGISTRY (Tynn #1007, 2g-4e): `local` keeps every other machine out, and of this machine's
+            // connections only main's own client writes; the write is read strictly. genie-host answers it from the start, as
+            // hostRemoteApi's own method (registry-protocol.ts hostRegistryAnswers); this is the same answer on this path.
+            case 'registry.write':
+                return answerRegistryWrite(deps.registryFiles, args, context);
             // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
             case 'tynn.recheck':
                 if (!deps.tynnRecheck) return { ok: false, reason: 'this host has no Tynn account to ask' };

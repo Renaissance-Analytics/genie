@@ -115,6 +115,7 @@ import { onTheClock } from '../core/tray-only.js';
 import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
 import { remoteWatchFeed, remoteWatchOf } from '../core/remote-watch.js';
 import { settingsWatchFeed } from './settings-watch.js';
+import { hostRegistryAnswers, registryWatchFeed } from './registry-protocol.js';
 import { mailSignalsOfRead, mailSignalsOfSend } from '../core/mail-actions.js';
 import { sayThings } from '../core/thing-sounds.js';
 import { hostDraftPrune } from './host-draft-prune.js';
@@ -485,6 +486,12 @@ async function main(): Promise<void> {
     // The agent's calls while a window runs them (P3.1): a window tool's approval in this queue ends with its call (genie#1360).
     const forwardedCalls = new Map<string, import('./mcp-tools.js').McpCall>();
     const stores = new AgentStoresService({ ...own, approvals, settings, drafts, registry: { store: registryStore, model: hostRegistry } }, { forwardedCall: (id) => forwardedCalls.get(id) });
+    // THE REGISTRY, AS MAIN'S OWN CLIENT READS, WATCHES AND WRITES IT (Tynn #1007, 2g-4e): a new revision each time its files
+    // are written, by whoever (a window, this host's own registry), on registry.watch; main's window registry reads them
+    // again. Built here, from the start, as the engine link's store calls were: main's registry loads before this host's
+    // own answers are built, so its RemoteHost answers these itself (remote-access-host.ts `registry`, `own`).
+    const registryWatch = registryWatchFeed({ dropped: () => registryStore.dropped, onWritten: (listener) => stores.onEvent((event) => { if (event.store === 'registry') listener(); }) });
+    const registryAnswers = hostRegistryAnswers({ call: (method, args) => stores.call('registry', method, args), dropped: () => registryStore.dropped }, registryWatch);
     // EVERY CHAT'S UNSENT DRAFT GOES WITH ITS AGENT (genie#1261; Tynn #997, 2g-4a): pruned here, over the roster loaded above, then
     // on each registry write whose roster changed. Sent when the roster changes, never on every snapshot.
     await hostDraftPrune({
@@ -1181,13 +1188,15 @@ async function main(): Promise<void> {
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
-            own: { 'updates.state': async () => updatesService.dump(), ...ownTakeOver,
+            own: { 'updates.state': async () => updatesService.dump(), ...ownTakeOver, ...registryAnswers.own,
                 // The account chips (Tynn #895): this host's book, for every client, window or not.
                 ...accountsOwnAnswers(() => accountsPortNow) },
             // Another machine's Take Over window closed: its TUI ends, or its sign-in is cancelled (Tynn #896).
             takeOverEnded: (terminalId) => { takeOverService.ended(terminalId); logins?.cancel(terminalId); hostScratchTerminals.windowClosed(terminalId); },
             // Every remote method and event, window or not (host-alone-api.ts; Tynn #898: none is sent to a window).
             alone: () => phoneApi,
+            // main's window registry, from this host's start (Tynn #1007): before `alone` is built.
+            registry: registryAnswers.registry,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
             // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
@@ -2012,6 +2021,9 @@ async function main(): Promise<void> {
         remoteWatch,
         // This host's settings, for what this machine's window reads (Tynn #998, 2g-4b1).
         settingsWatch,
+        // This host's registry, read and written by this machine's window registry over the protocol (Tynn #1007, 2g-4e):
+        // the same store calls the engine link carried, which keep the host's model following and its writes in order.
+        registryFiles: registryAnswers.files,
         // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
         legacySecrets: legacyAdopt,
         // A window-run tool's approval, from this queue, tied to the agent's real call (Tynn #1006, 2g-4b2).
