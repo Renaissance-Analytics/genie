@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('genieQuestion', {
     remote: (request: unknown) => ipcRenderer.invoke('question:remote', request),
     openInFiles: (id: string, path: string) => ipcRenderer.invoke('question:open-in-files', id, path),
     drawer: (open: boolean) => ipcRenderer.invoke('question:drawer', open),
+    // The whole window maximized to its display's work area, or restored (Tynn #1019, core/question-maximize.ts).
+    maximize: (on: boolean) => ipcRenderer.invoke('question:maximize', on),
     onShow: (listener: (view: unknown) => void) => {
         const handler = (_e: unknown, view: unknown) => listener(view);
         ipcRenderer.on('question:show', handler);

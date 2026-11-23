@@ -259,7 +259,8 @@ describe('ACTIVITY SOUNDS ARE A CLIENT SETTING (the owner): genie-host only says
         const SETTING = /settings|sound_|notification_sounds|do_not_disturb|alertSound|volume|mute/i;
         // CONTROL: the scan finds a setting read where there is one (the window's own decision).
         const app = code(src('src/renderer/App.tsx'));
-        expect(app).toContain('if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));');
+        // Which sound is the settings' choice; how loud is this client's own level (Tynn #1022): both read in the window.
+        expect(app).toContain('if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}), alertVolume(action.kind as AlertKind, clientSoundValues()));');
         expect(SETTING.test(app)).toBe(true);
         // The module that hears the things and says them: its only import is the kinds' type.
         const things = code(src('src/core/thing-sounds.ts'));
