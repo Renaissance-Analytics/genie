@@ -401,9 +401,12 @@ export class UpdatesService {
             this.#waiting.push(waiter);
             // One start per wait: what else asks meanwhile waits for the same helper.
             if (this.#waiting.length === 1) {
-                this.#log(`updater: starting ${this.#launch.file} ${this.#launch.args.join(' ')}`);
+                // The launch the helper really gets (helperLaunch: none of the window's debugger switches), and the line says
+                // that one: a log naming switches a process never had costs the next diagnosis (Tynn #1031).
+                const launch = helperLaunch(this.#launch);
+                this.#log(`updater: starting ${launch.file} ${launch.args.join(' ')}`);
                 try {
-                    this.#options.startHelper(this.#launch);
+                    this.#options.startHelper(launch);
                 } catch (error) {
                     this.#log(`updater: could not be started: ${error instanceof Error ? error.message : String(error)}`);
                 }

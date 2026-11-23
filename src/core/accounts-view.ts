@@ -39,6 +39,8 @@ export interface ProviderAccountsView { readonly provider: string; readonly acco
 export interface AccountsSnapshot {
     readonly providers: readonly ProviderAccountsView[];
     readonly offers: readonly SwitchOffer[];
+    /** The Claude sign-ins running now (Tynn #1011): in the browser, or waiting for a code the CLI asked for. Never a code. */
+    readonly signIns?: readonly import('./claude-accounts.js').ClaudeSignInView[] | undefined;
     /** Claude Design's authorization, one for the machine (Tynn #480); absent from an older host. */
     readonly design?: DesignAuthView | undefined;
 }
