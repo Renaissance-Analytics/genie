@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -44,6 +45,8 @@ async function until<T>(what: string, fn: () => Promise<T | null | undefined | f
         await sleep(100);
     }
 }
+/** A staging folder whose owner is gone: no process has this pid (above any OS's pid range) with this start time. */
+const OLD_STAGING = '2147483000-1';
 const readText = async (file: string) => { try { return await readFile(file, 'utf8'); } catch { return null; } };
 
 async function window(): Promise<{ client: SessionEngineClient; transport: ClientTransport }> {
@@ -83,6 +86,10 @@ beforeAll(async () => {
     // The workspace its agents run in, as the host's registry knows it: the host prepares an agent, and refuses a workspace it has never heard of.
     await mkdir(join(home, 'runtime'), { recursive: true });
     await writeFile(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'ws', path: workspace }]));
+    // Old local staging a process long gone left behind (pid-started), and a folder that is not staging's (Tynn #955).
+    await mkdir(join(home, 'runtime', 'local-staging', OLD_STAGING), { recursive: true });
+    await writeFile(join(home, 'runtime', 'local-staging', OLD_STAGING, 'left.txt'), 'left behind\n');
+    await mkdir(join(home, 'runtime', 'local-staging', 'not-staging'), { recursive: true });
     hostProcess = spawn(process.execPath, ['--import', TSX, 'src/main/genie-host.ts'], {
         // The spawn host's real entry, as TypeScript (the host forks it with its own --import tsx).
         env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB,
@@ -110,6 +117,14 @@ describe('genie-host as its own process', () => {
     it('writes host.json with its own pid, the protocol and the build it was started as', () => {
         expect(record).toMatchObject({ pid: hostProcess.pid, protocol: ENGINE_PROTOCOL, build: 'test-build' });
     });
+
+    it('OLD LOCAL STAGING IS SWEPT WITH NO WINDOW EVER OPENED: genie-host sweeps it itself after boot (Tynn #955, 2g-4d E)', async () => {
+        // Before any window() in this file: the sweep ran only in the window's composition before, so it never ran here.
+        const staging = join(home, 'runtime', 'local-staging');
+        await until('the old staging folder to be swept', () => !existsSync(join(staging, OLD_STAGING)), 30_000);
+        // CONTROL: the sweep is staging's own, not a wipe: a folder that is not a staging folder is kept.
+        expect(existsSync(join(staging, 'not-staging'))).toBe(true);
+    }, 60_000);
 
     it('a second host for the same user finds the endpoint taken and exits, leaving the first serving', async () => {
         const second = spawn(process.execPath, ['--import', TSX, 'src/main/genie-host.ts'], { env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'other' }, stdio: 'ignore' });

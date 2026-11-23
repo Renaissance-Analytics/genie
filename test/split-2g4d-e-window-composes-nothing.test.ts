@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { WINDOW_ENGINE_INVENTORY } from '../src/core/ipc-inventory.js';
@@ -112,6 +112,40 @@ describe('4. the WindowServices types live beside genie-host’s features, not i
     it('no host-side module imports its services type from compose.js', () => {
         for (const file of ['src/main/feature-controls.ts', 'src/main/feature-ipc.ts', 'src/main/feature-machine.ts', 'src/main/hosting-actions.ts']) {
             expect(code(src(file)), file).not.toMatch(/from '\.\/compose\.js'/);
+            expect(code(src(file)), file).toMatch(/from '\.\/host-services\.js'/);
         }
+    });
+
+    it('host-services.ts declares them, and compose.ts takes them from there (for the tests that compose)', () => {
+        const types = code(src('src/main/host-services.ts'));
+        expect(types).toMatch(/export (interface|type) ComposedServices\b/);
+        expect(types).toMatch(/export type WindowServices\b/);
+        expect(code(src('src/main/compose.ts'))).toMatch(/from '\.\/host-services\.js'/);
+        expect(code(src('src/main/compose.ts'))).not.toMatch(/export interface ComposedServices\b/);
+    });
+});
+
+describe('5. compose.ts is the TESTS’ composition: nothing in src/ composes with it', () => {
+    const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const path = join(dir, e.name);
+        return e.isDirectory() ? files(path) : /\.(ts|tsx|mts|cts)$/.test(e.name) ? [path] : [];
+    });
+    const all = files(resolve(root, 'src')).map((p) => relative(root, p).replace(/\\/g, '/'));
+    // composeWith / composeWindowServices from compose.js, or the tests' compose-alone helper, anywhere but compose.ts.
+    const composes = (text: string) => /\b(composeWith|composeWindowServices)\b/.test(text) || /compose-alone/.test(text);
+
+    it('no production file composes services or imports compose-alone (the guard)', () => {
+        const offenders = all.filter((f) => f !== 'src/main/compose.ts' && composes(code(src(f))));
+        expect(offenders).toEqual([]);
+    });
+
+    it('CONTROL: the gauge finds the composition where it is, and reads every source file', () => {
+        expect(all).toContain('src/main/compose.ts');
+        expect(all).toContain('src/main/genie-host.ts');
+        expect(all.length).toBeGreaterThan(300);
+        expect(composes(code(src('src/main/compose.ts')))).toBe(true);
+        // The pattern reads an import as written: a line that composes is caught.
+        expect(composes("import { composeWith } from './compose.js';")).toBe(true);
+        expect(composes("import { composeAlone } from '../../test/helpers/compose-alone.js';")).toBe(true);
     });
 });
