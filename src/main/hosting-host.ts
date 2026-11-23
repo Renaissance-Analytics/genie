@@ -1,6 +1,6 @@
 import type { DeckItem } from '../core/deck.js';
 import type { EngineStatusView, ReconcileReport } from '../core/engine-reconcile.js';
-import { WAITING_FOR_A_WINDOW } from '../core/elevation-waiting.js';
+import { WAITING_FOR_A_WINDOW, elevationWaitingDeckItem } from '../core/elevation-waiting.js';
 import { notAvailableHere } from '../core/host-runtime.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
@@ -96,7 +96,7 @@ export interface HostingApi {
      * running or not — plus any site up right now, so a name Caddy serves always resolves (genie#624's union).
      */
     configuredHosts(): string[];
-    /** Genie's own Deck items about the front door: the one Trust ask and the site-reach (hosts file) asks. */
+    /** Genie's own Deck items about the front door: the one Trust ask and the site-reach (hosts file) asks. What waits for a window is WindowElevation's. */
     trustDeckItems(): DeckItem[];
     /** THE WORKSPACES' TRUST (genie#1519): owned where the hosting is — genie-host, which sets its own git read policy from it. */
     readonly trust: TrustApi;
@@ -107,8 +107,9 @@ export interface HostingApi {
 /**
  * GENIE-HOST NEVER RAISES AN OS PROMPT ON ITS OWN (P5a ruling). Every elevation its hosting needs (the hosts file, the
  * trust store) is asked of a CONNECTED window, which runs it exactly as a window always has. With no window connected
- * nothing is elevated: the request is held and answered "waiting for a window" — connecting is not an approval, so
- * nothing runs until the person approves in a window.
+ * nothing is elevated: the request is held, answered "waiting for a window", and said on genie-host's own Deck (its
+ * `deckItems()`, which deck.watch and every client's estate carry; Approve there runs the hosts sync) — connecting is not
+ * an approval, so nothing runs until the person approves with a window open.
  *
  * A host that can never elevate (plain Node, P10.1d: no Genie window can connect) asks nothing and holds nothing: it says
  * the elevation is not available on this host, in the one wording.
@@ -123,6 +124,7 @@ export interface WindowElevationPorts {
 
 export class WindowElevation {
     readonly #ports: WindowElevationPorts;
+    readonly #listeners = new Set<() => void>();
     #waiting: { labels: string[]; at: number } | null = null;
 
     constructor(ports: WindowElevationPorts) {
@@ -140,7 +142,7 @@ export class WindowElevation {
             return this.#hold(steps, error instanceof Error ? error.message : String(error));
         }
         // The person was asked (whatever they answered): nothing waits any more.
-        this.#waiting = null;
+        if (this.#waiting !== null) { this.#waiting = null; this.#notify(); }
         return outcome;
     }
 
@@ -149,9 +151,26 @@ export class WindowElevation {
         return this.#waiting ? [...this.#waiting.labels] : [];
     }
 
+    /** What waits, as genie-host's Deck says it (core/elevation-waiting.ts): one item, or none. */
+    deckItems(): DeckItem[] {
+        const item = this.#waiting ? elevationWaitingDeckItem(this.#waiting.labels, this.#waiting.at) : null;
+        return item ? [item] : [];
+    }
+
+    /** Something started or stopped waiting: genie-host's Deck is said again. */
+    onChange(listener: () => void): () => void {
+        this.#listeners.add(listener);
+        return () => { this.#listeners.delete(listener); };
+    }
+
     #hold(steps: readonly PrivilegedStep[], why: string): ElevationOutcome {
         const labels = [...new Set([...(this.#waiting?.labels ?? []), ...steps.map((s) => s.label)])];
         this.#waiting = { labels, at: this.#waiting?.at ?? (this.#ports.now ?? Date.now)() };
+        this.#notify();
         return { ok: false, failed: null, error: `${WAITING_FOR_A_WINDOW}: Genie needs your approval to ${labels.join(' and ')}, and ${why}; it asks when a Genie window opens` };
+    }
+
+    #notify(): void {
+        for (const l of [...this.#listeners]) { try { l(); } catch { /* one listener never costs another */ } }
     }
 }

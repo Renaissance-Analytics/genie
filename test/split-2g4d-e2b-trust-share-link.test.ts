@@ -22,13 +22,26 @@ import { allowEveryPairing } from './support/allow-every-pairing.js';
  */
 const trustOf = (f: WorkspaceCallerFixture) => f.hosting.trust.view('work')?.trusted === true;
 
+/** A raw protocol client: the frames before the welcome in order; a call's answer is its own result, never a pushed event. */
 function client(t: ClientTransport) {
     const inbox: WireMessage[] = [];
     const waiters: Array<(m: WireMessage) => void> = [];
-    t.onMessage((text) => { const r = parseMessage(text); if (!r.ok) throw new Error(r.reason); const w = waiters.shift(); if (w) w(r.message); else inbox.push(r.message); });
+    const results = new Map<number, (m: WireMessage) => void>();
+    t.onMessage((text) => {
+        const r = parseMessage(text);
+        if (!r.ok) throw new Error(r.reason);
+        const m = r.message;
+        if (m.kind === 'result') { const done = results.get(m.id); if (done) { results.delete(m.id); done(m); return; } }
+        if (m.kind === 'event') return;
+        const w = waiters.shift(); if (w) w(m); else inbox.push(m);
+    });
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let id = 0;
-    const call = async (method: string, ...args: unknown[]) => { t.send(JSON.stringify({ kind: 'call', id: ++id, method, args })); return next() as Promise<Extract<WireMessage, { kind: 'result' }>>; };
+    const call = (method: string, ...args: unknown[]) => new Promise<Extract<WireMessage, { kind: 'result' }>>((resolve) => {
+        const mine = ++id;
+        results.set(mine, (m) => resolve(m as Extract<WireMessage, { kind: 'result' }>));
+        t.send(JSON.stringify({ kind: 'call', id: mine, method, args }));
+    });
     return { call, next, send: (frame: unknown) => t.send(JSON.stringify(frame)) };
 }
 
@@ -55,7 +68,8 @@ beforeEach(async () => {
         let welcome = await c.next();
         while (welcome.kind === 'pairing') welcome = await c.next();
         expect(welcome).toMatchObject({ kind: 'welcome', isOwner: who.isOwner });
-        if (!who.readonly) expect(await c.call('baton.take')).toMatchObject({ ok: true });
+        // Another device drives with the baton (this machine's own window does not need one).
+        if (auth === 'relay' && !who.readonly) expect(await c.call('baton.take')).toMatchObject({ ok: true });
         return c;
     };
 });

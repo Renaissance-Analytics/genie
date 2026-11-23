@@ -1783,7 +1783,9 @@ async function main(): Promise<void> {
         workspaces: hostRegistry.listWorkspaces(),
         workspaceName: workspaceNameFor,
         approvals: approvals.deckItems(),
-        trust: hostingStack?.trustDeckItems() ?? [],
+        // What its hosting asks, and what waits for a window to ask it in (WindowElevation): before the split a window read the
+        // latter from the hosting replica's dump; genie-host's own Deck says it now, to deck.watch and every client (2g-4d E2b).
+        trust: [...(hostingStack?.trustDeckItems() ?? []), ...hostingElevation.deckItems()],
         notices: [...limitNotices.items(Date.now()), ...playwrightInstaller.items(), ...stalledTurns.items()],
         attention: own.attention,
         inbox: own.inbox,
@@ -1808,6 +1810,8 @@ async function main(): Promise<void> {
     // store, a session, an approval or a Take Over touched. A front-door change touches it too, so the item appears and
     // leaves on deck.watch and the phones when the trust changes, not when something else happens to push.
     hostingStack?.onFrontDoorChange(() => { phoneTouch(); });
+    // An elevation that starts or stops waiting for a window: the Deck says it (2g-4d E2b).
+    hostingElevation.onChange(() => { phoneTouch(); });
     stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);
