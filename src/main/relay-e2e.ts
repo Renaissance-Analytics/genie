@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, verify, type KeyObject } from 'node:crypto';
+import { REMOTE_FRAME_MAX_BYTES } from '../core/remote-frame.js';
 import { jwkThumbprint, type Frame, type PopJwk } from './relay-wire.js';
 
 /**
@@ -22,10 +23,15 @@ import { jwkThumbprint, type Frame, type PopJwk } from './relay-wire.js';
  *   in an admitted member's place.
  * - Keys: HKDF-SHA256(X25519 shared, salt = th, info = "genie-relay-e2e v1 keys") → one per direction. The ephemerals
  *   are per connection; the long-lived keys only sign.
- * - Frames: AES-256-GCM. The nonce is the channel's id (rest 1, site 2) and a 64-bit counter kept per direction and
- *   channel, so no nonce repeats under a key; the AAD is the envelope the relay routes on (session, channel, kind,
- *   reqId) and the number. The receiver takes exactly the next number on each channel: a changed, repeated, dropped or
- *   reordered frame ends the session. Channels are counted apart because a relay may pace them apart.
+ * - Frames: AES-256-GCM. The nonce is the channel's id (rest 1, site 2, control 3) and a 64-bit counter kept per
+ *   direction and channel, so no nonce repeats under a key; the AAD is the envelope the relay routes on (session,
+ *   channel, kind, and reqId or its absence) and the number. The receiver takes exactly the next number on each channel:
+ *   a changed, repeated, dropped or reordered frame ends the session. Channels are counted apart because a relay may
+ *   pace them apart.
+ * - What is sealed: every `rest` and `site` frame, and on `control` what only the member may say after admission (a
+ *   grant renewal). The handshake itself, the proof and a close stay plain control frames.
+ * - A text payload is sealed as its own bytes (one type byte, then UTF-8), never re-encoded: sealing adds a fixed 17
+ *   bytes, so the size of a sealed frame is known from the size of its text ({@link E2E_REST_TEXT_MAX_BYTES}).
  * - A counter stops before 2^32: the session ends and the member connects again.
  * - There is one version and no plain path. Anything that is not exactly this is refused, and a cipher that refused once
  *   refuses everything after.
@@ -33,12 +39,27 @@ import { jwkThumbprint, type Frame, type PopJwk } from './relay-wire.js';
 
 const LABEL = 'genie-relay-e2e v1';
 const VERSION = 1;
-const CHANNEL_ID = { rest: 1, site: 2 } as const;
+const CHANNEL_ID = { rest: 1, site: 2, control: 3 } as const;
 type SealedChannel = keyof typeof CHANNEL_ID;
 const TAG_BYTES = 16;
 
 /** The most frames one direction of one channel carries in a session. */
 export const E2E_FRAME_LIMIT = 2 ** 32;
+
+/** A sealed text: this byte, then the text's UTF-8. Anything else: {@link SEALED_JSON}, then JSON of `{p, r, c}`. */
+const SEALED_TEXT = 1;
+const SEALED_JSON = 0;
+/** The type byte and the tag. */
+const SEAL_BYTES = 1 + TAG_BYTES;
+/** Room for a sealed frame's own envelope (kind, channel, a session id, the number): far more than it takes. */
+const ENVELOPE_ROOM_BYTES = 512;
+
+/**
+ * THE MOST TEXT ONE `rest` FRAME CARRIES (Tynn #579): with it, the SEALED frame as written to the relay (base64 of the
+ * ciphertext, in its envelope) is never over {@link REMOTE_FRAME_MAX_BYTES}, whatever the text holds. The host fits
+ * what it sends to this, so a frame too large is a refusal for its call or is not sent, never a frame over the cap.
+ */
+export const E2E_REST_TEXT_MAX_BYTES = Math.floor((REMOTE_FRAME_MAX_BYTES - ENVELOPE_ROOM_BYTES) / 4) * 3 - SEAL_BYTES;
 
 export type RelayE2eCode =
     /** Tynn named no usable key for the host. */
@@ -172,13 +193,13 @@ const objectOf = (value: unknown): Record<string, unknown> => (typeof value === 
 // ---- the frames --------------------------------------------------------------------------------------------------------
 
 export interface FrameCipher {
-    /** Seal a `rest` or `site` frame for the wire. Call it at the moment of the write: a sealed frame took its number. */
+    /** Seal a `rest`, `site` or `control` frame for the wire. Call it at the moment of the write: a sealed frame took its number. */
     seal(frame: Frame): Frame;
-    /** Open a `rest` or `site` frame from the wire, or throw: nothing that throws was delivered, and nothing after it will be. */
+    /** Open a sealed frame from the wire, or throw: nothing that throws was delivered, and nothing after it will be. */
     open(frame: Frame): Frame;
 }
 
-const isSealedChannel = (channel: string): channel is SealedChannel => channel === 'rest' || channel === 'site';
+const isSealedChannel = (channel: string): channel is SealedChannel => channel === 'rest' || channel === 'site' || channel === 'control';
 
 function nonceOf(channel: SealedChannel, n: number): Buffer {
     const nonce = Buffer.alloc(12);
@@ -187,7 +208,8 @@ function nonceOf(channel: SealedChannel, n: number): Buffer {
     return nonce;
 }
 
-const aadOf = (frame: Pick<Frame, 'sid' | 'channel' | 'kind' | 'reqId'>, n: number): Buffer => Buffer.from(JSON.stringify([VERSION, frame.sid, frame.channel, frame.kind, frame.reqId ?? '', n]), 'utf8');
+/** A frame with no reqId and one with an empty reqId are different frames: absence is `null`, never ''. */
+const aadOf = (frame: Pick<Frame, 'sid' | 'channel' | 'kind' | 'reqId'>, n: number): Buffer => Buffer.from(JSON.stringify([VERSION, frame.sid, frame.channel, frame.kind, frame.reqId === undefined ? null : frame.reqId, n]), 'utf8');
 
 /**
  * One end's cipher for a session: `send` seals what this end writes, `receive` opens what it reads. `sent` and `received`
@@ -195,8 +217,8 @@ const aadOf = (frame: Pick<Frame, 'sid' | 'channel' | 'kind' | 'reqId'>, n: numb
  */
 export function frameCipher(input: { send: Buffer; receive: Buffer; sid: string; sent?: Partial<Record<SealedChannel, number>>; received?: Partial<Record<SealedChannel, number>> }): FrameCipher {
     if (input.send.length !== 32 || input.receive.length !== 32) throw new RelayE2eError('state', 'a frame key is 32 bytes');
-    const sent: Record<SealedChannel, number> = { rest: input.sent?.rest ?? 0, site: input.sent?.site ?? 0 };
-    const received: Record<SealedChannel, number> = { rest: input.received?.rest ?? 0, site: input.received?.site ?? 0 };
+    const sent: Record<SealedChannel, number> = { rest: input.sent?.rest ?? 0, site: input.sent?.site ?? 0, control: input.sent?.control ?? 0 };
+    const received: Record<SealedChannel, number> = { rest: input.received?.rest ?? 0, site: input.received?.site ?? 0, control: input.received?.control ?? 0 };
     let dead = false;
     const refuse = (code: RelayE2eCode, detail: string): never => {
         dead = true;
@@ -205,25 +227,32 @@ export function frameCipher(input: { send: Buffer; receive: Buffer; sid: string;
     return {
         seal(frame) {
             if (dead) throw new RelayE2eError('state', 'this session was already refused');
-            if (!isSealedChannel(frame.channel)) return refuse('state', 'only rest and site frames are sealed');
+            if (!isSealedChannel(frame.channel)) return refuse('state', 'only rest, site and control frames are sealed');
             if (frame.sid !== input.sid) return refuse('state', 'a frame of another session');
             const n = sent[frame.channel] + 1;
             if (n >= E2E_FRAME_LIMIT) return refuse('limit', 'this session carried as many frames as one session may');
             sent[frame.channel] = n;
-            const inner: { p?: unknown; r?: string; c?: string } = {};
-            if (frame.payload !== undefined) inner.p = frame.payload;
-            if (frame.reason !== undefined) inner.r = frame.reason;
-            if (frame.code !== undefined) inner.c = frame.code;
+            let plain: Buffer;
+            if (typeof frame.payload === 'string' && frame.reason === undefined && frame.code === undefined) {
+                // Genie's own protocol text: its bytes as they are, so sealing never grows it by more than SEAL_BYTES.
+                plain = Buffer.concat([Buffer.from([SEALED_TEXT]), Buffer.from(frame.payload, 'utf8')]);
+            } else {
+                const inner: { p?: unknown; r?: string; c?: string } = {};
+                if (frame.payload !== undefined) inner.p = frame.payload;
+                if (frame.reason !== undefined) inner.r = frame.reason;
+                if (frame.code !== undefined) inner.c = frame.code;
+                plain = Buffer.concat([Buffer.from([SEALED_JSON]), Buffer.from(JSON.stringify(inner), 'utf8')]);
+            }
             const cipher = createCipheriv('aes-256-gcm', input.send, nonceOf(frame.channel, n));
             cipher.setAAD(aadOf(frame, n));
-            const c = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(inner), 'utf8')), cipher.final(), cipher.getAuthTag()]).toString('base64');
+            const c = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]).toString('base64');
             const sealed: Frame = { kind: frame.kind, channel: frame.channel, sid: frame.sid, payload: { e2e: VERSION, n, c } };
             if (frame.reqId !== undefined) sealed.reqId = frame.reqId;
             return sealed;
         },
         open(frame) {
             if (dead) throw new RelayE2eError('state', 'this session was already refused');
-            if (!isSealedChannel(frame.channel)) return refuse('state', 'only rest and site frames are sealed');
+            if (!isSealedChannel(frame.channel)) return refuse('state', 'only rest, site and control frames are sealed');
             const envelope = frame.payload as { e2e?: unknown; n?: unknown; c?: unknown } | null | undefined;
             if (typeof envelope !== 'object' || envelope === null || Array.isArray(envelope) || envelope.e2e !== VERSION) return refuse('plain', 'a frame that is not sealed');
             // What the relay could add beside the seal is not read, and not let through.
@@ -233,25 +262,31 @@ export function frameCipher(input: { send: Buffer; receive: Buffer; sid: string;
             if (n !== received[frame.channel] + 1) return refuse('sequence', 'a frame out of its order');
             if (typeof envelope.c !== 'string') return refuse('frame', 'a sealed frame with no ciphertext');
             const bytes = Buffer.from(envelope.c, 'base64');
-            if (bytes.length < TAG_BYTES) return refuse('frame', 'a sealed frame too short to be one');
-            let text: string;
+            if (bytes.length < SEAL_BYTES) return refuse('frame', 'a sealed frame too short to be one');
+            let plain: Buffer;
             try {
                 const decipher = createDecipheriv('aes-256-gcm', input.receive, nonceOf(frame.channel, n));
                 decipher.setAAD(aadOf(frame, n));
                 decipher.setAuthTag(bytes.subarray(bytes.length - TAG_BYTES));
-                text = Buffer.concat([decipher.update(bytes.subarray(0, bytes.length - TAG_BYTES)), decipher.final()]).toString('utf8');
+                plain = Buffer.concat([decipher.update(bytes.subarray(0, bytes.length - TAG_BYTES)), decipher.final()]);
             } catch {
                 return refuse('frame', 'a frame that does not open');
             }
+            const opened: Frame = { kind: frame.kind, channel: frame.channel, sid: frame.sid };
+            if (frame.reqId !== undefined) opened.reqId = frame.reqId;
+            if (plain[0] === SEALED_TEXT) {
+                received[frame.channel] = n;
+                opened.payload = plain.subarray(1).toString('utf8');
+                return opened;
+            }
             let inner: { p?: unknown; r?: unknown; c?: unknown };
             try {
-                inner = objectOf(JSON.parse(text));
+                if (plain[0] !== SEALED_JSON) throw new Error('not a sealed kind');
+                inner = objectOf(JSON.parse(plain.subarray(1).toString('utf8')));
             } catch {
                 return refuse('frame', 'a frame that opened to something else');
             }
             received[frame.channel] = n;
-            const opened: Frame = { kind: frame.kind, channel: frame.channel, sid: frame.sid };
-            if (frame.reqId !== undefined) opened.reqId = frame.reqId;
             if (inner.p !== undefined) opened.payload = inner.p;
             if (typeof inner.r === 'string') opened.reason = inner.r;
             if (typeof inner.c === 'string') opened.code = inner.c;

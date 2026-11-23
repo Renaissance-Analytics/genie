@@ -171,12 +171,13 @@ export function openRelayMember(input: {
             } catch (error) {
                 fresh = { ok: false, reason: error instanceof Error ? error.message : String(error) };
             }
-            if (closed || sid === null || ws.readyState !== OPEN) return;
+            if (closed || sid === null || cipher === null || ws.readyState !== OPEN) return;
             if (!fresh.ok) {
                 scheduleRenew(current, true);
                 return;
             }
-            ws.send(encodeFrame({ kind: 'data', channel: 'control', sid, payload: { type: 'grant-renew', grant: fresh.token } }));
+            // Inside the seal (relay-e2e.ts): only this member can hand the host a renewal, and the relay reads neither it nor the grant.
+            sendSealed({ kind: 'data', channel: 'control', sid, payload: { type: 'grant-renew', grant: fresh.token } });
             scheduleRenew(expiresAtOf(fresh.token));
         };
 
