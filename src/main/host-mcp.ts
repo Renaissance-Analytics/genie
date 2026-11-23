@@ -189,7 +189,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         }));
         // The action signal (the Dashboard row's "what it just did") for what runs HERE only: a forwarded call runs in the
         // window, which signals it there — signalled here too, it would show twice. hostRegistrations replaces a window
-        // tool's handler and calls a host tool's own only for what runs here (a `sites open` is forwarded, unsignalled).
+        // tool's handler and calls a host tool's own for what runs here (every host tool's action, `sites open` too since Tynn #1046 D2).
         const all = withActionSignal(tools0, resolveCaller, (agentId, kind, tool) => ports.signal({ kind: 'action', agentId, action: kind, tool }));
         // The plugins' tools run HERE (ADF A3): the host has their plugins, so nothing of theirs is forwarded to a window.
         const pluginNames = new Set((ports.plugins?.tools() ?? []).map((ref) => `${ref.pluginId}.${ref.tool.name}`));

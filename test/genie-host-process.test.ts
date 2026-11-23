@@ -203,14 +203,14 @@ describe('genie-host as its own process', () => {
         expect(JSON.parse(siteStatus.text)).toEqual({ ok: false, error: 'no site "teller" in this workspace; `sites list` shows them' });
         // A window tool: refused AT ONCE, in words (timed: a hang would be the failure).
         const t0 = Date.now();
-        // workspaceTabs: a workspace's tabs, in the person's window — still the window's (`sites open` is genie-host's since
-        // Tynn #1046 D2, answered above with the rest of `sites`).
-        const refused = await call('workspaceTabs', { action: 'list' });
+        // checkIssues: a window tool, open to every agent (workspaceTabs is offered only to a workspace's default agent, so its
+        // call is refused before any handler). `sites open` is genie-host's since Tynn #1046 D2, with the rest of `sites`.
+        const refused = await call('checkIssues', {});
         expect(refused.isError).toBe(true);
         // This host runs on plain Node under the test (tsx, no Electron), so hostCapabilities() gives it no window: the window
         // tool says it is not available on this host (P10.1d). An Electron host's "window, which is closed" wording is pinned
         // in mcp-host-tools.test.ts.
-        expect(refused.text).toBe(notAvailableHere('workspaceTabs', 'a Genie window'));
+        expect(refused.text).toBe(notAvailableHere('checkIssues', 'a Genie window'));
         expect(Date.now() - t0).toBeLessThan(5_000);
 
         // The next window: the question waits, the mail is there, the endpoint is the one agents were configured with.
