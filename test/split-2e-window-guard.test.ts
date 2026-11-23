@@ -67,7 +67,12 @@ describe('the window serves nothing (step 2e)', () => {
     const reach = valueReach('src/main/main.ts');
 
     it('POSITIVE CONTROL: the walk follows main.ts into what the window really loads', () => {
-        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/compose.ts']) expect(reach, file).toContain(file);
+        // compose.ts left the window in 2g-4d E (Tynn #955): window-tools.ts is the window's own module it reaches instead.
+        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/window-tools.ts']) expect(reach, file).toContain(file);
+    });
+
+    it('the window loads no composition: compose.ts is the tests’ (2g-4d E, Tynn #955)', () => {
+        expect(reach.has('src/main/compose.ts')).toBe(false);
     });
 
     it('no remote-serving module is loaded by the window', () => {
@@ -184,7 +189,7 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         expect(engineUses("import { X } from './session-engine-client.js';\n// client.flows()\nagentEngineLink.client.hosting();\nvoid client.call('engine.thing', []);\nlink?.client?.heartbeat(b);"))
             .toEqual(['call:engine.thing', 'heartbeat', 'hosting']);
         expect(ratchet([['newThing', 'move:2g']], []).joined).toEqual(['newThing']);
-        expect(ratchet([['hosting', 'window:chrome']], ['hosting']).relabelled).toEqual(['hosting']);
+        expect(ratchet([['issueWatch', 'window:chrome']], ['issueWatch']).relabelled).toEqual(['issueWatch']);
     });
 
     it('CONTROL: the scanner follows an alias of the engine client, and names a client handed over whole (Tynn #1007, 2g-4e)', () => {

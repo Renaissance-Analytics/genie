@@ -6,6 +6,7 @@ import type { AskerState } from '../core/deck-sources.js';
 import { type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1FlowImport } from './v1-flows.js';
+import { flowPillSignals } from '../core/flow-pill-signals.js';
 import { ensureFlowToolKinds } from './flow-tools.js';
 import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';

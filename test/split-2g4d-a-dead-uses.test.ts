@@ -130,8 +130,8 @@ describe('PROOF: compose reads no pty port, and adopts a pty only when it runs t
         expect(compose).toMatch(/input\.(supervisor|flowsEngine)\b/);
     });
 
-    it('main always hands compose genie-host’s supervisor', () => {
-        expect(main).toMatch(/^ {8}supervisor: agentEngineLink\.client\.supervisor\(\),$/m);
+    it('main hands compose no supervisor: it composes nothing (2g-4d E, Tynn #955)', () => {
+        expect(main).not.toMatch(/supervisor: agentEngineLink|composeWindowServices/);
     });
 
     it('nothing reads the ptys main listed at link-up, or its terminals’ spawn host: each is only written', () => {
@@ -233,8 +233,8 @@ describe('the window’s engine inventory', () => {
 
     it('has no row for the host tools’ forward or the Files watch', () => {
         for (const use of ['runHostTool', 'onFilesEvent', 'filesWatch', 'filesUnwatch']) expect(row(use), use).toBeNull();
-        // CONTROL: a row that stays is found.
-        expect(row('supervisor')).toBe('move:2g');
+        // CONTROL: a row that stays is found (supervisor left in 2g-4d E; the Tynn watches go in G-1, #934).
+        expect(row('issueWatch')).toBe('move:2g');
     });
 });
 
