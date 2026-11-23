@@ -86,12 +86,18 @@ let relay: ReturnType<typeof fakeRelay>;
 let link: ReturnType<typeof relayHostLink>;
 let active: Set<string>;
 let tickets: number;
+/** What the host link logged, and how many members it handed to RemoteHost (audit M-f). */
+let hostLog: string[];
+let admitted: number;
+let remote: RemoteHost;
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-relay-'));
     relay = fakeRelay(verifyHost);
     active = new Set(['g1']);
     tickets = 0;
+    hostLog = [];
+    admitted = 0;
     link = relayHostLink({
         socket: relay.socket,
         relayUrl: 'wss://relay.example.com',
@@ -104,8 +110,10 @@ beforeEach(async () => {
         },
         reconnect: { minMs: 0, maxMs: 0 },
         popTimeoutMs: 1_000,
+        log: (line) => { hostLog.push(line); },
     });
-    new RemoteHost({ confirm: allowEveryPairing,
+    link.onConnection(() => { admitted += 1; });
+    remote = new RemoteHost({ confirm: allowEveryPairing,
         api,
         hostName: 'alphar',
         baton: new Baton(),
@@ -197,8 +205,8 @@ describe('a member over the relay', () => {
         expect(t.closedBecause()).toMatch(/share link/);
     });
 
-    it('a READ-ONLY grant: reads work, a write is refused', async () => {
-        const opened = await member({ src: 'invite', cap: 'readonly', scope: ['workspace:tynn'] }, { bind: false });
+    it('a READ-ONLY grant, key proved: reads work, a write is refused', async () => {
+        const opened = await member({ src: 'invite', cap: 'readonly', scope: ['workspace:tynn'] });
         const c = wireClient((opened as { transport: ClientTransport }).transport);
         await c.hello({ kind: 'relay' });
         expect(await c.call('snapshot')).toMatchObject({ ok: true });
@@ -255,6 +263,61 @@ describe('a member over the relay', () => {
         const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
         await settle();
         expect(t.closedBecause()).toMatch(/proof-of-possession/);
+    });
+
+    /*
+     * AUDIT M-f (P9.1): a read-only grant used to be let in with no key binding at all, so for its 15 minutes it was a
+     * bearer token: whoever held a copy (the relay sees every one) could read the workspace. Every grant proves its key now.
+     */
+    const UNBOUND = 'this grant is not bound to a key, so nothing proves who holds it (no proof-of-possession binding, cnf). Nothing was sent. Connect again from a current Genie.';
+    const READ_ONLY: ReadonlyArray<[string, Record<string, unknown>]> = [
+        ['a READ-ONLY grant to one workspace', { src: 'share', share_origin: 'link', cap: 'readonly', scope: ['workspace:tynn'] }],
+        ['a READ-ONLY grant to the whole host', { src: 'share', share_origin: 'link', cap: 'readonly', scope: ['host:all'] }],
+        ['the OWNER’s own READ-ONLY grant', { src: 'owner', cap: 'readonly', scope: ['host:all'] }],
+    ];
+    for (const [what, claims] of READ_ONLY) {
+        it(`${what} with no key binding is refused like a control one: nobody is admitted, nothing is answered`, async () => {
+            const opened = await member(claims, { bind: false });
+            const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
+            const heard: string[] = [];
+            t.onMessage((text) => { heard.push(text); });
+            t.send(JSON.stringify({ kind: 'hello', auth: { kind: 'relay' }, label: 'laptop' }));
+            await settle();
+            expect(t.closedBecause()).toBe(UNBOUND);
+            // Fail closed: RemoteHost was never given this member, so no hello was answered and no Allow was raised.
+            expect(admitted).toBe(0);
+            expect(remote.connections()).toEqual([]);
+            expect(heard).toEqual([]);
+            // CONTROL: the same grant bound to the member's key, and proved, is admitted and reads.
+            const bound = wireClient(((await member(claims)) as { transport: ClientTransport }).transport);
+            expect(await bound.hello({ kind: 'relay' })).toMatchObject({ kind: 'welcome', readonly: true });
+            expect(admitted).toBe(1);
+            expect(await bound.call('snapshot')).toMatchObject({ ok: true });
+        });
+    }
+
+    it('a READ-ONLY grant, the WRONG key proved: refused, and nobody is admitted (CONTROL for the binding: it is checked, not only present)', async () => {
+        const opened = await member({ src: 'share', share_origin: 'link', cap: 'readonly', scope: ['workspace:tynn'] }, { prove: PopKeypair.generate() });
+        const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
+        await settle();
+        expect(t.closedBecause()).toBe('proof key does not match the grant binding');
+        expect(admitted).toBe(0);
+    });
+
+    it('the refusal is the same sentence for control and read-only, and the host’s log line holds no part of the grant', async () => {
+        const grants: string[] = [];
+        for (const cap of ['control', 'readonly']) {
+            const grant = mintGrant({ src: 'owner', cap, scope: ['host:all'] });
+            grants.push(grant);
+            const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant, pop: PopKeypair.generate() });
+            const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
+            await settle();
+            expect(t.closedBecause()).toBe(UNBOUND);
+        }
+        // CONTROL: the log did record both refusals, so "no part of the grant" is read from lines that exist.
+        expect(hostLog.filter((line) => line.endsWith(`ended: ${UNBOUND}`))).toHaveLength(2);
+        const logged = hostLog.join(' | ');
+        for (const grant of grants) for (const part of grant.split('.')) expect(logged).not.toContain(part);
     });
 
     it('a grant REVOKED in Tynn ends the session at the next revalidation', async () => {
