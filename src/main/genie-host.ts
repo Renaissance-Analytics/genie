@@ -116,6 +116,7 @@ import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
 import { remoteWatchFeed, remoteWatchOf } from '../core/remote-watch.js';
 import { settingsWatchFeed } from './settings-watch.js';
 import { hostRegistryAnswers, registryWatchFeed } from './registry-protocol.js';
+import { frontDoorViewOf, frontDoorWatchFeed } from '../core/front-door-watch.js';
 import { mailSignalsOfRead, mailSignalsOfSend } from '../core/mail-actions.js';
 import { sayThings } from '../core/thing-sounds.js';
 import { hostDraftPrune } from './host-draft-prune.js';
@@ -608,6 +609,14 @@ async function main(): Promise<void> {
     bootStep('hosting', stepAt);
     const hostingStack = hosting;
     hostingNow = hostingStack;
+    // THE FRONT DOOR, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #1046, 2g-4d-D1): its port, Genie's CA, the routes and each site's
+    // workspace, said on frontdoor.watch when they change: the front door itself, a site, an engine (the routes it serves) or a
+    // GApp's route. From this host's start, as the registry is (remote-access-host.ts `frontdoor`).
+    const frontDoorWatch = frontDoorWatchFeed({ read: () => frontDoorViewOf(hostingStack), onChange: (listener) => {
+        gappRouteListeners.add(listener);
+        const offs = [hostingStack?.onFrontDoorChange(listener) ?? (() => {}), hostingStack?.sites.onChange(listener) ?? (() => {}), hostingStack?.engines.onChange(listener) ?? (() => {}), () => { gappRouteListeners.delete(listener); }];
+        return () => { for (const off of offs) off(); };
+    } });
     // No hosting, no trust record: git in this host checks every folder's config first, as in a workspace not trusted.
     if (!hostingStack) setGitReadPolicy(trustAwarePolicy(() => false));
     /** The verdict as last read, without reading. A workspace not read yet, or a host with no hosting, is not trusted. */
@@ -1197,6 +1206,8 @@ async function main(): Promise<void> {
             alone: () => phoneApi,
             // main's window registry, from this host's start (Tynn #1007): before `alone` is built.
             registry: registryAnswers.registry,
+            // main's browser, from this host's start (Tynn #1046): its front door.
+            frontdoor: frontDoorWatch,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
             // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
@@ -1799,6 +1810,10 @@ async function main(): Promise<void> {
     // The estate every remote client hears, pushed whether or not a window is connected (Tynn #898).
     const phoneEstate = new Coalescer<'estate'>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: () => { phoneRegistry.touch(); }, schedule: realSchedule, now: () => Date.now() });
     const phoneTouch = () => { phoneEstate.request('estate'); };
+    // THE DECK FOLLOWS THE FRONT DOOR (Tynn #1010): its Trust item (trustDeckItems) is read with the estate, which only a
+    // store, a session, an approval or a Take Over touched. A front-door change touches it too, so the item appears and
+    // leaves on deck.watch and the phones when the trust changes, not when something else happens to push.
+    hostingStack?.onFrontDoorChange(() => { phoneTouch(); });
     stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);

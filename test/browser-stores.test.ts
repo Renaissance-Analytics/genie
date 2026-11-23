@@ -88,6 +88,7 @@ describe('the wires', () => {
     });
 
     it('the window says each site’s workspace', () => {
-        expect(strip('src/main/main.ts')).toMatch(/workspaceOf: Object\.fromEntries\(composed\.sites\.list\(\)/);
+        // From genie-host's front door, as frontdoor.watch says it (Tynn #1046).
+        expect(strip('src/main/main.ts')).toMatch(/workspaceOf: Object\.fromEntries\(frontDoorNow\.sites\.map\(/);
     });
 });
