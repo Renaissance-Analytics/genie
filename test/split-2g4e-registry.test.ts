@@ -198,8 +198,8 @@ describe('genie-host says registry.watch and registry.read to main’s own clien
 
 describe('genie-host’s host API: registry.write from main’s own client only; the reads and the watch beside it', () => {
     const base = { connectionId: 'c1', origin: 'local-window', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: OWN_CLIENT_LABEL } as const;
-    const deps = (registry?: { call(method: string, args: unknown[]): Promise<unknown>; dropped(): readonly string[] }) =>
-        ({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, ...(registry ? { registry } : {}) }) as unknown as HostApiDeps;
+    const deps = (registryFiles?: { call(method: string, args: unknown[]): Promise<unknown>; dropped(): readonly string[] }) =>
+        ({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, ...(registryFiles ? { registryFiles } : {}) }) as unknown as HostApiDeps;
 
     it('main’s own client writes through the host’s registry; a page in the window is refused and the registry never written', async () => {
         const call = vi.fn(async () => undefined);
@@ -300,7 +300,7 @@ describe('main’s side: a registry store over its own client', () => {
                 if (method.startsWith('write')) written();
                 return out;
             };
-            const built = buildHostApi({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, registry: { call, dropped: () => files.dropped }, registryWatch: feed } as unknown as HostApiDeps) as HostApi & { registryRead?(m: string): Promise<unknown>; registryWatch?(): unknown };
+            const built = buildHostApi({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, registryFiles: { call, dropped: () => files.dropped }, registryWatch: feed } as unknown as HostApiDeps) as HostApi & { registryRead?(m: string): Promise<unknown>; registryWatch?(): unknown };
             let emit: (channel: string, payload: unknown) => void = () => {};
             feed.subscribe((view) => emit(LOCAL_EVENTS.registry, view));
             const api = {
@@ -352,7 +352,7 @@ describe('wired: main’s registry is genie-host’s over the protocol, the engi
     it('genie-host feeds registry.watch from its store’s writes, and its host API says it on local-registry', () => {
         const host = code(src('src/main/genie-host.ts'));
         expect(host).toMatch(/const registryWatch = registryWatchFeed\(\{ dropped: \(\) => registryStore\.dropped, onWritten: \(listener\) => stores\.onEvent\(\(event\) => \{ if \(event\.store === 'registry'\) listener\(\); \}\) \}\);/);
-        expect(host).toMatch(/registry: \{ call: \(method, args\) => stores\.call\('registry', method, args\), dropped: \(\) => registryStore\.dropped \},/);
+        expect(host).toMatch(/registryFiles: \{ call: \(method, args\) => stores\.call\('registry', method, args\), dropped: \(\) => registryStore\.dropped \},/);
         expect(code(src('src/main/host-api.ts'))).toMatch(/deps\.registryWatch\?\.subscribe\(\(view\) => listener\(LOCAL_EVENTS\.registry, view\)\)/);
     });
 });

@@ -179,7 +179,7 @@ export interface HostApiDeps {
     windowView?: { userActive(active: boolean): void };
     approvalsGate?: (caller: import('./mcp-tools.js').Caller, action: string, detail: string, forwardedCallId: string | null) => Promise<'allowed' | 'denied' | 'expired'>;
     /** genie-host's registry, read and written by main's window registry (registry-protocol.ts; Tynn #1007). Absent = refused. */
-    registry?: { call(method: string, args: unknown[]): Promise<unknown>; dropped(): readonly string[] };
+    registryFiles?: { call(method: string, args: unknown[]): Promise<unknown>; dropped(): readonly string[] };
     /** That genie-host's registry was written, said to main's own client on registry.watch (Tynn #1007, 2g-4e). */
     registryWatch?: { now(): import('./registry-protocol.js').RegistryWatchView; subscribe(listener: (view: import('./registry-protocol.js').RegistryWatchView) => void): () => void };
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
@@ -815,11 +815,11 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             // A WRITE TO GENIE-HOST'S REGISTRY (Tynn #1007, 2g-4e): `local` keeps every other machine out, and of this machine's
             // connections only main's own client writes; the write is read strictly (registry-protocol.ts).
             case 'registry.write': {
-                if (!deps.registry) return { ok: false, reason: 'this host keeps no registry' };
+                if (!deps.registryFiles) return { ok: false, reason: 'this host keeps no registry' };
                 if (context.own !== true) return { ok: false, reason: 'the registry is written by Genie itself, never by a window' };
                 const write = readRegistryWrite(args);
                 if ('ok' in write) return write;
-                return deps.registry.call(write.method, write.args);
+                return deps.registryFiles.call(write.method, write.args);
             }
             // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
             case 'tynn.recheck':
@@ -946,7 +946,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         ...(deps.settingsWatch ? { settingsWatch: () => deps.settingsWatch!.now() } : {}),
         // genie-host's registry, for main's own client saying registry.watch and registry.read (Tynn #1007, 2g-4e).
         ...(deps.registryWatch ? { registryWatch: () => deps.registryWatch!.now() } : {}),
-        ...(deps.registry ? { registryRead: async (method: string) => (method === 'dropped' ? [...deps.registry!.dropped()] : deps.registry!.call(method, [])) } : {}),
+        ...(deps.registryFiles ? { registryRead: async (method: string) => (method === 'dropped' ? [...deps.registryFiles!.dropped()] : deps.registryFiles!.call(method, [])) } : {}),
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),

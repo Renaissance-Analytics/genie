@@ -2018,7 +2018,7 @@ async function main(): Promise<void> {
         settingsWatch,
         // This host's registry, read and written by this machine's window registry over the protocol (Tynn #1007, 2g-4e):
         // the same store calls the engine link carried, which keep the host's model following and its writes in order.
-        registry: { call: (method, args) => stores.call('registry', method, args), dropped: () => registryStore.dropped },
+        registryFiles: { call: (method, args) => stores.call('registry', method, args), dropped: () => registryStore.dropped },
         registryWatch,
         // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
         legacySecrets: legacyAdopt,
