@@ -1,6 +1,7 @@
 import './process-start.js';
 import './close-inherited-fds.js';
 // ^ FIRST but for process-start, which opens nothing: close inherited handles before a contributor opens its own.
+import { BUILT_IN_MCP_SERVERS } from '../core/agent-mcp.js';
 import { featureDownload } from './feature-download.js';
 import { HostFeatures } from './features-host.js';
 import { FeatureCallers } from './feature-callers.js';
@@ -1687,6 +1688,8 @@ async function main(): Promise<void> {
         launchBlocked: (account) => (account.configDir !== undefined && claudeSignIns.busy(account.configDir) ? 'That account is signing in; it starts once the sign-in is over.' : null),
         userData: home,
         ...engineHostOptions,
+        // The servers Genie provides to every agent (Tynn #1017; the Fancy Dev Kit's fancy-ui), each switchable off per workspace.
+        builtInMcpServers: BUILT_IN_MCP_SERVERS,
         // An agent's record, read per call (genie#1188), from this host's own registry: no window pushes records (Tynn #954).
         currentRecord: (id) => hostRegistry.find(id as AgentId) ?? null,
         // The window still plays the sound; the host decides whether the agent is nudged (it no longer asks a window to).

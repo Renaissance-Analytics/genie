@@ -116,6 +116,8 @@ export const ICON_NAMES: readonly string[] = [
     'eye-off', 'pause', 'play',
     // The header's update chip: download, then restart to install.
     'download', 'rotate-cw',
+    // The sound levels' Button in Settings → Notifications (components/SoundVolume.tsx, Tynn #1022): named by prop.
+    'sliders-horizontal',
     // The ArtBoard's "Open full size" Button. Its name reached Button as a prop, so the <Icon name> scan never saw it and
     // it rendered blank until the icon-prop scan (test/icons.test.ts, 2026-11-01) read Button props too.
     'maximize-2',

@@ -12,7 +12,7 @@ import { activeQuestion, type QuestionDraft, type QuestionDrafts } from '../../c
 import { resetScrollOnQuestionChange } from '../../core/question-scroll.js';
 import { QuestionForm } from './QuestionForm.js';
 import { QuestionVisualsContext } from './QuestionVisuals.js';
-import { PreviewFullButton, PreviewFullFrame } from './PreviewFull.js';
+import { MaximizeButton, PreviewFullButton, PreviewFullFrame } from './PreviewFull.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 
 /**
@@ -90,6 +90,9 @@ export interface QuestionAppProps {
     /** The drawer fills the window below its header (preview-full). */
     readonly drawerFull?: boolean;
     readonly onDrawerFull?: (full: boolean) => void;
+    /** The whole window maximized (Tynn #1019): main grows it to its display's work area (core/question-maximize.ts). */
+    readonly maximized?: boolean;
+    readonly onMaximize?: (on: boolean) => void;
 }
 
 /** The extensions the drawer shows as prose (Genie 1's: what its Document plugin claimed, minus binary .docx). */
@@ -146,8 +149,9 @@ function MediaBody({ path, media, onOpenInFiles }: { path: string; media: Questi
  * ever put IN the strip says `no-drag` itself (Genie 1's `.ask-head button`).
  */
 const DRAG = { WebkitAppRegion: 'drag' } as CSSProperties;
+const NO_DRAG = { WebkitAppRegion: 'no-drag' } as CSSProperties;
 
-export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile, onOpenInFiles, drawerFull = false, onDrawerFull, visuals = null }: QuestionAppProps) {
+export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile, onOpenInFiles, drawerFull = false, onDrawerFull, visuals = null, maximized = false, onMaximize }: QuestionAppProps) {
     // ESC IS LATER (Tynn #759; Genie 1's "PARK, never kill"): the question stays in Pending Questions with its draft;
     // Dismiss, which tells the agent, is never a key. Re-bound every render so it acts on the question now shown.
     useEffect(() => {
@@ -155,10 +159,13 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
         const onKey = (e: KeyboardEvent): void => {
             // Esc closes the file drawer first (Genie 1's), then is Later.
             // A drawer filling the window is put back before it is closed (core/preview-full.ts).
-            const action = questionWindowAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false }, { drawerOpen: drawer !== null, drawerFull });
+            const action = questionWindowAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false }, { drawerOpen: drawer !== null, drawerFull, maximized });
             if (action === 'restore-preview') {
                 e.preventDefault();
                 onDrawerFull?.(false);
+            } else if (action === 'restore-window') {
+                e.preventDefault();
+                onMaximize?.(false);
             } else if (action === 'close-drawer') {
                 e.preventDefault();
                 onCloseFile?.();
@@ -191,13 +198,15 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
     const kept = drafts?.[item.id] ?? view.drafts?.[item.id];
     const draft = kept && (kept.revision ?? 0) === (item.revision ?? 0) ? kept : undefined;
     return (
-        <div data-question-window={item.id} className="flex h-screen flex-col overflow-hidden bg-[var(--bg-0)] text-[var(--fg-1)]">
-            {/* THE HANDLE: fixed above the scroller, never inside it (genie#1298). Nothing in it is interactive. */}
+        <div data-question-window={item.id} data-question-maximized={maximized ? 'on' : 'off'} className="flex h-screen flex-col overflow-hidden bg-[var(--bg-0)] text-[var(--fg-1)]">
+            {/* THE HANDLE: fixed above the scroller, never inside it (genie#1298). Its one control, Maximize, says no-drag itself. */}
             <header data-question-drag="" style={DRAG} className="flex h-11 shrink-0 items-center gap-2 overflow-hidden whitespace-nowrap border-b border-[var(--border-1)] px-4">
                 <span className="min-w-0 truncate text-[14px] font-semibold">{item.agentName ?? 'An agent'} asks you</span>
                 {/* Which workspace asks, in its colour beside its name (genie#1300). */}
                 {item.workspaceName ? <span data-question-workspace={item.workspaceId ?? ''} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-3)]"><WorkspaceSwatch color={item.workspaceColor} />{item.workspaceName}</span> : null}
                 {item.at > 0 ? <time data-question-age="" dateTime={new Date(item.at).toISOString()} className="text-[12px] text-[var(--fg-4)]">{ageLabel(item.at, now)}</time> : null}
+                {/* MAXIMIZE (Tynn #1019): the whole window, not only a preview in it. In the strip, so it says no-drag itself. */}
+                {onMaximize ? <MaximizeButton maximized={maximized} onToggle={() => onMaximize(!maximized)} action="question-maximize" className="ml-auto shrink-0" style={NO_DRAG} /> : null}
             </header>
             {/* THE QUEUE (Tynn story #378): one row of tabs, always there, never taller — a question arriving adds a tab and moves nothing. */}
             <QuestionTabs queue={queue} selected={item.id} parked={parked} now={now} {...(onPick ? { onPick } : {})} />
@@ -220,6 +229,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                     onSubmit={(selections, notes) => onAnswer(selections, notes, item.id)}
                     {...(draft ? { initial: draft } : {})}
                     onDraft={(d) => onDraft?.(item.id, { ...d, revision: item.revision ?? 0 })}
+                    wide={maximized}
                 />
                 </QuestionVisualsContext.Provider>
             </main>
