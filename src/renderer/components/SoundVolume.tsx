@@ -1,5 +1,5 @@
 import { Button, Icon, Slider } from '@particle-academy/react-fancy';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ALERT_KINDS, SOUND_GROUPS, previewSound, type AlertKind } from '../../core/alerts.js';
 import { SOUND_LEVELS_SETTING, SOUND_MUTED_SETTING, SOUND_VOLUME_SETTING, eventLevel, masterLevel, previewVolume, withEventLevel } from '../../core/sound-volume.js';
 import { playPreviewSound } from '../alert-sound.js';
@@ -31,18 +31,35 @@ const TRACK = 'min-w-40 flex-1 [&_input]:h-5';
 
 type Values = Readonly<Record<string, boolean | string>>;
 
-/** A level the slider shows now, and the write it schedules once the hand stops; a new kept value (another window's) wins when nothing is pending. */
+/**
+ * A level the slider shows now, and the write it schedules once the hand stops; a new kept value (another window's) wins
+ * when nothing is pending. A WRITE STILL WAITING IS NEVER LOST: leaving the section (unmount) or the page going away
+ * (pagehide: the window closes or reloads) writes it at once. It used to be cleared, so a level set and left within the
+ * wait was not kept.
+ */
 function useLevel(saved: number, commit: (n: number) => void): [number, (n: number) => void] {
     const [draft, setDraft] = useState(saved);
     const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const waiting = useRef(saved);
     const commitRef = useRef(commit);
     commitRef.current = commit;
+    /** Write what is waiting, now, once. Nothing waiting: nothing written. */
+    const flush = useCallback(() => {
+        if (pending.current === null) return;
+        clearTimeout(pending.current);
+        pending.current = null;
+        commitRef.current(waiting.current);
+    }, []);
     useEffect(() => { if (pending.current === null) setDraft(saved); }, [saved]);
-    useEffect(() => () => { if (pending.current !== null) clearTimeout(pending.current); }, []);
+    useEffect(() => {
+        window.addEventListener('pagehide', flush);
+        return () => { window.removeEventListener('pagehide', flush); flush(); };
+    }, [flush]);
     const move = (n: number) => {
         setDraft(n);
+        waiting.current = n;
         if (pending.current !== null) clearTimeout(pending.current);
-        pending.current = setTimeout(() => { pending.current = null; commitRef.current(n); }, WRITE_AFTER_MS);
+        pending.current = setTimeout(flush, WRITE_AFTER_MS);
     };
     return [draft, move];
 }
