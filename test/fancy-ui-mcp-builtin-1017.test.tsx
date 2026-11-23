@@ -140,12 +140,18 @@ describe('the session host hands it to the provider', () => {
     // the SAME list, whatever the switches say. Each case runs down both paths and the two lists are compared, then
     // checked against what the case expects, so neither path can drift from the other unseen.
     const OTHER_FANCY: McpServer = { type: 'http', name: 'fancy-ui', url: 'http://127.0.0.1:2/mcp', headers: [] };
+    // SAME-ADDRESS-1017: the same server under another name (a workspace's own entry for the Fancy Dev Kit registry) is the
+    // same server: handed once, the one already there, whatever its name and however its address is written.
+    const SAME_ADDRESS: McpServer = { type: 'http', name: 'fancy-dev-kit', url: 'https://UI.particle.academy/mcp/', headers: [] };
+    const OTHER_ADDRESS: McpServer = { type: 'http', name: 'fancy-dev-kit', url: 'https://ui.particle.academy/other', headers: [] };
     const cases: ReadonlyArray<readonly [title: string, workspaceOff: readonly string[], own: Record<string, unknown>, others: readonly McpServer[], expected: readonly McpServer[]]> = [
         ['on by default', [], {}, [GENIE], [GENIE, FANCY_UI_MCP]],
         ['off for the workspace', ['fancy-ui'], {}, [GENIE], [GENIE]],
         ['off for the agent alone', [], { mcpOff: ['fancy-ui'] }, [GENIE], [GENIE]],
         ['off for the workspace, on for the agent: the agent’s own choice wins', ['fancy-ui'], { mcpOn: ['fancy-ui'] }, [GENIE], [GENIE, FANCY_UI_MCP]],
         ['a server of the same name already there: handed once, the one already there', [], {}, [GENIE, OTHER_FANCY], [GENIE, OTHER_FANCY]],
+        ['the same address under another name already there: handed once, the one already there', [], {}, [GENIE, SAME_ADDRESS], [GENIE, SAME_ADDRESS]],
+        ['CONTROL: another name at another address is another server: both handed', [], {}, [GENIE, OTHER_ADDRESS], [GENIE, OTHER_ADDRESS, FANCY_UI_MCP]],
     ];
     it.each(cases)('direct and prepared starts are handed the same servers: %s', async (_title, workspaceOff, own, others, expected) => {
         const direct = await launch(workspaceOff, false, own, others);
