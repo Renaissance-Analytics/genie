@@ -13,7 +13,7 @@ import { hostingRig, type HostingRig } from './helpers/hosting-rig.js';
  */
 
 const step: PrivilegedStep = { id: 'hosts', label: 'update the hosts file', step: { command: 'true', args: [] } as never };
-const call: ForwardedToolCall = { name: 'checkIssues', args: { action: 'list' }, headers: {}, caller: null };
+const call: ForwardedToolCall = { name: 'pages', args: { action: 'list' }, headers: {}, caller: null };
 
 let rig: HostingRig | null = null;
 afterEach(async () => { await rig?.close(); rig = null; });
@@ -23,7 +23,7 @@ describe('the host asks the window, never the browser\'s link', () => {
         rig = await hostingRig();
         await rig.window({ client: { onToolCall: async (c) => ({ text: `window ran ${c.name}`, isError: false }) } });
         await rig.window({ browser: true });
-        await expect(rig.server.forwardTool(call)).resolves.toEqual({ text: 'window ran checkIssues', isError: false });
+        await expect(rig.server.forwardTool(call)).resolves.toEqual({ text: 'window ran pages', isError: false });
     });
 
     it('an elevation is asked of the window when the browser linked after it', async () => {
@@ -47,6 +47,6 @@ describe('the host asks the window, never the browser\'s link', () => {
         await rig.window({ client: { onToolCall: async (c) => ({ text: `window ran ${c.name}`, isError: false }) } });
         expect(rig.server.windowConnected()).toBe(true);
         expect(rig.server.localWindowConnected()).toBe(true);
-        await expect(rig.server.forwardTool(call)).resolves.toEqual({ text: 'window ran checkIssues', isError: false });
+        await expect(rig.server.forwardTool(call)).resolves.toEqual({ text: 'window ran pages', isError: false });
     });
 });

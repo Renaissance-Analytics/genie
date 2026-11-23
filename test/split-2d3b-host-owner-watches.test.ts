@@ -8,7 +8,8 @@ import { droneRefusal } from '../src/core/workstation-role.js';
 import type { AppInboxDump } from '../src/main/app-inbox-host.js';
 import { FilesWatchHub, type FilesHubEvent } from '../src/main/files-watch-hub.js';
 import { hostAloneApi, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
-import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch, ownerRoute } from '../src/main/host-local-watches.js';
+import * as hostLocalWatches from '../src/main/host-local-watches.js';
+import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch } from '../src/main/host-local-watches.js';
 import { hostOwnerOps, restartAppSource, type HostOwnerSources } from '../src/main/host-owner-ops.js';
 import { LocalStagingArea } from '../src/main/local-staging-area.js';
 import { RemoteAccessHost, hostRemoteApi } from '../src/main/remote-access-host.js';
@@ -145,22 +146,18 @@ describe('the watch hubs have a host-local owner', () => {
         expect((heard[2] as { treeChanges?: unknown }).treeChanges).toBeUndefined();
     });
 
-    it('the owner route: genie-host\'s own owner is delivered here, an engine-link owner goes over the link', () => {
-        const local: unknown[] = [], remote: unknown[][] = [];
-        const send = ownerRoute<string>((e) => local.push(e), (o, e) => remote.push([o, e]));
-        send(HOST_LOCAL_OWNER, 'mine');
-        send('3f0c6a8e-uuid', 'theirs');
-        expect(local).toEqual(['mine']);
-        expect(remote).toEqual([['3f0c6a8e-uuid', 'theirs']]);
+    it('there is no owner route any more: no hub sends an owner\'s events over the engine link (the files hub since Tynn #1043, the Tynn hubs since #934 task #1474)', () => {
+        expect(Object.keys(hostLocalWatches).sort()).toEqual(['HOST_LOCAL_OWNER', 'hostFilesWatch', 'hostTynnWatch']);
     });
 
-    it('the real files hub sends genie-host\'s own view\'s batch here, and a window\'s over the link', async () => {
+    it('the real files hub sends genie-host\'s own view\'s batch here; a view under any other owner is told nowhere', async () => {
         let onPath: ((rel: string) => void) | null = null;
         const timers: Array<() => void> = [];
         const remote: unknown[][] = [];
         let hub: FilesWatchHub | null = null;
         const files = hostFilesWatch({ hub: () => hub, workspace: (id) => (id === 'tynn' ? { id, path: join(dir, 'tynn') } : null), recordDiskChanges: () => {} });
-        hub = new FilesWatchHub({ send: ownerRoute(files.deliver, (o, e) => remote.push([o, e])), source: (_root, cb) => { onPath = cb; return { close: () => {} }; }, schedule: (fn) => { timers.push(fn); return () => {}; }, now: () => 5 });
+        // As genie-host wires it: its own owner's events to its watch port; `remote` records what any other owner was sent.
+        hub = new FilesWatchHub({ send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) files.deliver(event); else remote.push([owner, event]); }, source: (_root, cb) => { onPath = cb; return { close: () => {} }; }, schedule: (fn) => { timers.push(fn); return () => {}; }, now: () => 5 });
         const heard: FilesHubEvent[] = [];
         files.port.subscribe((e) => heard.push(e));
         expect(await files.port.watch('v1', 'tynn', {})).toBe(true);
@@ -365,10 +362,11 @@ describe('local uploads on genie-host', () => {
 describe('the wiring', () => {
     const host = () => readFileSync('src/main/genie-host.ts', 'utf8');
 
-    it('genie-host\'s files hub sends its own owner\'s events here and no other owner\'s anywhere (Tynn #1043); its three Tynn hubs send theirs here, through one route', () => {
+    it('genie-host\'s files hub sends its own owner\'s events here and no other owner\'s anywhere (Tynn #1043); its three Tynn hubs send theirs here the same way (Tynn #934 task #1474)', () => {
         const src = host();
         expect(src).toMatch(/files = new FilesWatchHub\(\{[^\n]*send: \(owner, event\) => \{ if \(owner === HOST_LOCAL_OWNER\) hostFilesWatches\.deliver\(event\); \},/);
-        for (const kind of ['board', 'issues', 'features']) expect(src).toContain(`send: ownerRoute((event) => hostTynnWatches.deliver('${kind}', event)`);
+        for (const kind of ['board', 'issues', 'features']) expect(src).toContain(`send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostTynnWatches.deliver('${kind}', event); },`);
+        expect(src).not.toContain('ownerRoute');
     });
 
     it('genie-host hands its answers the watch ports and its owner operations, and stages its window\'s uploads', () => {

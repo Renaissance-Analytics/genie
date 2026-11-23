@@ -126,21 +126,26 @@ describe('checkIssues(refresh: true) — Tynn reads GitHub now', () => {
     });
 });
 
-describe('genie-host keeps the latest entry per project (P5c); main answers for a workspace through the replica', () => {
-    const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-    const host = readFileSync('src/main/issue-watch-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-    it('the client reports every entry; the tools are given the summary for a workspace', () => {
+describe('genie-host keeps the latest entry per project (P5c) and answers its own tools for a workspace (Tynn #934 task #1474)', () => {
+    const strip = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+    const src = strip('src/main/main.ts');
+    const host = strip('src/main/issue-watch-host.ts');
+    it('the client reports every entry; the tools are given the summary for a workspace, read from the host’s own state', async () => {
         expect(host).toMatch(/onEntry: \(entry\) => \{\s*this\.#latest\.set\(entry\.projectId, entry\);\s*this\.#delivered\.set\(entry\.projectId, this\.#now\(\)\);[\s\S]*?this\.#changed\(\);\s*\}/);
-        expect(src).toMatch(/return issueWatchNow\?\.summaryFor\(projectId\) \?\? \{ state: 'stopped', linked: projectId !== null \};/);
-        // Extended 2026-10-21: an agent that finds IssueWatch signed out has Genie ask Tynn again; genie-host's account since
-        // Tynn #959 (2g-3b), over main's own protocol client (tynn.recheck).
-        expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\), refresh: \(workspaceId\) => issueWatchRefreshFor\(workspaceId\), recheckSignIn: \(\) => \{ void ownProtocol\.call\('tynn\.recheck', \[\]\); \} \}/);
+        const { issueWatchSummaryOf } = await import('../src/main/issue-watch-replica.js');
+        const dump = { state: 'reconnecting' as const, reason: 'the socket closed', projects: { proj_1: { entry: ENTRY, deliveredAt: 7, recent: [] } } };
+        expect(issueWatchSummaryOf(dump, 'proj_1')).toEqual({ state: 'reconnecting', linked: true, reason: 'the socket closed', entry: ENTRY, deliveredAt: 7 });
+        expect(issueWatchSummaryOf(dump, 'proj_other')).toEqual({ state: 'reconnecting', linked: true, reason: 'the socket closed' });
+        expect(issueWatchSummaryOf(dump, null)).toEqual({ state: 'reconnecting', linked: false, reason: 'the socket closed' });
+        const port = strip('src/main/issue-watch-tools.ts');
+        expect(port).toMatch(/forWorkspace: \(workspaceId\) => issueWatchSummaryOf\(ports\.issueWatch\.dump\(\), ports\.projectFor\(workspaceId\)\),/);
+        // An agent that finds IssueWatch signed out has Genie ask Tynn again (2026-10-21): genie-host asks its own account.
+        expect(strip('src/main/genie-host.ts')).toMatch(/issueWatch: hostIssueWatchTools\(\{ issueWatch, projectFor: workspaceTynnProject, recheckSignIn: \(\) => \{ void recheckTynn\(\); \} \}\),/);
+        // The window answers for no workspace: it has no IssueWatch.
+        expect(src).not.toMatch(/issueWatchNow|issueWatchSummaryFor|issueWatchRefreshFor/);
     });
-    it('a refresh goes to the workspace’s Tynn project through the host’s client; unlinked or not running says so', () => {
-        expect(src).toMatch(/async function issueWatchRefreshFor\(workspaceId: string\): Promise<IssueWatchRefreshAnswer> \{/);
-        expect(src).toMatch(/if \(tynnProjectFor\(workspaceId\) === null\) return \{ ok: false, reason: 'this workspace is not linked to a Tynn project' \};/);
-        expect(src).toMatch(/if \(!issueWatchNow\) return \{ ok: false, reason: 'IssueWatch is not running' \};/);
-        expect(src).toMatch(/return issueWatchNow\.refresh\(workspaceId\);/);
+    it('a refresh goes to the workspace’s Tynn project through the host’s client; unlinked says so', () => {
+        expect(strip('src/main/issue-watch-tools.ts')).toMatch(/return \(await ports\.issueWatch\.call\('refresh', \[workspaceId\]\)\) as IssueWatchRefreshAnswer;/);
         // In the host: the refresh, then the repo switches read again (the GitHub panel's Watched repos).
         expect(host).toMatch(/if \(projectId === null\) return \{ ok: false, reason: 'this workspace is not linked to a Tynn project' \};/);
         expect(host).toMatch(/const answer = await this\.#client\.refresh\(projectId\);\s*void this\.#loadRepos\(projectId\);\s*return answer;/);
