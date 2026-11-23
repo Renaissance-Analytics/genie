@@ -114,7 +114,7 @@ import { type Platform } from '../core/toolchain.js';
 import { ensurePhpCaBundle, nodeToolchainFs, phpCaBundleNow, processEnv, restoreToolchainEnv } from './toolchain-ops.js';
 import { nodeLinkFs, restoreDefaultsEnv } from './toolchain-defaults.js';
 import { runElevatedBatch, type PrivilegedStep } from './elevate.js';
-import { nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
+import { nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, type PhpCaPort, type PhpVersionsPorts } from './php-versions.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView, followFrontDoorInPanes } from './electron-browser-view.js';
 import { BrowserCookieBridge } from './browser-cookie-bridge.js';
@@ -1097,14 +1097,6 @@ const phpVersionsBase = (): Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs' | 
  */
 const phpCaPorts = () => ({ platform: process.platform as Platform, fs: nodeToolchainFs(), dataDir: toolchainDataDir(), run: ((binary, args) => execFileRunner(binary, args, { timeoutMs: 120_000 })) as CommandRunner });
 const phpCa: PhpCaPort = { current: () => phpCaBundleNow(phpCaPorts()), ensure: () => ensurePhpCaBundle(phpCaPorts()) };
-/**
- * What a site start reads (genie#1043 part B): the managed versions, and Genie's toolchain PHP — PATH as the workers get
- * it, Genie's toolchain roots (Genie 1's, under the shared userData; Genie 2's own), and the opcache file cache's home.
- */
-const phpCgiBase = (): PhpCgiPorts => ({
-    ...phpVersionsBase(),
-    toolchainPhp: { path: process.env['PATH'] ?? '', genieRoots: [join(app.getPath('userData'), 'toolchain'), toolchainDataDir()], cacheDir: join(toolchainDataDir(), 'php-opcache') },
-});
 let featureEffectNow: ((connectionId: string, method: string, args: unknown[]) => Promise<unknown>) | null = null;
 /**
  * WINDOW-LOCAL CLIENT OPERATIONS genie-host asks of this window (Tynn #898 step 2d-4b; window-tunnel.ts): Delete moves a
@@ -1233,8 +1225,6 @@ async function boot(): Promise<void> {
         // WHAT ONLY THIS WINDOW CAN DO FOR GENIE-HOST (Tynn #898 step 2d-4b): Electron's trash, an app's window.
         onWindowOp: (op: string, args: unknown[]) => windowOps(op, args),
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
-        // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
-        phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
         onToolCall: (call: ForwardedToolCall) => (windowToolRun ? windowToolRun(call) : Promise.resolve({ text: `${call.name}: Genie's window is still starting; call it again in a moment. Nothing was done.`, isError: true })),
         // openFileForUser made while no window was here: shown now (once the tools are built).
         onOpenFileLater: (call: ForwardedToolCall) => { if (windowToolRun) void windowToolRun(call); else openFilesLater.push(call); },

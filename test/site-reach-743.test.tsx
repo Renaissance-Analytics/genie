@@ -138,13 +138,15 @@ async function shopAdded(r: HostingRig) {
     await settled(r);
 }
 
-function portsFor(w: Awaited<ReturnType<HostingRig['window']>>, opened: string[]): DeckAnswerPorts {
+function portsFor(r: HostingRig, opened: string[]): DeckAnswerPorts {
+    const stack = r.stack;
     return {
-        // The host's own Deck (Tynn #861): the answer is resolved against the items Genie's hosting stack holds.
-        deckItems: () => rig!.stack.trustDeckItems(),
+        // The host's own Deck (Tynn #861): the answer is resolved against the items Genie's hosting stack holds, and answered
+        // by that stack, as genie-host's own Deck ports are (genie-host.ts: `trustCertificate: () => hostingStack.trustCertificate()`).
+        deckItems: () => stack.trustDeckItems(),
         attention: {} as never, approvals: {} as never, inbox: {} as never,
-        trustCertificate: () => w.replica.trustCertificate(), deferTrustCertificate: () => w.replica.deferTrustCertificate(),
-        syncHosts: () => w.replica.syncHosts(), deferHosts: () => w.replica.deferHosts(),
+        trustCertificate: () => stack.trustCertificate(), deferTrustCertificate: () => stack.deferTrustCertificate(),
+        syncHosts: () => stack.syncHosts(), deferHosts: () => stack.deferHosts(),
         openExternal: async (url: string) => { opened.push(url); },
     } as DeckAnswerPorts;
 }
@@ -159,11 +161,11 @@ describe('Open in browser, end to end', () => {
 
     it('Open in browser → ONE prompt carrying the certificate AND the hosts file, then https://shop.gen opens; the row is gone', async () => {
         rig = await reachRig();
-        const w = await rig.window();
+        await rig.window();
         await shopAdded(rig);
         const item = rig.stack.trustDeckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX));
         const opened: string[] = [];
-        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, portsFor(w, opened));
+        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, portsFor(rig, opened));
         await settled(rig);
         expect(rig.elevationsAsked.map((b) => b.map((s) => s.id))).toEqual([['trust', HOSTS_STEP_ID]]);
         expect(opened).toEqual(['https://shop.gen']);
@@ -172,11 +174,11 @@ describe('Open in browser, end to end', () => {
 
     it('certificate already trusted → ONE prompt with the hosts file alone, then it opens', async () => {
         rig = await reachRig({ trusted: true });
-        const w = await rig.window();
+        await rig.window();
         await shopAdded(rig);
         const item = rig.stack.trustDeckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX));
         const opened: string[] = [];
-        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, portsFor(w, opened));
+        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, portsFor(rig, opened));
         await settled(rig);
         expect(rig.elevationsAsked.map((b) => b.map((s) => s.id))).toEqual([[HOSTS_STEP_ID]]);
         expect(opened).toEqual(['https://shop.gen']);
@@ -184,10 +186,10 @@ describe('Open in browser, end to end', () => {
 
     it('Not now → the row goes and nothing is asked of the computer', async () => {
         rig = await reachRig();
-        const w = await rig.window();
+        await rig.window();
         await shopAdded(rig);
         const item = rig.stack.trustDeckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX));
-        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'later' }, portsFor(w, []));
+        await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'later' }, portsFor(rig, []));
         await settled(rig);
         expect(genieRows(rig)).toEqual([]);
         expect(rig.elevationsAsked).toEqual([]);
@@ -196,11 +198,11 @@ describe('Open in browser, end to end', () => {
     it('a declined prompt opens nothing and says why', async () => {
         rig = await reachRig();
         const asked: string[][] = [];
-        const w = await rig.window({ client: { elevate: async (steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> => { asked.push(steps.map((s) => s.id)); return { ok: false, failed: null, error: 'The operation was canceled by the user.' }; } } as never });
+        await rig.window({ client: { elevate: async (steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> => { asked.push(steps.map((s) => s.id)); return { ok: false, failed: null, error: 'The operation was canceled by the user.' }; } } as never });
         await shopAdded(rig);
         const item = rig.stack.trustDeckItems().find((i) => i.id.startsWith(SITE_REACH_DECK_PREFIX));
         const opened: string[] = [];
-        await expect(answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, portsFor(w, opened))).rejects.toThrow(/canceled by the user/);
+        await expect(answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, portsFor(rig, opened))).rejects.toThrow(/canceled by the user/);
         expect(asked).toEqual([['trust', HOSTS_STEP_ID]]);
         expect(opened).toEqual([]);
     });

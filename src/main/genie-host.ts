@@ -69,7 +69,7 @@ import { ProcessSupervisor, osPidAlive } from './process-supervisor.js';
 import { endChildTrees } from './end-child-trees.js';
 import { LinkGate } from './linked-stream.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
-import { HostingService, WindowElevation } from './hosting-host.js';
+import { WindowElevation } from './hosting-host.js';
 import { AppInboxHost } from './app-inbox-host.js';
 import { shutDownHosted } from './host-shutdown.js';
 import { startBeat } from './safe-mode-beat.js';
@@ -529,9 +529,9 @@ async function main(): Promise<void> {
     const supervisedStream = supervisedLink.stream(supervisedClient.stream);
     /*
      * GENIE'S HOSTING (the host split, P5a): the front door, the service engines and the site routes are built HERE, under
-     * this host's supervisor, so sites stay served and routed with the UI closed; windows read and drive them through the
-     * service. This host never raises an OS prompt itself: an elevation is asked of a connected window, and with none it
-     * waits (WindowElevation) and the next window is told.
+     * this host's supervisor, so sites stay served and routed with the UI closed; windows read the front door on
+     * frontdoor.watch and drive the sites and services over the protocol (features.snapshot/act). This host never raises an
+     * OS prompt itself: an elevation is asked of a connected window, and with none it waits (WindowElevation).
      */
     const hostingElevation = new WindowElevation({
         connected: () => engineRef?.localWindowConnected() ?? false,
@@ -631,17 +631,6 @@ async function main(): Promise<void> {
     const hostMayWriteInto = (folder: string): Promise<boolean> => (hostingStack
         ? hostingStack.trust.mayWriteInto(folder)
         : Promise.resolve(!hostRegistry.workspaceStates().some((w) => w.path === folder)));
-    const hostingService = hostingStack ? new HostingService(hostingStack, {
-        workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
-        registeredFolders: () => hostRegistry.workspaceStates().map((w) => w.path),
-        elevation: hostingElevation,
-        // An engine's dependents name the running processes; the workspaces are the registry's.
-        onChange: (listener) => {
-            const off = processSupervisor.onChange(() => listener());
-            workspacesListeners.add(listener);
-            return () => { off(); workspacesListeners.delete(listener); };
-        },
-    }) : null;
     /*
      * THE TERMINALS (P3.3e): the `terminals` spawn-host child is this host's own now — its shells (and their scrollback)
      * outlive the window, and an agent's `manageTerminals` works with none. Windows drive them through the service.
@@ -1450,7 +1439,6 @@ async function main(): Promise<void> {
         // A window reaches the `processes` child only: `supervised` and `terminals` are this host's own (P3.3b, P3.3e).
         spawn: { send: (profile, frame) => { if (profile === 'processes') relay?.send('processes', frame); }, windowGone: () => relay?.windowGone() },
         terminals: terminalsService,
-        ...(hostingService ? { hosting: hostingService } : {}),
         appInbox: appInboxDoor,
         processes: processesService,
         cloneOffers: cloneOffersService,
@@ -2578,8 +2566,8 @@ async function main(): Promise<void> {
         onPtys: writePtys,
     });
 
-    // This host's OWN endpoint (a local socket or pipe, token-checked): every window here is local — the only kind sent the
-    // hosting, whose dump carries each workspace's service variables (P5a.2). P5d: a remote path accepts as not local.
+    // This host's OWN endpoint (a local socket or pipe, token-checked): every window here is local — the only kind asked to
+    // elevate for the hosting, or sent the local state (P5a.2). P5d: a remote path accepts as not local.
     server.on('connection', (socket) => engine.accept(lineTransport(socket), { local: true }));
 
     bootStep('spawn hosts', stepAt);

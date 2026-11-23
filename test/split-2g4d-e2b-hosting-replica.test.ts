@@ -57,7 +57,13 @@ describe('hosting-host.ts keeps the hosting’s types and the elevations, and no
 });
 
 describe('the plain-Node host boot script waits for genie-host’s front door, not for a replica’s dump', () => {
-    it('no hosting.dump in scripts/host-plain-node-boot.mjs', () => {
-        expect(src('scripts/host-plain-node-boot.mjs')).not.toMatch(/'hosting\.dump'/);
+    it('no hosting.dump in scripts/host-plain-node-boot.mjs: it reads genie-host’s Hosting over the protocol, tunnelled as a window’s', () => {
+        const script = src('scripts/host-plain-node-boot.mjs');
+        expect(script).not.toMatch(/'hosting\.dump'/);
+        // What it waits for instead: genie-host's own features snapshot, on a protocol connection tunnelled through the engine
+        // link (engine.protocol), and the front door it says there.
+        expect(script).toMatch(/method: 'engine\.protocol', args: \[op, 'boot', payload\]/);
+        expect(script).toMatch(/method: 'features\.snapshot'/);
+        expect(script).toMatch(/answer\.value\?\.hosting\?\.frontDoor/);
     });
 });
