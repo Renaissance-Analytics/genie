@@ -42,6 +42,12 @@ export interface HostRemoteApiPorts {
     readonly workspaceOfTerminal?: (terminalId: string) => string | null;
     /** Each workspace's folder (Tynn #691): how far a guest may browse. Absent = a guest browses nothing. */
     readonly workspacePaths?: () => Readonly<Record<string, string>>;
+    /**
+     * GENIE-HOST'S REGISTRY, FROM THE START (Tynn #1007, 2g-4e; registry-protocol.ts hostRegistryAnswers): what main's own
+     * client says registry.read and registry.watch for, and the local-registry event, ahead of the built answers (main's
+     * registry loads before they are). Absent = refused.
+     */
+    readonly registry?: { read(method: import('./registry-protocol.js').RegistryRead): Promise<unknown>; readonly watch: import('./registry-protocol.js').RegistryFeed };
 }
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
@@ -72,9 +78,12 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             let offAlone: (() => void) | null = null;
             const bind = () => { if (!offAlone) offAlone = alone()?.onEvent(listener, options) ?? null; };
             const offReady = ports.onAloneReady?.(bind); bind();
-            return () => { offReady?.(); offAlone?.(); };
+            // genie-host's registry is said from the start, not once its answers are built (Tynn #1007).
+            const offRegistry = ports.registry?.watch.subscribe((view) => listener(LOCAL_EVENTS.registry, view));
+            return () => { offReady?.(); offAlone?.(); offRegistry?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
+        ...(ports.registry ? { registryRead: (method: string) => ports.registry!.read(method as import('./registry-protocol.js').RegistryRead), registryWatch: () => ports.registry!.watch.now() } : {}),
         ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
         ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),

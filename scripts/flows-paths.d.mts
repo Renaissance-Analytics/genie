@@ -1,5 +1,6 @@
 export const FLOW_NAME: RegExp;
 export const WINDOW_PATH: readonly string[];
+export const WIRING: readonly string[];
 export const ALSO: readonly string[];
 export function srcFiles(root?: string): string[];
 export function runtimeImports(file: string, root?: string): { resolved: string[]; unresolved: string[] };

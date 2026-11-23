@@ -115,6 +115,7 @@ import { onTheClock } from '../core/tray-only.js';
 import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
 import { remoteWatchFeed, remoteWatchOf } from '../core/remote-watch.js';
 import { settingsWatchFeed } from './settings-watch.js';
+import { hostRegistryAnswers, registryWatchFeed } from './registry-protocol.js';
 import { mailSignalsOfRead, mailSignalsOfSend } from '../core/mail-actions.js';
 import { sayThings } from '../core/thing-sounds.js';
 import { hostDraftPrune } from './host-draft-prune.js';
@@ -169,7 +170,7 @@ import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
 import { APP_WINDOW, hostLocalPorts } from './host-local-ports.js';
 import { ProtocolTunnels } from './protocol-tunnels.js';
-import { hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
+import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
 import { hostOwnerOps } from './host-owner-ops.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { withComms } from './dashboard-comms.js';
@@ -485,6 +486,12 @@ async function main(): Promise<void> {
     // The agent's calls while a window runs them (P3.1): a window tool's approval in this queue ends with its call (genie#1360).
     const forwardedCalls = new Map<string, import('./mcp-tools.js').McpCall>();
     const stores = new AgentStoresService({ ...own, approvals, settings, drafts, registry: { store: registryStore, model: hostRegistry } }, { forwardedCall: (id) => forwardedCalls.get(id) });
+    // THE REGISTRY, AS MAIN'S OWN CLIENT READS, WATCHES AND WRITES IT (Tynn #1007, 2g-4e): a new revision each time its files
+    // are written, by whoever (a window, this host's own registry), on registry.watch; main's window registry reads them
+    // again. Built here, from the start, as the engine link's store calls were: main's registry loads before this host's
+    // own answers are built, so its RemoteHost answers these itself (remote-access-host.ts `registry`, `own`).
+    const registryWatch = registryWatchFeed({ dropped: () => registryStore.dropped, onWritten: (listener) => stores.onEvent((event) => { if (event.store === 'registry') listener(); }) });
+    const registryAnswers = hostRegistryAnswers({ call: (method, args) => stores.call('registry', method, args), dropped: () => registryStore.dropped }, registryWatch);
     // EVERY CHAT'S UNSENT DRAFT GOES WITH ITS AGENT (genie#1261; Tynn #997, 2g-4a): pruned here, over the roster loaded above, then
     // on each registry write whose roster changed. Sent when the roster changes, never on every snapshot.
     await hostDraftPrune({
@@ -1181,13 +1188,15 @@ async function main(): Promise<void> {
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
-            own: { 'updates.state': async () => updatesService.dump(), ...ownTakeOver,
+            own: { 'updates.state': async () => updatesService.dump(), ...ownTakeOver, ...registryAnswers.own,
                 // The account chips (Tynn #895): this host's book, for every client, window or not.
                 ...accountsOwnAnswers(() => accountsPortNow) },
             // Another machine's Take Over window closed: its TUI ends, or its sign-in is cancelled (Tynn #896).
             takeOverEnded: (terminalId) => { takeOverService.ended(terminalId); logins?.cancel(terminalId); hostScratchTerminals.windowClosed(terminalId); },
             // Every remote method and event, window or not (host-alone-api.ts; Tynn #898: none is sent to a window).
             alone: () => phoneApi,
+            // main's window registry, from this host's start (Tynn #1007): before `alone` is built.
+            registry: registryAnswers.registry,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
             // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
@@ -1426,8 +1435,6 @@ async function main(): Promise<void> {
         remoteAccess: remoteAccessService,
         stores,
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
-        // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
-        configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
         workstation: workstationService,
         takeOver: takeOverService,
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
@@ -1443,25 +1450,19 @@ async function main(): Promise<void> {
             setView: (view) => mcp!.setView(view as never),
             sessionServers: (record) => mcp!.sessionServers(record),
             status: () => mcp!.status(),
-            runNative: (call) => mcp!.runNative(call),
         },
         issueWatch,
         tynnBoard,
         tynnIssues,
         tynnFeatures,
         tynnPages: { read: readHostTynnPage },
-        files: {
-            subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
-            unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
-            dropOwner: (owner) => files?.dropOwner(owner),
-        },
     });
     engineRef = engine;
     // The watch runs on a thread of its own (Tynn #524): a build's thousands of changes never hold this host's loop.
     // THE FILE PANEL, AS GENIE-HOST'S OWN ANSWERS WATCH IT (Tynn #898 step 2d-3b): the same hub, under its own owner; a
     // batch feeds its files host's record of disk changes, as a window's main fed its own.
     const hostFilesWatches = hostFilesWatch({ hub: () => files, workspace: (id) => hostRegistry.workspace(id) ?? null, recordDiskChanges: (id, changes) => phoneFiles.recordDiskChanges(id, changes), log: say });
-    files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: ownerRoute(hostFilesWatches.deliver, (owner, event) => engine.filesEvent(owner, event)), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
+    files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostFilesWatches.deliver(event); }, workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
     // GENIE INSTALLS ITS PLAYWRIGHT BROWSERS ITSELF (Tynn #846): the stable set at launch when it has none, a version a
@@ -2012,6 +2013,9 @@ async function main(): Promise<void> {
         remoteWatch,
         // This host's settings, for what this machine's window reads (Tynn #998, 2g-4b1).
         settingsWatch,
+        // This host's registry, read and written by this machine's window registry over the protocol (Tynn #1007, 2g-4e):
+        // the same store calls the engine link carried, which keep the host's model following and its writes in order.
+        registryFiles: registryAnswers.files,
         // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): the window unseals it, this host keeps it in its own keychain and book.
         legacySecrets: legacyAdopt,
         // A window-run tool's approval, from this queue, tied to the agent's real call (Tynn #1006, 2g-4b2).

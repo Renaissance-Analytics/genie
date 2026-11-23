@@ -111,6 +111,8 @@ Object.assign(ROWS, {
     'keychain.adoptLegacy': [{ phase: 'removed', names: [] }], 'tynn.recheck': [],
     'approvals.gate': [{ agentId: 'agent_01ARZ3NDEKTSV4RRFFQ69G5FAV', agentName: 'a', workspaceId: 'ws', workspacePath: '/w' }, 'agents.create', 'x', null],
     'window.view': [{ userActive: true }],
+    // Tynn #1007 (2g-4e): this host has no registry files, and says so the same both ways.
+    'registry.write': ['writeAgents', [[]]],
 });
 type ResultFrame = Extract<WireMessage, { kind: 'result' }>;
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));

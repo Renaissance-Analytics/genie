@@ -14,9 +14,10 @@
  *  2. Everything the entries import at RUN TIME, transitively. `import type` / `export type … from` are left out: they
  *     cannot change what a flow does, and following them reaches half the app through shared port types. (Typecheck
  *     covers them on every PR anyway.)
- *  3. The WIRING — each file that imports a flow file at run time (compose.ts, feature-ipc.ts, main.ts, App.tsx, the MCP
+ *  3. The WIRING — each file that imports a flow file at run time (compose.ts, feature-ipc.ts, App.tsx, the MCP
  *     registrations…). The file itself, not what it imports: these are the app's hubs, and their own imports are the
- *     whole of Genie. They are where Flows are plugged in, so a change to them can unplug Flows.
+ *     whole of Genie. They are where Flows are plugged in, so a change to them can unplug Flows. A hub that plugs
+ *     Flows in and imports no flow file is named (WIRING below): the window's main.ts.
  *
  * Plus the suite itself, its config and this script. `test/flows-acceptance-ci.test.ts` holds every rule here.
  *
@@ -51,6 +52,14 @@ export const WINDOW_PATH = [
     // The window's preload (`preload.cjs`): the bridge the editor's load, save and run go through.
     'src/main/preload.ts',
 ];
+
+/**
+ * WIRING THE GRAPH CANNOT SEE — a hub that plugs Flows in and imports no flow file. The window's main.ts opens the flow
+ * editor window (`openFlowEditorWindow`) and hands compose genie-host's flows (`flowsEngine`). Since Tynn #1043 it builds
+ * no flow tool caller (a flow's steps run in genie-host), so it imports no flow module and the graph no longer finds it.
+ * The file itself joins the set, never what it imports. The test checks it still does both, so this cannot go stale.
+ */
+export const WIRING = ['src/main/main.ts'];
 
 /** Not under src/, and Flows all the same. A prefix ending in / is a directory. */
 export const ALSO = ['test/flows-acceptance/', 'vitest.flows.config.mts', 'scripts/flows-paths.mjs'];
@@ -115,6 +124,7 @@ export function flowsDependencySet(root = REPO) {
     }
     const flowSet = new Set(flowFiles);
     for (const f of files) if (graph.get(f).some((dep) => flowSet.has(dep))) set.add(f);
+    for (const f of WIRING) if (graph.has(f)) set.add(f);
     return [...set].sort();
 }
 
