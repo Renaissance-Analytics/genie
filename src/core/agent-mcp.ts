@@ -63,7 +63,7 @@ function mcpAddress(url: unknown): string | null {
  * hands itself can be compared this way: one a provider's own plugin loads never passes through Genie, which learns its
  * name (never its address) only once a session reports it.
  */
-export function sameMcpServer(handed: { readonly name: string; readonly url?: unknown }, builtIn: BuiltInMcpServer): boolean {
+export function sameMcpServer(handed: { readonly name: string; readonly url?: unknown }, builtIn: { readonly name: string; readonly url?: unknown }): boolean {
     if (handed.name === builtIn.name) return true;
     const address = mcpAddress(handed.url);
     return address !== null && address === mcpAddress(builtIn.url);
