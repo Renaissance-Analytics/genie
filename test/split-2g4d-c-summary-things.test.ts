@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { alertSound } from '../src/core/alerts.js';
 import { EMPTY_HOST_SUMMARY, hostSummaryFeed, hostSummaryOf, readHostSummary, type HostSummary } from '../src/core/host-summary.js';
 import { Baton, PairingPins } from '../src/core/remote.js';
 import { LOCAL_EVENTS, inMemoryPair, parseMessage, type ServerTransport, type WireMessage } from '../src/core/remote-protocol.js';
@@ -220,6 +221,57 @@ describe('genie-host says the sounds of what it runs', () => {
         for (const bad of [null, 7, 'exits', {}, { kind: 'exits' }, { agentId: 'a1', kind: 'exits' }, { agentId: null, kind: 'question' }, { agentId: null, kind: 'limit-alert' }, { agentId: null, kind: 'terminal-needs-you' }, { agentId: null, kind: 'account-switch' }, { agentId: null, kind: 'toString' }, { agentId: null, kind: ['exits'] }, { agentId: undefined, kind: 'exits' }]) {
             expect(readThingSignal(bad), JSON.stringify(bad)).toBeNull();
         }
+    });
+});
+
+describe('ACTIVITY SOUNDS ARE A CLIENT SETTING (the owner): genie-host only says that a thing happened', () => {
+    const SILENT = { notification_sounds: false, do_not_disturb: true, sound_exits: 'off', sound_siteup: 'off', sound_sitedown: 'off', sound_serviceup: 'off', sound_flowdone: 'off' };
+
+    it('the host says each thing whatever any sound setting is: it is handed no setting, and the same signals are silence in one client and sounds in another', () => {
+        const fire = { process: (_s: { id: string; state: string }) => {}, sites: () => {}, started: (_id: string) => {}, run: (_id: string, _run: { outcome: 'ran' | 'failed' | 'held' | 'stopped' }) => {} };
+        let sites = [{ id: 'site_a', state: 'running', processIds: ['site_a'] }];
+        const said: ThingActionSignal[] = [];
+        // Every sound off and Do not disturb on, in a settings store beside the sources: nothing of it reaches what is said.
+        const sources = {
+            settings: { snapshot: () => SILENT, data: () => ({ values: SILENT }) },
+            supervisor: { onChange: (l: typeof fire.process) => { fire.process = l; return () => {}; } },
+            sites: { list: () => sites, onChange: (l: () => void) => { fire.sites = l; return () => {}; } },
+            engines: { onStarted: (l: typeof fire.started) => { fire.started = l; return () => {}; } },
+            flows: { onRun: (l: typeof fire.run) => { fire.run = l; return () => {}; } },
+        };
+        sayThings(sources, (signal) => said.push(signal));
+        fire.process({ id: 'p1', state: 'running' }); fire.process({ id: 'p1', state: 'failed' });
+        sites = [{ id: 'site_a', state: 'exited', processIds: ['site_a'] }]; fire.sites();
+        sites = [{ id: 'site_a', state: 'running', processIds: ['site_a'] }]; fire.sites();
+        fire.started('engine_1');
+        fire.run('flow_1', { outcome: 'ran' });
+        expect(said).toEqual([{ agentId: null, kind: 'exits' }, { agentId: null, kind: 'sitedown' }, { agentId: null, kind: 'siteup' }, { agentId: null, kind: 'serviceup' }, { agentId: null, kind: 'flowdone' }]);
+        // The signal says what happened and nothing about a sound: no file, no volume, no mute.
+        for (const signal of said) expect(Object.keys(signal).sort()).toEqual(['agentId', 'kind']);
+        // THE CLIENT DECIDES, from its own settings: the same five signals are silence in one window...
+        expect(said.map((signal) => alertSound(signal.kind, SILENT))).toEqual([null, null, null, null, null]);
+        // ...and, CONTROL, sounds in another (so the silence above is the setting's, not a kind nobody plays).
+        const LOUD = { notification_sounds: true, sound_exits: 'synth', sound_siteup: 'synth', sound_sitedown: 'synth', sound_serviceup: 'synth', sound_flowdone: 'synth' };
+        for (const signal of said) expect(alertSound(signal.kind, LOUD), signal.kind).not.toBeNull();
+    });
+
+    it('nothing on the host side of the path reads a sound setting; the window that plays it does', () => {
+        const SETTING = /settings|sound_|notification_sounds|do_not_disturb|alertSound|volume|mute/i;
+        // CONTROL: the scan finds a setting read where there is one (the window's own decision).
+        const app = code(src('src/renderer/App.tsx'));
+        expect(app).toContain('if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));');
+        expect(SETTING.test(app)).toBe(true);
+        // The module that hears the things and says them: its only import is the kinds' type.
+        const things = code(src('src/core/thing-sounds.ts'));
+        expect([...things.matchAll(/^import .*$/gm)].map((m) => m[0].trim())).toEqual(["import type { AlertKind } from './alerts.js';"]);
+        expect(things).not.toMatch(SETTING);
+        // genie-host's own line, and main's line that hands the signal on: neither asks a setting.
+        const hostLine = code(src('src/main/genie-host.ts')).split('\n').filter((l) => l.includes('sayThings('));
+        expect(hostLine).toHaveLength(1);
+        expect(hostLine[0]).not.toMatch(SETTING);
+        const mainLine = code(src('src/main/main.ts')).split('\n').filter((l) => l.includes("signal.kind === 'thing'"));
+        expect(mainLine).toHaveLength(1);
+        expect(mainLine[0]).not.toMatch(SETTING);
     });
 });
 

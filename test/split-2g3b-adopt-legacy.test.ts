@@ -568,7 +568,7 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
     });
 
     it('genie-host’s summary reads its keychain and its GitHub account, and is poked on their changes', () => {
-        expect(host).toMatch(/keychainReady: keychainNow\?\.state\(\) === 'ready', githubBlocked: \(githubAccountNow\?\.view\(\)\.signal \?\? null\) !== null \}\)/);
+        expect(host).toMatch(/keychainReady: keychainNow\?\.state\(\) === 'ready', githubBlocked: \(githubAccountNow\?\.view\(\)\.signal \?\? null\) !== null \},\s*\{ processes: processSupervisor\.list\(\)/);
         expect(host).toMatch(/opened\.keychain\.onAnswerChange\(pokeSummary\); opened\.keyring\?\.onChange\(pokeSummary\);/);
         expect(host).toMatch(/githubOpening\.then\(\(account\) => \{ account\.onChange\(pokeSummary\); pokeSummary\(\); \}/);
         // Every client's Deck strip reads GitHub's block from here too.
