@@ -3,9 +3,10 @@ import type { AlertKind } from './alerts.js';
 /**
  * SOUND VOLUME (Tynn #1022; the owner, 2026-11-22: "can we add volume control to the sound system? And an advanced Volume
  * control for setting levels per event."). A master level (0–100) with a mute, and a level per alert kind (0–100, 100 when
- * never moved); what plays is master × event, as a 0..1 gain the one player (renderer/alert-sound.ts) applies. All three
- * are HOST settings (core/settings.ts), so every client of a host hears the same levels, and a change is heard at once:
- * the renderer reads them from the settings it already holds, nothing is cached.
+ * never moved); what plays is master × event, as a 0..1 gain the one player (renderer/alert-sound.ts) applies. All three are a
+ * CLIENT's (the owner's ruling: "activity sounds is a client setting"): not host settings — every registry key is kept
+ * in the host's one settings.json — but kept by each client (renderer/client-sound-settings.ts), and read at play time,
+ * so a change is heard on the next sound.
  *
  * Every reading is forgiving: a level that is not a number reads as 100, never as silence — a broken value must not
  * quietly turn every alert off.

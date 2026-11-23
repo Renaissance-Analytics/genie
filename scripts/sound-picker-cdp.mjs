@@ -13,12 +13,12 @@
  *   rows', and its text reads on it at >= 4.5:1), its play button included, in light AND dark → no check mark anywhere →
  *   every row is one height, and each name sits on one line.
  *
- *   Then SOUND VOLUME (Tynn #1022, checks V1-V22; the mouse is the required input, the keyboard an extra): the master slider and a kind's level moved with the mouse and saved on
+ *   Then SOUND VOLUME (Tynn #1022, checks V0-V22; the levels a CLIENT setting, kept in its localStorage, never the host's; the mouse is the required input, the keyboard an extra): the master slider and a kind's level moved with the mouse and saved on
  *   the host, mute inverted, Advanced listing every kind, and a preview played at master x level (the Audio's own volume).
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -260,6 +260,16 @@ async function dragRange(cdp, selector, from, to) {
     await sleep(200);
     return { width: at.width, height: at.height, row: at.row, reaches: at.reachFrom === 'input' && at.reachTo === 'input', before, pressed, after: await valueOf(cdp, selector) };
 }
+/**
+ * THE HOST'S SETTINGS, as its files hold them: every settings.json under this run's own home, read from disk. The levels
+ * are a CLIENT setting (the owner's ruling), so none of them may be here; the sound the picker chose above IS a host
+ * setting today, and is the control that the right file was read.
+ */
+function hostSettings() {
+    const files = readdirSync(home, { recursive: true }).map(String).filter((f) => f.replace(/[\\]/g, '/').endsWith('runtime/settings.json'));
+    return files.map((f) => { try { return { file: f, text: readFileSync(join(home, f), 'utf8') }; } catch { return { file: f, text: '' }; } });
+}
+const CLIENT_KEPT = `JSON.parse(localStorage.getItem('genie.client.sound-volume') ?? '{}')`;
 const valueOf = (cdp, selector) => cdp.evaluate(`Number(document.querySelector(${JSON.stringify(selector)})?.value ?? NaN)`);
 async function volumeProof(cdp) {
     const MASTER = '[data-sound-master] input[type="range"]';
@@ -285,7 +295,12 @@ async function volumeProof(cdp) {
     check(await click(cdp, '[data-settings-nav="general"]'), 'V5. away to General');
     await waitFor(cdp, `!document.querySelector(${JSON.stringify(MASTER)})`, 5_000);
     check(await click(cdp, '[data-settings-nav="notifications"]'), 'V6. and back to Notifications');
-    check(await waitFor(cdp, `Number(document.querySelector(${JSON.stringify(MASTER)})?.value) === ${master}`, 10_000), `V7. the master still reads ${master}%: it was saved on the host`, String(await valueOf(cdp, MASTER)));
+    check(await waitFor(cdp, `Number(document.querySelector(${JSON.stringify(MASTER)})?.value) === ${master}`, 10_000), `V7. the master still reads ${master}%: it was kept`, String(await valueOf(cdp, MASTER)));
+    const keptMaster = await cdp.evaluate(`${CLIENT_KEPT}.alert_volume ?? null`);
+    check(keptMaster === String(master), `V7b. it is kept by THIS CLIENT (its localStorage holds ${master})`, String(keptMaster));
+    const hs = hostSettings();
+    check(hs.length > 0 && hs.some((h) => /"sound_[a-z]+"\s*:/.test(h.text)), 'V7c. CONTROL: the host\'s settings.json is found, and holds the sound chosen above (a host setting today)', hs.map((h) => h.file).join(', ') || 'none found');
+    check(hs.length > 0 && hs.every((h) => !/"alert_(volume|muted|levels)"/.test(h.text)), 'V7d. and holds NONE of the levels: they never reach the host', hs.map((h) => `${h.file}: ${(h.text.match(/"alert_[a-z]+"/g) ?? []).join(' ') || 'no alert_ keys'}`).join('; '));
     // Mute: a button, inverted while on (its background is not the unmuted one), and saved.
     const bg = `(() => { const cv = document.createElement('canvas'); cv.width = cv.height = 1; const g = cv.getContext('2d'); g.fillStyle = '#000'; g.fillStyle = getComputedStyle(document.querySelector(${JSON.stringify(MUTE)})).backgroundColor; g.fillRect(0, 0, 1, 1); return [...g.getImageData(0, 0, 1, 1).data].join(','); })()`;
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, button: 'none', clickCount: 0 });
@@ -332,7 +347,12 @@ async function volumeProof(cdp) {
     await click(cdp, '[data-settings-nav="notifications"]');
     await waitFor(cdp, `Boolean(document.querySelector('[data-action="sound-levels-toggle"]'))`, 10_000);
     await click(cdp, '[data-action="sound-levels-toggle"]');
-    check(await waitFor(cdp, `Number(document.querySelector(${JSON.stringify(LEVEL)})?.value) === ${level}`, 10_000), `V20. "An agent finishes" still reads ${level}%: saved on the host`, String(await valueOf(cdp, LEVEL)));
+    check(await waitFor(cdp, `Number(document.querySelector(${JSON.stringify(LEVEL)})?.value) === ${level}`, 10_000), `V20. "An agent finishes" still reads ${level}%: it was kept`, String(await valueOf(cdp, LEVEL)));
+    const keptLevels = await cdp.evaluate(`JSON.parse(${CLIENT_KEPT}.alert_levels ?? '{}').finished ?? null`);
+    const keptMuted = await cdp.evaluate(`${CLIENT_KEPT}.alert_muted ?? null`);
+    check(keptLevels === level && keptMuted === true, `V20b. the level and the mute are kept by THIS CLIENT (finished ${level}, muted)`, `finished ${keptLevels}, muted ${keptMuted}`);
+    const hs2 = hostSettings();
+    check(hs2.length > 0 && hs2.every((h) => !/"alert_(volume|muted|levels)"/.test(h.text)), 'V20c. and the host\'s settings.json still holds none of them', hs2.map((h) => `${h.file}: ${(h.text.match(/"alert_[a-z]+"/g) ?? []).join(' ') || 'no alert_ keys'}`).join('; '));
     check(await waitFor(cdp, `Number(document.querySelector('[data-sound-level="question"] input[type="range"]')?.value) === 100`, 2_000), 'V21. CONTROL: a kind not moved is still 100%');
     // EXTRA, not instead of the mouse: the keyboard moves a level too (focus, then Left arrow presses).
     const KEY = '[data-sound-level="question"] input[type="range"]';

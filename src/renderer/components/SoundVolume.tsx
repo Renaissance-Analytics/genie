@@ -3,16 +3,20 @@ import { useEffect, useRef, useState } from 'react';
 import { ALERT_KINDS, SOUND_GROUPS, previewSound, type AlertKind } from '../../core/alerts.js';
 import { SOUND_LEVELS_SETTING, SOUND_MUTED_SETTING, SOUND_VOLUME_SETTING, eventLevel, masterLevel, previewVolume, withEventLevel } from '../../core/sound-volume.js';
 import { playPreviewSound } from '../alert-sound.js';
+import { clientSoundValues, setClientSound, useClientSound } from '../client-sound-settings.js';
 
 /**
  * SOUND VOLUME (Tynn #1022; the owner, 2026-11-22: "can we add volume control to the sound system? And an advanced Volume
  * control for setting levels per event."). Settings → Notifications: a master slider with a mute button, and an Advanced
- * disclosure listing every alert kind with its own level and a play button that previews it at master × its level. The
- * levels are host settings (core/sound-volume.ts), so every client hears the same, and the player reads them on every
- * sound: a change is heard on the next one, nothing restarts.
+ * disclosure listing every alert kind with its own level and a play button that previews it at master × its level.
  *
- * A slider follows the hand at once and writes when the hand settles (WRITE_AFTER_MS), so a drag is one host write, not
- * one per pixel. Selected states — mute on, Advanced open — are INVERTED, the sound picker's rule (Tynn #996).
+ * THE LEVELS ARE THIS CLIENT'S (the owner's ruling: "activity sounds is a client setting"): kept by this client's own store
+ * (renderer/client-sound-settings.ts), never written to the host, so each device sounds as its person set it. The player
+ * reads them on every sound: a change is heard on the next one, nothing restarts. The sound CHOSEN per kind still comes
+ * from `values`, the settings this block is given.
+ *
+ * A slider follows the hand at once and keeps the level when the hand settles (WRITE_AFTER_MS), so a drag is one write,
+ * not one per pixel. Selected states — mute on, Advanced open — are INVERTED, the sound picker's rule (Tynn #996).
  */
 const INVERTED = 'bg-[var(--selected-bg)] text-[var(--selected-fg)] hover:bg-[var(--selected-bg-hover)] dark:text-[var(--selected-fg)] dark:hover:bg-[var(--selected-bg-hover)]';
 const WRITE_AFTER_MS = 250;
@@ -26,9 +30,8 @@ const WRITE_AFTER_MS = 250;
 const TRACK = 'min-w-40 flex-1 [&_input]:h-5';
 
 type Values = Readonly<Record<string, boolean | string>>;
-type SetAction = { kind: 'settings.set'; key: string; value: boolean | string };
 
-/** A level the slider shows now, and the write it schedules once the hand stops; a new saved value from the host wins when nothing is pending. */
+/** A level the slider shows now, and the write it schedules once the hand stops; a new kept value (another window's) wins when nothing is pending. */
 function useLevel(saved: number, commit: (n: number) => void): [number, (n: number) => void] {
     const [draft, setDraft] = useState(saved);
     const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -48,27 +51,25 @@ function defaultPreview(values: Values): (kind: AlertKind, volume: number) => vo
     return (kind, volume) => playPreviewSound(previewSound(kind, values[`sound_${kind}`], values[`sound_${kind}_custom`]), volume);
 }
 
-export function SoundVolume({ values, onAction, onPreview }: {
+export function SoundVolume({ values, onPreview }: {
+    /** The settings the chosen sound per kind is read from (what a row's play button plays). */
     values: Values | null;
-    onAction?: ((action: SetAction) => void) | undefined; // RED STUB (Tynn #1022, client setting): still the host's
     /** What a row's play button does; the default plays the kind's chosen sound through the one player. */
     onPreview?: ((kind: AlertKind, volume: number) => void) | undefined;
 }) {
     const v: Values = values ?? {};
-    const muted = v[SOUND_MUTED_SETTING] === true;
+    const levels = useClientSound();
+    const muted = levels[SOUND_MUTED_SETTING] === true;
     const [open, setOpen] = useState(false);
-    const [master, moveMaster] = useLevel(masterLevel(v), (n) => onAction?.({ kind: 'settings.set', key: SOUND_VOLUME_SETTING, value: String(n) }));
-    // The latest saved map, so two rows moved one after the other each keep the other's level.
-    const levelsRaw = useRef(v[SOUND_LEVELS_SETTING]);
-    levelsRaw.current = v[SOUND_LEVELS_SETTING];
+    const [master, moveMaster] = useLevel(masterLevel(levels), (n) => setClientSound('alert_volume', String(n)));
     const preview = onPreview ?? defaultPreview(v);
-    // A row previews at the level its slider shows NOW, with the master as it shows now, not as last saved.
-    const live: Values = { ...v, [SOUND_VOLUME_SETTING]: String(master) };
+    // A row previews at the level its slider shows NOW, with the master as it shows now, not as last kept.
+    const live: Values = { ...levels, [SOUND_VOLUME_SETTING]: String(master) };
 
     return (
         <section data-sound-volume="" className="border-b border-[var(--border-1)] px-5 py-3">
             <div className="text-sm font-medium">Volume</div>
-            <div className="mb-2 text-xs text-[var(--fg-3)]">How loud every Genie sound plays, on every device using this host.</div>
+            <div className="mb-2 text-xs text-[var(--fg-3)]">How loud Genie’s sounds play on this device.</div>
             <div data-sound-master="" className="flex flex-wrap items-center gap-3">
                 <Button
                     type="button"
@@ -79,7 +80,7 @@ export function SoundVolume({ values, onAction, onPreview }: {
                     aria-label={muted ? 'Unmute sounds' : 'Mute sounds'}
                     title={muted ? 'Unmute' : 'Mute'}
                     className={`shrink-0 border border-[var(--border-1)] ${muted ? INVERTED : ''}`}
-                    onClick={() => onAction?.({ kind: 'settings.set', key: SOUND_MUTED_SETTING, value: !muted })}
+                    onClick={() => setClientSound('alert_muted', !muted)}
                 >
                     <Icon name={muted ? 'volume-x' : 'volume-2'} size="sm" />
                 </Button>
@@ -112,10 +113,11 @@ export function SoundVolume({ values, onAction, onPreview }: {
                                         key={k.kind}
                                         kind={k.kind}
                                         label={k.label}
-                                        saved={eventLevel(k.kind, v)}
+                                        saved={eventLevel(k.kind, levels)}
                                         playable={previewSound(k.kind, v[`sound_${k.kind}`], v[`sound_${k.kind}_custom`]) !== null}
-                                        commit={(n) => onAction?.({ kind: 'settings.set', key: SOUND_LEVELS_SETTING, value: withEventLevel(levelsRaw.current, k.kind, n) })}
-                                        onPlay={(level) => preview(k.kind, previewVolume(k.kind, { ...live, [SOUND_LEVELS_SETTING]: withEventLevel(levelsRaw.current, k.kind, level) }))}
+                                        // Read the map as kept NOW, so two rows moved one after the other each keep the other's level.
+                                        commit={(n) => setClientSound('alert_levels', withEventLevel(clientSoundValues()[SOUND_LEVELS_SETTING], k.kind, n))}
+                                        onPlay={(level) => preview(k.kind, previewVolume(k.kind, { ...live, [SOUND_LEVELS_SETTING]: withEventLevel(levels[SOUND_LEVELS_SETTING], k.kind, level) }))}
                                     />
                                 ))}
                             </ul>
