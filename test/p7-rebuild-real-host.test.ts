@@ -250,11 +250,16 @@ describe.each([
         expect(after.flows).toContain('the flow that came back');
         // The threads, byte for byte, and each agent still on its own.
         for (const [name, text] of Object.entries(THREADS)) expect(readFileSync(join(home, 'runtime', 'sessions', name), 'utf8')).toBe(text);
-        // The registry on disk is the one the old machine left, record for record (the host's own agent, which it keeps
-        // there too, with the same id: the first GREEN run showed it), and the two agents are on their threads.
-        const onThread = (root: string): string[] => (JSON.parse(readFileSync(join(root, 'runtime', 'agents.json'), 'utf8')) as Array<{ id: string; threadId: string | null }>).map((r) => `${r.id} ${r.threadId}`).sort();
-        expect(onThread(home)).toEqual(onThread(origin));
-        expect(onThread(home)).toEqual(expect.arrayContaining(agents.map((a) => `${a.id} ${a.threadId}`)));
+        // The registry on disk: every record the old machine left is there UNCHANGED, whole, and the two agents are on
+        // their threads. The one record a host may add is its own agent (registry.ts seeds the Genie agent, in no
+        // workspace, when it has none: two runs showed it added here and not on the old machine).
+        const recordsOf = (root: string): Array<{ id: string; threadId: string | null; workspaceId: string }> => JSON.parse(readFileSync(join(root, 'runtime', 'agents.json'), 'utf8')) as Array<{ id: string; threadId: string | null; workspaceId: string }>;
+        const left = recordsOf(origin);
+        const now = recordsOf(home);
+        expect(left.length).toBeGreaterThanOrEqual(2);
+        for (const record of left) expect(now.find((r) => r.id === record.id)).toEqual(record);
+        expect(now.filter((r) => !left.some((l) => l.id === r.id)).map((r) => r.workspaceId).filter((w) => w !== '__genie__')).toEqual([]);
+        expect(now.map((r) => `${r.id} ${r.threadId}`)).toEqual(expect.arrayContaining(agents.map((a) => `${a.id} ${a.threadId}`)));
     });
 
     it('EVERY MACHINE FILE A HOST MAKES AT START IS MADE AGAIN, for this root', () => {

@@ -118,10 +118,12 @@ async function startHost(): Promise<Running> {
 }
 
 interface Window { client: SessionEngineClient; own: OwnProtocolClient; close(): void }
+/** The thread each agent's provider named: a window hears it and writes it to the registry (main.ts does); this row is that window. */
+const threadHeard = new Map<string, string>();
 async function windowOn(host: Running): Promise<Window> {
     const token = readFileSync(join(runtime, 'host.token'), 'utf8').trim();
     const transport = await connectSocket(host.record.endpoint);
-    const client = new SessionEngineClient({ env: () => ({ ...process.env, GENIE2_CODEX_BINARY: STUB }) });
+    const client = new SessionEngineClient({ env: () => ({ ...process.env, GENIE2_CODEX_BINARY: STUB }), onThreadId: (agentId, threadId) => { threadHeard.set(agentId, threadId); } });
     const connected = await client.connect(transport, token);
     if (!(connected as { ok?: boolean }).ok) throw new Error(`the window was refused: ${JSON.stringify(connected)}`);
     const own = ownProtocolClient();
@@ -164,7 +166,13 @@ function threads(): Map<string, Buffer> {
 const providerPids = (): number[] => {
     try { return (JSON.parse(readFileSync(join(runtime, 'children.json'), 'utf8')) as { records: Array<{ processes: Array<{ pid: number }> }> }).records.flatMap((r) => r.processes.map((p) => p.pid)); } catch { return []; }
 };
-const registryOnDisk = (): Array<{ id: string; threadId: string | null }> => JSON.parse(readFileSync(join(runtime, 'agents.json'), 'utf8')) as Array<{ id: string; threadId: string | null }>;
+const registryOnDisk = (): AgentRecord[] => JSON.parse(readFileSync(join(runtime, 'agents.json'), 'utf8')) as AgentRecord[];
+/** Every record that was left is there unchanged; anything more is the host's own agent, which is in no workspace. */
+const keptWhole = (left: readonly AgentRecord[], now: readonly AgentRecord[]): string => {
+    const changed = left.filter((l) => JSON.stringify(now.find((r) => r.id === l.id)) !== JSON.stringify(l)).map((l) => l.name);
+    const added = now.filter((r) => !left.some((l) => l.id === r.id) && r.workspaceId !== '__genie__').map((r) => r.name);
+    return [...changed.map((n) => `${n} changed or gone`), ...added.map((n) => `${n} added`)].join('; ');
+};
 
 /** Everything under the root, relative; a folder some rule lists whole is one entry. */
 function entriesOf(): string[] {
@@ -237,8 +245,11 @@ async function main(): Promise<void> {
     const pidsBefore = await until('two providers in the spawn ledger', 30_000, () => { const p = providerPids(); return p.length >= 2 ? p : null; });
     for (const p of pidsBefore) everPids.add(p);
     check(pidsBefore.every(pidAlive), '3-two-providers-running', `pids ${pidsBefore.join(', ')}`);
-    const recorded = await until('each agent’s thread on record', 60_000, () => { const r = registryOnDisk().filter((x) => agents.some((a) => a.id === x.id)); return r.length === 2 && r.every((x) => typeof x.threadId === 'string' && x.threadId.length > 0) ? r : null; }).catch(() => null);
-    check(recorded !== null, '4-each-agent-has-a-thread-on-record', recorded ? recorded.map((r) => r.threadId).join(', ') : `agents.json says ${JSON.stringify(registryOnDisk().map((r) => r.threadId))}`);
+    await until('the host to name each agent’s thread', 60_000, () => agents.every((a) => threadHeard.has(a.id))).catch(() => null);
+    const withThreads = registryOnDisk().map((r) => (threadHeard.has(r.id) ? { ...r, threadId: threadHeard.get(r.id)! } : r));
+    const wrote = agents.every((a) => threadHeard.has(a.id)) && (await ask(w1.own, 'registry.write', ['writeAgents', [withThreads]])).ok;
+    const recorded = wrote ? await until('each agent’s thread on record', 30_000, () => { const r = registryOnDisk().filter((x) => agents.some((a) => a.id === x.id)); return r.length === 2 && r.every((x) => typeof x.threadId === 'string' && x.threadId.length > 0) ? r : null; }).catch(() => null) : null;
+    check(recorded !== null, '4-each-agent-has-a-thread-on-record', recorded ? recorded.map((r) => r.threadId).join(', ') : `heard ${threadHeard.size} of 2; agents.json says ${JSON.stringify(registryOnDisk().map((r) => r.threadId))}`);
     const growing = threads();
     await sleep(2_000);
     const grown = threads();
@@ -250,7 +261,7 @@ async function main(): Promise<void> {
     w1.close();
 
     step('2.1 the machine goes: the host and its providers are killed, mid-conversation');
-    const registryBefore = JSON.stringify(registryOnDisk().map((r) => `${r.id} ${r.threadId}`).sort());
+    const registryLeft = registryOnDisk();
     const oldToken = readFileSync(join(runtime, 'host.token'), 'utf8');
     first.child.kill('SIGKILL');
     await until('the host to be gone', 15_000, () => first.child.exitCode !== null || first.child.signalCode !== null);
@@ -275,7 +286,7 @@ async function main(): Promise<void> {
     const notMade = atStart.filter((p) => !existsSync(join(home, ...p.split('/'))));
     check(atStart.length > 5 && notMade.length === 0, '11-machine-files-made-again', notMade.length > 0 ? `not made: ${notMade.join(', ')}` : `${atStart.length} at-start path(s)`);
     check(readFileSync(join(runtime, 'host.token'), 'utf8') !== oldToken && second.record.pid !== first.record.pid, '12-a-new-token-and-a-new-host');
-    check(JSON.stringify(registryOnDisk().map((r) => `${r.id} ${r.threadId}`).sort()) === registryBefore, '13-registry-record-for-record');
+    check(registryLeft.length >= 2 && keptWhole(registryLeft, registryOnDisk()) === '', '13-registry-record-for-record', keptWhole(registryLeft, registryOnDisk()));
 
     step('3.2 it says what it could not restore');
     const w2 = await windowOn(second);
@@ -289,7 +300,7 @@ async function main(): Promise<void> {
     check(!/rpk_|test-word|PRIVATE KEY/.test(JSON.stringify(deckAfter)), '17-no-secret-is-said');
 
     step('3.3 each agent goes on in its own thread');
-    const records = (JSON.parse(readFileSync(join(runtime, 'agents.json'), 'utf8')) as AgentRecord[]).filter((r) => agents.some((a) => a.id === r.id));
+    const records = registryOnDisk().filter((r) => agents.some((a) => a.id === r.id));
     for (const record of records) await startWorking(w2, record);
     for (const p of providerPids()) everPids.add(p);
     await sleep(2_500);
@@ -297,7 +308,8 @@ async function main(): Promise<void> {
     const same = [...threadsLeft].filter(([name, bytes]) => { const now = threadsNow.get(name); return now !== undefined && now.length > bytes.length && now.subarray(0, bytes.length).equals(bytes); });
     check(threadsLeft.size >= 2 && same.length === threadsLeft.size, '18-the-same-threads-longer-now', `${same.length} of ${threadsLeft.size} thread log(s) kept their beginning and grew`);
     check([...threadsNow.keys()].every((name) => threadsLeft.has(name)), '19-no-new-thread-was-begun', `${threadsNow.size} now, ${threadsLeft.size} before`);
-    check(JSON.stringify(registryOnDisk().map((r) => `${r.id} ${r.threadId}`).sort()) === registryBefore, '20-still-the-threads-on-record');
+    const threadsOnRecord = (records: readonly AgentRecord[]): string => JSON.stringify(records.filter((r) => agents.some((a) => a.id === r.id)).map((r) => `${r.id} ${r.threadId}`).sort());
+    check(threadsOnRecord(registryOnDisk()) === threadsOnRecord(registryLeft) && !threadsOnRecord(registryLeft).includes('null'), '20-still-the-threads-on-record', threadsOnRecord(registryOnDisk()));
 
     step('4 everything under the root is in a list');
     const unlisted = entriesOf().filter((p) => classifyDataPath(p) === null);
