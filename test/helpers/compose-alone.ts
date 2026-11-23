@@ -10,6 +10,7 @@ import { ProcessSupervisor } from '../../src/main/process-supervisor.js';
 import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from '../../src/main/remote-access-host.js';
 import { RemoteAccessReplica } from '../../src/main/remote-access-replica.js';
 import { SettingsStore } from '../../src/main/settings-store.js';
+import type { PtyPort } from '../../src/main/terminal-host.js';
 
 /**
  * GENIE-HOST'S REMOTE ACCESS, AS A TEST THAT COMPOSES ALONE READS IT (Tynn #898 step 2d-4b2). A client serves no remote
@@ -45,7 +46,7 @@ export function remoteAccessAlone(home: string, now: () => number = Date.now, ho
  * gets `remoteAccessAlone`, closed when the services shut down. `remoteHost` names that host and where its connections
  * come from (a test that pairs a device or admits a Pilot): it is opened at once and read, as main reads it at link-up.
  */
-export async function composeServices(input: Omit<ComposeInput, 'agentStores' | 'remoteAccess'> & { readonly remoteAccess?: ComposeInput['remoteAccess']; readonly remoteHost?: { readonly hostName: string; readonly transport: ServerTransport } }): Promise<ComposedServices<OwnAgentStores>> {
+export async function composeServices(input: Omit<ComposeInput, 'agentStores' | 'remoteAccess'> & { /** The pty engine of the supervisor this test runs itself; `processPty` when it is another (the spawn host's). compose reads neither (Tynn #1043). */ readonly pty: PtyPort; readonly processPty?: PtyPort; readonly remoteAccess?: ComposeInput['remoteAccess']; readonly remoteHost?: { readonly hostName: string; readonly transport: ServerTransport } }): Promise<ComposedServices<OwnAgentStores>> {
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
     const alone: ComposeAlone = {

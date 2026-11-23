@@ -80,7 +80,7 @@ describe('what createAgent does', () => {
 
     it('the person declines: nothing is created, and the agent is told', async () => {
         const h = harness({ verdict: 'denied' });
-        expect(parse(await h.call('k-atlas', { name: 'scout', provider: 'codex', instructions: 'Review PRs.' }))).toEqual({ ok: false, error: 'The person declined: no agent was created.' });
+        expect(parse(await h.call('k-atlas', { name: 'scout', provider: 'codex', instructions: 'Review PRs.' }))).toEqual({ ok: false, error: 'creating the agent was denied by the person; no agent was created' });
         expect(h.registered).toEqual([]);
     });
 

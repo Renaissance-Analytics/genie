@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 /**
  * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
  * `window.genieTest.updates` on the same page bridge the Dashboard signal strip uses.
@@ -119,6 +120,7 @@ try {
     }
 
     // Click the door rather than call the bridge: this is the path a person takes.
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     await cdp.evaluate('document.querySelector("[data-signal=update]").click(); true');
     const downloading = await until(cdp, (s) => s.phase === 'downloading' || s.phase === 'downloaded', 10_000, 'download to start');
     check(downloading.phase === 'downloading' || downloading.phase === 'downloaded', '8. clicking the signal starts the download', downloading.phase);

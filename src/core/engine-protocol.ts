@@ -90,10 +90,6 @@ export const ENGINE_METHODS = [
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',
-    // The file watcher's per-view subscriptions (the host split, P2.2): `[viewId, {id, path}, want]` / `[viewId]`, under the
-    // calling window's connection. Its batches and git come back as `files.event`, to the windows whose views watch.
-    'engine.filesWatch',
-    'engine.filesUnwatch',
     // IssueWatch in genie-host (P5c): `[method, args]` — a LOCAL window's Refresh, repo load and repo switch. Its state is
     // sent as `issueWatch.dump` before `engine.ready` and as `issueWatch.event` (a new state, or a sound to play now), to
     // local windows only.
@@ -160,13 +156,9 @@ export const ENGINE_METHODS = [
     // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.
     'engine.terminals',
     // What Genie's MCP server in the host needs of the window until P3.2 (host-mcp.ts `WindowView`); the first one starts it.
-    'engine.windowView',
     // Genie 1's database, where only the window knows it is: the host takes its memories and AgentInbox history once.
-    'engine.v1Import',
     // The MCP server's endpoint, whether it verified, and its tools (the window's Deck and terminal env read them).
     'engine.mcpStatus',
-    // One of the host's own tools for a caller the window knows (a flow's step): `[ForwardedToolCall]`.
-    'engine.runTool',
     // This machine as a workstation: the host holds its key and signs: `[method, args]`.
     'engine.workstation',
     // THE WINDOW'S PROTOCOL CONNECTIONS, TUNNELLED (Tynn #898 step 2d-4b: protocol-tunnels.ts, window-tunnel.ts): `[op,
@@ -179,8 +171,6 @@ export const ENGINE_METHODS = [
     // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
     // Take over (Tynn #553, P5d.5c): genie-host owns who has a TUI open; a window starts, ends and reads them here.
     'engine.takeOver',
-    // A workspace's agent config: the host writes it, under the lock its agent preparation holds.
-    'engine.configSync',
     // The keyring card, as the host found it: `[method, args]`.
     // The host's GitHub account, and the authenticated git it runs (P3.4 cut c): `[method, args]`.
     // What the OS said about proxies, handed over by a window: `[{ origin: answer }]`.

@@ -1,6 +1,7 @@
 import { app, safeStorage } from 'electron';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { doorNotice } from '../core/browser-door.js';
 import { storeRefusal } from '../core/browser-store.js';
 import { BROWSER_LINK_LABEL } from '../core/engine-protocol.js';
 import type { BrowserFacts } from './browser-service.js';
@@ -19,10 +20,10 @@ import { configureWindowPages } from './window-pages.js';
  * open a site. A client of the host like the window, with its own hello; the two never talk directly.
  *
  * Its own user data folder: two processes cannot share a Chromium profile (measured on Electron 45.2.2).
- * The front door is the window's until P5, so with no window its pages stay up but `.gen` loads fail, and it says so.
+ * The front door is genie-host's (Tynn #1046 D2): with no window its pages stay up and `.gen` loads go on. It is down only
+ * when that host has no front door, and then it says so.
  */
 
-export const DOOR_DOWN = 'Genie sites can’t load until Genie’s window is open again. Pages already here stay as they are.';
 
 // The host's root (P7): started by genie-host with its environment, GENIE_HOME included.
 const home = genieRoot();
@@ -112,7 +113,7 @@ export async function runBrowserProcess(): Promise<void> {
         },
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         facts: onFacts,
-        door: (up) => { if (!locked) windows?.setNotice(up ? null : DOOR_DOWN); },
+        door: (up) => { if (!locked) windows?.setNotice(doorNotice(up)); },
         open: (url, activation, remote, anchor) => {
             opened = true;
             if (remote) remoteDoors.set(remote.key, { port: remote.port, ca: remote.ca });

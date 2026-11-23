@@ -113,6 +113,23 @@ describe('the composer on screen', () => {
         expect(count(render('genie://agent/a_atlas?tab=stream&chat=a_lark'), 'placeholder="Message lark — in beta.example"')).toBe(1);
     });
 
+    /*
+     * THE HEADER CHIP SAYS WHAT IT MEANS (Tynn #1002; the owner: an orange "in Tynn" with a hover nobody reads). It was
+     * `in {workspace}` with the meaning only in a `title`; "in Tynn" read as "in the Tynn product". Now its own words say
+     * it: the agent is from another workspace, named, and a click opens that workspace. No hover-only text.
+     */
+    it('the header chip reads "Agent from <workspace>", has no tooltip, and is a button that opens that workspace', () => {
+        const away = render('genie://workspace/ws_alpha?chat=a_lark');
+        // The chip's element, through its own closing tag (a react-fancy Button wraps its label in a span).
+        const chip = /<(button|span)[^>]*data-chat-scope="elsewhere"[^>]*>.*?<\/\1>(?:<\/button>)?/.exec(away)?.[0] ?? '';
+        expect(chip).not.toBe('');
+        expect(chip.startsWith('<button')).toBe(true);
+        expect(chip).toContain('data-chat-scope-workspace="ws_beta"');
+        expect(chip).not.toMatch(/\stitle=/);
+        expect(chip.replace(/<[^>]+>/g, '')).toBe('Agent from beta.example');
+        expect(away).not.toContain('not the workspace on screen');
+    });
+
     it('CONTROL: on its own workspace, its own agent, or a surface of no workspace, the composer is the plain one', () => {
         for (const route of ['genie://workspace/ws_beta?chat=a_lark', 'genie://agent/a_rook?tab=stream&chat=a_lark', 'genie://flows?chat=a_lark']) {
             const html = render(route);

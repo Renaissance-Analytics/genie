@@ -6,6 +6,8 @@ import { limitLevel, resetsIn, windowWords, type LimitLevel, type WindowReading 
 import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
 import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
+import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
+import { mismatchWords, OWN_DIRECTORY_SIGN_IN_LATER, type ClaudeAccountLive } from '../../core/claude-accounts.js';
 import type { DesignAuthView } from '../../core/design-auth.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 
@@ -27,9 +29,14 @@ export interface AccountsChipProps {
     /** Claude Design's authorization for the machine (Tynn #480): shown in Claude's popover. */
     readonly design?: DesignAuthView | undefined;
     readonly onDesignSignIn?: (() => void) | undefined;
+    /** Tynn #1011: add a Claude account of its own, or make one active (one click, no terminal). */
+    readonly onAccountsAct?: ((action: AccountsAction) => Promise<AccountsActResult> | void) | undefined;
 }
 
-const LEVEL_TEXT: Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
+/** The footer's rows (Add subscription, Add Console, Use another account): full width, icon and words from the left edge. */
+const FOOTER_ROW = 'w-full justify-start';
+
+const LEVEL_TEXT:Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
 const LEVEL_COLOR: Readonly<Record<LimitLevel, 'green' | 'amber' | 'red'>> = { ok: 'green', warning: 'amber', danger: 'red' };
 
 /** Initials for the account's avatar: the label's first letter (an email's, before the @). */
@@ -51,7 +58,7 @@ function targetWords(t: SwitchTarget): string {
     return `${t.label} (${t.leftPct}% left)`;
 }
 
-export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn }: AccountsChipProps) {
+export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn, onAccountsAct }: AccountsChipProps) {
     const [open, setOpen] = useState(false);
     const active = activeAccountOf(view);
     if (!active) return null;
@@ -66,6 +73,17 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
     const firstAccount = firstTarget ? view.accounts.find((a) => a.id === firstTarget.accountId) : undefined;
     const offerChoose = firstAccount ? chooseWords(firstAccount) : firstTarget?.label;
     const others = rankSwitchNext(view.accounts.filter((a) => a.id !== active.id), now);
+    /*
+     * HOW AN ACCOUNT IS SWITCHED TO (Tynn #1011). One Claude Code reports signed in where it lives (its own directory, or the
+     * default home it is signed in to now) becomes the active account with one click: no terminal, no login. One with its own
+     * directory that is not signed in shows Sign in, DISABLED until prism-acp's hidden login ships (the owner: "I should not see
+     * any terminals"). Any other is the default home's, reached by signing in again there (#753).
+     */
+    const choose = (a: AccountView): { kind: 'switch' | 'sign-in'; run: () => void } => {
+        if (a.live?.signedIn === true) return { kind: 'switch', run: () => { void onAccountsAct?.({ kind: 'set-active', id: a.id }); } };
+        if (a.ownDirectory === true) return { kind: 'sign-in', run: () => {} };
+        return { kind: 'switch', run: () => switchTo(chooseWords(a)) };
+    };
     return (
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
             <Popover.Trigger>
@@ -110,7 +128,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                             </div>
                         </Callout>
                     ) : null}
-                    <ActiveAccount account={active} now={now} />
+                    <ActiveAccount account={active} now={now} signInLater={active.ownDirectory === true && active.live?.signedIn !== true} />
                     {design && provider === 'claude' ? <DesignAuthRow design={design} onSignIn={onDesignSignIn} /> : null}
                 </div>
                 <div data-accounts-pane="others" className="flex w-60 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
@@ -119,12 +137,20 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                     <div data-accounts-others-list="" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
                         <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--fg-3)]">{others.length > 0 ? 'Switch to next' : 'Other accounts'}</span>
                         {others.length === 0 ? <span className="text-[var(--fg-3)]">No other {name} account yet.</span> : null}
-                        {others.map((a, i) => <OtherAccount key={a.id} account={a} rank={i + 1} now={now} onSwitch={() => switchTo(chooseWords(a))} />)}
+                        {others.map((a, i) => <OtherAccount key={a.id} account={a} rank={i + 1} now={now} action={choose(a)} />)}
                     </div>
                     {/* USE ANOTHER ACCOUNT (Tynn #850): always here, even with one known account. The provider's own login,
                         naming no account: the person picks or creates a different one, and Genie reads who it is afterwards. */}
-                    <div className="shrink-0 border-t border-[var(--border-1)] p-2">
-                        <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" onClick={() => switchTo()}>Use another account</Button>
+                    <div className="flex shrink-0 flex-col gap-1 border-t border-[var(--border-1)] p-2">
+                        {/* ADD AN ACCOUNT OF ITS OWN (Tynn #1011): a directory of its own; the person then signs in with Claude Code's
+                            own login (a claude.ai plan, or a Console account billed per token). */}
+                        {provider === 'claude' && onAccountsAct ? (
+                            <div data-accounts-add="" className="flex flex-col gap-1">
+                                <Button type="button" size="xs" variant="ghost" icon="plus" data-action="account-add-subscription" className={FOOTER_ROW} onClick={() => { void onAccountsAct({ kind: 'add-claude', method: 'subscription' }); }}>Add subscription</Button>
+                                <Button type="button" size="xs" variant="ghost" icon="plus" data-action="account-add-console" className={FOOTER_ROW} onClick={() => { void onAccountsAct({ kind: 'add-claude', method: 'console' }); }}>Add Console (API)</Button>
+                            </div>
+                        ) : null}
+                        <Button type="button" size="xs" variant="ghost" icon="user-plus" data-action="account-use-another" className={FOOTER_ROW} onClick={() => switchTo()}>Use another account</Button>
                     </div>
                 </div>
                 </div>
@@ -139,7 +165,7 @@ function PlanChip({ plan }: { plan: string | null }) {
 }
 
 /** THE LEFT PANE: the account the chip names, large, with who it is and every window it reported. */
-function ActiveAccount({ account, now }: { account: AccountView; now: number }) {
+function ActiveAccount({ account, now, signInLater }: { account: AccountView; now: number; signInLater: boolean }) {
     return (
         <section data-account={account.id} data-active={account.active ? 'true' : 'false'} className="flex flex-col gap-3">
             <div className="flex items-center gap-3">
@@ -149,12 +175,20 @@ function ActiveAccount({ account, now }: { account: AccountView; now: number }) 
                     {account.email && account.email !== account.label ? <span data-account-email="" className="truncate text-[var(--fg-3)]">{account.email}</span> : null}
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                         <PlanChip plan={account.plan} />
-                        {account.active
-                            ? <Badge size="sm" variant="outline" color="green" dot data-account-active="">Signed in</Badge>
-                            : <Badge size="sm" variant="outline" color="zinc" data-account-active-unknown="">Not signed in</Badge>}
+                        {/* With a live state (Tynn #1011) that is the one pill: this pane IS the active account, so "Active" beside
+                            "Signed in" said the same thing twice. Without one, the book's own state stands. */}
+                        {account.live
+                            ? <LiveBadge live={account.live} />
+                            : account.active
+                                ? <Badge size="sm" variant="outline" color="green" dot data-account-active="">Signed in</Badge>
+                                : <Badge size="sm" variant="outline" color="zinc" data-account-active-unknown="">Not signed in</Badge>}
+                        {account.live ? <BillingChip live={account.live} /> : null}
                     </div>
+                    {account.live?.org ? <span data-account-org="" className="truncate text-[var(--fg-3)]">{account.live.org}</span> : null}
+                    {account.live?.loginExpiresAt ? <span data-account-login-expires="" className="text-[11px] text-[var(--fg-4)]">Sign-in good until {shortDateTime(Date.parse(account.live.loginExpiresAt))}</span> : null}
                 </div>
             </div>
+            {signInLater ? <SignInLater size="sm" /> : null}
             <div className="flex flex-col gap-2.5 border-t border-[var(--border-1)] pt-3">
                 {account.windows.map((w) => <WindowRow key={w.window} w={w} now={now} />)}
             </div>
@@ -163,7 +197,7 @@ function ActiveAccount({ account, now }: { account: AccountView; now: number }) 
 }
 
 /** THE RIGHT COLUMN: another account, compact: its name, plan, a line per window and its Switch. */
-function OtherAccount({ account, rank, now, onSwitch }: { account: AccountView; rank: number; now: number; onSwitch: () => void }) {
+function OtherAccount({ account, rank, now, action }: { account: AccountView; rank: number; now: number; action: { kind: 'switch' | 'sign-in'; run: () => void } }) {
     return (
         <section data-account={account.id} data-active="false" data-switch-rank={rank} className="flex flex-col gap-1.5 rounded-md border border-[var(--border-1)] bg-[var(--surface-raised)] p-2">
             <div className="flex items-center gap-1.5">
@@ -171,10 +205,40 @@ function OtherAccount({ account, rank, now, onSwitch }: { account: AccountView; 
                 <span className="min-w-0 flex-1 truncate font-medium" title={account.email ?? account.label}>{account.label}</span>
                 <PlanChip plan={account.plan} />
             </div>
+            {account.live ? <div className="flex flex-wrap gap-1"><LiveBadge live={account.live} /><BillingChip live={account.live} /></div> : null}
             {account.windows.map((w) => <CompactWindow key={w.window} w={w} now={now} />)}
-            <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} className="self-end" onClick={onSwitch}>Switch</Button>
+            {action.kind === 'switch'
+                ? <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} className="self-end" onClick={action.run}>Switch</Button>
+                : <SignInLater size="xs" />}
         </section>
     );
+}
+
+/** SIGN IN, NOT YET (Tynn #1011): shown, disabled, with why: it comes as prism-acp's hidden login, never a terminal. */
+function SignInLater({ size }: { size: 'xs' | 'sm' }) {
+    return (
+        <div data-account-sign-in-later="" className="flex flex-col items-end gap-0.5 self-end">
+            <Button type="button" size={size} icon="log-in" data-action="account-sign-in" disabled aria-disabled="true" title={OWN_DIRECTORY_SIGN_IN_LATER}>Sign in</Button>
+            <span className="text-[11px] text-[var(--fg-4)]">Coming with the next prism-acp</span>
+        </div>
+    );
+}
+
+/** What Claude Code reports for the account now (prism-acp): ready, not signed in, or a typed mismatch with what was chosen. */
+function LiveBadge({ live }: { live: ClaudeAccountLive }) {
+    const { state, differences } = live.check;
+    if (state === 'mismatch') {
+        return <Badge size="sm" variant="soft" color="amber" data-account-live="mismatch" data-differences={differences.join(' ')} title={`Not what was chosen: ${mismatchWords(differences)}.`}>Mismatch</Badge>;
+    }
+    return state === 'ready'
+        ? <Badge size="sm" variant="outline" color="green" dot data-account-live="ready">Signed in</Badge>
+        : <Badge size="sm" variant="outline" color="zinc" data-account-live="signedOut">Not signed in</Badge>;
+}
+
+/** Who pays, as the CLI reports it: the plan, or per-token API usage. Nothing for an unknown. */
+function BillingChip({ live }: { live: ClaudeAccountLive }) {
+    const words = live.billing === 'subscription' ? 'Subscription' : live.billing === 'apiUsage' ? 'API usage' : null;
+    return words ? <Badge size="sm" variant="soft" color="zinc" data-account-billing="">{words}</Badge> : null;
 }
 
 function CompactWindow({ w, now }: { w: AccountWindowRow; now: number }) {

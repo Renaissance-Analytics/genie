@@ -1,3 +1,5 @@
+import { clockAmPm } from './clock-words.js';
+import type { Headroom } from './headroom.js';
 import { providerLogin } from './provider-login.js';
 
 /**
@@ -58,4 +60,24 @@ export function accountSwitchOutcomeOf(value: unknown): AccountSwitchOutcome | n
  */
 export function accountSwitchSignal(o: AccountSwitchOutcome): { readonly kind: 'account-switch'; readonly outcome: AccountSwitchOutcome } {
     return { kind: 'account-switch', outcome: o };
+}
+
+/**
+ * WHAT EVERY RUNNING AGENT IS TOLD AT A SWITCH (Tynn #1011; the owner: "whenever we have an account switch make sure to post
+ * the updated rate limit status so agents know it is reset. they keep getting stuck in holding patterns because they think the
+ * rate limit is about to hit."). One line, ahead of the agent's next turn: the account it now draws on, each window's use as
+ * that account last reported it, and when the nearest one resets; and that the warnings it saw before were the old account's.
+ * With no reading for the account yet, it says so: never a guessed figure.
+ */
+export function accountSwitchNote(label: string, headroom: Headroom | null, nowMs: number): string {
+    const after = 'Earlier rate-limit warnings were about the previous account, so carry on with your work at its normal pace.';
+    if (!headroom || headroom.windows.length === 0) return `Account switched to ${label}: its usage is not known yet. ${after}`;
+    const parts = headroom.windows.map((w) => {
+        if (w.resetsAtMs <= nowMs) return `${w.window} reset`;
+        if (w.over) return `${w.window} over the limit`;
+        return `${w.window} ${Math.max(0, Math.round(w.usedPct))}% used`;
+    });
+    const upcoming = headroom.windows.filter((w) => w.resetsAtMs > nowMs).map((w) => w.resetsAtMs);
+    const resets = upcoming.length > 0 ? `, resets ${clockAmPm(Math.min(...upcoming))}` : '';
+    return `Account switched to ${label}: ${parts.join(', ')}${resets}. ${after}`;
 }

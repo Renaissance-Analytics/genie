@@ -57,7 +57,7 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag',
-    'trust-step', 'accounts-popover', 'sound-picker', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher'
 )
 
@@ -352,6 +352,7 @@ function Row-artboard { Need-Build; Need-TestMachine; Run 'artboard-cdp' { node 
 function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scripts/ui-lag-cdp.mjs --budget } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
+function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
 function Row-sound-picker { Need-Build; Need-TestMachine; Run 'sound-picker-cdp' { node scripts/sound-picker-cdp.mjs } }
 # The app opened for no-pty..layout wrote this log: the spawn host started, and never fell back.
 function Row-spawn-host {
@@ -453,6 +454,7 @@ function Ceiling([string]$name) {
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
         'accounts-popover' { return 300 }
+        'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
         'files-watch' { return 240 }
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
@@ -574,6 +576,12 @@ function Invoke-Row([string]$name) {
         if ($left.Count -gt 0) {
             $leftover = (@($left | ForEach-Object { "$($_.Name) $($_.Id)" })) -join ', '
             Add-Content -Path $log -Value "LEFT RUNNING after the row: $leftover"
+            # WHAT each leftover was (Tynn #1011, the 4ac1f9c2 gate's packaged-launcher): its parent and its command line, read
+            # before it is stopped, so a leftover names its cause instead of only its pid.
+            foreach ($p in $left) {
+                $ci = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue
+                if ($ci) { Add-Content -Path $log -Value "LEFT RUNNING $($p.Id): parent $($ci.ParentProcessId), $($ci.CommandLine)" }
+            }
             Stop-GenieLeftovers $left
             $ok = $false
         }

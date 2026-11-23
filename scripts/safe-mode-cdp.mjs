@@ -28,6 +28,7 @@ import {
     readOr, refuseOffTestMachines, running, sleep, step, stubPids, tickerOn, ticksOf, twoStreamingAgents, until, whyOf,
 } from './crash-cdp-lib.mjs';
 import { freshProviderGauge } from './provider-ticks.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 // Agent commands are on the page's own bridge now: window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
@@ -149,6 +150,7 @@ try {
     const ticksAtStart = await ticksOf(session.cdp, first.id);
     const startedAt = Date.now();
     const gauge = freshProviderGauge({ startedAt, before: ticksAtStart.ticks });
+    await closeWhatsNew((expression) => session.cdp.evaluate(expression));
     await session.cdp.evaluate(`document.querySelector('[data-safe-mode] [data-action="safe-mode-start"][data-kind="agent"][data-id=${JSON.stringify(first.id)}]').click(); true`, 10_000);
     const startedAgain = await until(() => running(session.cdp, first.id), 45_000);
     check(startedAgain === true, `E1. ${first.name} runs again (the host says so)`, startedAgain === true ? '' : await whyOf(session.cdp, first.id));

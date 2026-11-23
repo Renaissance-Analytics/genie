@@ -79,14 +79,6 @@ probe "hub-git-once" src/main/files-watch-hub.ts \
     "        if (w.gitRunning) { w.gitDirty = true; return; }" "" \
     test/files-watch-hub.test.ts "does not start a second run"
 
-probe "engine-drops-closed-window-views" src/main/session-engine-server.ts \
-    "            if (was) this.#options.files?.dropOwner(conn.id);" "" \
-    test/engine-files-tunnel.test.ts "drops every view it had"
-
-probe "client-resubscribes" src/main/session-engine-client.ts \
-    "        for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);" "" \
-    test/engine-files-tunnel.test.ts "subscribes its views again"
-
 # main x host split: Cooling (#1433) reaches the window through the host replica
 probe "cooling-end-pushed" src/core/session.ts \
     "            this.#coolingCancel = null;
@@ -553,10 +545,6 @@ probe "device-socket-survives-its-own-close" src/main/device-socket.ts \
     test/device-socket.test.ts "cannot take the host down"
 
 # One writer of a workspace's agent config
-probe "a-window-with-a-host-writes-nothing" src/main/compose.ts \
-    "            const host = input.hostConfigSync?.() ?? null;" "            const host = null as ReturnType<NonNullable<typeof input.hostConfigSync>>;" \
-    test/tynn-activation.test.ts "with a host, the window writes nothing"
-
 probe "the-host-prep-holds-the-lock" src/main/host-agent-keys.ts \
     "        ...(options.withConfig ? { withConfig: options.withConfig } : {})," "" \
     test/workspace-config-writer.test.ts "wired: the host"
