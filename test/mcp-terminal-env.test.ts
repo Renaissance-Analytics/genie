@@ -18,10 +18,10 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * AN AGENT'S TERMINAL GETS THE ENV THE PERSON'S DOES. The Terminals tab opens a shell with the workspace's service
  * engines (DB_*, REDIS_URL…) and Genie's endpoint (GENIE_MCP_URL / GENIE_MCP_TOKEN); `manageTerminals create` opened
  * one with NEITHER (main.ts handed the agent path `terminals.open(options)` untouched) — so a migration an agent ran in
- * its own terminal could not reach the database the person's shell reached. In the window, the agents' tools and the
- * header's throwaway Terminal take their env from ONE function, `terminalEnvFor` (hosting-actions.ts). The Terminals
- * tab's shells are genie-host's since Tynn #898 step 2d-4b2 (host-local-ports.ts), and take the same env there: the
- * workspace's service engines, its Playwright variables and Genie's endpoint (genie-host.ts `shellEnv`).
+ * its own terminal could not reach the database the person's shell reached. Every shell is genie-host's now: an agent's
+ * (manageTerminals is its own tool), the header's throwaway Terminal and the Terminals tab's (Tynn #898 step 2d-4b2,
+ * host-local-ports.ts). Each takes ONE env there: the workspace's service engines, its Playwright variables and Genie's
+ * endpoint (genie-host.ts `shellEnv`). The window's own copy, `terminalEnvFor`, fed nothing and left in Tynn #1043.
  */
 
 const atlas: Caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'example', workspacePath: '/w/example' };
@@ -76,61 +76,17 @@ describe('manageTerminals create', () => {
     });
 });
 
-describe('the env both paths use, over the real composition', () => {
-    const pty: PtyPort = {
-        open: () => ({ id: 'term_1', pid: 1, shell: 'sh', scrollback: '' }),
-        write: () => true, resize: () => true, kill: () => true, scrollback: () => '',
-        onData: () => () => {}, onExit: () => () => {},
-    };
-    const docker: DockerRunner = async (args) => {
-        if (args[0] === 'image' || (args[0] === 'container' && args[1] === 'inspect')) return { stdout: '', exitCode: 1 };
-        return { stdout: '', exitCode: 0 };
-    };
-    let dir: string;
-    let services: ComposedServices;
-    beforeEach(async () => {
-        dir = await mkdtemp(join(tmpdir(), 'genie2-terminal-env-'));
-        for (const ws of ['example', 'example-other']) {
-            await mkdir(join(dir, ws), { recursive: true });
-            await writeFile(join(dir, ws, 'project.json'), '{ "name": "x", "repos": [] }\n', 'utf8');
-        }
-        services = await composeServices({
-            userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker, portFree: async () => true,
-            workspaces: () => [{ id: 'example', path: join(dir, 'example') }, { id: 'example-other', path: join(dir, 'example-other') }],
-        });
-    });
-    afterEach(async () => {
-        await services.shutdown();
-        await rm(dir, { recursive: true, force: true });
-    });
-
-    it('terminalEnvFor: the workspace’s engines, then Genie’s endpoint — and another workspace gets the endpoint only', async () => {
-        const { terminalEnvFor } = await import('../src/main/hosting-actions.js');
-        await handleFeatureAction(services, { kind: 'services.create', form: { workspaceId: 'example', engine: 'postgres', major: '17', scope: 'dedicated' }, consent: true });
-        const port = String(services.engines.list()[0]!.publishedPort);
-        const mcp = { GENIE_MCP_URL: 'http://127.0.0.1:4100/mcp', GENIE_MCP_TOKEN: 'tok' };
-        const env = terminalEnvFor(services, 'example', mcp);
-        expect(env).toMatchObject({ DB_PORT: port, PGPORT: port, DB_DATABASE: 'example', ...mcp });
-        expect(env).toEqual({ ...services.engines.envFor('example'), ...mcp });
-        const other = terminalEnvFor(services, 'example-other', mcp);
-        expect(other).toEqual(mcp);
-        // Before compose has run (main's `services` is still null), the endpoint alone.
-        expect(terminalEnvFor(null, 'example', mcp)).toEqual(mcp);
-    });
-});
-
 describe('main wires both paths to the one function', () => {
     // Comment lines dropped by LINE, CRLF-safe: a guard that matched a comment would pass on prose.
     const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
-    it('the header’s throwaway Terminal and the agents’ tools call terminalEnvFor in main — counted; the Terminals tab is genie-host’s', () => {
+    it('main assembles no terminal env: an agent’s terminal, the header’s Terminal and the Terminals tab are genie-host’s', () => {
         const main = code('src/main/main.ts');
-        // Two: the Terminals tab's port left main with its host API (Tynn #898 step 2d-4b2); genie-host opens those shells.
-        // One since 2c-4 (#897): the header's throwaway Terminal is genie-host's too (terminals.scratch, its shellEnv).
-        expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(1);
+        // None since 2g-4d-A (Tynn #1043): manageTerminals is genie-host's own tool, so nothing read the env main handed its copy.
+        expect(main).not.toMatch(/terminalEnv/);
+        expect(code('src/main/hosting-actions.ts')).not.toMatch(/terminalEnvFor/);
         // The header's Terminal button (Tynn story #378): a workspace terminal's environment, in a window of its own.
         expect(code('src/main/genie-host.ts')).toMatch(/scratchTerminalFor\(\{ scratch: hostScratch\w*, home: userHome\(\), workspace: \(id\) => hostRegistry\.workspace\(id\) \?\? null, envFor: shellEnv \}/);
-        expect(main).toMatch(/terminalEnv: \(workspaceId\) => terminalEnvFor\(composed, workspaceId, mcpEnv\(\)\)/);
         expect(/localTerminals: createNativeTerminalPort\(\{/.test(main)).toBe(false);
         // The Terminals tab: genie-host's port, with the workspace's service variables and Genie's MCP endpoint.
         expect(/localTerminals: createNativeTerminalPort\(\{/.test(code('src/main/host-local-ports.ts'))).toBe(true);

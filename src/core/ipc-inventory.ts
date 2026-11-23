@@ -147,6 +147,10 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['onLink', 'link'],
     // Where genie-host's MCP server listens and which tools it offers, asked once the link is up (Tynn #1007, seen likewise).
     ['mcpStatus', 'link'],
+    // The processes child's exec route and its streams (genie#1397): every command this window runs is run in genie-host's
+    // `processes` child, its frames in order on this one socket. The link's own (Tynn #1043: the route is live, and stays).
+    ['spawnLink', 'link'],
+    ['onSpawnFrame', 'link'],
     // The window announces itself and its launch line, and quits when the host installs an update.
     ['updates', 'link'],
     // The window's browser pane and its site panels.
@@ -166,16 +170,9 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // reads them runs in genie-host), and the engine link's replicas of them went with the accounts'.
     ['flows', 'move:2g'],
     // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955):
-    // the processes child's exec and streams (Tynn task #1468),
-    ['spawnLink', 'move:2g'],
-    ['onSpawnFrame', 'move:2g'],
     // (pushWindowView and v1Import left in 2g-4d B, #1044: window.view over the protocol, and genie-host imports Genie 1 itself.)
-    // and a window-registered host tool's call, a flow step's, once handed the whole client in withHostTools (#1471).
-    ['runHostTool', 'move:2g'],
-    // The Files panel's per-view watch and its disk changes, through main's `link` alias (Tynn #1007 saw it; task #1472 on #955).
-    ['onFilesEvent', 'move:2g'],
-    ['filesWatch', 'move:2g'],
-    ['filesUnwatch', 'move:2g'],
+    // runHostTool (#1471) and the Files watch (onFilesEvent, filesWatch, filesUnwatch: #1472) left in 2g-4d-A (#1043): nothing
+    // in the window read them, and their engine routes went with them. spawnLink and onSpawnFrame (#1468) are `link`, above.
     // IssueWatch and the Tynn board, issues and features watches, through main's `engineClient` alias (Tynn #1007 saw them;
     // they go with tynn/tynnPage in G-1, #934 task #1474).
     ['issueWatch', 'move:2g'],

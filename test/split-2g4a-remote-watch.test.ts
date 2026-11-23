@@ -214,7 +214,8 @@ describe('wired: genie-host says the watch and prunes; main reads the watch and 
         const rows = WINDOW_ENGINE_INVENTORY.filter(([, d]) => d === 'move:2g').map(([u]) => u).sort();
         // 2g-4e (#1007): the scanner follows main's aliases of the engine client, and the uses it found joined the list
         // (tasks on #955 and G-1 #934); the rows are exactly these.
-        expect(rows).toEqual(['filesUnwatch', 'filesWatch', 'flows', 'hosting', 'issueWatch', 'onFilesEvent', 'onSpawnFrame', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'runHostTool', 'spawnLink', 'stores', 'supervisor', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch']);
+        // 2g-4d-A (#1043): runHostTool and the Files watch left, and the exec route (spawnLink, onSpawnFrame) is `link`.
+        expect(rows).toEqual(['flows', 'hosting', 'issueWatch', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'stores', 'supervisor', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch']);
         expect(rows).not.toContain('remoteAccess');
     });
 });

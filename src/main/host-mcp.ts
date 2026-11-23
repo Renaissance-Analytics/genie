@@ -10,7 +10,7 @@ import { genieToolDeps } from './genie-tool-deps.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
-import { HOST_NATIVE_TOOLS, hostRegistrations, type ForwardedToolCall } from './mcp-host-tools.js';
+import { hostRegistrations, type ForwardedToolCall } from './mcp-host-tools.js';
 import { withActionSignal } from './mcp-signal.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import type { Caller } from './mcp-tools.js';
@@ -114,11 +114,6 @@ export interface HostMcp {
     /** Settled once the server has started, or failed to (said in `status`): what writing a workspace's config waits for. */
     ready(): Promise<void>;
     status(): { endpoint: { url: string; token: string } | null; verified: Verification | null; tools: McpToolRow[] };
-    /**
-     * One of the host's own tools, asked by the WINDOW for a caller it knows (a flow's step, P3.1): run here with that
-     * caller, answered as the tool answers. Only the host's own tools; the window has the rest.
-     */
-    runNative(call: ForwardedToolCall): Promise<McpToolResult>;
     /** Every tool as this server serves it (the host's own, and the window's forwarded): what a flow's tool steps call. */
     registrations(): readonly import('./mcp-tools.js').Registration[];
     stop(): Promise<void>;
@@ -136,17 +131,11 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     let starting: Promise<void> | null = null;
     /** The endpoint file's private write, while it is landing. It never rejects: a failure is logged. */
     let endpointWrite: Promise<void> = Promise.resolve();
-    let native = new Map<string, import('./mcp-tools.js').Registration>();
     let servedNow: readonly import('./mcp-tools.js').Registration[] = [];
-    /** Callers the window vouched for, for the length of one call (runNative). */
-    const injected = new Map<string, Caller>();
-    let injectSeq = 0;
 
     const workspace = (id: string) => ports.registry.workspace(id);
     const resolveCaller = (id: string): Caller | null => {
         const records = ports.records();
-        const vouched = injected.get(id);
-        if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
         return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? null;
     };
@@ -201,12 +190,10 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const all = withActionSignal(tools0, resolveCaller, (agentId, kind, tool) => ports.signal({ kind: 'action', agentId, action: kind, tool }));
         // The plugins' tools run HERE (ADF A3): the host has their plugins, so nothing of theirs is forwarded to a window.
         const pluginNames = new Set((ports.plugins?.tools() ?? []).map((ref) => `${ref.pluginId}.${ref.tool.name}`));
-        const isNative = (name: string) => HOST_NATIVE_TOOLS.has(name) || pluginNames.has(name);
         const servedAll = hostRegistrations(all, { native: (name) => pluginNames.has(name), resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         // Every call this server answers is the calling agent's to have ended by its Interrupt (Tynn #702), forwarded ones too.
         const served = ports.toolCalls ? withInterruptibleCalls(servedAll, resolveCaller, ports.toolCalls) : servedAll;
         tools = served.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
-        native = new Map(served.filter((r) => isNative(r.definition.name)).map((r) => [r.definition.name, r]));
         servedNow = served;
         return served;
     };
@@ -259,19 +246,5 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             }
         },
         registrations: () => servedNow,
-        runNative: async (call) => {
-            const r = native.get(call.name);
-            if (!r) return { text: `${call.name} is not one of genie-host's own tools`, isError: true };
-            if (!call.caller) return { text: 'Genie could not tell who is calling; nothing was done', isError: true };
-            const key = `vouched-${++injectSeq}`;
-            injected.set(key, call.caller);
-            try {
-                const { terminalId: _t, ...args } = call.args as Record<string, unknown>;
-                void _t;
-                return await r.handler(args as never, { server: 'genie', tool: call.name, headers: { 'genie-session': key } });
-            } finally {
-                injected.delete(key);
-            }
-        },
     };
 }
