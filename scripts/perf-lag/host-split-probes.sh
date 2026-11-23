@@ -92,22 +92,12 @@ probe "host-tool-refuses-without-window" src/main/mcp-host-tools.ts \
     "            if (!options.window.connected()) {" "            if (false) {" \
     test/mcp-host-tools.test.ts "with NO window: refused AT ONCE"
 
-probe "replica-follows-mail" src/main/agent-stores-host.ts \
+# The window's replicas of the stores, the supervisor and the flows left the engine link in 2g-4d E2a (Tynn #955): what a
+# window reads of them is the protocol's (features.snapshot, deck.watch, settings.watch). genie-host still follows the
+# stores' inbox changes: a hide or restore of a hibernated workspace's mail is one.
+probe "host-follows-mail" src/main/agent-stores-host.ts \
     "        this.#emit({ store: 'inbox', kind: 'delta', appended, updated, removed, cursors: { ...mail.cursors }, ...(mail.filtered ? { filtered: true } : {}) });" "" \
-    test/agent-stores-contract.test.ts "after an agent sends"
-
-probe "dump-before-ready" src/main/session-engine-server.ts \
-    "        if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());" "" \
-    test/agent-stores-contract.test.ts "connects later starts from the whole mail"
-
-# P3.2: the settings are the host's; every window a replica, hot-swap kept
-probe "settings-data-before-listeners" src/main/agent-stores-replica.ts \
-    "        this.#data = event.data;" "" \
-    test/settings-drafts-contract.test.ts "ALREADY readable"
-
-probe "settings-change-reaches-windows" src/main/agent-stores-host.ts \
-    "        stores.settings?.onChange((key, value, workspaceId) => this.#emit({ store: 'settings', kind: 'changed', key, value, workspaceId: workspaceId ?? null, data: stores.settings!.data() }));" "" \
-    test/settings-drafts-contract.test.ts "a change made ELSEWHERE"
+    test/ghost-replica-394.test.ts "story394"
 
 probe "registry-write-reaches-windows" src/main/agent-stores-host.ts \
     "                    this.#emit({ store: 'registry', kind: 'written' });" "" \
@@ -118,27 +108,14 @@ probe "host-mail-wake-starts" src/main/host-mail-wake.ts \
     test/host-mail-wake.test.ts "a STOPPED agent is started for its mail"
 
 # P3.3b: the process supervisor is the host's
-probe "window-stop-reaches-host" src/main/supervisor-host.ts \
-    "        void this.#call('stop', [id]).catch(() => {});" "" \
-    test/supervisor-host-contract.test.ts "Stop from a window ends it FOR GOOD"
-
 probe "start-of-running-is-noop" src/main/process-supervisor.ts \
     "        if (existing && existing.state === 'running') return this.#status(existing);" "" \
-    test/supervisor-host-contract.test.ts "starts nothing twice"
-
-probe "supervisor-dump-before-ready" src/main/session-engine-server.ts \
-    "        if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());" "" \
-    test/supervisor-host-contract.test.ts "the next window shows it"
+    test/process-supervisor.test.ts "starting an already-running process is a no-op"
 
 # P3.3c: the process book and the scheduler are the host's
 probe "book-dump-before-ready" src/main/session-engine-server.ts \
     "        if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());" "" \
     test/process-book-host-contract.test.ts "the next window lists its run"
-
-# P3.3d: flows are the host's
-probe "flows-dump-before-ready" src/main/session-engine-server.ts \
-    "        if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });" "" \
-    test/flows-host-contract.test.ts "the next window sees its run"
 
 # P3.3e: the terminals are the host's
 probe "terminals-dump-before-ready" src/main/session-engine-server.ts \
@@ -715,7 +692,7 @@ probe "a-hostile-provider-is-refused" src/main/login-host.ts \
     test/shell-line-callers.test.ts "refused, and no terminal opens"
 
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/ghost-replica-394.test.ts test/process-supervisor.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
