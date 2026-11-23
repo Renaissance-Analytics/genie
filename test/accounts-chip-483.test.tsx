@@ -89,14 +89,15 @@ describe('S10: the chip and its popover', () => {
         expect(chip()).not.toBeNull();
         expect(chip().textContent).toContain('Work Max');
     });
-    it('the popover renders one section per known account, each with its name, its plan or "unknown", and a bar per window', () => {
+    it('the popover renders one section per known account, each with its name, its plan when known, and a bar per window', () => {
         render(SNAPSHOT());
         click(chip());
         const sections = popover()!.querySelectorAll('[data-account]');
         expect([...sections].map((s) => s.getAttribute('data-account'))).toEqual([A, B]);
         expect(sections[0]!.textContent).toContain('Work Max');
         expect(sections[0]!.querySelector('[data-account-plan]')!.textContent).toBe('max');
-        expect(sections[1]!.querySelector('[data-account-plan]')!.textContent).toBe('unknown');
+        // Tynn #988: an unknown plan draws no chip (it used to read "unknown" on every Claude account).
+        expect(sections[1]!.querySelector('[data-account-plan]')).toBeNull();
         expect(sections[0]!.querySelectorAll('[data-account-window]')).toHaveLength(2);
         expect(sections[0]!.querySelector('[data-account-window="5h"] [role="progressbar"]')).not.toBeNull();
         expect(sections[1]!.querySelector('[data-account-window="5h"]')!.textContent).toContain('unknown');

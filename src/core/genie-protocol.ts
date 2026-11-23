@@ -8,6 +8,8 @@
 export interface ProtocolTool {
     readonly name: string;
     readonly description: string;
+    /** Served only to some agents (a per-request gate): never named here, where every agent of the workspace reads it. */
+    readonly someAgents?: boolean;
 }
 
 const HEADER = '<!-- Written by Genie 2 and replaced on every sync. Put your own rules in RULES.md. -->';
@@ -82,8 +84,11 @@ The \`genie\` skill is Genie’s guide, with a \`genie-*\` skill per topic. Read
 export function sharedProtocol(tools: readonly ProtocolTool[], tracking: WorkTracking = 'files', firstRun = false): string {
     // NAMES ONLY (the owner, 2026-10-18: no duplicate info in the system prompt chain): each tool's description already
     // reaches the agent through the MCP tool list; this file is read into every agent's instructions on top of it.
-    const list = tools.length > 0
-        ? `${tools.map((t) => `\`${t.name}\``).join(', ')}. Each describes itself in your tool list; read it there.`
+    // ONLY THE TOOLS EVERY AGENT HAS (Tynn #1015): this one file is every agent's of the workspace, so a tool behind a
+    // per-request gate (workspaceTabs, pages) is left out; it describes itself in the tool list of an agent that has it.
+    const everyAgent = tools.filter((t) => t.someAgents !== true);
+    const list = everyAgent.length > 0
+        ? `${everyAgent.map((t) => `\`${t.name}\``).join(', ')}. Each describes itself in your tool list; read it there.`
         : '(Genie’s MCP server is not listening right now; no tools are listed.)';
     return `${HEADER}
 

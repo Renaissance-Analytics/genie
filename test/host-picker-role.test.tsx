@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import * as roles from '../src/core/workstation-role.js';
 import { deviceLinkGate } from '../src/main/device-link-gate.js';
-import { RelayHostReplica } from '../src/main/relay-host-replica.js';
 import { RelayHostService, type RelayHostServicePorts } from '../src/main/relay-host-service.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 import { Shell } from '../src/renderer/Shell.js';
@@ -33,8 +32,8 @@ describe('what the person sees', () => {
     it('the role has not been answered: the picker is there', () => {
         expect(titleBar({ registered: true, host: 'https://tynn.ai', workstationId: 'ws_me', role: null })).toContain(PICKER);
     });
-    it('before genie-host has answered at all (the replica\'s first view): the picker is there', () => {
-        expect(titleBar(new RelayHostReplica(async () => null).workstation())).toContain(PICKER);
+    it('before genie-host has answered at all (no workstation said yet): the picker is there', () => {
+        expect(titleBar(null)).toContain(PICKER);
     });
     it('CONTROL: Tynn said drone: no picker', () => {
         expect(titleBar({ registered: true, host: 'https://tynn.ai', workstationId: 'ws_me', role: 'drone' })).not.toContain(PICKER);

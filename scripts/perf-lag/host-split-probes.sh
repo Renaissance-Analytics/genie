@@ -79,14 +79,6 @@ probe "hub-git-once" src/main/files-watch-hub.ts \
     "        if (w.gitRunning) { w.gitDirty = true; return; }" "" \
     test/files-watch-hub.test.ts "does not start a second run"
 
-probe "engine-drops-closed-window-views" src/main/session-engine-server.ts \
-    "            if (was) this.#options.files?.dropOwner(conn.id);" "" \
-    test/engine-files-tunnel.test.ts "drops every view it had"
-
-probe "client-resubscribes" src/main/session-engine-client.ts \
-    "        for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);" "" \
-    test/engine-files-tunnel.test.ts "subscribes its views again"
-
 # main x host split: Cooling (#1433) reaches the window through the host replica
 probe "cooling-end-pushed" src/core/session.ts \
     "            this.#coolingCancel = null;
@@ -320,7 +312,7 @@ probe "migration-read-back-gates-the-delete" src/main/keychain-migration.ts \
     test/keychain-migration.test.ts "kept, not confirmed, and said"
 
 probe "migration-book-before-the-delete" src/main/keychain-migration.ts \
-    "    if (!(await book.write(name, 'verified').then(() => true, () => false))) return 'book-failed';" "" \
+    "    return (await booked(book, name, 'verified')) ? 'verified' : 'book-failed';" "    return 'verified';" \
     test/keychain-migration.test.ts "each crash really stopped the run where it says"
 
 probe "migration-never-runs-twice" src/main/keychain-migration.ts \
@@ -344,14 +336,6 @@ probe "migration-host-compares-for-real" src/main/keychain-migration.ts \
     test/keychain-migration.test.ts "compare answers same, different"
 
 
-# P3.4 cut d: an agent's key is the host's (genie#1457).
-probe "a-window-asks-only-for-agent-keys" src/main/session-engine-server.ts \
-    "                return this.#keychain().get(agentKeyName(str(0)));" "                return this.#keychain().get(str(0) as never);" \
-    test/host-agent-keys.test.ts "nothing but an agent"
-
-probe "a-dead-link-is-not-a-missing-key" src/main/agent-secrets.ts \
-    "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'unavailable', reason: reply.reason };" "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'missing' };" \
-    test/host-agent-keys.test.ts "a dead link is not a signed-out agent"
 
 probe "a-sealed-key-must-match-its-record" src/main/tynn-agent-identities.ts \
     "? { kind: 'value', value: token } : { kind: 'unreadable' };" "? { kind: 'value', value: token } : { kind: 'value', value: token };" \
@@ -375,9 +359,6 @@ probe "only-a-real-pairing-token-moves" src/main/tynn-account.ts \
     "                    if (tokenValid(token)) return { kind: 'value', value: token };" "                    if (token) return { kind: 'value', value: token };" \
     test/tynn-account-host.test.ts "is not a pairing token"
 
-probe "a-window-reads-signed-in-at-once" src/main/session-engine-server.ts \
-    "        if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());" "" \
-    test/tynn-account-host.test.ts "reads signed in at once"
 
 probe "the-cookie-is-sent-on-the-exchange" src/main/host-tynn-account.ts \
     "const cookies = init.credentials === 'include' ? jar.get(new URL(url).origin) : undefined;" "const cookies = undefined as Map<string, string> | undefined;" \
@@ -490,15 +471,9 @@ probe "git-carries-the-credential-in-the-host" src/main/github-account-service.t
 probe "no-method-hands-out-a-credential" src/main/github-account-service.ts \
     "            case 'startSignIn': return account.startSignIn();" "            case 'startSignIn': return account.startSignIn();
             case 'cloneAuth': return account.cloneAuth(String(args[0] ?? ''));" \
-    test/github-account-host.test.ts "no method a window can ask for returns a credential"
+    test/github-account-host.test.ts "no method it answers returns a credential"
 
-probe "a-window-opens-only-githubs-pages" src/main/github-account-replica.ts \
-    "        if (!/^https:\\/\\/github\\.com\\//.test(url)) return;" "" \
-    test/github-account-host.test.ts "opens only GitHub"
 
-probe "typed-errors-survive-the-link" src/main/github-account-replica.ts \
-    "        if (carried.error) throw rebuilt(carried.error);" "        if (carried.error) throw new Error(carried.error.message);" \
-    test/github-account-host.test.ts "survives the link as that type"
 
 probe "the-seal-is-left-until-it-opens" src/main/github-account.ts \
     "        } catch { return { kind: 'unreadable' }; }" "        } catch { return { kind: 'none' }; }" \
@@ -514,9 +489,6 @@ probe "a-redirect-loop-stops" src/main/host-https-fetch.ts \
     "        if (hops >= REDIRECT_LIMIT) throw" "        if (hops >= 1000) throw" \
     test/host-https-fetch.test.ts "a loop stops at the limit"
 
-probe "the-card-is-there-as-a-window-connects" src/main/session-engine-server.ts \
-    "        if (this.#options.keyring) this.#event(conn, 'keyring.event', this.#options.keyring.dump());" "" \
-    test/keyring-host.test.ts "the card is there as the window connects"
 
 probe "the-keychain-coming-back-wakes-the-readers" src/main/keyring-service.ts \
     "                if (now && !ready) options.onReady?.();" "" \
@@ -573,10 +545,6 @@ probe "device-socket-survives-its-own-close" src/main/device-socket.ts \
     test/device-socket.test.ts "cannot take the host down"
 
 # One writer of a workspace's agent config
-probe "a-window-with-a-host-writes-nothing" src/main/compose.ts \
-    "            const host = input.hostConfigSync?.() ?? null;" "            const host = null as ReturnType<NonNullable<typeof input.hostConfigSync>>;" \
-    test/tynn-activation.test.ts "with a host, the window writes nothing"
-
 probe "the-host-prep-holds-the-lock" src/main/host-agent-keys.ts \
     "        ...(options.withConfig ? { withConfig: options.withConfig } : {})," "" \
     test/workspace-config-writer.test.ts "wired: the host"
@@ -709,7 +677,7 @@ probe "one-source-failing-stops-only-itself" src/main/keychain-migration.ts \
 
 # A book that does not parse
 probe "a-rebuilt-book-does-not-overwrite" src/main/keychain-migration.ts \
-    "        if (now === 'different') return 'keychain-differs';" "" \
+    "    if (now === 'different') return 'keychain-differs';" "" \
     test/keychain-migration-finishes.test.ts "the keychain wins, the seal stays"
 
 probe "the-bad-book-is-kept" src/main/keychain-migration.ts \
@@ -723,7 +691,7 @@ probe "a-book-that-cannot-be-read-stops" src/main/keychain-migration.ts \
 
 # S4's holds: only in a test build
 probe "the-holds-need-the-flag" src/main/migration-holds.ts \
-    "    if (typeof __GENIE_TEST_HOLDS__ === 'undefined' || !__GENIE_TEST_HOLDS__) return ports;" "" \
+    "    if (typeof __GENIE_TEST_HOLDS__ === 'undefined' || !__GENIE_TEST_HOLDS__) return null;" "" \
     test/migration-holds.test.ts "the ports as they were, whatever the environment says"
 
 

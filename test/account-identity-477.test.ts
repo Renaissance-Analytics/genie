@@ -42,9 +42,9 @@ describe('Claude identity comes only from the fields `claude auth status` report
         expect(parseClaudeAuthStatus(claudeStatus())).toEqual({ name: null, email: null, plan: null });
     });
 
-    it('never reads a key of another name in place of a missing one', () => {
+    it('never reads a key of another name in place of a missing one (the plan is the CLI\'s own subscriptionType, Tynn #988)', () => {
         expect(parseClaudeAuthStatus(claudeStatus({ subscriptionType: 'pro', organization: 'Fixture Org', userEmail: EMAIL, accessToken: 'fixture-token' })))
-            .toEqual({ name: null, email: null, plan: null });
+            .toEqual({ name: null, email: null, plan: 'pro' });
     });
 
     it('text that is not JSON is unknown', () => {

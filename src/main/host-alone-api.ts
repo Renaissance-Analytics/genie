@@ -103,6 +103,10 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
     'questions.files', 'questions.file', 'questions.visuals', 'files.openExternal', 'files.reveal',
     // A remote window's transport to another machine, owned by the calling connection (Tynn #941, 2f-2).
     'deviceLink.open', 'deviceLink.openRelay', 'deviceLink.send', 'deviceLink.close', 'deviceLink.openBrowser',
+    // What an older Genie sealed, into genie-host's own keychain; Tynn asked again (Tynn #959, 2g-3b).
+    'keychain.adoptLegacy', 'tynn.recheck', 'approvals.gate', 'window.view',
+    // A write to genie-host's registry, by main's window registry (Tynn #1007, 2g-4e).
+    'registry.write',
 ]);
 
 /** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
@@ -145,6 +149,16 @@ export interface HostAlonePorts {
     readonly deviceLinkProtocol?: HostApiDeps['deviceLinkProtocol'];
     /** What this host runs, for this machine's tray and quit (Tynn #953, 2g-2). Absent = nothing said. */
     readonly hostSummary?: HostApiDeps['hostSummary'];
+    readonly remoteWatch?: HostApiDeps['remoteWatch'];
+    readonly settingsWatch?: HostApiDeps['settingsWatch'];
+    /** What an older Genie sealed, adopted into this host's keychain (Tynn #959, 2g-3b). Absent = refused. */
+    readonly legacySecrets?: HostApiDeps['legacySecrets'];
+    readonly approvalsGate?: HostApiDeps['approvalsGate'];
+    readonly windowView?: HostApiDeps['windowView'];
+    /** genie-host's registry and its writes, for main's window registry (Tynn #1007, 2g-4e). Absent = refused. */
+    readonly registryFiles?: HostApiDeps['registryFiles'];
+    /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
+    readonly tynnRecheck?: HostApiDeps['tynnRecheck'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -294,6 +308,13 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.hostShell ? { hostShell: ports.hostShell } : {}),
         ...(ports.deviceLinkProtocol ? { deviceLinkProtocol: ports.deviceLinkProtocol } : {}),
         ...(ports.hostSummary ? { hostSummary: ports.hostSummary } : {}),
+        ...(ports.remoteWatch ? { remoteWatch: ports.remoteWatch } : {}),
+        ...(ports.settingsWatch ? { settingsWatch: ports.settingsWatch } : {}),
+        ...(ports.legacySecrets ? { legacySecrets: ports.legacySecrets } : {}),
+        ...(ports.approvalsGate ? { approvalsGate: ports.approvalsGate } : {}),
+        ...(ports.windowView ? { windowView: ports.windowView } : {}),
+        ...(ports.registryFiles ? { registryFiles: ports.registryFiles } : {}),
+        ...(ports.tynnRecheck ? { tynnRecheck: ports.tynnRecheck } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

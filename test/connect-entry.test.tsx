@@ -45,8 +45,8 @@ describe('the Command Window offers the two ways in (the owner: paste a link, or
         expect(connectPaletteActions(null)).toEqual([OPEN_SHARE_LINK_ACTION, CONNECT_WORKSTATIONS_ACTION]);
     });
 
-    it('a drone: neither — Tynn refuses a drone every connect-grant, so it offers nothing it would only be refused', () => {
-        expect(connectPaletteActions('drone')).toEqual([]);
+    it('a drone: "Open a share link…" only — a share link is how a drone opens another host (Tynn #963)', () => {
+        expect(connectPaletteActions('drone')).toEqual([OPEN_SHARE_LINK_ACTION]);
     });
 });
 

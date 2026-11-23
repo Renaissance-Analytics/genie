@@ -136,7 +136,9 @@ export class ProtocolTunnels implements ServerTransport {
         // A window reopening the same tunnel id replaces it, as the door replaces a window's connection.
         const previous = this.#tunnels.get(owner)?.get(id);
         if (previous) this.#end(previous, 'this window opened a replacement protocol connection', false);
-        const said = (payload && typeof payload === 'object' ? payload : {}) as { window?: unknown; label?: unknown };
+        const said = (payload && typeof payload === 'object' ? payload : {}) as { window?: unknown; label?: unknown; kind?: unknown };
+        // Main's own client's tunnel (window-tunnel.ts `own`), never a page's: the one thing keychain.adoptLegacy admits.
+        const own = said.kind === 'own';
         const window: TunnelWindow = said.window === 'remote' ? 'remote' : 'main';
         const label = typeof said.label === 'string' && said.label.length > 0 && said.label.length <= 120 ? said.label : 'this Genie window';
         const t: Tunnel = { binding: { owner, tunnel: id, window }, messages: new Set(), closes: new Set(), send, connectionId: null, browser: null, notice: null, closed: false };
@@ -146,7 +148,7 @@ export class ProtocolTunnels implements ServerTransport {
         if (this.#listeners.size === 0) return this.#end(t, 'Genie is still starting', true);
         const connection: ServerConnection = {
             remoteAddress: 'local-window',
-            preAuth: { kind: 'local', label, isOwner: true, workspaceId: null, readonly: false, window },
+            preAuth: { kind: 'local', label, isOwner: true, workspaceId: null, readonly: false, window, ...(own ? { own: true as const } : {}) },
             send: (text) => {
                 if (t.closed) return;
                 if (Buffer.byteLength(text, 'utf8') > LOCAL_FRAME_LIMIT_BYTES) return this.#end(t, CAP_REASON, true);

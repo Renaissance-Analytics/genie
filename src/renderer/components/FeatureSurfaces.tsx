@@ -7,7 +7,7 @@ import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { McpServerPanel } from './McpServerPanel.js';
-import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, Progress, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
 import { HotkeyCapture } from './HotkeyCapture.js';
@@ -15,8 +15,9 @@ import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePro
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
-import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
-import { patchWithinLine } from '../../core/toolchain-update.js';
+import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, defaultSelection, formatElapsed, installNote, langView, nextFix, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
@@ -24,7 +25,7 @@ import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
 import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
-import type { FeatureAction, FeatureData, ProcessLogOpen, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
+import type { FeatureAction, FeatureData, InstallPreview, ProcessLogOpen, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
 import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -1159,39 +1160,6 @@ export function ToolchainUpdateWarning({ warning, busy, onAction }: { warning: N
     );
 }
 
-/** The languages Genie installs side by side: each has its own section, never also a single-version row (Tynn #713). */
-const SIDE_BY_SIDE = ['php', 'node', 'python', 'java'] as const;
-type SideBySide = (typeof SIDE_BY_SIDE)[number];
-const LANG_TITLE: Record<SideBySide, string> = { php: 'PHP', node: 'Node', python: 'Python', java: 'Java' };
-const INSTALL_KIND = { php: 'toolchain.installPhp', node: 'toolchain.installNode', python: 'toolchain.installPython', java: 'toolchain.installJava' } as const;
-
-/**
- * A SIDE-BY-SIDE LANGUAGE'S INSTALLED VERSIONS AS CHIPS (Tynn #713), the default marked, and a patch update PER version -
- * the newest build on that version's own line (8.4.24 to 8.4.27). The patch is an Install beside the old version: it never
- * switches the default, and a workspace pinned to the old one keeps it. Hook-free: what it renders is what is tested.
- */
-export function LanguageVersionChips({ lang, managed, current, available, busy, onAction }: { lang: SideBySide; managed: readonly string[]; current: string | null; available: ReadonlyArray<{ readonly version: string; readonly installed: boolean }>; busy: boolean; onAction: SurfaceProps['onAction'] }) {
-    if (managed.length === 0) return null;
-    return (
-        <div data-version-chips={lang} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2">
-            {managed.map((v) => {
-                const isDefault = v === current;
-                const patch = patchWithinLine(lang, v, available);
-                return (
-                    <span key={v} data-version-chip={`${lang}:${v}`} data-default={isDefault ? 'true' : 'false'} className="inline-flex items-center gap-1">
-                        <Badge variant="soft" size="sm" {...(isDefault ? { color: 'blue' as const } : {})}>{isDefault ? <Icon name="star" size="xs" /> : null}{v}</Badge>
-                        {patch !== null ? (
-                            <Button size="xs" type="button" data-patch-update={`${lang}:${v}`} data-version={patch} disabled={busy} title={`Install ${LANG_TITLE[lang]} ${patch}, beside ${v}`} className="text-[12px]" onClick={() => onAction({ kind: INSTALL_KIND[lang], version: patch, consent: true })}>
-                                <Icon name="arrow-up" size="xs" />{patch}
-                            </Button>
-                        ) : null}
-                    </span>
-                );
-            })}
-        </div>
-    );
-}
-
 /** One row's state in a "Check for updates" run (Tynn #714): an icon and a word, the reason when it failed. */
 export function CheckStateMark({ tool, check }: { tool: string; check: ToolCheckState }) {
     const look = {
@@ -1234,18 +1202,39 @@ export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | 
     );
 }
 
-export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
+/**
+ * THE TOOLCHAIN (Tynn #962 — the redesign the owner approved on the ArtBoard, 2026-11-20; mockup
+ * .ai/sandbox/958-toolchain-mockup.html). A problems strip with one button per problem, logo cards grouped by type with
+ * ONE primary action each, progress drawn on the card it is for while the rest of the page stays usable, a side panel per
+ * tool, and an activity feed. No raw shell command anywhere: an install says "asks once" or "no password", and the
+ * command it runs is its tooltip. UI only: every control sends an action main already handles; the model is
+ * renderer/toolchain-view.ts.
+ */
+export function ToolchainSurface({ data, onAction: act, selected: initial }: SurfaceProps & { selected?: string | undefined }) {
     const tc = data.toolchain;
     const busy = tc?.busy ?? null;
-    // The click shows at once (genie#1306): the row is "Starting" until main's own step arrives, and is cleared by the
-    // next snapshot either way — an update never looks like nothing happened.
+    // The click shows at once (genie#1306): an update's card says "Starting" until main's own step arrives, and is cleared
+    // by the next snapshot either way — an update never looks like nothing happened.
     const [pending, setPending] = useState<{ tool: string; version?: string } | null>(null);
     useEffect(() => { setPending(null); }, [tc]);
+    // Main reports every install through ONE busy line; the card it is drawn on is the one the person clicked.
+    const [inFlight, setInFlight] = useState<{ card: string; at: number } | null>(null);
+    const [chosen, setChosen] = useState<string | null>(initial ?? null);
+    const [now, setNow] = useState(() => Date.now());
     const onAction: SurfaceProps['onAction'] = (action) => {
         if (action.kind === 'toolchain.update') setPending({ tool: action.tool, ...(action.version ? { version: action.version } : {}) });
+        const card = cardOfAction(action);
+        if (card !== null && action.kind !== 'toolchain.setDefault' && action.kind !== 'toolchain.login') setInFlight({ card, at: Date.now() });
         return act(action);
     };
     const updating = tc?.updating ?? (pending ? { ...pending, step: 'Starting' } : null);
+    const running = busy !== null || updating !== null;
+    useEffect(() => { if (tc && tc.busy === undefined && tc.updating === undefined && pending === null) setInFlight(null); }, [tc, pending]);
+    useEffect(() => {
+        if (!running) return undefined;
+        const tick = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(tick);
+    }, [running]);
     // First run: the surface has never been scanned — scan once on open instead of drawing skeletons until a click.
     const asked = useRef(false);
     useEffect(() => {
@@ -1254,272 +1243,459 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
             onAction({ kind: 'toolchain.check' });
         }
     }, [tc, onAction]);
-    // A language Genie installs side by side has its own section below; it is not also a single-version row (Tynn #713).
-    const hasSection = (tool: string): boolean => (SIDE_BY_SIDE as readonly string[]).includes(tool) && tc?.[tool as SideBySide] !== undefined;
-    const singles = tc ? tc.tools.filter((t) => !hasSection(t.tool)) : [];
+    const servicesWaiting = (data.services?.instances ?? []).filter((s) => s.status === 'docker-not-running').length;
+    const groups = tc ? toolchainCards(tc) : [];
+    const problems = tc ? toolchainProblems(tc, servicesWaiting) : [];
+    const fixable = problems.flatMap((p) => (p.action ? [p.action] : []));
+    // "FIX N PROBLEMS": the strip's actions one at a time, each after main has answered the last (toolchain-view nextFix).
+    const [fix, setFix] = useState<{ queue: FeatureAction[]; waiting: boolean; refusals: number } | null>(null);
+    useEffect(() => {
+        if (!fix || fix.waiting) return;
+        const { send, rest } = nextFix(fix.queue, tc, fix.refusals);
+        if (!send) {
+            if (rest.length === 0) setFix(null);
+            return;
+        }
+        setFix({ ...fix, queue: rest, waiting: true });
+        void Promise.resolve(onAction(send)).finally(() => setFix((f) => (f ? { ...f, waiting: false } : f)));
+        // onAction is a fresh closure every render; the queue advances on the snapshot, not on it.
+    }, [fix, tc]);
+    const cards = groups.flatMap((g) => g.cards);
+    const selectedKey = chosen !== null && cards.some((c) => c.key === chosen) ? chosen : defaultSelection(groups, problems);
+    const selectedCard = cards.find((c) => c.key === selectedKey) ?? null;
     const checkRows = tc?.checkRun?.rows ?? {};
-    const missing = singles.filter((t) => t.tone === 'not-installed');
-    // A refused or failed action, drawn on the row it was for (who or what is busy, verbatim); a PHP version's goes to
-    // PHP versions, and one for a tool with no row (a prerequisite such as vcredist) is said above the rows, never dropped.
+    // A refused or failed action, drawn on the card it was for (who or what is busy, verbatim); a language version's goes to
+    // its panel, and one for a tool with no card (a prerequisite such as vcredist) is said above the cards, never dropped.
     const refusals = tc?.refusals ?? [];
     const toolRefusal = (tool: string) => refusals.find((r) => r.tool === tool && r.version === undefined) ?? null;
-    const rowless = refusals.filter((r) => r.version === undefined && !(tc?.tools ?? []).some((t) => t.tool === r.tool));
+    const rowless = refusals.filter((r) => r.version === undefined && !(tc?.tools ?? []).some((t) => t.tool === r.tool) && r.tool !== 'machine-path');
+    const progressOf = (key: string): { step: string; elapsed: string | null } | null => {
+        if (updating && cardKeyOfTool(updating.tool) === key) return { step: updating.step, elapsed: inFlight?.card === key ? formatElapsed(now - inFlight.at) : null };
+        if (busy !== null && inFlight?.card === key) return { step: busy, elapsed: formatElapsed(now - inFlight.at) };
+        return null;
+    };
+    const elevated = Object.values(tc?.installs ?? {}).some((p) => 'label' in p && p.elevated);
+    const tally = toolchainTally(groups, problems);
     return (
         <div data-surface="toolchain" className="flex h-full min-h-0 flex-col">
             <Header title="Toolchain">
+                {elevated ? (
+                    <span data-toolchain-asks="" title="Installs and updates run as you; only the system package manager asks for your password, once per install" className="inline-flex h-6 items-center gap-1.5 rounded-full border border-[var(--border-1)] bg-[var(--bg-2)] px-2.5 text-xs text-[var(--fg-2)]">
+                        <Icon name="lock" size="xs" />Asks once per system install
+                    </span>
+                ) : null}
                 <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
-                <Button size="xs" type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
-                    Check and repair
+                <Button size="xs" type="button" variant="ghost" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                    <Icon name="stethoscope" size="xs" />Check and repair
                 </Button>
+                {fixable.length > 0 ? (
+                    <Button size="sm" type="button" color="blue" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
+                        <Icon name="wrench" size="xs" />Fix {fixable.length} {fixable.length === 1 ? 'problem' : 'problems'}
+                    </Button>
+                ) : null}
             </Header>
-            {busy !== null ? <p data-toolchain-busy="" className="px-5 py-2 text-sm text-[var(--fg-2)]">{busy}</p> : null}
-            {tc?.result ? <p data-toolchain-result="" className="px-5 py-2 text-sm">{tc.result}</p> : null}
-            {tc?.warning ? <ToolchainUpdateWarning warning={tc.warning} busy={busy !== null || updating !== null} onAction={onAction} /> : null}
-            {tc?.findings && tc.findings.length > 0 ? (
-                <ul data-toolchain-findings={tc.findings.length} className="divide-y divide-[var(--border-1)] border-b border-[var(--border-1)]">
-                    {tc.findings.map((f, i) => (
-                        <li key={`${f.kind}-${i}`} data-finding={f.kind} data-result={f.result.kind} className="flex items-center gap-3 px-5 py-2 text-sm">
-                            <span>
-                                {f.kind === 'path-shadow' ? `${f.tool} ${f.first.version} at ${f.first.path} was running instead of ${f.newer.version} at ${f.newer.path}. ` : f.kind === 'php-ca' || f.kind === 'genie-node' ? `${f.problem}. ` : `Missing: ${f.missing.join(', ')}. `}
-                                {f.result.kind === 'repaired' ? f.result.detail : f.result.reason}
-                            </span>
-                            {f.result.kind === 'needs-install' ? (
-                                <Button size="xs" type="button" disabled={busy !== null} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: (f.result as { tool: string }).tool, consent: true })}>Install</Button>
-                            ) : null}
-                        </li>
-                    ))}
-                </ul>
-            ) : null}
-            {rowless.map((r) => (
-                <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
-            ))}
-            {tc?.machinePath ? <MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /> : null}
-            {tc?.php ? <PhpVersions php={tc.php} check={checkRows.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
-            {tc?.node ? <NodeVersions node={tc.node} check={checkRows.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
-            {tc?.go ? <GoVersions go={tc.go} current={tc.defaults?.go ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
-            {tc?.python ? <PythonVersions python={tc.python} check={checkRows.python} current={tc.defaults?.python ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'python' && r.version !== undefined)} /> : null}
-            {tc?.dotnet ? <DotnetVersions dotnet={tc.dotnet} current={tc.defaults?.dotnet ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'dotnet' && r.version !== undefined)} /> : null}
-            {tc?.rust ? <RustVersions rust={tc.rust} current={tc.defaults?.rust ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'rust' && r.version !== undefined)} /> : null}
-            {tc?.ruby ? <RubyVersions ruby={tc.ruby} current={tc.defaults?.ruby ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'ruby' && r.version !== undefined)} /> : null}
-            {tc?.playwright ? <PlaywrightBrowsers playwright={tc.playwright} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'playwright')} /> : null}
-            {tc?.java ? <JavaVersions java={tc.java} check={checkRows.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
-                <>
-                    {missing.length > 0 ? (
-                        <p data-toolchain-missing={missing.length} className="px-5 py-2 text-sm text-[var(--fg-2)]">
-                            Not on this machine yet: {missing.map((t) => t.tool).join(', ')}. Each row shows the command Genie would run; nothing runs until you click Install.
-                        </p>
-                    ) : null}
-                    {/* GROUPED BY TYPE (the owner, 2026-10-18): languages, package managers, version control, containers, agent CLIs. */}
-                    {groupTools(singles).map((g) => (
-                    <section key={g.group} data-tool-group={g.group}>
-                    <h3 className="px-5 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-[var(--fg-3)]">{g.label}</h3>
-                    <ul className="divide-y divide-[var(--border-1)]">
-                        {g.tools.map((t) => {
-                            const plan = t.tone === 'not-installed' ? tc.installs?.[t.tool] : undefined;
-                            const refusal = toolRefusal(t.tool);
-                            const word = toneLabel(t.tone);
-                            return (
-                                <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex flex-wrap items-center gap-3 px-5 py-2">
-                                    <span className="font-medium">{t.tool}</span>
-                                    {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
-                                    {checkRows[t.tool] ? <CheckStateMark tool={t.tool} check={checkRows[t.tool]!} /> : null}
-                                    {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
-                                    {t.tone === 'security-update' ? (
-                                        <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
-                                    ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : t.tone === 'broken' ? { color: 'red' as const } : {})}>{word}</Badge> : null}
-                                    {t.advisory ? <span data-tool-advisory={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.advisory}</span> : null}
-                                    {/* Tynn #698: an agent CLI the health check found cannot run says why; an Update cannot fix it (the repair is its own action). */}
-                                    {t.problem ? <span data-tool-problem={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.problem}</span> : null}
-                                    {/* It runs and is signed out: a login matter, never Broken. The provider's own login, as the Agent view's Log in opens it. */}
-                                    {t.signedOut ? (
-                                        <>
-                                            <Badge variant="soft" size="sm" color="amber" data-tool-signed-out={t.tool}>Not signed in</Badge>
-                                            <Button type="button" size="sm" color="blue" disabled={busy !== null} data-action="toolchain-login" onClick={() => onAction({ kind: 'toolchain.login', tool: t.tool })}>Log in</Button>
-                                        </>
-                                    ) : null}
-                                    {/* Update from here (genie#1306): real buttons — a language's patch first, another line second; the step while it runs; the end, either way. */}
-                                    {t.tone === 'broken' ? <CliRepairAction t={t} busy={busy !== null} updating={updating} onAction={onAction} /> : t.installed !== null ? <ToolUpdateActions t={t} busy={busy !== null} updating={updating} updated={tc.updated ?? null} refusal={refusal} onAction={onAction} /> : null}
-                                    {plan && 'label' in plan ? (
-                                        <>
-                                            <span data-install-command={t.tool} className="ml-auto truncate font-mono text-xs text-[var(--fg-3)]">{plan.label}{plan.elevated ? ' — asks for permission' : ''}</span>
-                                            <Button size="xs" type="button" disabled={busy !== null} className="shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: t.tool, consent: true })}>Install</Button>
-                                        </>
-                                    ) : plan ? (
-                                        <span data-install-refused={t.tool} className="ml-auto text-xs text-[var(--fg-3)]">{plan.refused}</span>
-                                    ) : null}
-                                    {refusal && (t.installed === null || t.tone === 'broken') ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
-                                </li>
-                            );
-                        })}
-                    </ul>
-                    </section>
+                <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1">
+                    <div className="min-h-0 overflow-y-auto pb-4">
+                        {tc.warning ? <ToolchainUpdateWarning warning={tc.warning} busy={running} onAction={onAction} /> : null}
+                        {rowless.map((r) => (
+                            <p key={r.tool} data-tool-refusal={r.tool} className="px-6 pt-3 text-sm text-[var(--danger)]">{r.reason}</p>
+                        ))}
+                        <ToolchainTallies tally={tally} />
+                        {problems.length > 0 ? <ProblemsStrip problems={problems} busy={running} onAction={onAction} onOpen={setChosen} /> : null}
+                        {tc.machinePath ? <div className="mx-6 mt-3 overflow-hidden rounded-xl border border-[var(--border-1)]"><MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /></div> : null}
+                        {groups.map((g) => (
+                            <section key={g.group} data-card-group={g.group} className="px-6">
+                                <h3 className="mb-2 mt-4 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">
+                                    {g.label}<span aria-hidden="true" className="h-px flex-1 bg-[var(--border-1)]" />
+                                </h3>
+                                <ul className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5">
+                                    {g.cards.map((c) => (
+                                        <ToolCardView
+                                            key={c.key}
+                                            card={c}
+                                            selected={c.key === selectedKey}
+                                            busy={running}
+                                            updating={updating}
+                                            updated={tc.updated ?? null}
+                                            refusal={c.tool ? toolRefusal(c.tool.tool) : null}
+                                            check={c.tool ? checkRows[c.tool.tool] : undefined}
+                                            install={c.tool ? tc.installs?.[c.tool.tool] : undefined}
+                                            progress={progressOf(c.key)}
+                                            onSelect={() => setChosen(c.key)}
+                                            onAction={onAction}
+                                        />
+                                    ))}
+                                </ul>
+                            </section>
+                        ))}
+                    </div>
+                    <aside className="flex min-h-0 flex-col overflow-y-auto border-t border-[var(--border-1)] bg-[var(--bg-1)] lg:border-l lg:border-t-0">
+                        {selectedCard ? <ToolPanel card={selectedCard} tc={tc} busy={busy !== null} check={selectedCard.lang ? checkRows[selectedCard.lang] : undefined} onAction={onAction} onClose={() => setChosen(null)} /> : null}
+                        <ActivityFeed tc={tc} />
+                    </aside>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/** The three tiles: ready, updates (and how many of them are security fixes), and what needs the person. */
+function ToolchainTallies({ tally }: { tally: ReturnType<typeof toolchainTally> }) {
+    const tile = (id: string, n: number, word: string, dot: string) => (
+        <div data-tally={id} className="flex items-center gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] px-3.5 py-3">
+            <span aria-hidden="true" className={`size-2.5 shrink-0 rounded-full ${dot}`} />
+            <div className="leading-tight"><b className="text-xl font-semibold">{n}</b><br /><span className="text-xs text-[var(--fg-2)]">{word}</span></div>
+        </div>
+    );
+    return (
+        <div data-toolchain-tallies="" className="grid grid-cols-3 gap-3 px-6 pt-4">
+            {tile('ready', tally.ready, 'ready', 'bg-[var(--success)]')}
+            {tile('updates', tally.updates, tally.security > 0 ? `updates · ${tally.security} security` : 'updates', 'bg-[var(--warning)]')}
+            {tile('need-you', tally.needYou, 'need you', 'bg-[var(--danger)]')}
+        </div>
+    );
+}
+
+/** THE PROBLEMS STRIP: each problem, why it matters, and its ONE button (or, with nothing one click fixes, its panel). */
+export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: readonly ToolchainProblem[]; busy: boolean; onAction: SurfaceProps['onAction']; onOpen: (card: string) => void }) {
+    return (
+        <ul data-toolchain-problems={problems.length} className="mx-6 mt-3 divide-y divide-[var(--border-1)] overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg-1))]">
+            {problems.map((p) => (
+                <li key={p.key} data-problem={p.key} className="flex items-center gap-3 px-3.5 py-2.5">
+                    <ToolLogo tool={p.card} />
+                    <div className="min-w-0">
+                        <b className="text-sm font-semibold">{p.title}</b>
+                        {p.why ? <div className="text-xs text-[var(--fg-2)]">{p.why}</div> : null}
+                    </div>
+                    <span className="ml-auto flex shrink-0 items-center gap-2">
+                        {p.note ? <span className="font-mono text-[11px] text-[var(--fg-3)]">{p.note}</span> : null}
+                        {p.action ? (
+                            <Button type="button" size="sm" color="red" data-problem-action={p.key} disabled={busy} onClick={() => onAction(p.action!)}>{p.label}</Button>
+                        ) : (
+                            <Button type="button" size="sm" variant="ghost" data-problem-action={p.key} onClick={() => onOpen(p.card)}>{p.label}</Button>
+                        )}
+                    </span>
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+/** A card's status in its corner: an icon, named for a screen reader and on hover. Quiet and missing cards have none. */
+function CardStatus({ card }: { card: ToolCard }) {
+    const word = card.tool?.signedOut ? 'Not signed in' : card.tool ? toneLabel(card.tool.tone) : null;
+    const look = {
+        ok: { icon: 'check', tone: 'bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)]', word: word ?? 'Up to date' },
+        update: { icon: 'arrow-up', tone: 'bg-[color-mix(in_srgb,var(--warning)_15%,transparent)] text-[var(--warning)]', word: word ?? 'Update available' },
+        problem: { icon: 'circle-alert', tone: 'bg-[color-mix(in_srgb,var(--danger)_15%,transparent)] text-[var(--danger)]', word: word ?? 'Needs you' },
+    }[card.state as 'ok' | 'update' | 'problem'];
+    if (!look) return null;
+    return (
+        <span data-card-status={card.state} role="img" aria-label={look.word} title={look.word} className={`absolute right-3 top-3 grid size-5 place-items-center rounded-full ${look.tone}`}>
+            <Icon name={look.icon} size="xs" />
+        </span>
+    );
+}
+
+/** The step, the elapsed time, and a bar, ON the card; the rest of the page goes on working. */
+function CardProgress({ card, progress }: { card: ToolCard; progress: { step: string; elapsed: string | null } }) {
+    return (
+        <div data-card-progress={card.key} {...(card.tool ? { 'data-tool-updating': card.tool.tool } : {})} className="mt-auto flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--fg-2)]">
+                <span className="flex min-w-0 items-center gap-1.5"><Icon name="loader-circle" size="xs" className="shrink-0 animate-spin" /><span className="truncate">{progress.step}</span></span>
+                {progress.elapsed !== null ? <span data-card-elapsed="" className="shrink-0 font-mono">{progress.elapsed}</span> : null}
+            </div>
+            <Progress indeterminate size="sm" color="blue" aria-label={`${card.title}: ${progress.step}`} />
+        </div>
+    );
+}
+
+/**
+ * ONE TOOL'S CARD: its logo, name and version, its versions as chips (the default starred), its status, and ONE primary
+ * action (`data-card-primary`) — or, while something runs for it, the progress. Clicking the card opens its panel; that
+ * is never disabled, so the page stays usable while anything runs. Hook-free: what it renders is what is tested.
+ */
+export function ToolCardView({ card, selected, busy, updating, updated, refusal, check, install, progress, onSelect, onAction }: {
+    card: ToolCard; selected: boolean; busy: boolean; updating: ToolchainData['updating'] | null; updated: ToolchainData['updated'] | null;
+    refusal: ToolchainRefusal | null; check: ToolCheckState | undefined; install: InstallPreview | undefined;
+    progress: { step: string; elapsed: string | null } | null; onSelect: () => void; onAction: SurfaceProps['onAction'];
+}) {
+    const t = card.tool;
+    const missing = card.state === 'missing';
+    const versionsButton = card.lang !== null || card.key === 'playwright'
+        ? <Button type="button" size="sm" variant="ghost" data-open-panel={card.key} onClick={onSelect}>{card.key === 'playwright' ? 'Browsers' : 'Versions'}</Button>
+        : null;
+    const note = installNote(install);
+    let actions: React.ReactNode = null;
+    if (t && t.tone === 'broken') {
+        actions = <span data-card-primary="repair" className="contents"><CliRepairAction t={t} busy={busy} updating={updating} onAction={onAction} /></span>;
+    } else if (t && t.signedOut) {
+        actions = (
+            <>
+                <Button type="button" size="sm" color="blue" data-card-primary="login" data-action="toolchain-login" disabled={busy} onClick={() => onAction({ kind: 'toolchain.login', tool: t.tool })}>Log in</Button>
+                <Badge variant="soft" size="sm" color="amber" data-tool-signed-out={t.tool}>Not signed in</Badge>
+            </>
+        );
+    } else if (t && t.installed !== null) {
+        const offered = t.patch !== undefined || t.upgrade !== undefined || ((t.tone === 'update-available' || t.tone === 'security-update') && t.latest) || t.tone === 'unknown';
+        actions = (
+            <>
+                <span data-card-primary="update" className="contents"><ToolUpdateActions t={t} busy={busy} updating={updating} updated={updated} refusal={refusal} onAction={onAction} /></span>
+                {offered ? null : versionsButton}
+            </>
+        );
+    } else if (t && t.installed === null) {
+        actions = install && 'label' in install ? (
+            <>
+                <Button type="button" size="sm" color={card.key === 'docker' ? 'red' : 'blue'} data-card-primary="install" data-action="toolchain-install" disabled={busy} title={install.label} onClick={() => onAction({ kind: 'toolchain.install', tool: t.tool, consent: true })}>Install</Button>
+                {note ? <span data-install-note={t.tool} title={install.label} className="font-mono text-[11px] text-[var(--fg-3)]">{note}</span> : null}
+            </>
+        ) : install ? (
+            <span data-install-refused={t.tool} className="text-xs text-[var(--fg-3)]">{install.refused}</span>
+        ) : null;
+    } else if (card.primary?.kind === 'patch') {
+        const lang = card.lang!;
+        actions = (
+            <>
+                <Button type="button" size="sm" color="blue" data-card-primary="patch" data-version={card.primary.version} disabled={busy} title={`Install ${card.title} ${card.primary.version}, beside ${card.primary.from}`} onClick={() => onAction({ kind: INSTALL_KIND[lang], version: (card.primary as { version: string }).version, consent: true } as FeatureAction)}>
+                    Install {card.primary.version}
+                </Button>
+                {versionsButton}
+            </>
+        );
+    } else if (card.primary?.kind === 'install') {
+        const lang = card.lang!;
+        const version = card.primary.version;
+        actions = (
+            <>
+                <Button type="button" size="sm" color="blue" data-card-primary="install" data-version={version} disabled={busy} onClick={() => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)}>{card.primary.label}</Button>
+                <span className="font-mono text-[11px] text-[var(--fg-3)]">no password</span>
+            </>
+        );
+    } else if (card.refused) {
+        actions = <span data-card-refused={card.key} className="text-xs text-[var(--fg-3)]">{card.refused}</span>;
+    } else {
+        actions = versionsButton;
+    }
+    return (
+        <li
+            data-tool-card={card.key}
+            {...(t ? { 'data-tool': t.tool, 'data-tone': t.tone } : {})}
+            data-card-state={card.state}
+            data-selected={selected ? 'true' : 'false'}
+            className={`relative flex min-h-28 flex-col gap-2 rounded-xl border p-3 ${missing ? 'border-dashed border-[var(--border-1)] bg-transparent' : 'border-[var(--border-1)] bg-[var(--bg-1)]'} ${selected ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : ''}`}
+        >
+            <Button type="button" variant="ghost" data-select-tool={card.key} aria-pressed={selected} className="h-auto justify-start gap-2.5 p-0 pr-6 text-left hover:bg-transparent" onClick={onSelect}>
+                <ToolLogo tool={card.key} />
+                <span className="flex min-w-0 flex-col">
+                    <span className="text-sm font-semibold text-[var(--fg-1)]">{card.title}</span>
+                    <span className={`truncate font-mono text-xs ${card.version === null ? 'text-[var(--fg-3)]' : 'text-[var(--fg-2)]'}`}>{card.version ?? 'not here'}</span>
+                </span>
+            </Button>
+            <CardStatus card={card} />
+            {card.chips.length > 0 ? (
+                <span data-version-chips={card.key} className="flex flex-wrap gap-1">
+                    {card.chips.map((c) => (
+                        <span key={c.version} data-version-chip={`${card.key}:${c.version}`} data-default={c.isDefault ? 'true' : 'false'} className={`rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${c.isDefault ? 'border-[color-mix(in_srgb,var(--primary)_50%,transparent)] bg-[color-mix(in_srgb,var(--primary)_14%,transparent)] text-[var(--primary)]' : 'border-[var(--border-1)] bg-[var(--bg-2)] text-[var(--fg-2)]'}`}>
+                            {c.system ? `system ${c.version}` : c.version}{c.isDefault && !c.system ? ' ★' : ''}
+                        </span>
                     ))}
-                </>
+                </span>
+            ) : null}
+            {check ? <CheckStateMark tool={t?.tool ?? card.key} check={check} /> : null}
+            {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
+            {t?.tone === 'security-update' ? <span data-tool-security={t.tool} className="self-start rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{toneLabel(t.tone)}</span> : null}
+            {t?.advisory ? <span data-tool-advisory={t.tool} className="text-xs text-[var(--danger)]">{t.advisory}</span> : null}
+            {/* Tynn #698: an agent CLI the health check found cannot run says why; an Update cannot fix it (the repair is its own action). */}
+            {t?.problem ? <span data-tool-problem={t.tool} className="text-xs text-[var(--danger)]">{t.problem}</span> : null}
+            {progress ? (
+                <CardProgress card={card} progress={progress} />
+            ) : (
+                <div data-card-actions="" className="mt-auto flex flex-wrap items-center gap-1.5 [&_.ml-auto]:ml-0">{actions}</div>
+            )}
+            {refusal && t && (t.installed === null || t.tone === 'broken') ? <span data-tool-refusal={t.tool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+        </li>
+    );
+}
+
+/** How each language's panel words itself — the words each of its sections used before #962. */
+const LANG_COPY: Readonly<Record<LangKey, { readonly heading: string; readonly name: string; readonly means: string; readonly binary: string; readonly source: string; readonly refusedDot: boolean }>> = {
+    php: { heading: 'PHP versions', name: 'PHP', means: '`php` is', binary: 'php', source: 'windows.php.net (checked against its published sha256)', refusedDot: false },
+    node: { heading: 'Node versions', name: 'Node', means: '`node` is', binary: 'node', source: 'nodejs.org (checked against its published sha256)', refusedDot: false },
+    go: { heading: 'Go versions', name: 'Go', means: '`go` is', binary: 'go', source: 'go.dev (checked against its published sha256)', refusedDot: false },
+    python: { heading: 'Python versions', name: 'Python', means: '`python` and `pip` are', binary: 'python', source: 'python.org (checked against its published sha256)', refusedDot: true },
+    java: { heading: 'Java (Temurin JDKs)', name: 'Java', means: '`java` and `javac` are', binary: 'java', source: 'Eclipse Temurin from Adoptium (checked against its published sha256)', refusedDot: true },
+    ruby: { heading: 'Ruby versions', name: 'Ruby', means: '`ruby`, `gem` and `bundle` are', binary: 'ruby', source: "ruby-lang.org's source on Linux, RubyInstaller on Windows (checked against the published sha256)", refusedDot: true },
+    rust: { heading: 'Rust versions', name: 'Rust', means: '`rustc` and `cargo` are', binary: 'rustc', source: 'rustup (rust-lang.org; each part verified)', refusedDot: true },
+    dotnet: { heading: '.NET SDKs', name: '.NET SDK', means: '`dotnet` is', binary: 'dotnet', source: 'Microsoft (checked against its published sha512)', refusedDot: true },
+};
+
+/**
+ * THE SIDE PANEL for the chosen card: its logo and what its command points at; a language's versions (the default as a
+ * radio, the system copy, the sites pinned to each, a patch per version, Remove, and Install another version); Playwright's
+ * browsers; or, for a tool Genie keeps one copy of, what it is and where it updates from.
+ */
+function ToolPanel({ card, tc, busy, check, onAction, onClose }: { card: ToolCard; tc: ToolchainData; busy: boolean; check: ToolCheckState | undefined; onAction: SurfaceProps['onAction']; onClose: () => void }) {
+    const view = card.lang ? langView(tc, card.lang) : undefined;
+    const current = card.lang ? tc.defaults?.[card.lang] ?? null : null;
+    const binary = card.lang ? LANG_COPY[card.lang].binary : card.tool?.tool ?? card.key;
+    const dir = view?.managed.find((m) => m.version === current) as { dir?: string } | undefined;
+    return (
+        <div data-toolchain-panel={card.key} className="border-b border-[var(--border-1)]">
+            <div className="flex items-center gap-3 border-b border-[var(--border-1)] px-5 py-4">
+                <ToolLogo tool={card.key} size="lg" />
+                <div className="min-w-0">
+                    <div className="text-base font-semibold">{card.title}</div>
+                    <div className="truncate font-mono text-[11px] text-[var(--fg-3)]">{binary} → {card.version ?? 'not here'}{dir?.dir ? ` · ${dir.dir}` : ''}</div>
+                </div>
+                <Button type="button" size="xs" variant="ghost" className="ml-auto" aria-label="Close" onClick={onClose}><Icon name="x" size="xs" /></Button>
+            </div>
+            {card.lang && view ? (
+                <LanguagePanel lang={card.lang} view={view} current={current} busy={busy} check={check} onAction={onAction} refusals={(tc.refusals ?? []).filter((r) => r.tool === card.lang && r.version !== undefined)} />
+            ) : card.key === 'playwright' && tc.playwright ? (
+                <PlaywrightBrowsers playwright={tc.playwright} busy={busy} onAction={onAction} refusals={(tc.refusals ?? []).filter((r) => r.tool === 'playwright')} />
+            ) : (
+                <section data-tool-panel={card.key} className="flex flex-col gap-1 px-5 py-3.5 text-sm">
+                    <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">On this machine</h4>
+                    <p className="text-[var(--fg-2)]">{card.tool?.installed ? `${card.title} ${card.tool.installed}` : `${card.title} is not on this machine.`}</p>
+                    {card.tool?.latest && card.tool.latest !== card.tool.installed ? <p className="text-xs text-[var(--fg-3)]">Newest: {card.tool.latest}</p> : null}
+                    {card.tool?.source ? <p className="text-xs text-[var(--fg-3)]">Updates from {card.tool.source}.</p> : null}
+                    {card.tool?.signedOut ? <p className="text-xs text-[var(--warning)]">Signed out: its agents start once you log in.</p> : null}
+                </section>
             )}
         </div>
     );
 }
 
 /**
- * T4 — PHP VERSIONS: what Genie manages (each with the sites pinned to it; Remove is refused while there are any, and the
- * button says why before it is pressed), the PATH PHP an unpinned site runs, and the versions this release can install —
- * each Install is the person's consent. Where Genie installs none (macOS/Linux) it says so instead of offering a button.
+ * ONE LANGUAGE'S VERSIONS, in the panel: "what `php` means everywhere" as a radio per version and one for the system's
+ * copy; each version's sites (a pinned version's Remove is refused, and says why before it is pressed), its advisory and
+ * its patch (installed BESIDE it, never switching anything); and Install another version — or, where Genie installs none
+ * here, why. Every handle is the one its section had before #962 (`data-<lang>-version`, `-install`, `-refusal`…).
  */
-function PhpVersions({ php, current = null, busy, onAction, refusals = [], check }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = php.available.filter((a) => !a.installed);
+function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }: { lang: LangKey; view: NonNullable<ReturnType<typeof langView>>; current: string | null; busy: boolean; check: ToolCheckState | undefined; onAction: SurfaceProps['onAction']; refusals: readonly ToolchainRefusal[] }) {
+    const copy = LANG_COPY[lang];
+    const addable = view.available.filter((a) => !a.installed);
+    const attr = (suffix: string, value: string | number) => ({ [`data-${lang}-${suffix}`]: String(value) });
     return (
-        <section data-php-versions={php.managed.length} className="border-b border-[var(--border-1)]">
-            <div className="flex items-center gap-3 px-5 pt-3">
-                <h3 className="text-sm font-medium">PHP versions</h3>
-                {check ? <CheckStateMark tool="php" check={check} /> : null}
-            </div>
-            <LanguageVersionChips lang="php" managed={php.managed.map((m) => m.version)} current={current} available={php.available} busy={busy} onAction={onAction} />
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`php` is PHP {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="php" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'php', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
+        <section {...attr('versions', view.managed.length)} className="flex flex-col gap-1.5 px-5 py-3.5">
+            <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">
+                <span>Default · what <span className="font-mono normal-case">{copy.binary}</span> means everywhere</span>
+                {check ? <CheckStateMark tool={lang} check={check} /> : null}
+            </h4>
+            {current !== null ? <p className="text-xs text-[var(--fg-3)]">{copy.means} {copy.name} {current}, Genie's default.</p> : null}
             {refusals.map((r) => (
-                <p key={r.version} data-php-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+                <p key={r.version} {...attr('refusal', r.version ?? '')} className="text-xs text-[var(--danger)]">{r.reason}</p>
             ))}
-            <p data-php-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {php.system ? `Unpinned php sites run PHP ${php.system.version} from your PATH.` : 'No php-cgi on your PATH: an unpinned php site cannot start until PHP is installed above.'}
+            <ul role="radiogroup" aria-label={`${copy.name}: the default`} className="flex flex-col gap-1.5">
+                {view.managed.map((m) => {
+                    const usedBy = (m as { usedBy?: readonly string[] }).usedBy;
+                    const advisory = (m as { advisory?: string }).advisory;
+                    const patch = patchFor(lang, m.version, view);
+                    const isDefault = m.version === current;
+                    const pinned = usedBy !== undefined && usedBy.length > 0;
+                    return (
+                        <li key={m.version} {...attr('version', m.version)} {...(usedBy !== undefined ? attr('used', usedBy.length) : {})} data-default={isDefault ? 'true' : 'false'} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-2)] px-2.5 py-2 text-sm">
+                            <DefaultMark lang={lang} version={m.version} current={current} busy={busy} onAction={onAction} />
+                            <b className="font-semibold">{m.version}</b>
+                            {advisory ? <Badge variant="soft" size="sm" color="red">security fix</Badge> : null}
+                            <span className="flex-1" />
+                            {pinned ? <span title={`pinned by ${usedBy!.join(', ')}`} className="rounded bg-[var(--bg-3)] px-1.5 text-[11px] text-[var(--fg-2)]">{usedBy!.length === 1 ? usedBy![0] : `${usedBy!.length} sites`}</span> : null}
+                            {patch !== null ? (
+                                <Button size="xs" type="button" color={advisory ? 'red' : 'blue'} data-patch-update={`${lang}:${m.version}`} data-version={patch} disabled={busy} title={`Install ${copy.name} ${patch}, beside ${m.version}`} onClick={() => onAction({ kind: INSTALL_KIND[lang], version: patch, consent: true } as FeatureAction)}>
+                                    → {patch}
+                                </Button>
+                            ) : null}
+                            <Button size="xs" type="button" variant="ghost" disabled={busy || pinned || isDefault} title={pinned ? `Pinned by ${usedBy!.join(', ')} — change their PHP version first` : isDefault ? `${copy.name} ${m.version} is the default — make another version the default first` : undefined} onClick={() => onAction({ kind: REMOVE_KIND[lang], version: m.version } as FeatureAction)}>Remove</Button>
+                            {advisory ? <span {...attr('advisory', m.version)} className="basis-full text-xs text-[var(--danger)]">{advisory}</span> : null}
+                        </li>
+                    );
+                })}
+                <li {...attr('system-row', '')} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-2)] px-2.5 py-2 text-sm">
+                    {current === null ? (
+                        <span role="radio" aria-checked="true" data-system-default={lang} title="The default" className="grid size-4 shrink-0 place-items-center rounded-full border-2 border-[var(--primary)]"><span className="size-1.5 rounded-full bg-[var(--primary)]" /></span>
+                    ) : (
+                        <Button size="xs" type="button" variant="ghost" role="radio" aria-checked="false" data-use-system={lang} disabled={busy} title="Use the one on your PATH instead" className="size-4 shrink-0 rounded-full border-2 border-[var(--border-1)] p-0" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version: null })}>
+                            <span className="sr-only">Use the one on your PATH instead</span>
+                        </Button>
+                    )}
+                    <span>System</span>
+                    <span className="font-mono text-[11px] text-[var(--fg-3)]">{view.system ? `${copy.binary} ${view.system.version}` : 'none on your PATH'}</span>
+                </li>
+            </ul>
+            <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">
+                {lang === 'php'
+                    ? view.system ? `Unpinned php sites run PHP ${view.system.version} from your PATH.` : 'No php-cgi on your PATH: an unpinned php site cannot start until PHP is installed above.'
+                    : view.system ? `The ${copy.binary} on your PATH is ${view.system.version}.` : `No ${copy.binary} on your PATH.`}
             </p>
             {/* THE FLOOR (PHP2Shell, core/php-advisories.ts): a version under it says so in red, beside the number — never a quiet "update available". */}
-            {php.system?.advisory ? <p data-php-system-advisory="" className="px-5 py-1 text-xs text-[var(--danger)]">{php.system.advisory}</p> : null}
-            <ul className="divide-y divide-[var(--border-1)]">
-                {php.managed.map((m) => (
-                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">PHP {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        {m.usedBy.length > 0 ? <span className="text-xs text-[var(--fg-2)]">pinned by {m.usedBy.join(', ')}</span> : null}
-                        {m.advisory ? <span data-php-advisory={m.version} className="basis-full text-xs text-[var(--danger)]">{m.advisory}</span> : null}
-                        <DefaultMark lang="php" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.usedBy.length > 0 || m.version === current} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : m.version === current ? `PHP ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</Button>
-                    </li>
-                ))}
-            </ul>
-            {php.installRefused ? (
-                <p data-php-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{php.installRefused}</p>
+            {lang === 'php' && view.system?.advisory ? <p data-php-system-advisory="" className="text-xs text-[var(--danger)]">{view.system.advisory}</p> : null}
+            {view.installRefused ? (
+                <p {...attr('install-refused', '')} className="text-xs text-[var(--fg-3)]">{view.installRefused}{copy.refusedDot ? '.' : ''}</p>
             ) : addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install from windows.php.net (checked against its published sha256):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-php-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPhp', version: a.version, consent: true })}>
-                            PHP {a.version}
-                        </Button>
-                    ))}
-                </div>
+                <InstallAnother lang={lang} addable={addable} busy={busy} onAction={onAction} />
             ) : null}
         </section>
     );
 }
 
-/**
- * GENIE'S OWN NODE (the owner, 2026-10-23: "genie has its own install path"): the versions Genie manages, the node on
- * PATH, and an Install per version this release offers — each Install is the person's consent. Where Genie installs none
- * it says so instead of offering a button.
- */
-function NodeVersions({ node, current = null, busy, onAction, refusals = [], check }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = node.available.filter((a) => !a.installed);
+/** INSTALL ANOTHER VERSION: the versions this release offers in a select, and one Install — the click is the consent. */
+function InstallAnother({ lang, addable, busy, onAction }: { lang: LangKey; addable: ReadonlyArray<{ readonly version: string; readonly line?: number }>; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    const copy = LANG_COPY[lang];
+    const newest = lang === 'java' ? [...addable].sort((a, b) => (b.line ?? 0) - (a.line ?? 0))[0]!.version : addable[0]!.version;
+    const [picked, setPicked] = useState(newest);
+    const version = addable.some((a) => a.version === picked) ? picked : newest;
     return (
-        <section data-node-versions={node.managed.length} className="border-b border-[var(--border-1)]">
-            <div className="flex items-center gap-3 px-5 pt-3">
-                <h3 className="text-sm font-medium">Node versions</h3>
-                {check ? <CheckStateMark tool="node" check={check} /> : null}
-            </div>
-            <LanguageVersionChips lang="node" managed={node.managed.map((m) => m.version)} current={current} available={node.available} busy={busy} onAction={onAction} />
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`node` is Node {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="node" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'node', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
-            {refusals.map((r) => (
-                <p key={r.version} data-node-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
-            ))}
-            <p data-node-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {node.system ? `The node on your PATH is ${node.system.version}.` : 'No node on your PATH.'}
-            </p>
-            <ul className="divide-y divide-[var(--border-1)]">
-                {node.managed.map((m) => (
-                    <li key={m.version} data-node-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">Node {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <DefaultMark lang="node" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Node ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeNode', version: m.version })}>Remove</Button>
+        <div data-install-another={lang} className="mt-1 flex flex-wrap items-center gap-2">
+            <Select
+                list={addable.map((a) => ({ value: a.version, label: lang === 'java' && a.line !== undefined ? `${a.line} LTS · ${a.version}` : a.version }))}
+                value={version}
+                onValueChange={setPicked}
+                aria-label={`${copy.name} version to install`}
+                className="w-40"
+            />
+            <Button size="sm" type="button" color="blue" {...{ [`data-${lang}-install`]: version }} disabled={busy} title={`From ${copy.source}`} onClick={() => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)}>Install</Button>
+            <span className="font-mono text-[11px] text-[var(--fg-3)]">no password</span>
+        </div>
+    );
+}
+
+/** THE ACTIVITY FEED: what runs now, what finished, the last outcome, and what Check and repair found. */
+function ActivityFeed({ tc }: { tc: ToolchainData }) {
+    const items = toolchainActivity(tc);
+    const findings = tc.findings ?? [];
+    return (
+        <section data-toolchain-activity={items.length} className="flex-1 px-5 py-3.5">
+            <h4 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">Activity</h4>
+            {items.length === 0 ? <p className="text-xs text-[var(--fg-3)]">Nothing has run yet.</p> : null}
+            <ul className="flex flex-col">
+                {items.filter((a) => a.kind !== 'finding').map((a, i) => (
+                    <li key={i} data-activity={a.kind} {...(a.kind === 'running' && a.source === 'busy' ? { 'data-toolchain-busy': '' } : {})} {...(a.kind === 'note' ? { 'data-toolchain-result': '' } : {})} className="flex gap-2.5 py-1.5 text-xs text-[var(--fg-2)]">
+                        {a.kind === 'running' ? <Icon name="loader-circle" size="xs" className="mt-0.5 shrink-0 animate-spin" /> : a.kind === 'done' ? <Icon name="check" size="xs" className="mt-0.5 shrink-0 text-[var(--success)]" /> : <Icon name="info" size="xs" className="mt-0.5 shrink-0" />}
+                        <span>{a.text}</span>
                     </li>
                 ))}
             </ul>
-            {node.installRefused ? (
-                <p data-node-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{node.installRefused}</p>
-            ) : addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install from nodejs.org (checked against its published sha256):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-node-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installNode', version: a.version, consent: true })}>
-                            Node {a.version}
-                        </Button>
+            {findings.length > 0 ? (
+                <ol data-toolchain-findings={findings.length} className="flex flex-col">
+                    {findings.map((f, i) => (
+                        <li key={`${f.kind}-${i}`} data-finding={f.kind} data-result={f.result.kind} className="flex gap-2.5 py-1.5 text-xs text-[var(--fg-2)]">
+                            {f.result.kind === 'repaired' ? <Icon name="check" size="xs" className="mt-0.5 shrink-0 text-[var(--success)]" /> : <Icon name="x" size="xs" className="mt-0.5 shrink-0 text-[var(--danger)]" />}
+                            <span>
+                                {f.kind === 'path-shadow' ? `${f.tool} ${f.first.version} at ${f.first.path} was running instead of ${f.newer.version} at ${f.newer.path}. ` : f.kind === 'php-ca' || f.kind === 'genie-node' ? `${f.problem}. ` : `Missing: ${f.missing.join(', ')}. `}
+                                {f.result.kind === 'repaired' ? f.result.detail : f.result.reason}
+                            </span>
+                        </li>
                     ))}
-                </div>
+                </ol>
             ) : null}
         </section>
     );
 }
 
-/**
- * GENIE'S OWN GO (plan `.ai/plans/genie-2-toolchain-rest.md`, TC2a): the versions Genie manages, the go on PATH, and an
- * Install per supported line — each Install is the person's consent. go.dev builds every OS, so there is no refusal row.
- */
-function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go: NonNullable<NonNullable<FeatureData['toolchain']>['go']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = go.available.filter((a) => !a.installed);
-    return (
-        <section data-go-versions={go.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Go versions</h3>
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`go` is Go {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="go" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'go', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
-            {refusals.map((r) => (
-                <p key={r.version} data-go-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
-            ))}
-            <p data-go-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {go.system ? `The go on your PATH is ${go.system.version}.` : 'No go on your PATH.'}
-            </p>
-            <ul className="divide-y divide-[var(--border-1)]">
-                {go.managed.map((m) => (
-                    <li key={m.version} data-go-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">Go {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <DefaultMark lang="go" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Go ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeGo', version: m.version })}>Remove</Button>
-                    </li>
-                ))}
-            </ul>
-            {addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install from go.dev (checked against its published sha256):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-go-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installGo', version: a.version, consent: true })}>
-                            Go {a.version}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
-        </section>
-    );
-}
-
-/**
- * GENIE'S OWN JAVA (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6d): the Temurin JDKs Genie manages, the java on
- * PATH, and an Install per LTS line (its release for this OS) — or, on macOS, why not.
- */
 function formatBytes(bytes: number): string {
     if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`;
     return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
@@ -1577,244 +1753,6 @@ function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { pla
     );
 }
 
-function JavaVersions({ java, current = null, busy, onAction, refusals = [], check }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = java.available.filter((a) => !a.installed);
-    return (
-        <section data-java-versions={java.managed.length} className="border-b border-[var(--border-1)]">
-            <div className="flex items-center gap-3 px-5 pt-3">
-                <h3 className="text-sm font-medium">Java (Temurin JDKs)</h3>
-                {check ? <CheckStateMark tool="java" check={check} /> : null}
-            </div>
-            <LanguageVersionChips lang="java" managed={java.managed.map((m) => m.version)} current={current} available={java.available} busy={busy} onAction={onAction} />
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`java` and `javac` are Java {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="java" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'java', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
-            {refusals.map((r) => (
-                <p key={r.version} data-java-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
-            ))}
-            <p data-java-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {java.system ? `The java on your PATH is ${java.system.version}.` : 'No java on your PATH.'}
-            </p>
-            <ul className="divide-y divide-[var(--border-1)]">
-                {java.managed.map((m) => (
-                    <li key={m.version} data-java-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">Java {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <DefaultMark lang="java" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Java ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeJava', version: m.version })}>Remove</Button>
-                    </li>
-                ))}
-            </ul>
-            {java.installRefused ? (
-                <p data-java-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{java.installRefused}.</p>
-            ) : addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install Eclipse Temurin from Adoptium (checked against its published sha256):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-java-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installJava', version: a.version, consent: true })}>
-                            Java {a.line} ({a.version})
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
-        </section>
-    );
-}
-
-/**
- * GENIE'S OWN RUBY (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6c): the versions Genie built, the ruby on PATH, and
- * an Install per supported line on Linux — or, where the owner has not decided yet (Windows, macOS), why not.
- */
-function RubyVersions({ ruby, current = null, busy, onAction, refusals = [] }: { ruby: NonNullable<NonNullable<FeatureData['toolchain']>['ruby']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = ruby.available.filter((a) => !a.installed);
-    return (
-        <section data-ruby-versions={ruby.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Ruby versions</h3>
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`ruby`, `gem` and `bundle` are Ruby {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="ruby" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'ruby', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
-            {refusals.map((r) => (
-                <p key={r.version} data-ruby-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
-            ))}
-            <p data-ruby-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {ruby.system ? `The ruby on your PATH is ${ruby.system.version}.` : 'No ruby on your PATH.'}
-            </p>
-            <ul className="divide-y divide-[var(--border-1)]">
-                {ruby.managed.map((m) => (
-                    <li key={m.version} data-ruby-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">Ruby {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <DefaultMark lang="ruby" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Ruby ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeRuby', version: m.version })}>Remove</Button>
-                    </li>
-                ))}
-            </ul>
-            {ruby.installRefused ? (
-                <p data-ruby-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{ruby.installRefused}.</p>
-            ) : addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install (ruby-lang.org's source on Linux, RubyInstaller on Windows; checked against the published sha256):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-ruby-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installRuby', version: a.version, consent: true })}>
-                            Ruby {a.version}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
-        </section>
-    );
-}
-
-/**
- * GENIE'S OWN RUST (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6b): the toolchain versions Genie manages, the rustc on
- * PATH, and an Install per supported line — or, on Windows until the owner decides, why not.
- */
-function RustVersions({ rust, current = null, busy, onAction, refusals = [] }: { rust: NonNullable<NonNullable<FeatureData['toolchain']>['rust']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = rust.available.filter((a) => !a.installed);
-    return (
-        <section data-rust-versions={rust.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">Rust versions</h3>
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`rustc` and `cargo` are Rust {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="rust" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'rust', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
-            {refusals.map((r) => (
-                <p key={r.version} data-rust-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
-            ))}
-            <p data-rust-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {rust.system ? `The rustc on your PATH is ${rust.system.version}.` : 'No rustc on your PATH.'}
-            </p>
-            <ul className="divide-y divide-[var(--border-1)]">
-                {rust.managed.map((m) => (
-                    <li key={m.version} data-rust-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">Rust {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <DefaultMark lang="rust" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Rust ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeRust', version: m.version })}>Remove</Button>
-                    </li>
-                ))}
-            </ul>
-            {rust.installRefused ? (
-                <p data-rust-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{rust.installRefused}.</p>
-            ) : addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install through rustup (rust-lang.org; each part verified):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-rust-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installRust', version: a.version, consent: true })}>
-                            Rust {a.version}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
-        </section>
-    );
-}
-
-/**
- * GENIE'S OWN .NET (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6a): the SDKs Genie manages, the dotnet on PATH, and an
- * Install per supported line — each Install is the person's consent. Microsoft builds every OS, so there is no refusal row.
- */
-function DotnetVersions({ dotnet, current = null, busy, onAction, refusals = [] }: { dotnet: NonNullable<NonNullable<FeatureData['toolchain']>['dotnet']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = dotnet.available.filter((a) => !a.installed);
-    return (
-        <section data-dotnet-versions={dotnet.managed.length} className="border-b border-[var(--border-1)]">
-            <h3 className="px-5 pt-3 text-sm font-medium">.NET SDKs</h3>
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`dotnet` is .NET SDK {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="dotnet" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'dotnet', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
-            {refusals.map((r) => (
-                <p key={r.version} data-dotnet-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
-            ))}
-            <p data-dotnet-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {dotnet.system ? `The dotnet on your PATH is ${dotnet.system.version}.` : 'No dotnet on your PATH.'}
-            </p>
-            <ul className="divide-y divide-[var(--border-1)]">
-                {dotnet.managed.map((m) => (
-                    <li key={m.version} data-dotnet-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">.NET SDK {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <DefaultMark lang="dotnet" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `.NET SDK ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeDotnet', version: m.version })}>Remove</Button>
-                    </li>
-                ))}
-            </ul>
-            {addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install from Microsoft (checked against its published sha512):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-dotnet-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installDotnet', version: a.version, consent: true })}>
-                            .NET SDK {a.version}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
-        </section>
-    );
-}
-
-/**
- * GENIE'S OWN PYTHON (plan `.ai/plans/genie-2-toolchain-rest.md`, TC4a): the versions Genie manages, the python on PATH,
- * and an Install per supported line on Windows — each Install is the person's consent. Where python.org publishes no
- * build Genie can install (macOS, Linux until TC4b), it says so instead of offering buttons.
- */
-function PythonVersions({ python, current = null, busy, onAction, refusals = [], check }: { python: NonNullable<NonNullable<FeatureData['toolchain']>['python']>; check?: ToolCheckState | undefined; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
-    const addable = python.available.filter((a) => !a.installed);
-    return (
-        <section data-python-versions={python.managed.length} className="border-b border-[var(--border-1)]">
-            <div className="flex items-center gap-3 px-5 pt-3">
-                <h3 className="text-sm font-medium">Python versions</h3>
-                {check ? <CheckStateMark tool="python" check={check} /> : null}
-            </div>
-            <LanguageVersionChips lang="python" managed={python.managed.map((m) => m.version)} current={current} available={python.available} busy={busy} onAction={onAction} />
-            {current !== null ? (
-                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
-                    <span>`python` and `pip` are Python {current}, Genie's default.</span>
-                    <Button size="xs" type="button" data-use-system="python" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'python', version: null })}>Use the one on your PATH instead</Button>
-                </p>
-            ) : null}
-            {refusals.map((r) => (
-                <p key={r.version} data-python-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
-            ))}
-            <p data-python-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
-                {python.system ? `The python on your PATH is ${python.system.version}.` : 'No python on your PATH.'}
-            </p>
-            <ul className="divide-y divide-[var(--border-1)]">
-                {python.managed.map((m) => (
-                    <li key={m.version} data-python-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
-                        <span className="font-medium">Python {m.version}</span>
-                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <DefaultMark lang="python" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Python ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePython', version: m.version })}>Remove</Button>
-                    </li>
-                ))}
-            </ul>
-            {python.installRefused ? (
-                <p data-python-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{python.installRefused}.</p>
-            ) : addable.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Install from python.org (checked against its published sha256):</span>
-                    {addable.map((a) => (
-                        <Button size="xs" key={a.version} type="button" data-python-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPython', version: a.version, consent: true })}>
-                            Python {a.version}
-                        </Button>
-                    ))}
-                </div>
-            ) : null}
-        </section>
-    );
-}
-
 /**
  * YOUR TERMINALS (plan TC3b; the owner's decision 3): Genie's defaults on the machine's own PATH, once, with consent.
  * Before anything changes it says EXACTLY what would — the entries, and where — and after, where it is, with Undo.
@@ -1845,10 +1783,17 @@ function MachinePathCard({ mp, busy, onAction, refusal }: { mp: NonNullable<NonN
 
 /** A managed version's default state: the Default mark on the chosen one, "Make default" on the others (plan TC3a). */
 function DefaultMark({ lang, version, current, busy, onAction }: { lang: 'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust' | 'ruby' | 'java'; version: string; current: string | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
-    if (version === current) return <span data-is-default={`${lang}:${version}`} className="rounded-sm bg-[var(--primary)]/15 px-1.5 text-[11px] font-medium text-[var(--primary)]">Default</span>;
+    // The default as a RADIO (Tynn #962): what the command means everywhere is one choice among the versions and the system's.
+    if (version === current) {
+        return (
+            <span role="radio" aria-checked="true" data-is-default={`${lang}:${version}`} title="The default" className="grid size-4 shrink-0 place-items-center rounded-full border-2 border-[var(--primary)]">
+                <span className="size-1.5 rounded-full bg-[var(--primary)]" />
+            </span>
+        );
+    }
     return (
-        <Button size="xs" type="button" data-make-default={`${lang}:${version}`} disabled={busy} className="text-[12px] text-[var(--fg-2)]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version })}>
-            Make default
+        <Button size="xs" type="button" variant="ghost" role="radio" aria-checked="false" data-make-default={`${lang}:${version}`} disabled={busy} title={`Make ${version} the default`} className="size-4 shrink-0 rounded-full border-2 border-[var(--border-1)] p-0" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version })}>
+            <span className="sr-only">Make default</span>
         </Button>
     );
 }
@@ -2901,6 +2846,13 @@ function FirewallRow({ rule, enabled, outcome, onAction, button }: { rule: Firew
  * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
  * link, made from a workspace's Share (ShareWorkspaceModal); the old local share link here was removed (audit M-d).
  */
+/** When the relay link was lost (Tynn #940): the time today, or the day and time when it was earlier. */
+function sinceWords(since: number, now: number = Date.now()): string {
+    const at = new Date(since);
+    const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return at.toDateString() === new Date(now).toDateString() ? time : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
 export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date.now() }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined; now?: number | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
@@ -2950,6 +2902,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                     {remote.tynnWorkstation.relay ? (
                                         <span data-tynn-relay={remote.tynnWorkstation.relay.state} className="basis-full text-xs text-[var(--fg-3)]">
                                             {remote.tynnWorkstation.relay.state === 'reachable' ? `Reachable through the Tynn relay (${remote.tynnWorkstation.relay.relay.replace(/^wss?:\/\//, '')}).`
+                                                : remote.tynnWorkstation.relay.state === 'reconnecting' ? <>Reconnecting to the Tynn relay since <time dateTime={new Date(remote.tynnWorkstation.relay.since).toISOString()}>{sinceWords(remote.tynnWorkstation.relay.since, now)}</time>: {remote.tynnWorkstation.relay.reason}.</>
                                                 : remote.tynnWorkstation.relay.state === 'unavailable' ? `Not reachable through Tynn: ${remote.tynnWorkstation.relay.reason}`
                                                 : remote.tynnWorkstation.relay.state === 'connecting' ? 'Connecting to the Tynn relay…'
                                                 : 'Turn on remote access to be reachable through Tynn.'}

@@ -148,6 +148,13 @@ export interface RelaySocket {
     onmessage: ((event: { data: unknown }) => void) | null;
     onclose: ((event: unknown) => void) | null;
     onerror: ((event: unknown) => void) | null;
+    /**
+     * The relay's heartbeat (Tynn #940): genie-cloud sends a WebSocket PING every 30 s, and `ws` answers it by itself and
+     * emits `'ping'`, never a message. Without this a link with no member traffic hears nothing from a relay that is alive.
+     */
+    on?(event: 'ping', listener: () => void): unknown;
+    /** Destroy the socket now, without a close handshake: a half-open socket's `close()` never comes back (`ws`). */
+    terminate?(): void;
 }
 
 export type RelaySocketFactory = (url: string) => RelaySocket;

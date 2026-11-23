@@ -12,6 +12,7 @@ import { Registry } from '../src/main/registry.js';
 // Only storage transport, persona files and the provider process are replaced; no timers or OS work.
 async function rig() {
     let stored: readonly AgentRecord[] = [];
+    let workspaces: ReadonlyArray<{ id: string; path: string; defaultAgentId?: string }> = [{ id: 'fixture', path: '/fixture/workspace' }];
     const files = new Map([[join('/fixture/workspace', 'project.json'), JSON.stringify({
         $schema: `https://raw.githubusercontent.com/Civicognita/shared-schemas/v${SCHEMA_REVISION}/schemas/workspace/project.schema.json`, name: 'fixture',
     })]]);
@@ -21,7 +22,9 @@ async function rig() {
         registryDropped: () => [],
         call: async (family, method, args) => {
             expect(family).toBe('registry');
-            if (method === 'readWorkspaces') return [{ id: 'fixture', path: '/fixture/workspace' }];
+            if (method === 'readWorkspaces') return structuredClone(workspaces);
+            // The first agent of a workspace is its default, recorded with the agent (Tynn #1015).
+            if (method === 'writeWorkspaces') { workspaces = structuredClone(args[0] as typeof workspaces); return; }
             if (method === 'readAgents') {
                 const captured = structuredClone(stored);
                 const pending = hold; hold = null;
@@ -62,6 +65,7 @@ async function rig() {
         const result = await api.invoke('addAgent', ['fixture', { name: 'new-agent', purpose: 'fixture', provider: 'codex' }]) as { ok: boolean; id: string };
         expect(result.ok).toBe(true);
         expect(stored.some((record) => record.id === result.id)).toBe(true);
+        expect(workspaces[0]?.defaultAgentId).toBe(result.id);
         return result.id;
     };
     return {

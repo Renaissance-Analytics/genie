@@ -22,16 +22,19 @@ const base = {
 };
 
 describe('Toolchain', () => {
-    it('first run: names what is missing; each missing row shows its command and Install, or why it cannot', () => {
+    // Tynn #962 (the approved redesign): a missing tool is a dashed card saying "not here", its Install says whether it
+    // asks for a password, and the command it runs is only its tooltip — never shown as text.
+    it('first run: each missing card says so, with Install and whether it asks, or why it cannot', () => {
         const html = render({ ...base, installs: { php: { label: 'winget install --id PHP.PHP.8.4 -e --silent', elevated: false }, rustc: { refused: 'rustc is installed with rustup (rustup.rs)' } } });
-        expect(html).toContain('data-toolchain-missing="2"');
-        expect(html).toMatch(/Not on this machine yet: php, rustc/);
-        expect(html).toContain('data-install-command="php"');
-        expect(html).toMatch(/winget install --id PHP\.PHP\.8\.4/);
+        expect(html).toMatch(/data-tool-card="php"[^>]*data-card-state="missing"/);
+        expect(html).toMatch(/data-tool-card="rust"[^>]*data-card-state="missing"/);
+        expect(html).toMatch(/data-install-note="php"[^>]*>no password</);
+        expect(html).toMatch(/title="winget install --id PHP\.PHP\.8\.4 -e --silent"/);
+        expect(html).not.toMatch(/>[^<]*winget install/);
         expect(html).toContain('data-install-refused="rustc"');
         expect(html).toMatch(/Check and repair/);
-        // Control: nothing missing → no first-run line.
-        expect(render({ ...base, tools: base.tools.slice(0, 1) })).not.toContain('data-toolchain-missing');
+        // Control: an installed tool is not a missing card.
+        expect(render({ ...base, tools: base.tools.slice(0, 1) })).not.toContain('data-card-state="missing"');
     });
 
     it('a repair’s findings, each with its result; a needs-install finding offers Install', () => {

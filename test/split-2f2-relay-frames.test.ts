@@ -371,7 +371,8 @@ describe('the question window and the tray read genie-host’s Deck (takeOvers g
 
     it('RemoteHost: a deck.watch connection hears the Deck when it changes, and no estate snapshot', () => {
         const rh = code(src('src/main/remote-host.ts'));
-        expect(rh).toMatch(/case 'deck\.watch': \{\s*if \(!connection\.local\) return refuse\(/);
+        // main's own client only since Tynn #998 (the coordinator: security), as remote.watch.
+        expect(rh).toMatch(/case 'deck\.watch': \{\s*(\/\/[^\n]*\n\s*)*if \(!connection\.local \|\| connection\.socket\.preAuth\?\.own !== true\) return refuse\(/);
         expect(rh).toMatch(/if \(c\.deckOnly\) \{/);
     });
 });

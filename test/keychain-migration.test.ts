@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Keychain, type KeyringModule } from '../src/main/keychain.js';
-import { fileMigrationBook, hostVault, migrateSecrets, type HostVault, type MigrationBook, type MigrationSource, type OldRead } from '../src/main/keychain-migration.js';
+import { fileMigrationBook, hostVault, type HostVault, type MigrationBook, type MigrationSource, type OldRead } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 
 /**
  * THE ONE-TIME MIGRATION (P3.4 cut b; plan §13): the one place a bug loses a person's sign-ins. The window decrypts each secret
  * once and hands it to the host, the host writes it to the keychain and reads it back, and only then does the window delete
- * its copy.
+ * its copy; the host books `done` once the window says it did (Tynn #959, 2g-3b: moveAll is the three halves in one launch).
  *
  * A CRASH HERE IS A REAL ONE. A port "crashes" by never returning, so nothing after that point runs: no catch, no finally, no
  * later step. An injected exception would prove only that the engine handles exceptions. Then a NEW engine runs over what is
@@ -43,9 +44,10 @@ class World {
     /** Runs the engine until it reaches `step`, then the process is gone. */
     runUntilCrash(step: Step, sources = [this.source()]): Promise<void> {
         this.#crashAt = step;
-        return new Promise<void>((resolve) => {
+        return new Promise<void>((resolve, reject) => {
             this.#crashed = resolve;
-            void migrateSecrets(sources, this.vault(), this.book());
+            // A move that throws is not a crash: it is said, rather than waited on.
+            moveAll(sources, this.vault(), this.book()).catch(reject);
         }).finally(() => { this.#crashAt = null; this.#crashed = null; });
     }
 
@@ -86,7 +88,8 @@ class World {
                 return { ok: true };
             },
             compare: async (name, value) => {
-                await this.#before('read-back');
+                // The read-back is the compare past a write: with no row the move compares once before it writes.
+                if (this.writes > 0) await this.#before('read-back');
                 if (!this.available) return 'unavailable';
                 const held = this.keychain.get(name);
                 return held === undefined ? 'missing' : held === value ? 'same' : 'different';
@@ -109,7 +112,7 @@ class World {
     }
 
     run(sources = [this.source()]) {
-        return migrateSecrets(sources, this.vault(), this.book());
+        return moveAll(sources, this.vault(), this.book());
     }
 
     /** The person can still sign in with what is left. */
@@ -127,12 +130,12 @@ describe('a clean run', () => {
         expect(world.states[NAME]).toBe('done');
     });
 
-    it('nothing to move: no write, no delete, and it is never asked again', async () => {
+    it('nothing to move: no write, no delete, and no row made up (a row is finished only once confirmed; the security review of #2120)', async () => {
         const world = new World();
         world.old = null;
         expect(await world.run()).toEqual([{ name: NAME, status: 'nothing' }]);
         expect([world.writes, world.deletes]).toEqual([0, 0]);
-        expect(world.states[NAME]).toBe('done');
+        expect(world.states[NAME]).toBeUndefined();
     });
 });
 
@@ -199,7 +202,7 @@ describe('it never runs twice', () => {
         // One book, as in one process: a NEW book is what a new launch has (and what a crash leaves behind).
         const book = world.book();
         const vault = world.vault();
-        const [a, b] = await Promise.all([migrateSecrets([world.source()], vault, book), migrateSecrets([world.source()], vault, book)]);
+        const [a, b] = await Promise.all([moveAll([world.source()], vault, book), moveAll([world.source()], vault, book)]);
         expect(world.writes).toBe(1);
         expect([a[0]?.status, b[0]?.status].sort()).toEqual(['already', 'moved']);
     });
@@ -255,25 +258,31 @@ describe('the old copy is never deleted until the read-back matches, byte for by
         const world = new World();
         world.stores = (value) => value;
         const vault = world.vault();
-        const result = await migrateSecrets([world.source()], { ...vault, compare: async () => 'missing' }, world.book());
+        const result = await moveAll([world.source()], { ...vault, compare: async () => 'missing' }, world.book());
         expect(result[0]?.status).toBe('read-back-differs');
         expect(world.old).toBe(SECRET);
     });
 
-    it('a bad read-back is tried again at the next launch, and a good one finishes', async () => {
+    it('a bad read-back is not written over at the next launch: with no row, what the keychain holds is never overwritten, and the old copy stays (the coordinator’s ruling on #2120)', async () => {
         const world = new World();
         world.stores = (value) => value.slice(0, 16);
-        await world.run();
+        expect(await world.run()).toEqual([{ name: NAME, status: 'read-back-differs' }]);
         world.stores = (value) => value;
-        expect(await world.run()).toEqual([{ name: NAME, status: 'moved' }]);
-        expect(world.keychain.get(NAME)).toBe(SECRET);
+        const writes = world.writes;
+        expect(await world.run()).toEqual([{ name: NAME, status: 'keychain-differs' }]);
+        expect(world.writes).toBe(writes);
+        expect(world.old).toBe(SECRET);
+        expect(world.states[NAME]).toBeUndefined();
     });
 
-    it('before it is confirmed the old copy is the truth: a stale keychain entry from an earlier install is replaced, never believed', async () => {
+    it('with no row, a value already in the keychain wins over the old copy: never overwritten, the old copy kept for someone to look at (the coordinator’s ruling on #2120)', async () => {
         const world = new World();
-        world.keychain.set(NAME, 'left-by-an-earlier-install');
-        await world.run();
-        expect(world.keychain.get(NAME)).toBe(SECRET);
+        world.keychain.set(NAME, 'written-since-by-genie-host');
+        expect(await world.run()).toEqual([{ name: NAME, status: 'keychain-differs' }]);
+        expect(world.keychain.get(NAME)).toBe('written-since-by-genie-host');
+        expect(world.writes).toBe(0);
+        expect(world.old).toBe(SECRET);
+        expect(world.states[NAME]).toBeUndefined();
     });
 });
 
@@ -297,7 +306,7 @@ describe('no keychain: refused, and nothing moves (decision 3)', () => {
     it('the keychain goes away between the write and the read-back: kept', async () => {
         const world = new World();
         const vault = world.vault();
-        const result = await migrateSecrets([world.source()], { ...vault, compare: async () => 'unavailable' }, world.book());
+        const result = await moveAll([world.source()], { ...vault, compare: async () => 'unavailable' }, world.book());
         expect(result[0]?.status).toBe('keychain-unavailable');
         expect(world.old).toBe(SECRET);
         expect(world.states).toEqual({});
@@ -460,24 +469,29 @@ describe('the book on disk', () => {
     it('holds names and states only', async () => {
         const file = join(dir, 'keychain-migration.json');
         const world = new World();
-        await migrateSecrets([world.source()], world.vault(), fileMigrationBook(file));
+        await moveAll([world.source()], world.vault(), fileMigrationBook(file));
         expect(existsSync(file)).toBe(true);
         expect(readFileSync(file, 'utf8')).not.toContain(SECRET);
     });
 });
 
-describe('each secret switches on with its reader', () => {
+describe('each half runs where it belongs', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((line) => line.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
 
-    it('compose runs it for the agents’ keys and nothing else; nothing else runs it', () => {
-        for (const file of ['src/main/main.ts', 'src/main/genie-host.ts', 'src/main/session-engine-server.ts', 'src/main/session-engine-client.ts', 'src/main/tynn-account.ts']) {
-            expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/migrateSecrets/);
+    it('genie-host verifies and finishes (host-legacy-adopt.ts); the window unseals and deletes (legacy-unsealer.ts); nothing else runs it', () => {
+        for (const file of ['src/main/main.ts', 'src/main/compose.ts', 'src/main/genie-host.ts', 'src/main/session-engine-server.ts', 'src/main/session-engine-client.ts', 'src/main/tynn-account.ts']) {
+            expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/verifySecrets|finishSecrets|removeOldCopies|migrateSecrets/);
         }
-        const compose = strip(readFileSync('src/main/compose.ts', 'utf8'));
-        expect(compose.match(/migrateSecrets\(/g)).toHaveLength(1);
-        expect(compose).toMatch(/const sources = await gatherSources\(\[[\s\S]*?tynnTokens\.legacyKeys\(tynnCipher\)[\s\S]*?input\.legacySecrets\?\.\(\)/);
-        // The accounts' tokens join in main.ts, with their readers in the host.
-        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/legacySecrets: \(\) => gatherSources\(\[[\s\S]*?settleStaleLegacyPairing\([\s\S]*?tynnPairingSource\([\s\S]*?githubSealedSources\([\s\S]*?workstationSealedSources\(/);
+        const host = strip(readFileSync('src/main/host-legacy-adopt.ts', 'utf8'));
+        expect(host).toMatch(/await finishSecrets\(mine, book\)/);
+        expect(host).toMatch(/request\.names\.filter\(\(name\) => answered\.has\(name\)\)/);
+        expect(host).toMatch(/await verifySecrets\(request\.secrets\.map\(sourceOf\), vault, book\)/);
+        expect(host).not.toMatch(/removeOldCopies|\.remove\(\)/);
+        const window = strip(readFileSync('src/main/legacy-unsealer.ts', 'utf8'));
+        expect(window).toMatch(/await removeOldCopies\(sources, deletable\)/);
+        expect(window).not.toMatch(/verifySecrets|finishSecrets/);
+        // What the window gathers: the agents' keys, the Tynn pairing, GitHub's tokens, the workstation key (main.ts).
+        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/return gatherSources\(\[[\s\S]*?tynnAgentIdentities\([\s\S]*?\.legacyKeys\(cipher\)[\s\S]*?settleStaleLegacyPairing\([\s\S]*?tynnPairingSource\([\s\S]*?githubSealedSources\([\s\S]*?workstationSealedSources\(/);
     });
 
     it('it has no fallback to write to: the engine touches no file but its book', () => {

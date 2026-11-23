@@ -1,5 +1,6 @@
 import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
  *
@@ -190,6 +191,8 @@ check(typeof route === 'string' && new RegExp(ADDRESS.dashboard).test(route), '3
 
 const features = await cdp.evaluate('document.querySelectorAll("[data-feature]").length');
 check(features === 4, '4. the four feature icons are in the title bar', `found ${features}`);
+// Nothing over the page before the clicks: the seed marks What's new seen; one open anyway is closed here (Tynn #1009).
+await closeWhatsNew((expression) => cdp.evaluate(expression));
 
 // 4b. THE AGENTINBOX among the header's system icons (beta.33 item 19): a press opens the flyout over the page, a second
 // closes it — in the real window, where the address layer carries `inbox=`.
@@ -1496,8 +1499,7 @@ check(parsed.length === 0, '34. the console is clean', parsed.join(' | ') || 'no
 await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]')?.click(); true`);
 await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]')) && !document.querySelector('[data-surface="agent"]')`, 'the Dashboard, for its screenshot');
 // A first run shows What's new over the page (once per version); closed the way a person closes it, or the shot is of it.
-await cdp.evaluate(`document.querySelector('[data-action="whats-new-close"]')?.click(); true`);
-await waitFor(cdp, `!document.querySelector('[data-whats-new]')`, 'What’s new to close');
+await closeWhatsNew((expression) => cdp.evaluate(expression));
 const dashboardShown = await cdp.evaluate(`(() => {
     const surfaces = [...document.querySelectorAll('[data-surface]')].map((s) => s.getAttribute('data-surface'));
     return JSON.stringify({ dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), agent: Boolean(document.querySelector('[data-surface="agent"]')), whatsNew: Boolean(document.querySelector('[data-whats-new]')), surfaces });

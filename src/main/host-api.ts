@@ -39,6 +39,9 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { isPromptAction } from '../core/prompt-delivery.js';
 import { answerAccounts, isAccountsMethod, type AccountsPort } from './accounts-protocol.js';
+import { readGateRequest } from './approvals-gate-protocol.js';
+import { readWindowView } from './host-window-view.js';
+import { answerRegistryWrite } from './registry-protocol.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -163,8 +166,22 @@ export interface HostApiDeps {
     hostShell?: import('./host-shell.js').HostShell;
     /** What this host runs, as this machine's tray and quit read it, said when it changes (core/host-summary.ts; Tynn #953). */
     hostSummary?: { now(): import('../core/host-summary.js').HostSummary; subscribe(listener: (summary: import('../core/host-summary.js').HostSummary) => void): () => void };
+    /** Who is at this machine, as main's own client's notifications read it, said when it changes (core/remote-watch.ts; Tynn #997). */
+    remoteWatch?: { now(): import('../core/remote-watch.js').RemoteWatchView; subscribe(listener: (view: import('../core/remote-watch.js').RemoteWatchView) => void): () => void };
+    /** genie-host's settings, as main's own client reads them, said when they change (settings-watch.ts; Tynn #998). */
+    settingsWatch?: { now(): import('./settings-watch.js').SettingsWatchView; subscribe(listener: (view: import('./settings-watch.js').SettingsWatchView) => void): () => void };
     /** A window's transport to another machine, owned by its connection (device-link-protocol.ts; Tynn #941, 2f-2). */
     deviceLinkProtocol?: Pick<import('./device-link-protocol.js').DeviceLinkProtocol, 'call' | 'dropOwner'>;
+    /** What an older Genie sealed, adopted into this host's keychain (host-legacy-adopt.ts; Tynn #959, 2g-3b). Absent = refused. */
+    legacySecrets?: { adopt(request: unknown): Promise<unknown> };
+    /** A window-run tool's approval, from this host's one queue, tied to the agent's call by its forwarded id (Tynn #1006). */
+    /** What this machine's window says of the person: whether they are at the computer (host-window-view.ts; Tynn #1044). */
+    windowView?: { userActive(active: boolean): void };
+    approvalsGate?: (caller: import('./mcp-tools.js').Caller, action: string, detail: string, forwardedCallId: string | null) => Promise<'allowed' | 'denied' | 'expired'>;
+    /** genie-host's registry, read and written by main's window registry (registry-protocol.ts; Tynn #1007). Absent = refused. */
+    registryFiles?: import('./registry-protocol.js').RegistryFiles;
+    /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
+    tynnRecheck?: () => Promise<void>;
     takeOver?: {
         start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
@@ -768,6 +785,41 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'deviceLink.openBrowser':
                 if (!deps.deviceLinkProtocol || !context) return { ok: false, reason: 'this Genie connects to no other machines' };
                 return deps.deviceLinkProtocol.call(context.connectionId, method.slice('deviceLink.'.length), args);
+            // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b; host-legacy-adopt.ts). `local` keeps every other machine out (RemoteHost's);
+            // of this machine's connections only main's own client hands secrets over, never a page in a window. Its tunnel says so
+            // (CallContext `own`, set by genie-host's tunnel for main's own door); a label is display words any door may say.
+            case 'keychain.adoptLegacy':
+                if (!deps.legacySecrets) return { ok: false, reason: 'this host keeps nothing an older Genie sealed' };
+                if (context.own !== true) return { ok: false, reason: 'what an older Genie sealed is handed over by Genie itself, never by a window' };
+                return deps.legacySecrets.adopt(args[0]);
+            // A WINDOW-RUN TOOL'S APPROVAL (Tynn #1006, 2g-4b2): `local` keeps every other machine out (RemoteHost's), and of this
+            // machine's connections only main's own client asks; the request is read strictly (approvals-gate-protocol.ts).
+            // WHETHER THE PERSON IS AT THIS MACHINE (Tynn #1044, 2g-4d B): only Electron knows, so main's own client says it.
+            case 'window.view': {
+                if (!deps.windowView) return { ok: false, reason: 'this host keeps no window view' };
+                if (context.own !== true) return { ok: false, reason: 'whether the person is here is said by Genie itself, never by a window' };
+                const view = readWindowView(args);
+                if ('ok' in view) return view;
+                deps.windowView.userActive(view.userActive);
+                return null;
+            }
+            case 'approvals.gate': {
+                if (!deps.approvalsGate) return { ok: false, reason: 'this host keeps no approval queue' };
+                if (context.own !== true) return { ok: false, reason: 'an approval is asked by Genie itself for the tools it runs, never by a window' };
+                const request = readGateRequest(args);
+                if ('ok' in request) return request;
+                return deps.approvalsGate(request.caller, request.action, request.detail, request.forwardedCallId);
+            }
+            // A WRITE TO GENIE-HOST'S REGISTRY (Tynn #1007, 2g-4e): `local` keeps every other machine out, and of this machine's
+            // connections only main's own client writes; the write is read strictly. genie-host answers it from the start, as
+            // hostRemoteApi's own method (registry-protocol.ts hostRegistryAnswers); this is the same answer on this path.
+            case 'registry.write':
+                return answerRegistryWrite(deps.registryFiles, args, context);
+            // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
+            case 'tynn.recheck':
+                if (!deps.tynnRecheck) return { ok: false, reason: 'this host has no Tynn account to ask' };
+                await deps.tynnRecheck();
+                return null;
             // Open with / Show in file manager on this host's own screen (Tynn #841; #912 2f-1). Who may is RemoteHost's (the owner's).
             case 'files.openExternal':
             case 'files.reveal':
@@ -882,6 +934,10 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         releaseCaller: context => { deps.features.releaseCaller?.(context); deps.deviceLinkProtocol?.dropOwner(context.connectionId); },
         // What this host runs, for a connection that said summary.watch (Tynn #953, 2g-2).
         ...(deps.hostSummary ? { hostSummary: () => deps.hostSummary!.now() } : {}),
+        // Who is at this machine, for main's own client saying remote.watch (Tynn #997, 2g-4a).
+        ...(deps.remoteWatch ? { remoteWatch: () => deps.remoteWatch!.now() } : {}),
+        // genie-host's settings, for main's own client saying settings.watch (Tynn #998, 2g-4b1).
+        ...(deps.settingsWatch ? { settingsWatch: () => deps.settingsWatch!.now() } : {}),
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
@@ -925,6 +981,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
                 deps.hostSummary?.subscribe((summary) => listener(LOCAL_EVENTS.summary, summary)) ?? (() => {}),
+                deps.remoteWatch?.subscribe((view) => listener(LOCAL_EVENTS.remote, view)) ?? (() => {}),
+                deps.settingsWatch?.subscribe((view) => listener(LOCAL_EVENTS.settings, view)) ?? (() => {}),
                 deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
                 deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
                 deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),

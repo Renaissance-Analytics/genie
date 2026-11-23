@@ -45,7 +45,7 @@ describe('source: nothing in the window can start them', () => {
 
     it('CONTROL: the patterns read the window’s real sources', () => {
         expect(main).toMatch(/connectAgentEngine\(/);
-        expect(compose).toMatch(/input\.plugins/);
+        expect(compose).toMatch(/input\.hosting/);
     });
 });
 

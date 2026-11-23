@@ -390,27 +390,6 @@ export function realKeyringPorts(deps: RealKeyringDeps): KeyringPorts {
     };
 }
 
-/** The non-secret note that a sign-in was waiting for the keyring, so the relaunched Genie reopens it. */
-const RESUME_FILE = 'keyring-resume.json';
-export type ResumeSignIn = 'tynn';
-
-/** Write it before a keyring restart. Only WHICH sign-in — never a code or a token. */
-export function markResumeSignIn(dir: string, which: ResumeSignIn): void {
-    try { fs.writeFileSync(path.join(dir, RESUME_FILE), JSON.stringify({ resume: which }), 'utf8'); } catch { /* the person signs in again by hand */ }
-}
-
-/** Read it once, at launch; it is gone after. */
-export function takeResumeSignIn(dir: string): ResumeSignIn | null {
-    const file = path.join(dir, RESUME_FILE);
-    try {
-        const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { resume?: unknown };
-        fs.rmSync(file, { force: true });
-        return parsed?.resume === 'tynn' ? 'tynn' : null;
-    } catch {
-        return null;
-    }
-}
-
 /**
  * THE WINDOW'S OWN ASK, BEFORE IT READS ITS STORE (Tynn story #388): Electron reads safeStorage's availability once per
  * process, so a window that started on a locked keyring could not use it until a restart. Unlock on an unlocked collection

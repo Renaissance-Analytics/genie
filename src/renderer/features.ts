@@ -231,6 +231,8 @@ export type TynnRelayState =
     | { readonly state: 'off' }
     | { readonly state: 'connecting' }
     | { readonly state: 'reachable'; readonly relay: string }
+    /** The link was up and was lost at `since` (epoch ms), for `reason`; it is being redialled (Tynn #940). */
+    | { readonly state: 'reconnecting'; readonly since: number; readonly reason: string }
     | { readonly state: 'unavailable'; readonly reason: string };
 
 /** Whether this machine is registered with Tynn as a workstation, and with which Tynn; or why not. */

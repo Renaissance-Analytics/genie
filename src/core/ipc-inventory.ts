@@ -143,6 +143,14 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['heartbeat', 'link'],
     // Electron resolves this machine's proxies; the host is told what it cannot ask for itself.
     ['call:engine.proxyRemember', 'link'],
+    // The link's own coming and going: what main says again when genie-host restarts (Tynn #1007 saw it through the alias).
+    ['onLink', 'link'],
+    // Where genie-host's MCP server listens and which tools it offers, asked once the link is up (Tynn #1007, seen likewise).
+    ['mcpStatus', 'link'],
+    // The processes child's exec route and its streams (genie#1397): every command this window runs is run in genie-host's
+    // `processes` child, its frames in order on this one socket. The link's own (Tynn #1043: the route is live, and stays).
+    ['spawnLink', 'link'],
+    ['onSpawnFrame', 'link'],
     // The window announces itself and its launch line, and quits when the host installs an update.
     ['updates', 'link'],
     // The window's browser pane and its site panels.
@@ -155,16 +163,30 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // A window's channels to another machine are its own session's (Tynn #941, 2f-2): main holds no device link.
     // 2g (#913): what the window still composes (composeWindowServices) or reads over genie-host's replicas.
     // appInbox, tynnPage and workstation left in 2g-1 (#952): main held them and nothing read them.
-    ['catalog', 'move:2g'],
+    // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
+    // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy, legacy-unsealer.ts).
+    // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch, and Settings its features.
+    // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window (the feature machine that
+    // reads them runs in genie-host), and the engine link's replicas of them went with the accounts'.
     ['flows', 'move:2g'],
-    ['github', 'move:2g'],
+    // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955):
+    // (pushWindowView and v1Import left in 2g-4d B, #1044: window.view over the protocol, and genie-host imports Genie 1 itself.)
+    // runHostTool (#1471) and the Files watch (onFilesEvent, filesWatch, filesUnwatch: #1472) left in 2g-4d-A (#1043): nothing
+    // in the window read them, and their engine routes went with them. spawnLink and onSpawnFrame (#1468) are `link`, above.
+    // IssueWatch and the Tynn board, issues and features watches, through main's `engineClient` alias (Tynn #1007 saw them;
+    // they go with tynn/tynnPage in G-1, #934 task #1474).
+    ['issueWatch', 'move:2g'],
+    ['tynnBoardWatch', 'move:2g'],
+    ['tynnBoardUnwatch', 'move:2g'],
+    ['onTynnBoardEvent', 'move:2g'],
+    ['tynnIssuesWatch', 'move:2g'],
+    ['tynnIssuesUnwatch', 'move:2g'],
+    ['onTynnIssuesEvent', 'move:2g'],
+    ['tynnFeaturesWatch', 'move:2g'],
+    ['tynnFeaturesUnwatch', 'move:2g'],
+    ['onTynnFeaturesEvent', 'move:2g'],
     ['hosting', 'move:2g'],
-    ['keyring', 'move:2g'],
-    ['plugins', 'move:2g'],
-    ['recordsChanged', 'move:2g'],
-    ['relayHost', 'move:2g'],
-    ['remoteAccess', 'move:2g'],
+    // compose's agentStores input (2g-4d, #955); main's registry left it in 2g-4e (#1007): registry.read/write/watch.
     ['stores', 'move:2g'],
     ['supervisor', 'move:2g'],
-    ['tynn', 'move:2g'],
 ];

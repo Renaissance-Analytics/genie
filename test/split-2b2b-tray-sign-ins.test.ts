@@ -192,7 +192,7 @@ describe('main’s own protocol client: hello, one call, close, over the tray’
         const pre: unknown[] = [];
         own.door.onConnection((c) => { pre.push(c.preAuth); c.close(); });
         await own.call('logins.provider' as RemoteMethod, ['claude']);
-        expect(pre).toEqual([{ kind: 'local', label: TRAY, isOwner: true, workspaceId: null, readonly: false, window: 'main' }]);
+        expect(pre).toEqual([{ kind: 'local', label: TRAY, isOwner: true, workspaceId: null, readonly: false, window: 'main', own: true }]);
     });
 });
 

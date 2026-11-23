@@ -23,6 +23,9 @@ export interface DeviceSocket {
     onerror: ((ev: unknown) => void) | null;
     send(data: string): void;
     close(): void;
+    /** `ws`'s own: the relay's heartbeat pings, and a close with no handshake (relay-wire.ts `RelaySocket`, Tynn #940). */
+    on?(event: 'ping', listener: () => void): unknown;
+    terminate?(): void;
 }
 
 export type DeviceLinkEvent =
@@ -37,13 +40,13 @@ export type DeviceLinkEvent =
 export type ConnectGrant = Awaited<ReturnType<typeof mintConnectGrant>>;
 
 /**
- * A PILOT'S CONNECTION TO ANOTHER WORKSTATION (Tynn #552, host split P5d.4; audit M-e): genie-host mints the grant with its
- * own Tynn account, holds the proof key, opens the relay member and renews its grant. The window gets a channel.
+ * A CONNECTION TO ANOTHER WORKSTATION OVER THE TYNN RELAY (Tynn #552, host split P5d.4; audit M-e): genie-host mints the
+ * grant with its own Tynn account, holds the proof key, opens the relay member and renews its grant. The window gets a
+ * channel. There is no local role gate (Tynn #963): Tynn decides whether this machine gets a grant (a share link is how
+ * a drone opens another host), and its refusal is worded from the role read again (device-link-protocol.ts).
  */
 export interface RelayMemberPorts {
     readonly signedIn: () => boolean;
-    /** Why this machine may not connect out (a drone, from the role genie-host read from Tynn); `null` = it may. */
-    readonly refusal?: () => string | null | Promise<string | null>;
     readonly keypair: () => PopKeypair;
     readonly mint: (workstationId: string, jwk: PopJwk) => Promise<ConnectGrant>;
     readonly open: (input: { relayUrl: string; workstationId: string; grant: string; pop: PopKeypair; renew: () => Promise<ConnectGrant> }) => Promise<RelayMemberResult>;
@@ -142,8 +145,6 @@ export class DeviceLinkService {
         const relay = this.#options.relay;
         if (!relay) return { ok: false, reason: 'this Genie connects to no Tynn workstations' };
         if (typeof workstationId !== 'string' || workstationId.length === 0 || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
-        const refused = (await relay.refusal?.()) ?? null;
-        if (refused) return { ok: false, reason: refused };
         if (!relay.signedIn()) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = relay.keypair();
         // Each step is said where it fails (core/relay-connect.ts): Tynn's way in, then the relay to the machine.

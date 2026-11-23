@@ -96,7 +96,7 @@ describe('THE BUG: an agent started during an outage, with no window, gets its t
         const keys = hostAgentKeys({ vaultFile, keychain: fakeKeychain(), tynn: () => t.port, workspaces: () => [{ id: 'ws', path: workspace }] });
         const server = new SessionEngineServer({
             token: 'a'.repeat(64), build: 'test', agentKeys: keys,
-            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null, runNative: async () => null } as never,
+            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null } as never,
         });
         const host = new SessionHost({ userData: dir, driverFor, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
         server.attach(host);
@@ -512,8 +512,10 @@ describe('where it is wired', () => {
         expect(host).toMatch(/hostTynnRecovery\(/);
         expect(host).toMatch(/\.onChange\(\(\) => [^\n]*recover/);
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        // Only that its one-time move of the secrets finished (Tynn #896, 2b-3): it restarts nothing itself.
-        expect(main).toMatch(/tynn\(\)\.recovery\(\{ secretsMoved: true \}\)/);
+        // The one-time move is genie-host's own since Tynn #959 (2g-3b): it recovers after a move by itself, and the window
+        // tells it nothing (it once said its move finished, Tynn #896 2b-3). The window restarts nothing either.
+        expect(host).toMatch(/if \(secretsMoved\) void tynnRecovery\?\.recover\(\{ secretsMoved: true \}\);/);
+        expect(main).not.toMatch(/tynn\(\)\.recovery\(/);
         expect(main).not.toMatch(/restartForMcp/);
     });
 });

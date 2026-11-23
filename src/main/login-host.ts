@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DESIGN_LOGIN } from '../core/design-login.js';
+import { OWN_DIRECTORY_SIGN_IN_LATER } from '../core/claude-accounts.js';
 import { type ProviderAccountHome } from '../core/accounts.js';
 import { providerLogin } from '../core/provider-login.js';
 import type { TerminalHost } from './terminal-host.js';
@@ -59,7 +60,7 @@ export interface LoginHostOptions {
     /** Run a status command in `cwd` through the shell, in the provider's normal home; resolves with its exit code. */
     runStatus: (command: string, cwd: string) => Promise<number>;
     /** The host book's account, to refuse a provider it does not know; it sets no environment (Tynn #753). */
-    accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string }) | null;
+    accountFor?: (provider: string, accountId?: string) => (ProviderAccountHome & { id?: string; configDir?: string; method?: 'subscription' | 'console'; identity?: { readonly email: string | null } }) | null;
     onSignedIn: (provider: string, accountId?: string) => void;
     /** An account switch's login is over (Tynn #482): `signedIn` is the provider's status answer. Called once per switch. */
     onSwitchEnded?: ((provider: string, signedIn: boolean) => void) | undefined;
@@ -84,6 +85,7 @@ interface Live {
     /** An account switch (Tynn #753): the provider's own login, in its one home, with the steps on screen. */
     switching?: boolean;
 }
+
 
 const OS_WORKSPACE = '__genie__';
 
@@ -131,6 +133,9 @@ export class LoginHost {
             if (!account || account.provider !== cli) return { ok: false, reason: 'The provider account is unavailable; reconnect Genie’s host before logging in.' };
             resolvedId = account.id;
         }
+        // NO TERMINAL FOR AN ACCOUNT OF ITS OWN (Tynn #1011; the owner: "I should not see any terminals nor do we store login
+        // keys"): its sign-in is prism-acp's hidden login, opening Anthropic's page in the person's browser, which is not here yet.
+        if (!design && this.#ownDirectory(cli, accountId) !== null) return { ok: false, reason: OWN_DIRECTORY_SIGN_IN_LATER };
         // One sign-in per ACCOUNT: two clicks on one account join it; another account of the provider gets its own (Tynn #479).
         const key = design ? DESIGN_LOGIN : resolvedId ?? provider;
         const existing = this.#live.get(key);
@@ -160,6 +165,14 @@ export class LoginHost {
         this.#live.set(key, live);
         this.#options.openWindow(this.#route(live));
         return { ok: true, terminalId: opened.id };
+    }
+
+    /** The account's own directory and method, when it is a Claude account with one (Tynn #1011). */
+    #ownDirectory(provider: string, accountId: string | undefined): { configDir: string; method: 'subscription' | 'console'; email: string | null } | null {
+        if (provider !== 'claude' || !this.#options.accountFor) return null;
+        const account = this.#options.accountFor(provider, accountId);
+        if (!account || account.configDir === undefined || account.method === undefined) return null;
+        return { configDir: account.configDir, method: account.method, email: account.identity?.email ?? null };
     }
 
     /**

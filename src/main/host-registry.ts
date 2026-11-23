@@ -73,9 +73,21 @@ export class HostRegistry {
         return [...(this.workspace(workspaceId)?.mcpOff ?? [])];
     }
 
+    /**
+     * The workspace's default agent: the one recorded, else its first (or only) agent (Tynn #1015, the owner: "the first
+     * or only agent in a workspace is automatically the default agent"). genie-host records the missing ones at boot
+     * (Registry.assignMissingDefaults); this view says the same before and after. `null` = asleep, or no agents.
+     */
     defaultAgentOf(workspaceId: string): string | null {
-        if (this.workspace(workspaceId)?.asleep === true) return null;
-        return this.workspace(workspaceId)?.defaultAgentId ?? null;
+        const w = this.workspace(workspaceId);
+        if (!w || w.asleep === true) return null;
+        return w.defaultAgentId ?? this.#agents.find((a) => a.workspaceId === workspaceId)?.id ?? null;
+    }
+
+    /** The default someone CHOSE, or `null`: an automatic one (`defaultAgentAuto`) or none recorded is not. */
+    chosenDefaultAgentOf(workspaceId: string): string | null {
+        const w = this.workspace(workspaceId);
+        return !w || w.asleep === true || w.defaultAgentAuto === true ? null : w.defaultAgentId ?? null;
     }
 
     workspaceSlugs(): Map<string, string> {

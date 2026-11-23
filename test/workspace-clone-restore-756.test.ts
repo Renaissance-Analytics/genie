@@ -48,7 +48,7 @@ function rig(over: Rig = {}) {
     const writes: [string, string][] = [];
     const settings: RestorePorts = {
         agentsOf: () => [], overridden: () => over.overridden ?? {}, setSetting: async (_w, k, v) => { log.push('settings'); void k; void v; },
-        defaultAgentOf: () => null, setDefaultAgent: async () => {}, envFileOf: () => null, defaultEnvFile: () => '.env', setEnvFile: async () => {}, mcpOff: () => [], setMcpServer: async () => {},
+        chosenDefaultAgentOf: () => null, setDefaultAgent: async () => {}, envFileOf: () => null, defaultEnvFile: () => '.env', setEnvFile: async () => {}, mcpOff: () => [], setMcpServer: async () => {},
     };
     const flows: FlowPorts = { list: () => [], create: async (input) => { log.push('flows'); created.push(input); return input; } };
     const processes: ProcessPorts = { list: () => [], keep: async (input) => { log.push('processes'); kept.push(input); return input; }, agentAddressOf: () => null };

@@ -88,7 +88,7 @@ describe.each([false, true])('host-owned tools with a non-answering window (conn
     it('denied approval executes nothing in either process', async () => {
         const w = await rig(connected, false);
         const result = await w.call('services', { action: 'exec', command: 'fixture-command' });
-        expect(result.error).toBe(true); expect(result.text).toContain('did not allow');
+        expect(result.error).toBe(true); expect(result.text).toContain('this command was denied by the person; nothing was run');
         expect(w.executed).toEqual([]); expect(w.forwarded).toEqual([]);
     });
 

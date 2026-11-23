@@ -76,10 +76,10 @@ describe('drafts are pruned when the roster changes, not on every registry snaps
         expect(calls).toEqual([['a'], ['a']]);
     });
 
-    it('main.ts prunes through the roster pruner, not on every registry notification', () => {
-        const src = readFileSync('src/main/main.ts', 'utf8');
-        expect(src).not.toMatch(/registry\.subscribe\(\(\) => \{ void drafts\.prune\(/);
+    it('genie-host prunes through the roster pruner, not on every registry notification (main prunes nothing since Tynn #997)', () => {
+        const src = readFileSync('src/main/host-draft-prune.ts', 'utf8');
         expect(src).toMatch(/rosterPruner\(/);
-        expect(src).toMatch(/registry\.subscribe\(\(\) => draftPruner\.changed\(\)\)/);
+        expect(src).toMatch(/ports\.onRegistryWritten\(\(\) => pruner\.changed\(\)\)/);
+        expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/drafts\.prune\(/);
     });
 });

@@ -11,6 +11,15 @@ import { SOUND_CHOICES, soundPickerList } from '../../core/alerts.js';
  * What a preview or a selection DOES is the caller's (`onPreview`, `onSelect`): this only draws and routes the keys, so
  * the one player (renderer/alert-sound.ts) stays the one place sound is made.
  */
+/**
+ * THE SELECTED SOUND IS SHOWN INVERTED (Tynn #996; the owner: "instead of a check, invert the colors"). Its whole row, play
+ * button included, is the accent: solid `--selected-bg` behind `--selected-fg` (tokens.css), set for light and dark so the
+ * text reads at AA in both. No check mark: the one it replaced sat in a flex span inside Button's inline label and wrapped
+ * onto a line of its own. Every row is the same two buttons, so every row is one height.
+ */
+const INVERTED = 'bg-[var(--selected-bg)] text-[var(--selected-fg)]';
+const INVERTED_BUTTON = `${INVERTED} hover:bg-[var(--selected-bg-hover)] dark:text-[var(--selected-fg)] dark:hover:bg-[var(--selected-bg-hover)]`;
+
 export function SoundPicker({ value, label, onSelect, onPreview, canPreview }: {
     value: string;
     /** The setting's name, for assistive tech. */
@@ -73,34 +82,38 @@ export function SoundPicker({ value, label, onSelect, onPreview, canPreview }: {
                 {soundPickerList().map((group) => (
                     <div key={group.label} data-sound-group={group.label} role="group" aria-label={group.label} className="mb-1">
                         <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-3)]">{group.label}</div>
-                        {group.options.map((o) => (
-                            <div key={o.value} data-sound-row={o.value} {...(o.value === value ? { 'data-selected': 'true' } : {})} className="flex items-center gap-1">
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    aria-pressed={o.value === value}
-                                    data-sound-name={o.value}
-                                    className="flex w-full min-w-0 flex-1 items-center justify-start gap-2 text-left"
-                                    onClick={() => choose(o.value)}
-                                >
-                                    <span className="flex w-4 shrink-0 justify-center">{o.value === value ? <Icon name="check" size="xs" /> : null}</span>
-                                    <span className="truncate">{o.label}</span>
-                                </Button>
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    data-sound-play={o.value}
-                                    disabled={!playable(o.value)}
-                                    onClick={() => onPreview(o.value)}
-                                    title="Play"
-                                    aria-label={`Play ${o.label}`}
-                                >
-                                    <Icon name="play" size="xs" />
-                                </Button>
-                            </div>
-                        ))}
+                        {group.options.map((o) => {
+                            const on = o.value === value;
+                            return (
+                                <div key={o.value} data-sound-row={o.value} {...(on ? { 'data-selected': 'true' } : {})} className={`flex items-center gap-1 rounded-md ${on ? INVERTED : ''}`}>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        aria-pressed={on}
+                                        data-sound-name={o.value}
+                                        labelClassName="truncate"
+                                        className={`flex w-full min-w-0 flex-1 items-center justify-start text-left ${on ? INVERTED_BUTTON : ''}`}
+                                        onClick={() => choose(o.value)}
+                                    >
+                                        {o.label}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        data-sound-play={o.value}
+                                        disabled={!playable(o.value)}
+                                        onClick={() => onPreview(o.value)}
+                                        title="Play"
+                                        aria-label={`Play ${o.label}`}
+                                        className={on ? INVERTED_BUTTON : undefined}
+                                    >
+                                        <Icon name="play" size="xs" />
+                                    </Button>
+                                </div>
+                            );
+                        })}
                     </div>
                 ))}
             </Popover.Content>

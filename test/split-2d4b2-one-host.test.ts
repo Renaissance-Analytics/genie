@@ -76,7 +76,9 @@ describe('main serves no protocol of its own', () => {
         expect(main).not.toMatch(/const remoteHub = transportHub\(/);
         // What stays: the door tunnels to genie-host, and the window's own facts are said down it.
         expect(main).toMatch(/tunnelDoor\(localDoor, tunnelLinkOf\(/);
-        expect(main).toMatch(/remoteAccess: linkedRemote/);
+        // ...and since Tynn #997 (2g-4a) no remote-access replica either: its notifications read remote.watch.
+        expect(main).not.toMatch(/linkedRemote|client\.remoteAccess\(/);
+        expect(main).toMatch(/ownProtocol\.watchRemote\(/);
     });
 
     it('compose keeps no RemoteHost and no remote-serving section, host-less or not: the remote view is genie-host’s', async () => {
@@ -86,9 +88,10 @@ describe('main serves no protocol of its own', () => {
         expect(compose).not.toMatch(/readonly remoteApi\?:/);
         expect(compose).not.toMatch(/readonly remoteTransport\?:/);
         expect(compose).not.toMatch(/openDevices/);
-        expect(compose).toMatch(/readonly remoteAccess: RemoteAccessReplica;/);
-        expect(compose).toMatch(/remote: input\.remoteAccess,/);
-        expect(compose).toMatch(/pairing: input\.remoteAccess\.pairing,/);
+        // Handed in only by a test that composes alone (Tynn #997, 2g-4a); with none, a stand-in that refuses.
+        expect(compose).toMatch(/readonly remoteAccess\?: RemoteAccessReplica;/);
+        expect(compose).toMatch(/remote: remoteAccess,/);
+        expect(compose).toMatch(/pairing: remoteAccess\.pairing,/);
     });
 });
 

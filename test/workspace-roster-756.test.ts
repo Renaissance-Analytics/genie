@@ -47,7 +47,7 @@ function adoption(manifest: Record<string, unknown>, over: { defaultAgent?: stri
         writeTextAtomic: async () => {},
         register: async (input) => { registered.push(input); return { id: `agent_${input.name}`, name: input.name }; },
         setIssueWatch: async (id, setting) => { watches.push([id, setting]); },
-        defaultAgentOf: () => over.defaultAgent ?? null,
+        chosenDefaultAgentOf: () => over.defaultAgent ?? null,
         setDefaultAgent: async (workspaceId, id) => { defaults.push([workspaceId, id]); },
     };
     return { ports, registered, watches, defaults };
@@ -90,7 +90,7 @@ function restore(over: { overridden?: Record<string, unknown>; agents?: { id: st
         agentsOf: () => over.agents ?? [],
         overridden: () => over.overridden ?? {},
         setSetting: async (_ws, key, value) => { calls.push(`setting ${key}=${value}`); },
-        defaultAgentOf: () => over.defaultAgent ?? null,
+        chosenDefaultAgentOf: () => over.defaultAgent ?? null,
         setDefaultAgent: async (_ws, id) => { calls.push(`default ${id}`); },
         envFileOf: () => over.envFile ?? null,
         defaultEnvFile: () => over.defaultEnvFile ?? '.env',

@@ -45,8 +45,10 @@ describe('source', () => {
     });
 
     it('CONTROL: the patterns read the real sources, and the host’s are what the window uses', () => {
-        expect(main).toMatch(/agentEngineLink\.client\.remoteAccess\(\)/);
-        expect(main).toMatch(/agentEngineLink\.client\.relayHost\(\)/);
+        // remoteAccess left in 2g-4a (Tynn #997); the summary is read over main's own client.
+        expect(main).toMatch(/ownProtocol\.watchSummary\(/);
+        // The relay host's replica left main in 2g-3b (Tynn #959); the stores' is still the host's that main uses.
+        expect(main).toMatch(/engineForStores\.client\.stores\(\)/);
         expect(compose).toMatch(/input\.agentStores/);
         expect(code('src/main/genie-host.ts')).toMatch(/ProcessBook\.open\(/);
     });

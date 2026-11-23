@@ -85,7 +85,9 @@ beforeAll(async () => {
     await writeFile(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'ws', path: workspace }]));
     hostProcess = spawn(process.execPath, ['--import', TSX, 'src/main/genie-host.ts'], {
         // The spawn host's real entry, as TypeScript (the host forks it with its own --import tsx).
-        env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB, GENIE_HOST_IDLE_MS: '600000', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts') },
+        env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB,
+            // A Take Over's TUI (the tools test): a plain node in the pty, quoted for a path with spaces.
+            GENIE2_CLAUDE_BINARY: `"${process.execPath}"`, GENIE_HOST_IDLE_MS: '600000', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts') },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     hostProcess.stdout?.on('data', (d) => { hostLog += String(d); });
@@ -154,37 +156,24 @@ describe('genie-host as its own process', () => {
         second.transport.close();
     }, 120_000);
 
-    it('the FILE WATCHER runs in the host: a write in a watched workspace arrives as a batch; after the last view leaves, writes arrive nowhere (P2.2)', async () => {
-        const w = await window();
-        const heard: FilesHubEvent[] = [];
-        w.client.onFilesEvent((e) => heard.push(e));
-        expect(await w.client.filesWatch('panel-1', { id: 'ws', path: workspace }, {})).toBe(true);
-        await writeFile(join(workspace, 'seen.txt'), 'one\n');
-        // POSITIVE CONTROL: the gauge hears a write while a view watches.
-        await until('the batch for seen.txt', () => heard.some((e) => e.kind === 'changed' && e.changes.some((c) => c.path === 'seen.txt')), 15_000);
-
-        expect(await w.client.filesUnwatch('panel-1')).toBe(true);
-        await sleep(500); // a batch already in flight lands, or is dropped, before the line is drawn
-        const before = heard.length;
-        await writeFile(join(workspace, 'unseen.txt'), 'two\n');
-        await sleep(1_500); // six batch windows: long enough that a live watcher would have spoken
-        expect(heard.slice(before).filter((e) => e.kind === 'changed' && e.changes.some((c) => c.path === 'unseen.txt'))).toEqual([]);
-        w.transport.close();
-    }, 60_000);
-
     it('GENIE\'S TOOLS OUTLIVE THE WINDOW (P3.1): with the window gone, agentinbox, ForceTheQuestion, knowledge, sites and services answer over real HTTP; a window tool refuses at once; the next window sees the question; the endpoint is the same', async () => {
         const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
-        const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'teller' });
-        const caller = { agentId: agent.id, agentName: agent.name, workspaceId: 'ws', workspacePath: workspace };
+        const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'teller' });
         const first = await window();
-        await first.client.call('engine.records', [[agent]]);
-        // A Take Over terminal's agent: the window says whose terminal it is; it calls Genie's tools over HTTP by its id.
-        expect(await first.client.pushWindowView({ workspaceNames: { ws: 'ws' }, userActive: true, callers: { 'term-teller': caller } })).toBe(true);
+        // genie-host reads its own registry for records (Tynn #954, 2g-3): the window pushes none.
+        expect(await first.client.call('engine.stores', ['registry', 'writeAgents', [[agent]]])).toMatchObject({ ok: true });
+        // A Take Over terminal's agent: genie-host starts its TUI and mints the id it calls Genie's tools by over HTTP. No
+        // window says whose terminal it is (Tynn #1044: the window view carries no callers).
+        expect(await first.client.takeOvers().start(agent.id)).toMatchObject({ ok: true });
+        const terminalId = await until('the Take Over caller genie-host minted', async () => {
+            await first.client.takeOvers().refresh();
+            return Object.entries(first.client.takeOvers().callers()).find(([, c]) => c.agentId === agent.id)?.[0] ?? null;
+        }, 30_000);
         const status = await first.client.mcpStatus();
         expect(status?.endpoint).not.toBeNull();
         const endpoint = status!.endpoint!;
         const call = async (name: string, args: Record<string, unknown>) => {
-            const res = await fetch(endpoint.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${endpoint.token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { ...args, terminalId: 'term-teller' }, _meta: META } }) });
+            const res = await fetch(endpoint.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${endpoint.token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { ...args, terminalId }, _meta: META } }) });
             const body = (await res.json()) as { result?: { content: Array<{ text: string }>; isError?: boolean }; error?: unknown };
             return { isError: body.result?.isError ?? true, text: body.result?.content[0]?.text ?? JSON.stringify(body.error) };
         };
@@ -214,13 +203,14 @@ describe('genie-host as its own process', () => {
         expect(JSON.parse(siteStatus.text)).toEqual({ ok: false, error: 'no site "teller" in this workspace; `sites list` shows them' });
         // A window tool: refused AT ONCE, in words (timed: a hang would be the failure).
         const t0 = Date.now();
-        // `sites open`: Genie's browser, in front of the person — still the window's.
-        const refused = await call('sites', { action: 'open', site: 'teller' });
+        // checkIssues: a window tool, open to every agent (workspaceTabs is offered only to a workspace's default agent, so its
+        // call is refused before any handler). `sites open` is genie-host's since Tynn #1046 D2, with the rest of `sites`.
+        const refused = await call('checkIssues', {});
         expect(refused.isError).toBe(true);
         // This host runs on plain Node under the test (tsx, no Electron), so hostCapabilities() gives it no window: the window
         // tool says it is not available on this host (P10.1d). An Electron host's "window, which is closed" wording is pinned
         // in mcp-host-tools.test.ts.
-        expect(refused.text).toBe(notAvailableHere('sites', 'a Genie window'));
+        expect(refused.text).toBe(notAvailableHere('checkIssues', 'a Genie window'));
         expect(Date.now() - t0).toBeLessThan(5_000);
 
         // The next window: the question waits, the mail is there, the endpoint is the one agents were configured with.

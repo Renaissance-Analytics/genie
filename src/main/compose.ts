@@ -11,18 +11,12 @@ import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
 import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
-import type { McpServer } from '@particle-academy/prism-acp';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { inboxNotices } from './inbox-notices.js';
 import type { NoticeMail } from '../core/stream-event.js';
 import type { AppEnvSource } from './app-inbox-service.js';
 import { configSync, type SyncResult } from '../core/integrations.js';
 import { AgentFilesHealth, type AgentFilesReport, type SyncSource } from '../core/agent-files-health.js';
-import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
-import { agentTynnPrep } from './agent-tynn-prep.js';
-import type { AgentSecrets } from './tynn-agent-identities.js';
-import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type HostVault, type MigrationSource } from './keychain-migration.js';
-import { holdMigration, portsOf } from './migration-holds.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginsReplica, type PluginsApi } from './plugins-replica.js';
 import { hostCatalog } from './genie-catalog.js';
@@ -41,15 +35,14 @@ import { attentionLimitsFrom } from './attention-store.js';
 import { runtimeDir } from './paths.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
-import type { ListedPty } from './spawn-host-protocol.js';
-import type { PairingView, RemoteAccessReplica, RemoteAccessView } from './remote-access-replica.js';
+import { RemoteAccessReplica, type PairingView, type RemoteAccessView } from './remote-access-replica.js';
+import { hostname } from 'node:os';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
 import type { WorkTracking } from '../core/genie-protocol.js';
 import { trustSteps, type TrustApi } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
-import type { PtyPort } from './terminal-host.js';
 import type { HostingComposeInput, HostingOptions, HostingStack } from './hosting-compose.js';
 import { composeStageDiagnostics, type ComposeStageSample } from './compose-stage-diagnostics.js';
 import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
@@ -88,18 +81,6 @@ export interface ComposeInput extends HostingOptions {
     readonly userData: string;
     /** Read-only live pause state for AgentInbox's automatic replies; no session is started by this probe. */
     readonly inboxSession?: InboxSessionProbe;
-    readonly pty: PtyPort;
-    /**
-     * The supervisor's pty engine (sites, queue workers, the front door), when it is not `pty`: in Electron, the spawn
-     * host's (main/spawn-host-client.ts, genie#1397), so no supervised process is created on main's thread. Absent = `pty`.
-     */
-    readonly processPty?: PtyPort;
-    /**
-     * Live supervised ptys a previous window started, still running under genie-host (the host split, P2.1): adopted
-     * as the supervisor is built — BEFORE any site or kept process starts — so each one's first start claims its
-     * running process instead of starting it a second time on the same port.
-     */
-    readonly adoptPtys?: readonly ListedPty[];
     /** Reads v1's settings table, or `null` when there is no v1 database. Called once, on first run only. */
     readonly v1Settings: () => Readonly<Record<string, string>> | null;
     /**
@@ -125,10 +106,6 @@ export interface ComposeInput extends HostingOptions {
     readonly buildOwnHosting?: (input: HostingComposeInput) => Promise<HostingStack>;
     /** The same for what genie-host owns besides (Tynn #594): only a test that composes alone sets this. */
     readonly alone?: ComposeAlone;
-    /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
-    readonly plugins?: PluginsApi;
-    /** genie-host's catalog, through this window's replica (ADF A4/A5). Absent = this window builds its own from its plugins. */
-    readonly catalog?: { list(): ElementDefinition[] };
     /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
     readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
     /**
@@ -150,9 +127,10 @@ export interface ComposeInput extends HostingOptions {
     /**
      * Remote access is genie-host's (Tynn #409, P5d.1): the paired devices, the PIN, the pair prompts, the baton and the lock.
      * A client is a dumb terminal and serves no remote connection (Tynn #898 step 2d-4b2): this window's protocol door
-     * tunnels to genie-host's RemoteHost, and Settings reads and drives the host's remote access through this replica.
+     * tunnels to genie-host's RemoteHost. Since Tynn #997 (2g-4a) the app's window passes none: Settings draws remote access
+     * from genie-host's features and main's notifications read remote.watch; only a test that composes alone hands one in.
      */
-    readonly remoteAccess: RemoteAccessReplica;
+    readonly remoteAccess?: RemoteAccessReplica;
     /**
      * A site's or a kept process's OWN app credential (genie#1345, main/app-inbox-service.ts): `GENIE_INBOX_URL` and
      * `GENIE_INBOX_TOKEN`, or nothing. Compose lays it over THAT site's env only — never the service env — and gives none
@@ -161,24 +139,6 @@ export interface ComposeInput extends HostingOptions {
     readonly appInboxEnv?: (source: AppEnvSource) => Readonly<Record<string, string>>;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
-    /** With a host, a workspace's agent config is the host's to write. */
-    readonly hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null;
-    /**
-     * The scoped Tynn account, late-bound because it opens after composition. Used only during private agent preparation.
-     */
-    readonly tynn?: () => TynnSessionPort | null;
-    /** OS encryption from Electron; the vault's path is fixed under Genie's own userData, never an envelope path. */
-    /** Where agents' keys are held: the host's keychain, over the link (agent-secrets.ts). */
-    readonly tynnSecrets?: AgentSecrets;
-    /** The one-time move of keys an older Genie sealed: the window opens them, the host keeps and reads back. */
-    readonly tynnCipher?: { decrypt(bytes: Buffer): string };
-    readonly tynnVault?: HostVault;
-    /** What else an older Genie sealed, moved the same way: each joins this with its reader (the Tynn pairing, cut c). */
-    readonly legacySecrets?: () => Promise<readonly MigrationSource[]>;
-    /** Where a secret that did not move is said, as well as the console: the lifecycle log, which someone can read afterwards. Names and states, never a value. */
-    readonly secretsLog?: (line: string) => void;
-    /** Something moved: whoever reads it reads again. */
-    readonly onSecretsMoved?: () => void;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -243,17 +203,6 @@ export interface ComposeAlone {
 type OwnStores = Awaited<ReturnType<typeof openAgentStores>>;
 
 export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites' | 'trust'> {
-    /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
-    prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
-    /** Why this agent's last start went without its Tynn server, for a note in its chat; `null` when it has it (genie#1234). */
-    tynnNote(agentId: string): string | null;
-    /**
-     * Signed in to Tynn: the agents to restart so they get their Tynn server — those that started without it because of
-     * the account (signed out, unreachable), and those whose unverified stored key Tynn now refuses (genie#1234).
-     */
-    tynnRecovery(asked?: { readonly secretsMoved?: boolean }): Promise<string[]>;
-    /** The keychain answers now: the one-time move tries what it could not do before. */
-    moveSecretsAgain(): Promise<void>;
     readonly inbox: S['inbox'];
     readonly attention: S['attention'];
     readonly knowledge: S['knowledge'];
@@ -353,7 +302,11 @@ export async function composeWindowServices(input: ComposeInput & { readonly age
 export async function composeWith(input: ComposeInput): Promise<WindowServices> {
     if (!input.agentStores?.settings && !input.alone) throw new Error("compose was given no settings: they are genie-host's");
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
-    const workTracking = (): WorkTracking => (input.tynn?.()?.status().signedIn === true ? 'tynn' : 'files');
+    // The window holds no Tynn account (Tynn #959) and writes no agent's docs: genie-host decides it from its own account
+    // (genie-host.ts featureWorkspaceFiles). What the window composes alone is a test's, and says the fallback (Tynn #961).
+    const workTracking = (): WorkTracking => 'files';
+    // Remote access is genie-host's: with none handed in, the window's stand-in answers nothing, and refuses whatever is asked.
+    const remoteAccess: RemoteAccessReplica = input.remoteAccess ?? new RemoteAccessReplica(hostname(), async () => { throw new Error("remote access is genie-host's"); });
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
@@ -414,11 +367,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     // UI closed, and this window drives it through a replica. This window's own only on the emergency path.
     let supervisor: SupervisorApi;
     if (input.supervisor) supervisor = input.supervisor;
-    else {
-        const own = input.alone!.supervisor();
-        for (const pty of input.adoptPtys ?? []) own.adopt(pty);
-        supervisor = own;
-    }
+    else supervisor = input.alone!.supervisor();
     /** A source's app credential, while its workspace allows apps (the setting's default is on). */
     const appEnvOf = (source: AppEnvSource): Readonly<Record<string, string>> =>
         input.appInboxEnv && settings.snapshotFor(source.workspaceId).app_inbox !== false ? input.appInboxEnv(source) : {};
@@ -437,7 +386,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
     // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
     const pluginsDir = join(input.userData, 'plugins');
-    const plugins: PluginsApi = input.plugins ?? new PluginsReplica(async () => false);
+    // genie-host's plugins and catalog are read in genie-host (feature-machine.ts runs there): the window keeps an empty stand-in (Tynn #961).
+    const plugins: PluginsApi = new PluginsReplica(async () => false);
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
     // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA.
     stage?.begin('hosting');
@@ -461,53 +411,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
-    const tynnVaultFile = join(input.userData, 'agent-credentials', 'agents.json');
-    const tynnSecretsPort: AgentSecrets = input.tynnSecrets ?? {
-        probe: async () => ({ ok: false, reason: 'no keychain' }),
-        get: async () => ({ kind: 'unavailable', reason: 'no keychain' }),
-        set: async () => ({ ok: false, reason: 'no keychain' }),
-    };
-    const tynnTokens = tynnAgentTokens({ file: tynnVaultFile, secrets: tynnSecretsPort });
-    /**
-     * THE KEYS AN OLDER GENIE SEALED MOVE TO THE KEYCHAIN (P3.4 cut b's engine, switched on with this reader). At boot, so a host
-     * that loses this window still has them; and awaited before a key is read. What could not move is tried again next time.
-     */
-    let keysMoved: Promise<void> | null = null;
-    const stuckSaid = new Set<string>();
-    const moveAgentKeys = (): Promise<void> => keysMoved ??= (async () => {
-        const { tynnCipher, tynnVault } = input;
-        if (!tynnCipher || !tynnVault) return;
-        const sources = await gatherSources([
-            { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnTokens.legacyKeys(tynnCipher) },
-            { file: 'legacy secrets', covers: '', sources: async () => (await input.legacySecrets?.()) ?? [] },
-        ]);
-        const outcomes = await migrateSecrets(...portsOf(holdMigration({ sources, vault: tynnVault, book: migrationBook })));
-        if (outcomes.some((o) => o.status === 'moved')) input.onSecretsMoved?.();
-        const stuck = outcomes.some((o) => !['moved', 'nothing', 'already'].includes(o.status));
-        for (const line of stuckLines(outcomes, stuckSaid)) { console.error(line); input.secretsLog?.(line); }
-        if (stuck) keysMoved = null;
-    })().catch((error: unknown) => {
-        keysMoved = null;
-        const line = `[keychain] secrets could not be moved: ${error instanceof Error ? error.message : String(error)}`;
-        console.error(line);
-        input.secretsLog?.(line);
-    });
-    const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'), { log: (line) => { console.error(line); input.secretsLog?.(line); } });
-    void moveAgentKeys();
     // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
     const withConfig = configWriter();
-    // A window running its own engine prepares its agents here (agent-tynn-prep.ts). With a host, the host does, and this goes unused.
-    const tynnPrep = agentTynnPrep({
-        vaultFile: tynnVaultFile,
-        secrets: tynnSecretsPort,
-        tynn: () => input.tynn?.() ?? null,
-        workspaces: () => input.workspaces?.() ?? [],
-        withConfig,
-        ready: () => moveAgentKeys(),
-    });
-    const prepareAgentMcp = tynnPrep.prepare;
-    const tynnNote = tynnPrep.note;
-    const tynnRecovery = tynnPrep.recovery;
     // FLOWS RUN (P4): the scheduler fires an armed flow through the runner (flow-runner.ts) — a command as a supervised
     // process whose log is kept like any background process's, a prompt to a live agent (held back while it is mid-turn),
     // a knowledge write — and every run's outcome is recorded on the flow. Planned here, after every await that could
@@ -565,10 +470,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
         ownFlows,
         inbox,
-        prepareAgentMcp,
-        tynnNote,
-        tynnRecovery,
-        moveSecretsAgain: moveAgentKeys,
         attention,
         knowledge,
         flows,
@@ -605,8 +506,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             return workspaceTrust.view(workspace.id)?.trusted !== true;
         },
         approvals,
-        remote: input.remoteAccess,
-        pairing: input.remoteAccess.pairing,
+        remote: remoteAccess,
+        pairing: remoteAccess.pairing,
         // Read at each use (P5a.2): a host that comes back on a new port reaches this window.
         get frontDoorPort() { return hosting.frontDoorPort; },
         browserTrust: () => hosting.browserTrust(),
@@ -645,12 +546,12 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         }),
         integrations: () => {
             return {
-                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description)) },
+                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description, (t as { someAgents?: boolean }).someAgents === true)) },
                 agentFiles: agentFiles.list(),
             };
         },
         plugins,
-        catalogDefinitions: () => (input.catalog ? input.catalog.list() : hostCatalog({ tools: () => [] }).list()),
+        catalogDefinitions: () => hostCatalog({ tools: () => [] }).list(),
         pluginsDir,
         pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {
@@ -665,9 +566,9 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             const values = settings.snapshot();
             const flag = (k: string) => values[k] !== false;
             const request: WorkspaceConfigRequest = { workspacePath, endpoint, flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') } };
-            // One writer (workspace-config-sync.ts): the host's when there is one, and a failure there is not a reason to write here.
-            const host = input.hostConfigSync?.() ?? null;
-            const results = [...await (host ? host.configSync(request) : withConfig(workspacePath, () => writeWorkspaceConfig(request)))];
+            // One writer (workspace-config-sync.ts). In the app that is genie-host's own (genie-host.ts `featureConfig`): the
+            // window never asks this (Tynn #1043), so the write here is a composition's that runs alone.
+            const results = [...await withConfig(workspacePath, () => writeWorkspaceConfig(request))];
             agentFiles.config(workspacePath, results, Date.now(), source);
             return results;
         },

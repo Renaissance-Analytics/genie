@@ -28,6 +28,7 @@ import {
     alive, attach, check, cleanQuit, failures, finish, gone, hostPid, killHard, launch, makeHome,
     refuseOffTestMachines, running, sleep, step, tickerOn, ticksOf, twoStreamingAgents, until,
 } from './crash-cdp-lib.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 // Agent commands are on the page's own bridge now: window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
@@ -181,6 +182,7 @@ try {
     step('S1', 'Stop all agents');
     const providers = [];
     for (const a of agents) providers.push((await ticksOf(session.cdp, a.id)).last);
+    await closeWhatsNew((expression) => session.cdp.evaluate(expression));
     await session.cdp.evaluate(`document.querySelector('[data-action="hang-stop-all"]').click(); true`, 10_000);
     for (const a of agents) check(await until(async () => (await running(session.cdp, a.id)) === false, 45_000) === true, `S1. ${a.name} stopped (the host says so)`);
     check(await until(() => session.cdp.evaluate(`document.querySelector('[data-hang-outcome="stop-all"]')?.textContent === 'Stopped'`, 10_000), 30_000) === true, 'S2. the notice says Stopped');
