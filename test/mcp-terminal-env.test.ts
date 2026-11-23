@@ -76,35 +76,6 @@ describe('manageTerminals create', () => {
     });
 });
 
-describe('the env both paths use, over the real composition', () => {
-    const pty: PtyPort = {
-        open: () => ({ id: 'term_1', pid: 1, shell: 'sh', scrollback: '' }),
-        write: () => true, resize: () => true, kill: () => true, scrollback: () => '',
-        onData: () => () => {}, onExit: () => () => {},
-    };
-    const docker: DockerRunner = async (args) => {
-        if (args[0] === 'image' || (args[0] === 'container' && args[1] === 'inspect')) return { stdout: '', exitCode: 1 };
-        return { stdout: '', exitCode: 0 };
-    };
-    let dir: string;
-    let services: ComposedServices;
-    beforeEach(async () => {
-        dir = await mkdtemp(join(tmpdir(), 'genie2-terminal-env-'));
-        for (const ws of ['example', 'example-other']) {
-            await mkdir(join(dir, ws), { recursive: true });
-            await writeFile(join(dir, ws, 'project.json'), '{ "name": "x", "repos": [] }\n', 'utf8');
-        }
-        services = await composeServices({
-            userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker, portFree: async () => true,
-            workspaces: () => [{ id: 'example', path: join(dir, 'example') }, { id: 'example-other', path: join(dir, 'example-other') }],
-        });
-    });
-    afterEach(async () => {
-        await services.shutdown();
-        await rm(dir, { recursive: true, force: true });
-    });
-});
-
 describe('main wires both paths to the one function', () => {
     // Comment lines dropped by LINE, CRLF-safe: a guard that matched a comment would pass on prose.
     const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');

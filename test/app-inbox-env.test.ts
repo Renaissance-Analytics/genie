@@ -191,8 +191,14 @@ describe('main wires it where the plan says, and nowhere else', () => {
         expect((readFileSync(join(__dirname, '..', 'src', 'main', 'genie-host.ts'), 'utf8').match(/appEnv:\s*\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
     });
     it('the token is never put into a terminal’s env or the MCP env', () => {
-        const mcpEnvLine = main.split('\n').find((l) => l.includes('const mcpEnv ='))!;
-        expect(mcpEnvLine).toBeDefined();
-        expect(mcpEnvLine).not.toMatch(/INBOX/);
+        // The window assembles no terminal env (Tynn #1043): every shell's is genie-host's `shellEnv`.
+        expect(main).not.toMatch(/const mcpEnv =|terminalEnv/);
+        const host = readFileSync(join(__dirname, '..', 'src', 'main', 'genie-host.ts'), 'utf8').split('\r\n').join('\n');
+        const at = host.indexOf('const shellEnv = ');
+        expect(at).toBeGreaterThan(-1);
+        const shellEnv = host.slice(at, host.indexOf('\n    };', at));
+        // CONTROL: this is the env a shell gets, Genie's endpoint in it.
+        expect(shellEnv).toMatch(/GENIE_MCP_URL: endpoint\.url, GENIE_MCP_TOKEN: endpoint\.token/);
+        expect(shellEnv).not.toMatch(/INBOX/);
     });
 });
