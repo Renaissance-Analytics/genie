@@ -16,6 +16,7 @@
  *   window at both sizes.
  */
 import { isGeniePage, mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -185,9 +186,10 @@ try {
     main = await Cdp.connect(mainWindow, 'main window');
     check(await waitFor(main, `Boolean(document.querySelector('[data-route]'))`, 60_000), '0. the app is up, on a home of its own');
     // What's new can open over a fresh home: a person closes it (its own Close), and any other modal with Escape.
+    // Through the shared helper (scripts/cdp-whats-new.mjs): it throws if the dialog will not close, so no click goes through it.
     if (await waitFor(main, `Boolean(document.querySelector('[data-whats-new]'))`, 3_000)) {
-        await main.evaluate(`document.querySelector('[data-action="whats-new-close"]')?.click(); true`);
-        check(await waitFor(main, `!document.querySelector('[data-whats-new]')`, 10_000), '0b. What’s new is closed');
+        const closed = await closeWhatsNew((expression) => main.evaluate(expression));
+        check(closed.closed, '0b. What’s new is closed');
     }
     for (let i = 0; i < 3 && (await main.evaluate(`Boolean(document.querySelector('[aria-modal="true"]'))`)); i++) { await escape(main); await sleep(500); }
 
