@@ -145,9 +145,10 @@ const hello = async (offer, as) => {
     if (answer.kind !== 'welcome') fail('caddy', `the tunnelled protocol connection was answered ${JSON.stringify(answer)}`);
     return answer;
 };
-const first = await hello({ schema: 0, minSchema: 0, capabilities: [] }, 'boot-offer');
+// A schema older than any host's floor: welcomed as not compatible, with the host's own offer in the welcome.
+const first = await hello({ schema: '0000.00.00', minSchema: '0000.00.00', capabilities: [] }, 'boot-offer');
 tunnel('close', 'the offer was read');
-if (!Number.isInteger(first.schema) || !Array.isArray(first.capabilities)) fail('caddy', `the host's welcome says no protocol offer: ${JSON.stringify(first)}`);
+if (typeof first.schema !== 'string' || typeof first.minSchema !== 'string' || !Array.isArray(first.capabilities)) fail('caddy', `the host's welcome says no protocol offer: ${JSON.stringify(first)}`);
 const greeted = await hello({ schema: first.schema, minSchema: first.minSchema, capabilities: first.capabilities }, 'boot');
 if (greeted.compatible === false) fail('caddy', `the tunnelled protocol connection was answered ${JSON.stringify(greeted)}`);
 // genie-host answers features once its own services are built: "still starting" until then, asked again.
