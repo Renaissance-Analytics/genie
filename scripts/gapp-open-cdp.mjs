@@ -14,6 +14,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 const PORT = Number(process.env.CDP_PORT ?? 9336);
 const WIN = process.platform === 'win32';
@@ -115,6 +116,7 @@ try {
     // This run's own genie-host, by its record: it is started detached, so the window's tree kill below does not reach it.
     try { hostRecord = JSON.parse(readFileSync(join(root, '.genie', 'runtime', 'host.json'), 'utf8')); } catch { /* read again at the end */ }
 
+    await closeWhatsNew((expression) => page.evaluate(expression));
     await until('the GApps icon', () => page.evaluate('(() => { const b = document.querySelector(\'[data-feature="GApps"]\'); if (!b) return false; b.click(); return true; })()'));
     // The store reads the book when it opens: the installed app's row, then its Open button, clicked as a person does.
     await until('the Open button of the installed app', () => page.evaluate(`(() => { const b = document.querySelector('[data-gapp="${APP}"] [data-gapp-action="open"]'); if (!b || b.disabled) return false; b.click(); return true; })()`));

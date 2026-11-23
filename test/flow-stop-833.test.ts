@@ -249,7 +249,7 @@ describe('an agent\'s Stop: its own flow, or the person\'s with the person\'s ap
         const t = await agentTool({ approve: 'denied' });
         const r = await t.stop(t.persons.id);
         expect(r.isError).toBe(true);
-        expect(String(r.json.error)).toMatch(/approv/);
+        expect(String(r.json.error)).toMatch(/was denied by the person; nothing was stopped/);
         expect(t.asked.map(([a]) => a)).toEqual(['flows.stop']);
         expect(t.stops).toEqual([]);
     });

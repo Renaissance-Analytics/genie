@@ -72,13 +72,14 @@ describe('abandonment', () => {
         expect(q.lastCancelled()).toEqual([{ action: 'write', detail: 'one', reason: 'Genie is shutting down' }, { action: 'create', detail: 'two', reason: 'Genie is shutting down' }]);
     });
 
-    it('a request older than the timeout is denied as abandoned, by `sweep`, never silently allowed', async () => {
+    // EXPIRED, not denied (Tynn #1006, the coordinator's ruling): nobody answered, and both the agent and the Deck say so.
+    it('a request older than the timeout EXPIRES, by `sweep`, never silently allowed', async () => {
         const q = new ApprovalQueue({ now, timeoutMs: 100 });
         const v = q.gate(atlas, 'write', 'late');
         clock += 1_000;
         expect(q.sweep()).toBe(1);
-        expect(await v).toBe('denied');
-        expect(q.deckItems()).toEqual([]);
+        expect(await v).toBe('expired');
+        expect(q.deckItems().map((i) => i.id.startsWith('apprx_'))).toEqual([true]);
     });
 });
 

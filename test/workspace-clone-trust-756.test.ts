@@ -34,7 +34,7 @@ describe('running the restore again after the person trusts', () => {
         let trusted = false;
         const ports: CloneRestorePorts = {
             files: { read: async (p) => files[p] ?? null, list: async (dir) => { const n = Object.keys(files).filter((f) => f.startsWith(`${dir}/`)).map((f) => f.slice(dir.length + 1)); if (n.length === 0) throw new Error('ENOENT'); return n; } },
-            settings: { agentsOf: () => [], overridden: () => ({}), setSetting: async () => {}, defaultAgentOf: () => null, setDefaultAgent: async () => {}, envFileOf: () => null, defaultEnvFile: () => '.env', setEnvFile: async () => {}, mcpOff: () => [], setMcpServer: async () => {} },
+            settings: { agentsOf: () => [], overridden: () => ({}), setSetting: async () => {}, chosenDefaultAgentOf: () => null, setDefaultAgent: async () => {}, envFileOf: () => null, defaultEnvFile: () => '.env', setEnvFile: async () => {}, mcpOff: () => [], setMcpServer: async () => {} },
             tabs: { values: () => ({ tabs: '', panelSplits: '', panelLayout: '' }), overridden: () => ({}), write: async () => {}, siteHosts: () => [] },
             flows: async () => ({ list: () => flows, create: async (input) => { flows.push({ name: input.name, document: input.document }); return input; } }),
             processes: async () => ({ list: () => [], keep: async (input) => { kept.push({ name: input.name }); return input; }, agentAddressOf: () => null }),

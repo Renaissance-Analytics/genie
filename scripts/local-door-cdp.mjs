@@ -14,6 +14,7 @@
 import { geniePageSource, isMainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { pageSpan } from './local-door-span.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -374,6 +375,7 @@ try {
     inspector = await Cdp.connect((await until('main inspector', async () => (await targets(INSPECT))[0], 30_000)).webSocketDebuggerUrl);
     await until('preload/door registration', () => main.evaluate('typeof window.genieLocalProtocol === "object" && typeof window.genie === "object"'), 60_000);
     await until('real composed services', () => main.evaluate('(window.genieTest ?? window.genie).features.snapshot().then(d=>!!d.remote)'), 60_000);
+    await closeWhatsNew((expression) => main.evaluate(expression));
     const refs = await doorScopes(); await observeDoor(refs);
     mainId = await inspector.evaluate(`(() => { const { BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron'); return BrowserWindow.getAllWindows().find((w) => new RegExp(${jsLiteral(geniePageSource('index'))}).test(w.webContents.getURL())).webContents.id; })()`);
     if (BREAK) await inspector.evaluate(`(() => { for (const wc of globalThis.__doorNative.admitted.keys()) if (wc.id === ${mainId}) globalThis.__doorNative.admitted.delete(wc); return true; })()`);

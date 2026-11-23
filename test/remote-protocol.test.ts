@@ -129,7 +129,11 @@ describe('the capability table', () => {
         // machine, owned by its own connection (Tynn #941, 2f-2).
         // 189 with `keychain.adoptLegacy` (local, main's own client only: what an older Genie sealed, into genie-host's keychain)
         // and `tynn.recheck` (local: genie-host asks Tynn again) (Tynn #959, 2g-3b).
-        expect(REMOTE_METHODS.length).toBe(189);
+        // 190 with `approvals.gate` (local, main's own client only: a window-run tool's approval, from genie-host's queue) (Tynn #1006, 2g-4b2).
+        // 191 with `window.view` (local, main's own client only: whether the person is active; genie-host names its workspaces itself) (Tynn #1044, 2g-4d B).
+        // 192 with `registry.write` (local, main's own client only: a write to genie-host's registry) (Tynn #1007, 2g-4e).
+        expect(REMOTE_METHODS.length).toBe(192);
+        expect(capabilityOf('registry.write')).toBe('local');
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');

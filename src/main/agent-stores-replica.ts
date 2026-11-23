@@ -245,9 +245,10 @@ export class ApprovalsReplica {
     lastCancelled(): Array<{ action: string; detail: string; reason: string }> { return [...this.#view.cancelled]; }
 
     /** A gated action (a window tool's), asked of the host's one queue. */
-    async gate(caller: import('./mcp-tools.js').Caller, action: string, detail: string, call?: import('./mcp-tools.js').McpCall): Promise<'allowed' | 'denied'> {
+    async gate(caller: import('./mcp-tools.js').Caller, action: string, detail: string, call?: import('./mcp-tools.js').McpCall): Promise<'allowed' | 'denied' | 'expired'> {
         // Tied to the agent's real call in the host by its forwarded id: it ends when that call goes (genie#1360).
-        return (await this.#call('approvals', 'gate', [caller, action, detail, call?.forwardedCallId ?? null])) === 'allowed' ? 'allowed' : 'denied';
+        const verdict = await this.#call('approvals', 'gate', [caller, action, detail, call?.forwardedCallId ?? null]);
+        return verdict === 'allowed' || verdict === 'expired' ? verdict : 'denied';
     }
 
     /** The person's verdict, decided in the host's queue: true when there was such an item. */

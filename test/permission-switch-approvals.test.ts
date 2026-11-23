@@ -43,7 +43,7 @@ const caller = (id: string): Caller => ({ agentId: id as never, agentName: id, w
 
 /** The verdict now, or 'asked' when the request parked on the Deck for the person. */
 async function verdictOf(id: string, action: string, detail = 'Save on https://shop.gen/projects'): Promise<'allowed' | 'denied' | 'asked'> {
-    let settled: 'allowed' | 'denied' | null = null;
+    let settled: 'allowed' | 'denied' | 'expired' | null = null;
     void services.approvals.gate(caller(id), action, detail).then((v) => { settled = v; });
     await new Promise((r) => setTimeout(r, 0));
     return settled ?? 'asked';
