@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { AttachKind } from '../core/attach-report.js';
 import { writeJsonAtomic } from './store.js';
 
 /**
@@ -25,6 +29,8 @@ import { writeJsonAtomic } from './store.js';
  */
 
 export const DATA_ROOT_FILE = 'data-root.json';
+/** The mark beside the machine files: the machine they were made on. Gone with them, so its absence says they are gone. */
+export const MACHINE_MARK_FILE = 'runtime/machine.json';
 /** The manifest's format. A reader that does not know a format reads nothing from it. */
 export const DATA_ROOT_FORMAT = 1;
 
@@ -40,10 +46,15 @@ export interface DataRootRule {
     readonly names?: readonly string[];
     /** Every host makes it when it starts. */
     readonly atStart?: boolean;
+    /**
+     * Machine only: a Genie process that is running now may hold it (this host's own endpoint and log, the window's pid,
+     * another process's scratch, the copy the host runs from). The attach never moves it away; its owner replaces it.
+     */
+    readonly live?: true;
 }
 
 const state = (path: string, travels: boolean, holds: string, more: Pick<DataRootRule, 'names' | 'atStart'> = {}): DataRootRule => ({ path, kind: 'state', travels, holds, ...more });
-const machine = (path: string, holds: string, more: Pick<DataRootRule, 'names' | 'atStart'> = {}): DataRootRule => ({ path, kind: 'machine', holds, ...more });
+const machine = (path: string, holds: string, more: Pick<DataRootRule, 'names' | 'atStart' | 'live'> = {}): DataRootRule => ({ path, kind: 'machine', holds, ...more });
 
 export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     // --- STATE: the work ---------------------------------------------------------------------------------------------
@@ -100,11 +111,12 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     // --- MACHINE: how to reach this host, here and now -----------------------------------------------------------------
     machine('runtime/host.json', 'this host’s pid, endpoint, protocol and build', { atStart: true }),
     machine('runtime/host.token', 'the token a window says to this host', { atStart: true }),
-    machine('runtime/host.sock', 'this host’s endpoint (not Windows, where it is a pipe)'),
+    machine('runtime/host.sock', 'this host’s endpoint (not Windows, where it is a pipe)', { live: true }),
+    machine(MACHINE_MARK_FILE, 'which machine these machine files were made on', { atStart: true }),
     machine('mcp-endpoint.json', 'the port and token of Genie’s MCP server', { atStart: true }),
     machine('app-inbox-endpoint.json', 'the app inbox’s port'),
-    machine('runtime/genie.pid', 'the window’s pid'),
-    machine('runtime/doctor-hold.json', 'that the doctor holds Genie stopped'),
+    machine('runtime/genie.pid', 'the window’s pid', { live: true }),
+    machine('runtime/doctor-hold.json', 'that the doctor holds Genie stopped', { live: true }),
     machine('runtime/host-proxy.json', 'the proxy routes the OS last gave'),
     machine('runtime/provider-programs.json', 'where each provider’s program is on this machine'),
     machine('runtime/mobile-tls/', 'this machine’s tailnet certificate', { names: ['cert.pem', 'key.pem'] }),
@@ -117,14 +129,15 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     machine('runtime/alive.prev.json', 'the last run’s heartbeat'),
     machine('runtime/clean-exit.json', 'that the last run ended cleanly'),
     machine('runtime/crash/', 'the crash records'),
-    machine('runtime/lifecycle.log', 'the host’s own log', { atStart: true }),
+    machine('runtime/lifecycle.log', 'the host’s own log', { atStart: true, live: true }),
     machine('runtime/lifecycle.log.1', 'the host’s own log, before the last turn-over'),
     machine('runtime/update-failed.json', 'the last update that failed'),
+    machine('runtime/attach-report.json', 'how this machine found the root, what it made again and what the person put away'),
     machine('runtime/process-logs/', 'what the kept processes printed'),
-    machine('logs/', 'what the host, the browser process and the updater printed', { names: ['genie-host.log', 'genie-browser.log', 'genie-updater.log'] }),
+    machine('logs/', 'what the host, the browser process and the updater printed', { names: ['genie-host.log', 'genie-browser.log', 'genie-updater.log'], live: true }),
 
     // --- MACHINE: installed, downloaded or generated; made again when it is missing -----------------------------------
-    machine('host/', 'the host’s own copy of its runtime and its code, made from the install'),
+    machine('host/', 'the host’s own copy of its runtime and its code, made from the install', { live: true }),
     machine('genie2-toolchain/', 'the runtimes and browsers Genie installed', { names: ['sets.json', 'toolchain-env.json', 'cacert.pem', 'zz-genie-ca.ini'] }),
     machine('runtime/caddy-bin/', 'the front door’s program, copied from the install'),
     machine('runtime/caddy/', 'the front door’s configuration and its own storage'),
@@ -138,7 +151,7 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     machine('runtime/local-staging/', 'uploads on their way to a workspace'),
     machine('runtime/.updater/', 'the updater’s own Chromium folder'),
     machine('browser/.process/', 'the browser process’s own Chromium folder', { names: ['window-origin.json'] }),
-    machine('cache/', 'scratch, one folder per process'),
+    machine('cache/', 'scratch, one folder per process; and what an attach moved out of the way', { live: true }),
     machine('marketplace-staging/', 'a plugin’s download on its way in', { names: ['activation.json'] }),
     machine('plugin-sandbox/', 'the guard scripts generated for plugins'),
     machine('marketplace-publisher-keys.json', 'the publishers’ public keys, as last fetched'),
@@ -188,21 +201,112 @@ export interface DataRootManifest {
     readonly format: number;
     /** The host build that wrote it. */
     readonly build: string;
+    /** The machine it was written on (`machineMarkOf`: a hash, never the OS's id), or null when the OS gave none. */
+    readonly writtenOn: string | null;
     readonly state: ReadonlyArray<{ readonly path: string; readonly travels: boolean }>;
     readonly machine: readonly string[];
 }
 
 /** The manifest: the rules' own words and the build. Nothing is read from the root, so nothing of the root can be in it. */
-export function dataRootManifest(build: string): DataRootManifest {
+export function dataRootManifest(build: string, writtenOn: string | null = null): DataRootManifest {
     return {
         format: DATA_ROOT_FORMAT,
         build,
+        writtenOn,
         state: DATA_ROOT_RULES.filter((r) => r.kind === 'state').map((r) => ({ path: r.path, travels: r.travels === true })),
         machine: DATA_ROOT_RULES.filter((r) => r.kind === 'machine').map((r) => r.path),
     };
 }
 
 /** Written whole (a temp file, then renamed over the last one). */
-export async function writeDataRootManifest(home: string, build: string): Promise<void> {
-    await writeJsonAtomic(join(home, DATA_ROOT_FILE), dataRootManifest(build));
+export async function writeDataRootManifest(home: string, build: string, writtenOn: string | null = null): Promise<void> {
+    await writeJsonAtomic(join(home, DATA_ROOT_FILE), dataRootManifest(build, writtenOn));
+}
+
+/**
+ * This machine, as the manifest names it: a hash of the OS's own machine id (main/machine-key.ts `readMachineId`), so the
+ * manifest says "the same machine or another" and nothing about which. Null when the OS gave no id.
+ */
+export function machineMarkOf(rawId: string | null): string | null {
+    const id = rawId?.trim().toLowerCase() ?? '';
+    return id === '' ? null : createHash('sha256').update(`genie data root\n${id}`).digest('hex');
+}
+
+export interface AttachResult {
+    readonly kind: AttachKind;
+    /** The machine paths moved out of the way (another machine's), relative to the root. */
+    readonly moved: readonly string[];
+    /** Those that could not be moved, each with why. */
+    readonly notRemoved: readonly string[];
+    /** Done when what was moved away, now and by any earlier attach, is deleted. Never awaited by a start. */
+    readonly swept: Promise<void>;
+}
+
+const readJsonOrNull = async (file: string): Promise<Record<string, unknown> | null> => {
+    try {
+        const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown;
+        return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+};
+
+/**
+ * ATTACH THE ROOT TO THIS MACHINE (P7.3), once per start, by the host that holds the endpoint and before it reads any
+ * machine file. It says how it found the root, and when the machine files are ANOTHER machine's it moves every one of
+ * them out of the way first, so nothing of that machine (its ledgers of pids, its ports and tokens, its certificates, the
+ * runtimes installed for it) is ever read as this one's. Moved, not deleted here: a rename is at once, and a tree of
+ * installed runtimes can take minutes to delete; `swept` deletes them afterwards. Then the manifest and the mark are
+ * written for this machine.
+ *
+ * `machine` is `machineMarkOf(<the OS machine id>)`; with none the root is never judged another machine's.
+ */
+export async function attachDataRoot(home: string, options: { readonly build: string; readonly machine: string | null; readonly now?: () => number; readonly log?: (line: string) => void }): Promise<AttachResult> {
+    const previous = await readJsonOrNull(join(home, DATA_ROOT_FILE));
+    const named = previous?.['format'] === DATA_ROOT_FORMAT ? previous['writtenOn'] : null;
+    const writtenOn = typeof named === 'string' ? named : null;
+    const markFile = join(home, ...MACHINE_MARK_FILE.split('/'));
+    const marked = (await readJsonOrNull(markFile))?.['machine'];
+    const mark = typeof marked === 'string' ? marked : null;
+    const here = options.machine;
+    const kind: AttachKind = writtenOn === null ? 'first'
+        : here !== null && writtenOn !== here ? 'another-machine'
+        : mark === null ? 'machine-files-gone'
+        : here !== null && mark !== here ? 'another-machine'
+        : 'same';
+
+    const moved: string[] = [];
+    const notRemoved: string[] = [];
+    const cache = join(home, 'cache');
+    if (kind === 'another-machine') {
+        const aside = join(cache, `stale-${(options.now ?? Date.now)()}-${process.pid}`);
+        let n = 0;
+        for (const rule of DATA_ROOT_RULES) {
+            if (rule.kind !== 'machine' || rule.live === true) continue;
+            const path = rule.path.replace(/\/$/, '');
+            const from = join(home, ...path.split('/'));
+            if (!existsSync(from)) continue;
+            try {
+                await mkdir(aside, { recursive: true });
+                await rename(from, join(aside, `${++n}-${path.replace(/\//g, '_')}`));
+                moved.push(rule.path);
+            } catch (error) {
+                notRemoved.push(`${rule.path} (${error instanceof Error ? error.message : String(error)})`);
+            }
+        }
+    }
+    options.log?.(`data root: ${kind}${moved.length > 0 ? `; moved away ${moved.length} of another machine's: ${moved.join(', ')}` : ''}${notRemoved.length > 0 ? `; NOT moved: ${notRemoved.join('; ')}` : ''}`);
+
+    // An unreadable machine id keeps the last one named: a later start that can read it still tells same from another.
+    const now = here ?? writtenOn;
+    await writeDataRootManifest(home, options.build, now);
+    await writeJsonAtomic(markFile, { machine: now });
+
+    const swept = (async (): Promise<void> => {
+        for (const name of await readdir(cache).catch(() => [] as string[])) {
+            if (!/^stale-\d+-\d+$/.test(name)) continue;
+            await rm(join(cache, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch((error: unknown) => { options.log?.(`data root: ${name} was not deleted: ${error instanceof Error ? error.message : String(error)}`); });
+        }
+    })();
+    return { kind, moved, notRemoved, swept };
 }

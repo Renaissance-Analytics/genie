@@ -146,5 +146,5 @@ export function agentTynnPrep(options: AgentTynnPrepOptions) {
     /** Is an agent running without what Tynn answering would give it: no key for want of Tynn, or a key nobody has checked? */
     const waiting = (): boolean => unverified.size > 0 || [...without.values()].includes('offline');
 
-    return { prepare, note, recovery, waiting, legacyKeys: tokens.legacyKeys };
+    return { prepare, note, recovery, waiting, legacyKeys: tokens.legacyKeys, lostKeys: tokens.lostKeys };
 }
