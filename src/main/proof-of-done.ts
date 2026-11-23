@@ -217,12 +217,12 @@ export class ProofOfDone {
         if (item.approval === 'hitl') {
             const asking = new AbortController();
             this.#asking.set(id, asking);
-            let verdict: 'allowed' | 'denied';
+            let verdict: 'allowed' | 'denied' | 'expired';
             try { verdict = await this.#ports.approve({ id, detail: describe(item.claim), signal: asking.signal }); }
             finally { if (this.#asking.get(id) === asking) this.#asking.delete(id); }
             // Withdrawn while it waited: whatever the ask answered after that, Tynn is no longer waiting for this claim.
             if (asking.signal.aborted) { this.#say(`claim ${id} withdrawn: Tynn no longer lists it as waiting`); return; }
-            if (verdict !== 'allowed') { this.#say(`claim ${id} not signed: the person declined`); return; }
+            if (verdict !== 'allowed') { this.#say(`claim ${id} not signed: ${verdict === 'expired' ? 'nobody answered within 30 minutes, so the request expired' : 'the person declined'}`); return; }
         } else if (item.approval !== 'agent') {
             this.#say(`claim ${id} refused: unknown approval`);
             return;

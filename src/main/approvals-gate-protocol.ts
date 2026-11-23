@@ -20,7 +20,7 @@ export type GateRefusal = { readonly ok: false; readonly reason: string };
 export const APPROVAL_CALL_DEADLINE_MS = APPROVAL_TIMEOUT_MS + APPROVAL_SWEEP_MS + 60_000;
 
 /** The request as it came over the wire, or why it is refused. A flow acts with the person's authority, so a caller is read strictly. */
-const WORD_MAX = 300;
+const WORD_MAX = 200;
 const DETAIL_MAX = 4_000;
 const word = (v: unknown, max = WORD_MAX): v is string => typeof v === 'string' && v.length <= max;
 const refuse = (reason: string): GateRefusal => ({ ok: false, reason });

@@ -438,7 +438,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     if (i.scope.kind === 'shared' && sliceIsDroppable(i.engine)) {
                         if (!i.slices?.[caller.workspaceId]) return err(`${i.engine} ${i.version} has no app for this workspace; nothing was done`);
                         const appVerdict = await deps.approve(caller, 'services.remove', `this workspace’s app on the shared ${i.engine} ${i.version} (127.0.0.1:${i.publishedPort}) — its credentials stop working; the engine and every other workspace’s app keep running`, context);
-                        if (appVerdict !== 'allowed') return err(`removing this workspace’s ${i.engine} app was denied by the person; nothing was done`);
+                        if (appVerdict !== 'allowed') return err(refusalWords(appVerdict, `removing this workspace’s ${i.engine} app`, 'nothing was done'));
                         await s.engines.releaseSlice(i.id, caller.workspaceId);
                         return ok({ ok: true, removed: i.id, appRemoved: true });
                     }

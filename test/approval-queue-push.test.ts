@@ -41,6 +41,7 @@ describe('ApprovalQueue tells its listeners when the Deck it feeds changes', () 
         expect(changes).toBe(1);
     });
 
+    // Since Tynn #1006 an ask the sweep finds unanswered EXPIRES: it leaves the Deck as an ask, and a dismissable notice says so.
     it('a cancel and a timeout sweep take items off the Deck, and say so', () => {
         let t = 0;
         const q = new ApprovalQueue({ now: () => t, timeoutMs: 10 });
@@ -51,12 +52,15 @@ describe('ApprovalQueue tells its listeners when the Deck it feeds changes', () 
         expect(changes).toBe(2);
         t = 100;
         expect(q.sweep()).toBe(2);
+        expect(q.deckItems().map((i) => [i.id.slice(0, 6), i.blocking])).toEqual([['apprx_', false], ['apprx_', false]]);
+        expect(changes).toBe(3);
+        for (const i of q.deckItems()) q.dismissExpired(i.id);
         expect(q.deckItems()).toHaveLength(0);
-        expect(changes).toBe(4);
         void q.gate(atlas, 'processes.add', 'three');
         q.cancelAll('Genie is shutting down');
         expect(q.deckItems()).toHaveLength(0);
-        expect(changes).toBe(6);
+        // 2 asks, 1 sweep (both expiries at once), 2 dismissals, 1 ask, 1 cancel.
+        expect(changes).toBe(7);
     });
 
     it('an answer for an item that is not pending changes nothing and announces nothing', () => {

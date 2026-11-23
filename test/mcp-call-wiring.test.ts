@@ -17,6 +17,7 @@ describe('the MCP call reaches the approval queue (genie#1360)', () => {
         expect(gates.length).toBeGreaterThan(0);
         for (const args of gates) expect(args).toHaveLength(4);
         // genie-host's queue, through the replica, ties it to the agent's real call by its forwarded id (the host split, P3.1).
-        expect(code('main.ts')).toMatch(/approve: \(caller, action, detail, call\) => composed\.approvals\.gate\(caller, action, detail, call\)/);
+        // Since Tynn #1006 (2g-4b2) over main's own client, to genie-host's one queue, still WITH the call (approvals-gate-protocol.ts).
+        expect(code('main.ts')).toMatch(/approve: \(caller, action, detail, call\) => approvalsNow\.gate\(caller, action, detail, call\)/);
     });
 });

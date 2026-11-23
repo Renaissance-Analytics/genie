@@ -212,7 +212,7 @@ export class ApprovalQueue {
     }
 
     deckItems(): DeckItem[] {
-        return [...this.#pending.values()].map((p) => ({
+        return [...this.#pending.values()].map((p): DeckItem => ({
             id: p.id,
             source: 'agent-question',
             agentId: p.caller.agentId,
@@ -226,17 +226,17 @@ export class ApprovalQueue {
             answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] },
             forwardedFrom: null,
             ...(p.why ? { why: p.why } : {}),
-        })).concat(this.#expired.map((e) => ({
+        })).concat(this.#expired.map((e): DeckItem => ({
             id: e.id,
-            source: 'agent-question' as const,
+            source: 'agent-question',
             agentId: e.caller.agentId,
             agentName: e.caller.agentName,
             workspaceId: e.caller.workspaceId === '' ? null : e.caller.workspaceId,
             title: `${e.caller.agentName} wanted to ${VERBS[e.action] ?? e.action}: ${e.detail} — expired, no answer in 30 min`,
             blocking: false,
-            priority: 'normal' as const,
+            priority: 'normal',
             at: e.at,
-            answer: { kind: 'inline' as const, options: [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' as const }] },
+            answer: { kind: 'inline', options: [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' }] },
             forwardedFrom: null,
         })));
     }
