@@ -1,6 +1,10 @@
-import { expect, it, vi } from 'vitest';
-import { HostingReplica, HostingService, type HostingDump } from '../src/main/hosting-host.js';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, expect, it } from 'vitest';
+import type { WorkspaceRef } from '../src/main/envelope-sites-host.js';
 import { wakeWorkspace, type WorkspaceOpsPorts } from '../src/main/workspace-ops-host.js';
+import { hostingRig, type HostingRig } from './helpers/hosting-rig.js';
 
 function fixture(verify: () => Promise<void>) {
     const events: string[] = [];
@@ -29,29 +33,49 @@ it('story394: failed host trust verification keeps the workspace asleep and acti
     expect(f.asleep()).toBe(true); expect(f.events).toEqual(['verify']);
 });
 
-it('story394: the redock refresh purpose survives the existing window-to-host hosting call', async () => {
-    const refreshed = vi.fn(async () => null);
-    const none = () => () => {};
-    const service = new HostingService({ sites: { onChange: none }, engines: { onChange: none, onStarted: none }, onFrontDoorChange: none, trust: { refresh: refreshed, onVerdict: none }, engineReconcile: Promise.resolve({}) } as never, { workspaces: () => ['workspace'], schedule: () => () => {} });
-    // The call publishes its dump after refresh. Isolate that unrelated snapshot assembly, not the real call/forwarding.
-    vi.spyOn(service, 'dump').mockReturnValue({ frontDoorPort: 0, browserTrust: { caPem: null, reason: 'fixture' }, externalFrontDoor: { running: false, reason: 'fixture' }, routes: [], configuredHosts: [], deckItems: [], sites: [], specs: {}, declared: {}, engines: [], workspaces: {}, dependents: {}, reconcile: null, problems: [] });
-    const replica = new HostingReplica((method, args) => service.call(method, args));
-    type Refresh = (id: string, purpose?: 'redock') => Promise<unknown>;
-    await (replica.trust.refresh as Refresh)('workspace', 'redock');
-    expect(refreshed).toHaveBeenCalledWith('workspace', 'redock');
+/*
+ * Since 2g-4d E2b (Tynn #955) the redock's trust read is genie-host's own: its workspace lifecycle asks its own hosting's
+ * trust (genie-host.ts `reverifyTrust`), with no window and no replica between. What #394 needs of it there: the redock
+ * purpose reaches the trust that owns the record, and a hidden (asleep) registered folder is never taken for a new one.
+ */
+let r: HostingRig | null = null;
+const strays: string[] = [];
+afterEach(async () => { await r?.close(); r = null; for (const d of strays.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+/** genie-host's hosting over one registered workspace whose `asleep` the test moves (the registry's workspaceStates()). */
+async function hostWith() {
+    const workspace: { id: string; path: string; asleep: boolean } = { id: 'workspace', path: '', asleep: false };
+    r = await hostingRig({ workspaces: (ws) => { workspace.path = ws; return [workspace as WorkspaceRef]; } });
+    return { r, workspace };
+}
+
+it('story394: the redock purpose reaches genie-host’s own trust: an asleep workspace is read for its redock, and only then', async () => {
+    const { r, workspace } = await hostWith();
+    // The person's yes while awake (genie-host's own record).
+    expect(await r.stack.trust.trust('workspace')).toMatchObject({ trusted: true });
+    workspace.asleep = true;
+    // CONTROL: an ordinary read of an asleep workspace reads nothing and believes no yes.
+    expect(await r.stack.trust.refresh('workspace')).toBeNull();
+    expect(r.stack.trust.isTrustedPath(workspace.path)).toBe(false);
+    // The redock's read is the fresh one the wake waits for: it reads the folder, and the person's yes stands.
+    expect(await r.stack.trust.refresh('workspace', 'redock')).toMatchObject({ trusted: true });
 });
 
-it('story394: a hidden registered folder is refused by the hosting replica rather than mistaken for a new folder', async () => {
-    const replica = new HostingReplica(async () => null);
-    const dump: HostingDump & { registeredFolders: readonly string[] } = {
-        frontDoorPort: 0, browserTrust: { caPem: null, reason: 'fixture' }, externalFrontDoor: { running: false, reason: 'fixture' },
-        routes: [], configuredHosts: [], deckItems: [], sites: [], specs: {}, declared: {}, engines: [], dependents: {}, reconcile: null, problems: [],
-        workspaces: { awake: { env: {}, choices: [], toRelease: [], toResume: [], path: '/fixture/awake' } },
-        registeredFolders: ['/fixture/awake', '/fixture/ghost'],
-        trust: [{ workspaceId: 'awake', path: '/fixture/awake', trusted: true, changed: false, list: { sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] } }],
-    };
-    replica.rebase(dump);
-    expect(await replica.trust.mayWriteInto('/fixture/ghost')).toBe(false);
-    expect(await replica.trust.mayWriteInto('/fixture/awake')).toBe(true);
-    expect(await replica.trust.mayWriteInto('/fixture/new')).toBe(true);
+it('story394: a hidden registered folder is refused by genie-host’s own trust rather than mistaken for a new folder', async () => {
+    const { r, workspace } = await hostWith();
+    await r.stack.trust.trust('workspace');
+    // CONTROL: awake and trusted, Genie's files may go in.
+    expect(await r.stack.trust.mayWriteInto(workspace.path)).toBe(true);
+    workspace.asleep = true;
+    expect(await r.stack.trust.mayWriteInto(workspace.path)).toBe(false);
+    // A folder that is no workspace is not this rule's.
+    const elsewhere = mkdtempSync(join(tmpdir(), 'genie-394-new-'));
+    strays.push(elsewhere);
+    expect(await r.stack.trust.mayWriteInto(elsewhere)).toBe(true);
+});
+
+it('story394, wired: genie-host hands its hosting every registered workspace (asleep ones included), and its redock asks for the redock read', () => {
+    const host = readFileSync('src/main/genie-host.ts', 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
+    expect(host).toMatch(/hosting = await composeHosting\(\{[\s\S]{0,4000}?workspaces: \(\) => hostRegistry\.workspaceStates\(\),/);
+    expect(host).toMatch(/reverifyTrust: async \(id\) => \{\s*if \(!hostingStack\) throw new Error\('workspace trust is not available yet'\);\s*await hostingStack\.trust\.refresh\(id, 'redock'\);/);
 });

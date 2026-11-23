@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { LIVE_STATUS_PAUSED, LinkGate } from '../src/main/linked-stream.js';
 import type { DockerEventsPort } from '../src/main/service-driver.js';
-import { hostingRig, tick, type HostingRig } from './helpers/hosting-rig.js';
+import { hostingRig, tick, type HostingRig, type RigFeatures } from './helpers/hosting-rig.js';
 
 /**
  * THE ENGINES' LIVE STATUS SAYS WHEN IT IS PAUSED. genie-host's `docker events` runs under its `supervised` spawn-host
  * child (one owner for every process the host starts); while that child's link is down — it never came up, or it exited
- * and is not back — the watch cannot run, and Hosting SHOWS why, in words. It clears when the link returns, and the watch
- * resumes. Rows:
+ * and is not back — the watch cannot run, and Hosting SHOWS why, in words: genie-host's own features (what a window's
+ * features.snapshot reads, 2g-4d E2b) carry the reason in Hosting's problems. It clears when the link returns, and the
+ * watch resumes. Rows:
  *  (1) the link never comes up: Hosting shows the reason;
  *  (2) the link drops: the reason appears; it returns: the reason clears and the watch starts again;
  *  (3) POSITIVE CONTROL: the link up, no reason.
@@ -38,13 +39,16 @@ async function hostWith(gate: LinkGate) {
     return { r, events };
 }
 
+/** What a window's Hosting tab shows as its problems: genie-host's features snapshot (features.snapshot). */
+const shown = async (features: RigFeatures) => (await features.snapshot()).hosting?.problems ?? [];
+
 describe('the engines’ live status, while the process helper is down', () => {
     it('(1) the link never comes up: Hosting shows the reason, and no watch runs', async () => {
         const gate = new LinkGate();
         const { r, events } = await hostWith(gate);
-        const w = await r.window();
+        const features = await r.features();
         expect(r.stack.hostingProblems()).toContain(LIVE_STATUS_PAUSED);
-        expect(w.replica.hostingProblems()).toContain(LIVE_STATUS_PAUSED);
+        expect(await shown(features)).toContain(LIVE_STATUS_PAUSED);
         expect(events.starts()).toBe(0);
     });
 
@@ -52,30 +56,30 @@ describe('the engines’ live status, while the process helper is down', () => {
         const gate = new LinkGate();
         gate.setUp(true);
         const { r, events } = await hostWith(gate);
-        const w = await r.window();
+        const features = await r.features();
         expect(events.starts()).toBe(1);
-        expect(w.replica.hostingProblems()).not.toContain(LIVE_STATUS_PAUSED);
+        expect(await shown(features)).not.toContain(LIVE_STATUS_PAUSED);
 
         gate.setUp(false);
         await tick(30);
         expect(r.stack.hostingProblems()).toContain(LIVE_STATUS_PAUSED);
-        expect(w.replica.hostingProblems()).toContain(LIVE_STATUS_PAUSED);
+        expect(await shown(features)).toContain(LIVE_STATUS_PAUSED);
 
         gate.setUp(true);
         await tick(30);
-        expect(w.replica.hostingProblems()).not.toContain(LIVE_STATUS_PAUSED);
+        expect(await shown(features)).not.toContain(LIVE_STATUS_PAUSED);
         // The driver asks again after its stream ended (its first re-watch is 5 s): the ask waited for the link, and runs.
         const deadline = Date.now() + 15_000;
         while (events.starts() < 2 && Date.now() < deadline) await new Promise((res) => setTimeout(res, 100));
         expect(events.starts()).toBe(2);
     }, 30_000);
 
-    it('(3) CONTROL: the link up, no reason', async () => {
+    it('(3) CONTROL: the link up, no reason — and Hosting’s problems are read (the gauge can show one: row 1)', async () => {
         const gate = new LinkGate();
         gate.setUp(true);
         const { r } = await hostWith(gate);
-        const w = await r.window();
+        const features = await r.features();
         expect(r.stack.hostingProblems()).not.toContain(LIVE_STATUS_PAUSED);
-        expect(w.replica.hostingProblems()).not.toContain(LIVE_STATUS_PAUSED);
+        expect(await shown(features)).toEqual(r.stack.hostingProblems());
     });
 });

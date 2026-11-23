@@ -6,9 +6,10 @@ import type { PrivilegedStep } from '../src/main/elevate.js';
 import { notAvailableHere } from '../src/core/host-runtime.js';
 
 /**
- * AN ELEVATION THAT WAITED FOR A WINDOW (the host split, P5a): genie-host held it because no window was open; the next
- * window shows it on the Deck, and Approve now is the person asking — it runs the hosts sync from that window, the one
- * privileged step the host can need with no one asking. Nothing else answers it.
+ * AN ELEVATION THAT WAITED FOR A WINDOW (the host split, P5a): genie-host held it because no window was open, and says what
+ * waits. The Deck item that names it (core/elevation-waiting.ts) answers Approve now with the hosts sync, the one privileged
+ * step the host can need with no one asking; nothing else answers it. genie-host puts it on its own Deck (deck.watch and
+ * every client's estate): split-2g4d-e2b-elevation-deck.test.ts.
  */
 
 const hostsStep: PrivilegedStep = { id: 'hosts', label: 'update the hosts file', step: { command: 'cp', args: [] } as never };
