@@ -3,7 +3,8 @@ import { relative } from 'node:path';
 import { loadWindowPage } from './window-pages.js';
 import type { QuestionView, QuestionWindow, QuestionWindowPort } from './question-window.js';
 import { genieWindowIcon } from './app-identity.js';
-import { askWindowBounds } from '../core/question-drawer.js';
+import { askWindowBounds, type AskWindowGeometry } from '../core/question-drawer.js';
+import { askWindowMaximized, askWindowRestored } from '../core/question-maximize.js';
 import { questionFileInside } from './question-files.js';
 import { actOnRemoteQuestion } from './remote-questions.js';
 import { onceShowable } from '../core/window-activation.js';
@@ -83,14 +84,37 @@ export function electronQuestionWindow(input: {
     // The window WIDENS for the drawer and back (Genie 1's askWindowBounds): the width it had before is what it returns to.
     let current: BrowserWindow | null = null;
     let baseWidth: number | null = null;
+    // MAXIMIZED (Tynn #1019): the bounds it had, and whether the drawer was open then; null = not maximized.
+    let restoreTo: { bounds: AskWindowGeometry; drawerOpen: boolean } | null = null;
+    let drawerOpen = false;
     ipcMain.handle('question:drawer', (_e, open: unknown) => {
         const win = current;
         if (!win || win.isDestroyed()) return;
+        drawerOpen = open === true;
+        // A maximized window already has the room: Restore puts the drawer's width right (core/question-maximize.ts).
+        if (restoreTo !== null) return;
         const bounds = win.getBounds();
         if (open === true && baseWidth === null) baseWidth = bounds.width;
         const workArea = screen.getDisplayMatching(bounds).workArea;
         win.setBounds(askWindowBounds({ current: bounds, workArea, drawerOpen: open === true, baseWidth: baseWidth ?? bounds.width }));
         if (open !== true) baseWidth = null;
+    });
+    // The whole window to its display's work area, and back to the bounds it had (core/question-maximize.ts).
+    ipcMain.handle('question:maximize', (_e, on: unknown) => {
+        const win = current;
+        if (!win || win.isDestroyed()) return;
+        const bounds = win.getBounds();
+        const workArea = screen.getDisplayMatching(bounds).workArea;
+        if (on === true) {
+            if (restoreTo === null) restoreTo = { bounds, drawerOpen };
+            win.setBounds(askWindowMaximized(workArea));
+            return;
+        }
+        if (restoreTo === null) return;
+        const back = askWindowRestored({ saved: restoreTo.bounds, workArea, drawerOpen, drawerOpenWhenSaved: restoreTo.drawerOpen, baseWidth });
+        restoreTo = null;
+        baseWidth = back.baseWidth;
+        win.setBounds(back.bounds);
     });
 
     return (onClosed) => {
@@ -125,7 +149,7 @@ export function electronQuestionWindow(input: {
         input.admit?.(win.webContents);
         onceShowable(win, process.platform, () => win.showInactive());
         current = win;
-        win.on('closed', () => { if (current === win) { current = null; baseWidth = null; } onClosed(); });
+        win.on('closed', () => { if (current === win) { current = null; baseWidth = null; restoreTo = null; drawerOpen = false; } onClosed(); });
         void loadWindowPage(win.webContents, 'question').catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
         return {
             show: (view) => {

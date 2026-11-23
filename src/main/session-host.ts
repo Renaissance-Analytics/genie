@@ -19,7 +19,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
-import { mcpOffFor } from '../core/agent-mcp.js';
+import { mcpOffFor, sameMcpServer } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
 import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
 import { accountSwitchNote } from '../core/account-switch.js';
@@ -612,6 +612,7 @@ export class SessionHost {
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
+    readonly #builtInMcpServers: readonly McpServer[];
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
@@ -725,6 +726,12 @@ export class SessionHost {
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
         /**
+         * THE SERVERS GENIE PROVIDES (Tynn #1017; core/agent-mcp.ts BUILT_IN_MCP_SERVERS, the Fancy Dev Kit's `fancy-ui`).
+         * Handed to every session after the servers above, except one switched off for the agent or its workspace
+         * (mcpOffFor): off, the provider is not given it at all, so it costs the agent no context. Absent = none.
+         */
+        builtInMcpServers?: readonly McpServer[];
+        /**
          * A turn STARTED and took its number — main writes it to the record (`lastTurn`) for the next start. At the start,
          * not the end: a turn cut off by an exit or a quit had already taken its number, and the next run numbered it again.
          */
@@ -811,6 +818,7 @@ export class SessionHost {
         this.#untrustedNow = options.untrustedNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
+        this.#builtInMcpServers = options.builtInMcpServers ?? [];
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
@@ -1145,7 +1153,12 @@ export class SessionHost {
             if (found && reason === null) account = found;
             if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
         }
-        const mcpServers = this.#mcpServersFor?.(record) ?? [];
+        // Genie's provided servers after the rest (Tynn #1017), unless off for this agent or its workspace, read per launch.
+        const withBuiltIn = (servers: readonly McpServer[]): readonly McpServer[] => {
+            const off = new Set(mcpOffFor(record, this.#workspaceMcpOffFor?.(record) ?? []));
+            return [...servers, ...this.#builtInMcpServers.filter((b) => !off.has(b.name) && !servers.some((s) => sameMcpServer(s, b)))];
+        };
+        const mcpServers = withBuiltIn(this.#mcpServersFor?.(record) ?? []);
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
         // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
         const startPhase = (phase: AgentStartPhase): void => { const run = this.#running.get(record.id)?.run; if (run !== undefined) this.#lifecycle?.phase?.(record.id, run, phase); };
@@ -1156,7 +1169,7 @@ export class SessionHost {
         const driverFactory = deferred ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
+            const prepared = this.#prepareMcpServers ? withBuiltIn(await this.#prepareMcpServers(record, cwd, signal)) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const factory = this.#driverFor(record, cwd, record.threadId, { ...(account ? { account } : {}), mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
