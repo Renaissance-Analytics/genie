@@ -199,7 +199,10 @@ try {
     if (-not $hostAfter) { throw 'no live genie-host recorded in host.json after the update' }
     Write-Output ("genie-host after the update: pid " + $hostAfter.Id + ", started " + $hostAfter.StartTime + "; the window relaunched at " + $relaunchAt)
     if ($hostAfter.Id -ne $hostBefore.Id -or $hostAfter.StartTime -ne $hostBefore.StartTime) { throw "genie-host changed: pid $($hostBefore.Id) before, $($hostAfter.Id) after" }
-    $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' -and $_.Name -eq 'node.exe' })
+    # The stub provider runs under genie-host's own executable as Node (ELECTRON_RUN_AS_NODE, session-host.ts providerLaunchOptions),
+    # never node.exe: found by its script, whatever runs it (measured: a node.exe filter found 0 while the agent ran).
+    $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' })
+    $stubs | ForEach-Object { Write-Output ("  provider: " + $_.ProcessId + " " + $_.Name + " parent " + $_.ParentProcessId + " started " + $_.CreationDate + " path " + $_.ExecutablePath) }
     $kept = @($stubs | Where-Object { $_.CreationDate -lt $relaunchAt })
     $restarted = @($stubs | Where-Object { $_.CreationDate -ge $relaunchAt })
     Write-Output ("agent providers from before the update still running: " + $kept.Count + "; started since: " + $restarted.Count)

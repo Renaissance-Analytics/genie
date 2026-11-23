@@ -41,6 +41,7 @@ cleanup() {
     [ -n "$FEED_PID" ] && kill "$FEED_PID" 2>/dev/null
     [ -f package.json.pristine ] && mv -f package.json.pristine package.json
     [ -f package-lock.json.pristine ] && mv -f package-lock.json.pristine package-lock.json
+    rm -f "$ROOT/electron-builder.client-only-feed.json"
 }
 trap cleanup EXIT
 
@@ -81,6 +82,18 @@ end_all() { for p in $(genie_pids) $(pgrep -f 'stub-codex\.mjs'); do kill -9 "$p
 
 cp -f package.json package.json.pristine
 cp -f package-lock.json package-lock.json.pristine
+# The packaging config with the local feed as its publish target, whole: electron-builder merges a `-c.publish.*` override
+# into the github block (owner, repo, releaseType stay) and its schema refuses that for `generic` (measured, 1123-192745).
+FEED_CONFIG="$ROOT/electron-builder.client-only-feed.json"
+node -e '
+const fs = require("fs");
+let yaml; try { yaml = require("js-yaml"); } catch { yaml = null; }
+const text = fs.readFileSync("electron-builder.yml", "utf8");
+const config = yaml ? yaml.load(text) : require("yaml").parse(text);
+config.publish = { provider: "generic", url: process.argv[1] };
+fs.writeFileSync(process.argv[2], JSON.stringify(config, null, 2));
+' "$FEED_URL" "$FEED_CONFIG" || fail 'the packaging config with the local feed could not be written'
+echo "packaging with: $FEED_CONFIG (publish: generic $FEED_URL)"
 
 # --- the base: packaged, "installed", launched -------------------------------------------------------------------------
 step "package $BASE and install it"
@@ -90,7 +103,7 @@ run bump-base.log npm version "$BASE" --no-git-tag-version --allow-same-version
 run build-base.log npm run build
 BASE_HASH="$(sha256sum dist/main/host.js | cut -c1-12)"
 echo "the base build's genie-host: $BASE_HASH"
-run package-base.log npx electron-builder --linux AppImage --publish never -c.publish.provider=generic "-c.publish.url=$FEED_URL"
+run package-base.log npx electron-builder --linux AppImage --publish never --config "$FEED_CONFIG"
 base_image="$(ls release/*"$BASE"*.AppImage 2>/dev/null | head -1)"
 [ -n "$base_image" ] || { ls -la release; fail "no $BASE AppImage in release/"; }
 mkdir -p "$APPS"
@@ -104,7 +117,7 @@ run build-next.log npm run build
 NEXT_HASH="$(sha256sum dist/main/host.js | cut -c1-12)"
 echo "the update's genie-host: $NEXT_HASH"
 if [ "$NEXT_HASH" != "$BASE_HASH" ]; then echo '### client-only=NOT-CLIENT-ONLY'; fail "the two builds carry different hosts ($BASE_HASH, $NEXT_HASH)"; fi
-run package-next.log npx electron-builder --linux AppImage --publish never -c.publish.provider=generic "-c.publish.url=$FEED_URL"
+run package-next.log npx electron-builder --linux AppImage --publish never --config "$FEED_CONFIG"
 mv -f package.json.pristine package.json
 mv -f package-lock.json.pristine package-lock.json
 next_image="$(ls release/*"$NEXT"*.AppImage 2>/dev/null | head -1)"
