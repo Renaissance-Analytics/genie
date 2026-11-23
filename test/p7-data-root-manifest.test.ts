@@ -277,7 +277,6 @@ const NOT_THE_ROOTS: ReadonlyArray<{ readonly why: string; readonly names: reado
     { why: 'files of a runtime Genie installed (under genie2-toolchain/, machine) or of the OS', names: ['php.ini', 'Thumbs.db'] },
     { why: 'Genie 1’s database and its CA files, in Genie 1’s own folder: read once for the import, never written', names: ['genie.db', 'gen-ca.crt', 'gen-ca.key'] },
     { why: 'a protocol method’s name (host.lock, remote.lock), not a file', names: ['host.lock', 'remote.lock'] },
-    { why: 'the publisher’s schema, a URL path', names: ['project.schema.json'] },
 ];
 
 describe('completeness 2: every data file host-side code names is in a list, or is named here as not the root’s', () => {
