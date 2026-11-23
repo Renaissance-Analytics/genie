@@ -58,6 +58,44 @@ export function readRegistryWatch(raw: unknown): RegistryWatchView {
     return { revision: raw.revision, dropped: [...(raw.dropped as string[])] };
 }
 
+/** genie-host's registry files: its store's calls (agent-stores-host.ts `registry`), and what the store dropped reading them. */
+export interface RegistryFiles {
+    call(method: string, args: unknown[]): Promise<unknown>;
+    dropped(): readonly string[];
+}
+
+export interface RegistryFeed {
+    now(): RegistryWatchView;
+    subscribe(listener: (view: RegistryWatchView) => void): () => void;
+}
+
+/** `registry.write` as genie-host answers it, on either path: main's own client only, the write read strictly. */
+export async function answerRegistryWrite(files: RegistryFiles | undefined, args: unknown[], context: { readonly own?: true } | undefined): Promise<unknown> {
+    if (!files) return refuse('this host keeps no registry');
+    if (context?.own !== true) return refuse('the registry is written by Genie itself, never by a window');
+    const write = readRegistryWrite(args);
+    if ('ok' in write) return write;
+    return files.call(write.method, write.args);
+}
+
+/**
+ * WHAT GENIE-HOST ANSWERS OF ITS REGISTRY, FROM THE START (Tynn #1007; gate 1123-021408-46f518). main's registry loads
+ * early in its boot, before genie-host has built its own answers (host-alone-api.ts), so these are hostRemoteApi's own
+ * ports: `registry.write` among its own methods, `registry.read` and `registry.watch` as its registry port. The same
+ * store calls the engine link carried, which were there from genie-host's start too.
+ */
+export function hostRegistryAnswers(files: RegistryFiles, feed: RegistryFeed): {
+    readonly files: RegistryFiles;
+    readonly own: { readonly 'registry.write': (args: unknown[], context?: { readonly own?: true }) => Promise<unknown> };
+    readonly registry: { read(method: RegistryRead): Promise<unknown>; readonly watch: RegistryFeed };
+} {
+    return {
+        files,
+        own: { 'registry.write': (args, context) => answerRegistryWrite(files, args, context) },
+        registry: { read: async (method) => (method === 'dropped' ? [...files.dropped()] : files.call(method, [])), watch: feed },
+    };
+}
+
 /** genie-host's registry as a feed: revision 0 now, then a new revision each time its files are written. */
 export function registryWatchFeed(ports: { dropped(): readonly string[]; onWritten(listener: () => void): () => void }): { now(): RegistryWatchView; subscribe(listener: (view: RegistryWatchView) => void): () => void } {
     const listeners = new Set<(view: RegistryWatchView) => void>();

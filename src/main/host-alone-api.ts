@@ -157,7 +157,6 @@ export interface HostAlonePorts {
     readonly windowView?: HostApiDeps['windowView'];
     /** genie-host's registry and its writes, for main's window registry (Tynn #1007, 2g-4e). Absent = refused. */
     readonly registryFiles?: HostApiDeps['registryFiles'];
-    readonly registryWatch?: HostApiDeps['registryWatch'];
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
     readonly tynnRecheck?: HostApiDeps['tynnRecheck'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
@@ -315,7 +314,6 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.approvalsGate ? { approvalsGate: ports.approvalsGate } : {}),
         ...(ports.windowView ? { windowView: ports.windowView } : {}),
         ...(ports.registryFiles ? { registryFiles: ports.registryFiles } : {}),
-        ...(ports.registryWatch ? { registryWatch: ports.registryWatch } : {}),
         ...(ports.tynnRecheck ? { tynnRecheck: ports.tynnRecheck } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
