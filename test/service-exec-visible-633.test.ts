@@ -4,7 +4,6 @@ import { spawn } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeServiceExec } from '../src/main/service-exec.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
-import { SupervisorService } from '../src/main/supervisor-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ServiceExec } from '../src/main/mcp-tools-hosting.js';
@@ -99,7 +98,6 @@ function rig() {
     const open = vi.fn(() => { throw new Error('observation must never start a second shell'); });
     const pty: PtyPort = { open, write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} };
     const supervisor = new ProcessSupervisor(pty);
-    const service = new SupervisorService(supervisor);
     const tree: ProcessTree = { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) };
     const execute = makeServiceExec(tree, supervisor);
     const input: Parameters<ServiceExec>[0] = {
@@ -109,7 +107,7 @@ function rig() {
     const start = (overrides: Partial<Parameters<ServiceExec>[0]> = {}) => {
         const promise = execute({ ...input, ...overrides }); pending.push(promise); return promise;
     };
-    return { supervisor, service, input, start, open };
+    return { supervisor, input, start, open };
 }
 
 describe('actual service executor publishes one transient command (#633)', () => {
@@ -143,13 +141,13 @@ describe('actual service executor publishes one transient command (#633)', () =>
 
     it('publishes stdout/stderr live through the real masker before command completion', async () => {
         const w = rig(); const events: string[] = [];
-        w.service.onEvent((event) => { if (event.kind === 'output') events.push(event.data); });
+        w.supervisor.onOutput((_id, data) => { events.push(data); });
         const result = w.start();
         commands[0]!.stdout.write(`before ${SECRET.slice(0, 9)}`);
         expect(w.supervisor.log('command-one')).toBe('before ');
         commands[0]!.stderr.write(`${SECRET.slice(9)} after\n`);
         expect(events.join('')).toBe('before ******** after\n');
-        expect(w.service.dump().logs['command-one']).toBe('before ******** after');
+        expect(w.supervisor.log('command-one')).toBe('before ******** after');
         commands[0]!.emit('close', 0); await result;
         expect(w.supervisor.status('command-one')).toMatchObject({ state: 'exited', exitCode: 0, pid: null });
     });

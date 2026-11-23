@@ -61,8 +61,8 @@ describe('genie-host times the calls a window makes', () => {
         expect(src).toMatch(/hostWatchdog\.start\(\);/);
     });
 
-    it('names the store and allowed operation without logging call payloads or unknown names', async () => {
-        dir = await mkdtemp(join(tmpdir(), 'slow-store-names-'));
+    it('names a call by its method alone, never its arguments', async () => {
+        dir = await mkdtemp(join(tmpdir(), 'slow-call-names-'));
         const timed: string[] = [];
         const server = new SessionEngineServer({ token: TOKEN, build: 't', timeCall: (label) => { timed.push(label); return () => {}; } });
         const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() });
@@ -72,25 +72,10 @@ describe('genie-host times the calls a window makes', () => {
         const client = new SessionEngineClient();
         try {
             expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
-            // No stores attached: even refused calls must identify the allowed operation they attempted.
-            for (const [store, method] of [['knowledge', 'list'], ['attention', 'withdraw'], ['registry', 'readAgents']]) {
-                expect((await client.call('engine.stores', [store, method, [{ query: 'private-content' }]])).ok).toBe(false);
-            }
-            expect(timed.filter((s) => s.startsWith('engine.stores'))).toEqual([
-                'engine.stores store=knowledge method=list',
-                'engine.stores store=attention method=withdraw',
-                'engine.stores store=registry method=readAgents',
-            ]);
             timed.length = 0;
-            await client.call('engine.stores', ['unknown\nprivate-content', 'private-content', []]);
-            await client.call('engine.stores', ['knowledge', 'private-content', []]);
-            // Object prototype properties are not store or operation names either.
-            await client.call('engine.stores', ['constructor', 'toString', []]);
-            expect(timed).toEqual([
-                'engine.stores store=? method=?',
-                'engine.stores store=knowledge method=?',
-                'engine.stores store=? method=?',
-            ]);
+            expect(await client.call('engine.ping', [{ query: 'private-content' }])).toMatchObject({ ok: true });
+            expect(timed).toEqual(['engine.ping']);
+            expect(JSON.stringify(timed)).not.toContain('private-content');
         } finally {
             client.disconnect();
         }

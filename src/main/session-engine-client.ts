@@ -38,9 +38,6 @@ import type { AccountsSnapshot } from '../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
-import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
-import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
-import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
 import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-host.js';
 import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
@@ -50,7 +47,6 @@ import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
 import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
 import type { BrowserEvent } from './browser-service.js';
-import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
@@ -160,8 +156,6 @@ export class SessionEngineClient {
     /** genie-host's frames for this window's tunnelled protocol connections (Tynn #898 step 2d-4b). */
     readonly #protocolListeners = new Set<(event: import('./protocol-tunnels.js').TunnelEvent) => void>();
     readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
-    #replicas: StoreReplicas | null = null;
-    #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
@@ -169,7 +163,6 @@ export class SessionEngineClient {
     #marketplace: MarketplaceApi | null = null;
     #gapps: GAppBookApi | null = null;
     readonly #gappsChanged = new Set<() => void>();
-    #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
     #workstation: WorkstationReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
@@ -359,9 +352,6 @@ export class SessionEngineClient {
             case 'browser.event':
                 for (const listener of [...this.#browserListeners]) listener(payload as BrowserEvent);
                 return;
-            case 'flows.event':
-                this.flows().apply(payload as FlowsEvent);
-                return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
                 return;
@@ -394,18 +384,6 @@ export class SessionEngineClient {
                 return;
             case 'hosting.event':
                 this.hosting().apply(payload as HostingEvent);
-                return;
-            case 'supervisor.dump':
-                this.supervisor().rebase(payload as SupervisorDump);
-                return;
-            case 'supervisor.event':
-                this.supervisor().apply(payload as SupervisorEvent);
-                return;
-            case 'stores.dump':
-                this.stores().rebase(payload as StoresDump);
-                return;
-            case 'stores.event':
-                this.stores().apply(payload as StoresEvent);
                 return;
             case 'takeOver.event':
                 this.takeOvers().deliver(payload as TakeOverView);
@@ -527,19 +505,6 @@ export class SessionEngineClient {
         };
     }
 
-    /**
-     * The window's replicas of genie-host's stores (the host split, P3.1): the inbox, attention, approvals (read here,
-     * synchronously, re-based at every connect) and the knowledge graph (read by call). Writes answer in the host's words.
-     */
-    stores(): StoreReplicas {
-        this.#replicas ??= storeReplicas(async (store: StoreName, method: string, args: readonly unknown[]) => {
-            const reply = await this.call('engine.stores', [store, method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#replicas;
-    }
-
     /** The host MCP server's endpoint, verification and tools; null when it has not started. */
     mcpStatus(): Promise<ReturnType<HostMcp['status']> | null> {
         return this.#value<ReturnType<HostMcp['status']> | null>('engine.mcpStatus', [], null);
@@ -606,19 +571,6 @@ export class SessionEngineClient {
         return this.#hosting;
     }
 
-    /**
-     * genie-host's process supervisor, as this window drives it (P3.3b): sites, the front door and the Processes view run
-     * their processes there, so they live — and restart — with the UI closed.
-     */
-    supervisor(): SupervisorReplica {
-        this.#supervisor ??= new SupervisorReplica(async (method, args) => {
-            const reply = await this.call('engine.supervisor', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#supervisor;
-    }
-
     /** genie-host's terminals, as this window opens, types into and shows them (P3.3e). */
     terminals(): TerminalsReplica {
         this.#terminals ??= new TerminalsReplica(async (method, args) => {
@@ -671,15 +623,6 @@ export class SessionEngineClient {
     onBrowserEvent(listener: (event: BrowserEvent) => void): () => void {
         this.#browserListeners.add(listener);
         return () => { this.#browserListeners.delete(listener); };
-    }
-
-    flows(): FlowsReplica {
-        this.#flows ??= new FlowsReplica(async (method, args) => {
-            const reply = await this.call('engine.flows', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#flows;
     }
 
     /** The local window's Marketplace actions. Only the host downloads, verifies and activates packages. */

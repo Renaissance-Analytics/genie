@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { COMPLETED_COMMAND_HISTORY_MAX as MAX, ProcessSupervisor } from '../src/main/process-supervisor.js';
-import { SupervisorReplica, SupervisorService, type SupervisorEvent } from '../src/main/supervisor-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
-// Fixed-clock, in-memory supervisor + actual host/replica protocol. No file, shell, provider or OS process.
+// Fixed-clock, in-memory supervisor. No file, shell, provider or OS process. Every reader of the supervisor (the process
+// book, the features snapshot's hosting.processes, the agents' tools) reads its list, so what it forgets is gone for all.
 function rig() {
     let opened = 0; let cancelled = 0;
     const pty: PtyPort = {
@@ -12,11 +12,9 @@ function rig() {
         onData: () => () => {}, onExit: () => () => {},
     };
     const supervisor = new ProcessSupervisor(pty, { now: () => 42, schedule: () => () => {} });
-    const service = new SupervisorService(supervisor);
-    const replica = new SupervisorReplica(async (method, args) => service.call(method, args));
-    replica.rebase(service.dump());
-    const events: SupervisorEvent[] = [];
-    service.onEvent((event) => { events.push(event); replica.apply(event); });
+    // What a forget says to whoever follows the supervisor (the process book, genie-host's feature pushes).
+    const forgotten: string[] = [];
+    supervisor.onForget((id) => { forgotten.push(id); });
     const run = (id: string, workspaceId = 'work') => supervisor.trackExternal(
         { id, workspaceId, name: 'fixture command', command: `command ${id}`, cwd: '/fixture' },
         { pid: 123, stop: () => { cancelled += 1; } },
@@ -24,7 +22,7 @@ function rig() {
     const complete = (id: string, workspaceId = 'work', code: number | null = 0, stopped = false) => {
         const handle = run(id, workspaceId); handle.output(`log ${id}\n`); handle.finish(code, stopped); return handle;
     };
-    return { supervisor, service, replica, events, run, complete, cancelled: () => cancelled, opened: () => opened };
+    return { supervisor, forgotten, run, complete, cancelled: () => cancelled, opened: () => opened };
 }
 
 describe('transient service command history is bounded everywhere (#633)', () => {
@@ -56,35 +54,34 @@ describe('transient service command history is bounded everywhere (#633)', () =>
         expect(w.supervisor.log('started-first-finished-last')).toBe('last to finish');
     });
 
-    it('notifies connected replicas to release evicted statuses, commands and logs, and reconnects without them', () => {
+    it('says an evicted run is forgotten, once, to whoever follows the supervisor; a later read has neither it nor its log', () => {
         const w = rig();
-        for (let i = 0; i <= MAX; i += 1) w.complete(`replicated-${i}`);
-        expect(w.events.filter((event) => event.kind === 'forgotten')).toEqual([{ kind: 'forgotten', id: 'replicated-0' }]);
-        expect(w.replica.list()).toHaveLength(MAX);
-        expect(w.replica.status('replicated-0')).toBeNull();
-        expect(w.replica.command('replicated-0')).toBeUndefined();
-        expect(w.replica.readLog('replicated-0')).toBeNull();
-        const reconnect = new SupervisorReplica(async () => null); reconnect.rebase(w.service.dump());
-        expect(reconnect.list()).toHaveLength(MAX);
-        expect(reconnect.status('replicated-0')).toBeNull();
-        expect(reconnect.log(`replicated-${MAX}`)).toBe(`log replicated-${MAX}`);
+        for (let i = 0; i <= MAX; i += 1) w.complete(`evicted-${i}`);
+        expect(w.forgotten).toEqual(['evicted-0']);
+        // What a reader that comes later (a new snapshot, a reconnecting phone) reads: the newest MAX, without the evicted run.
+        expect(w.supervisor.list()).toHaveLength(MAX);
+        expect(w.supervisor.list().some((row) => row.id === 'evicted-0')).toBe(false);
+        expect(w.supervisor.command('evicted-0')).toBeUndefined();
+        expect(w.supervisor.readLog('evicted-0')).toBeNull();
+        expect(w.supervisor.log(`evicted-${MAX}`)).toBe(`log evicted-${MAX}`);
     });
 
-    it('direct host forget is propagated once, including to an already connected window', () => {
+    it('a forget is said once, however often it is asked', () => {
         const w = rig(); w.complete('direct-forget');
         expect(w.supervisor.forget('direct-forget')).toBe(true);
         expect(w.supervisor.forget('direct-forget')).toBe(false);
-        expect(w.events.filter((event) => event.kind === 'forgotten')).toEqual([{ kind: 'forgotten', id: 'direct-forget' }]);
-        expect(w.replica.status('direct-forget')).toBeNull();
+        expect(w.forgotten).toEqual(['direct-forget']);
+        expect(w.supervisor.status('direct-forget')).toBeNull();
     });
 
-    it('the replica notifies its process view after deleting a forgotten row, without inventing a status transition', () => {
+    it('a forget is said after the row and its log are gone, and with no status transition invented for it', () => {
         const w = rig(); w.complete('view-refresh');
-        const observed: unknown[] = [];
-        const off = w.replica.onForget((id) => observed.push({ id, status: w.replica.status(id), log: w.replica.readLog(id) }));
-        w.replica.apply({ kind: 'forgotten', id: 'view-refresh' });
+        const observed: unknown[] = []; const changes: string[] = [];
+        w.supervisor.onForget((id) => observed.push({ id, status: w.supervisor.status(id), log: w.supervisor.readLog(id) }));
+        w.supervisor.onChange((status) => changes.push(`${status.id}:${status.state}`));
+        expect(w.supervisor.forget('view-refresh')).toBe(true);
         expect(observed).toEqual([{ id: 'view-refresh', status: null, log: null }]);
-        off();
+        expect(changes).toEqual([]);
     });
 
     it('failed and stopped runs count toward the same completion bound', () => {
@@ -108,10 +105,10 @@ describe('transient service command history is bounded everywhere (#633)', () =>
         expect(w.cancelled()).toBe(0); expect(w.opened()).toBe(1);
     });
 
-    it('CONTROL: an explicit remote forget emits one forgotten event, not duplicates', () => {
-        const w = rig(); w.complete('remote-forget');
-        expect(w.service.call('forget', ['remote-forget'])).toBe(true);
-        expect(w.events.filter((event) => event.kind === 'forgotten')).toEqual([{ kind: 'forgotten', id: 'remote-forget' }]);
-        expect(w.replica.status('remote-forget')).toBeNull();
+    it('CONTROL: a run that is still in the history is said by nobody as forgotten', () => {
+        const w = rig();
+        for (let i = 0; i < MAX; i += 1) w.complete(`kept-${i}`);
+        expect(w.forgotten).toEqual([]);
+        expect(w.supervisor.status('kept-0')).toMatchObject({ state: 'exited' });
     });
 });

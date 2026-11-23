@@ -3,14 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
-import { AgentStoresService } from '../src/main/agent-stores-host.js';
 import { openAgentStores } from '../src/main/agent-stores-open.js';
-import { ApprovalQueue } from '../src/main/approval-queue.js';
-import { AttentionReplica } from '../src/main/agent-stores-replica.js';
+import { assembleDeckItems } from '../src/main/deck-assembly.js';
 
 /**
  * A DISMISSED OR ANSWERED QUESTION STAYS GONE (Tynn #600, acceptance 1 and 3): decided, genie-host restarted on the same
- * files, a window connected afresh. Written after the code: break-probed (the decided write broken, seen red on CI, and
+ * files, and the Deck it says to every window (deck.watch, built by assembleDeckItems as genie-host's featureDeckItems
+ * is) read afresh. Written after the code: break-probed (the decided write broken, seen red on CI, and
  * restored by reversing that edit) before it was trusted.
  */
 let dir: string;
@@ -32,16 +31,17 @@ describe('decided, then a restart and a fresh window', () => {
         await first.attention.answer(answered.questionId, { selections: [['a']], notes: [''], note: '' });
         first.knowledge.close();
 
-        // genie-host again, on the same files; a window connects and takes its dump.
+        // genie-host again, on the same files; a window asks it for the Deck.
         const again = await openAgentStores(dir, now, undefined, undefined);
         try {
             expect(again.attention.pending().map((p) => p.id)).toEqual([open.questionId]);
             expect(again.attention.asked(dismissed.questionId)?.outcome).toBe('dismissed');
             expect(again.attention.asked(answered.questionId)?.outcome).toBe('answered');
-            const host = new AgentStoresService({ ...again, approvals: new ApprovalQueue({ now: () => 0 } as never) });
-            const window = new AttentionReplica(async () => null);
-            window.rebase(host.dump().attention);
-            expect(window.pending().map((p) => p.id)).toEqual([open.questionId]);
+            const deck = assembleDeckItems({ workspaces: [{ id: 'ws', path: dir }], approvals: [], trust: [], attention: again.attention, inbox: again.inbox,
+                agents: { [agent]: { name: 'prism', workspaceId: 'ws' } } });
+            const questions = deck.filter((item) => item.source === 'agent-question');
+            expect(questions.map((item) => item.id)).toEqual([open.questionId]);
+            // CONTROL: the Deck the gauge reads does carry an open question (the one left open), so an empty list would show.
         } finally {
             again.knowledge.close();
         }

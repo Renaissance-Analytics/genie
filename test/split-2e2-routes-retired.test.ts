@@ -23,15 +23,13 @@ afterEach(() => { for (const close of closers.splice(0)) close(); });
 
 async function localWindow() {
     const features = { call: vi.fn(async () => ({ answered: true })), presentation: () => null, dropOwner: () => {} };
-    const stores = { call: vi.fn(), dump: () => ({}), onEvent: () => () => {}, dropDraftFiles: vi.fn(async () => {}),
-        draftFileOpen: vi.fn(async () => null), draftFileRead: vi.fn(async () => ({ base64: '' })), draftFileClose: vi.fn(async () => ({ closed: true })) };
-    const server = new SessionEngineServer({ token: 'fixture', build: 'fixture', features: features as never, stores: stores as never });
+    const server = new SessionEngineServer({ token: 'fixture', build: 'fixture', features: features as never });
     const [host, window] = memoryPair();
     server.accept(host, { local: true });
     const client = new SessionEngineClient();
     closers.push(() => window.close());
     expect(await client.connect(window, 'fixture')).toMatchObject({ ok: true });
-    return { client, features, stores };
+    return { client, features };
 }
 
 describe('the engine server\'s feature and draft-file routes are retired (step 2e-2)', () => {
@@ -39,16 +37,13 @@ describe('the engine server\'s feature and draft-file routes are retired (step 2
         expect(RETIRED.filter((m) => (ENGINE_METHODS as readonly string[]).includes(m))).toEqual([]);
     });
 
-    it('a local window that asks for one is answered no, and neither the features nor the stores are asked', async () => {
-        const { client, features, stores } = await localWindow();
+    it('a local window that asks for one is answered no, and the features are not asked (the server holds no stores since 2g-4d E2a)', async () => {
+        const { client, features } = await localWindow();
         for (const method of RETIRED) {
             const answer = await client.call(method as never, method === 'engine.features' ? ['snapshot', [], null, null] : ['ref']);
             expect(answer, method).toMatchObject({ ok: false });
         }
         expect(features.call).not.toHaveBeenCalled();
-        expect(stores.draftFileOpen).not.toHaveBeenCalled();
-        expect(stores.draftFileRead).not.toHaveBeenCalled();
-        expect(stores.draftFileClose).not.toHaveBeenCalled();
     });
 
     it('engine.featureQuestion is retired too (Tynn #912, 2f-1): answered no, and the features are not asked', async () => {
