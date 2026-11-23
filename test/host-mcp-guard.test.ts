@@ -71,7 +71,8 @@ describe('the process supervisor is genie-host\'s (P3.3b)', () => {
         // No window sends into the host's own children: a window's engine.spawn reaches `processes` only (since P3.3e).
         expect(host).toMatch(/if \(profile === 'processes'\) relay\?\.send\('processes', frame\);/);
         expect(code('src/main/main.ts')).toMatch(/supervisor: agentEngineLink\.client\.supervisor\(\)/);
-        expect(code('src/main/compose.ts')).toMatch(/if \(input\.supervisor\) supervisor = input\.supervisor;\s*else \{\s*const own = input\.alone!\.supervisor\(\)/);
+        // It adopts no pty a window listed (Tynn #1043): a composition that runs alone builds its own, and that is all.
+        expect(code('src/main/compose.ts')).toMatch(/if \(input\.supervisor\) supervisor = input\.supervisor;\s*else supervisor = input\.alone!\.supervisor\(\);/);
     });
 });
 

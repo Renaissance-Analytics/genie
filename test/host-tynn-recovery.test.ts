@@ -96,7 +96,7 @@ describe('THE BUG: an agent started during an outage, with no window, gets its t
         const keys = hostAgentKeys({ vaultFile, keychain: fakeKeychain(), tynn: () => t.port, workspaces: () => [{ id: 'ws', path: workspace }] });
         const server = new SessionEngineServer({
             token: 'a'.repeat(64), build: 'test', agentKeys: keys,
-            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null, runNative: async () => null } as never,
+            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null } as never,
         });
         const host = new SessionHost({ userData: dir, driverFor, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
         server.attach(host);

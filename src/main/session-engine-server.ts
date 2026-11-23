@@ -2,8 +2,6 @@ import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { WorkstationService } from './workstation-service.js';
-import type { SyncResult } from '../core/integrations.js';
-import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -25,7 +23,6 @@ import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
-import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import { WINDOW_CALLS, type AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
 import type { HostingService } from './hosting-host.js';
@@ -88,8 +85,6 @@ export interface EngineServerOptions {
     /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
     readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown };
     readonly takeOver?: { call(method: string, args: unknown[]): unknown };
-    /** A workspace's agent config (P3.4): one writer, here. */
-    readonly configSync?: (asked: WorkspaceConfigRequest) => Promise<readonly SyncResult[]>;
     /** What the OS said about proxies, as a window hands it over. */
     readonly proxy?: { remember(answers: Record<string, string>): Promise<void> };
     /** An agent's Tynn key with no window connected (genie#1457: host-agent-keys.ts). */
@@ -125,10 +120,6 @@ export interface EngineServerOptions {
      */
     readonly spawn?: { send(profile: string, frame: SpawnFrame): void; windowGone?(): void };
     /**
-     * genie-host's file-watch hub (the host split, P2.2: files-watch-hub.ts). Views are owned by their CONNECTION: a window
-     * whose link closes drops them all. Absent = `engine.filesWatch` is refused.
-     */
-    /**
      * Genie's MCP server in the host (P3.1: host-mcp.ts): told what the window says, asked a session's Genie entry and
      * its status. Absent = the window's own MCP entry is all a session gets (phase 1's way).
      */
@@ -136,7 +127,6 @@ export interface EngineServerOptions {
         setView(view: unknown): Promise<void>;
         sessionServers(record: AgentRecord): readonly McpServer[];
         status(): unknown;
-        runNative(call: never): Promise<unknown>;
     };
     /**
      * genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): each window's `engine.heartbeat` by its connection, and
@@ -204,11 +194,6 @@ export interface EngineServerOptions {
     };
     /** Other Tynn pages, resolved and read on the host's account. Absent = refused; local windows only. */
     readonly tynnPages?: { read(workspaceId: string, page: unknown, query: unknown): Promise<unknown> };
-    readonly files?: {
-        subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void;
-        unsubscribe(owner: string, viewId: string): void;
-        dropOwner(owner: string): void;
-    };
 }
 
 /** The most rows one frame carries: a longer patch is cut into several (see `#updatesFor`). */
@@ -418,7 +403,6 @@ export class SessionEngineServer {
             // Its disposable terminals end with it: nothing re-attaches one (Tynn story #378).
             if (was) this.#options.terminals?.dropped(String(conn.id));
             if (was) this.#options.features?.dropOwner(conn.id);
-            if (was) this.#options.files?.dropOwner(conn.id);
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) this.#options.tynnIssues?.dropOwner(conn.id);
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
@@ -709,18 +693,6 @@ export class SessionEngineServer {
                 this.#options.spawn.send(str(0), args[1] as SpawnFrame);
                 return true;
             }
-            case 'engine.filesWatch': {
-                if (!this.#options.files) throw new Error('This host runs no file watcher.');
-                const ws = (args[1] ?? {}) as { id?: unknown; path?: unknown };
-                if (typeof ws.id !== 'string' || typeof ws.path !== 'string') throw new Error('engine.filesWatch needs a workspace id and path');
-                const want = (args[2] ?? {}) as { git?: unknown; repos?: unknown };
-                const repos = Array.isArray(want.repos) ? want.repos.filter((r): r is string => typeof r === 'string') : [];
-                this.#options.files.subscribe(conn.id, str(0), { id: ws.id, path: ws.path }, { ...(want.git === true ? { git: true } : {}), ...(repos.length > 0 ? { repos } : {}) });
-                return true;
-            }
-            case 'engine.runTool':
-                if (!this.#options.mcp) throw new Error('This host runs no MCP server.');
-                return this.#options.mcp.runNative(args[0] as never);
             case 'engine.mcpStatus':
                 return this.#options.mcp?.status() ?? null;
             case 'engine.terminals':
@@ -762,9 +734,6 @@ export class SessionEngineServer {
                 if (!this.#options.stores) throw new Error('This host keeps no stores.');
                 return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);
             }
-            case 'engine.filesUnwatch':
-                this.#options.files?.unsubscribe(conn.id, str(0));
-                return true;
             case 'engine.issueWatch':
                 if (!this.#options.issueWatch) throw new Error('This host runs no IssueWatch.');
                 if (!conn.local) throw new Error('IssueWatch is asked from a local window only.');
@@ -799,9 +768,6 @@ export class SessionEngineServer {
                 if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
                 if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');
                 return this.#options.tynnPages.read(str(0), args[1], args[2]);
-            case 'engine.configSync':
-                if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
-                return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);
             case 'engine.workstation':
                 if (!this.#options.workstation) throw new Error('This host keeps no workstation identity.');
                 return this.#options.workstation.call(str(0), Array.isArray(args[1]) ? args[1] : []);
@@ -890,10 +856,6 @@ export class SessionEngineServer {
     /** Features rings go only to the local connection whose views follow the page. */
     tynnFeaturesEvent(owner: string, event: TynnBoardHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnFeatures.event', event);
-    }
-
-    filesEvent(owner: string, event: FilesHubEvent): void {
-        for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'files.event', event);
     }
 
     /** A frame from genie-host's spawn-host child of `profile`, to every window. */

@@ -48,7 +48,7 @@ export interface MoreToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
     /**
      * The env a terminal in that workspace gets — the SAME the Terminals tab gives its shells (hosting-actions.ts
-     * `terminalEnvFor`: the workspace's service engines, then Genie's MCP endpoint). Absent = none (doctor mode).
+     * `shellEnv`: the workspace's service engines, then Genie's MCP endpoint). Absent = none (doctor mode).
      */
     readonly envFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
