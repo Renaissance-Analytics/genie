@@ -540,7 +540,7 @@ describe('the summary says whether genie-host’s keychain can keep secrets, and
         expect(hostSummaryOf([], [], [], { workstationRole: 'pilot', tynnAccountKey: null, keychainReady: true, githubBlocked: true })).toMatchObject({ keychainReady: true, githubBlocked: true });
         expect(hostSummaryOf([], [], [])).toMatchObject({ keychainReady: false, githubBlocked: false });
         expect(EMPTY_HOST_SUMMARY).toMatchObject({ keychainReady: false, githubBlocked: false });
-        const base = { terminals: [], armedFlows: [], scheduledTasks: [] };
+        const base = { terminals: [], armedFlows: [], scheduledTasks: [], processes: [], services: [], sites: [] };
         expect(readHostSummary({ ...base, keychainReady: true, githubBlocked: true })).toMatchObject({ keychainReady: true, githubBlocked: true });
         expect(readHostSummary({ ...base, keychainReady: 'yes', githubBlocked: 1 })).toMatchObject({ keychainReady: false, githubBlocked: false });
         expect(readHostSummary(base)).toMatchObject({ keychainReady: false, githubBlocked: false });
