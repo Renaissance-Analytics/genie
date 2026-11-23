@@ -70,10 +70,24 @@ describe('mintConnectGrant — a grant for one workstation, bound to this connec
         const result = await mintConnectGrant(async (path, init) => {
             expect(`${init.method} ${path}`).toBe('POST /api/v1/workstations/ws_cloud/connect-grant');
             body = init.body;
-            return json(200, { token: 'jws', relay_endpoint: 'wss://relay.example.com', workstation_id: 'ws_cloud' });
+            return json(200, { token: 'jws', relay_endpoint: 'wss://relay.example.com', workstation_id: 'ws_cloud', host_public_key: 'SPKI-BASE64' });
         }, 'ws_cloud', pop.publicJwk);
         expect(body).toEqual({ pop_jwk: pop.publicJwk });
-        expect(result).toEqual({ ok: true, token: 'jws', relayEndpoint: 'wss://relay.example.com' });
+        expect(result).toEqual({ ok: true, token: 'jws', relayEndpoint: 'wss://relay.example.com', hostPublicKey: 'SPKI-BASE64' });
+    });
+
+    // Audit M-a (P9.2): the key the host enrolled, as Tynn names it with the grant. It is what the member checks the
+    // host against, so it is carried exactly as Tynn said it; "Tynn did not say" is null, never a guess, and not refused
+    // here (the member refuses, in words, before it dials: relay-e2e-tamper.test.ts).
+    it.each([
+        ['null (a workstation with no enrolled key)', { host_public_key: null }],
+        ['nothing', {}],
+        ['something that is not text', { host_public_key: { x: 1 } }],
+        ['an empty string', { host_public_key: '' }],
+    ])('Tynn naming %s as the host key: the grant comes back with no key', async (_name, extra) => {
+        const pop = PopKeypair.generate();
+        const result = await mintConnectGrant(async () => json(200, { token: 'jws', relay_endpoint: 'wss://relay.example.com', ...extra }), 'ws_cloud', pop.publicJwk);
+        expect(result).toEqual({ ok: true, token: 'jws', relayEndpoint: 'wss://relay.example.com', hostPublicKey: null });
     });
 
     it('refused: Tynn’s own words; a 404 (signed out, or not shared with you — Tynn no longer says which)', async () => {

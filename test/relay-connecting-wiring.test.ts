@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { remoteWindowSearch } from '../src/core/remote-window.js';
@@ -42,7 +43,7 @@ describe('the window is given the machine’s name', () => {
 describe('offline is known as offline', () => {
     it('the relay’s no-host answer comes back marked offline, not only as its words', async () => {
         const relay = fakeRelay(() => null);
-        const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: 'ws_off', grant: 'g', pop: PopKeypair.generate() });
+        const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: 'ws_off', grant: 'g', hostPublicKey: (generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64'), pop: PopKeypair.generate() });
         expect(opened).toMatchObject({ ok: false, offline: true });
     });
 

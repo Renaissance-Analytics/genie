@@ -82,6 +82,7 @@ function link(relay: ReturnType<typeof silentCapableRelay>, lines: string[], sta
         relayUrl: 'wss://relay.test',
         workstationId: 'ws_me',
         hello: async () => ({ type: 'host-hello', workstationId: 'ws_me', fingerprint: 'f', nonce: 'n', ts: 0, ticket: 't', sig: 's' }),
+        fingerprint: 'f', sign: () => Buffer.alloc(64),
         ...grantless,
         revalidateMs: 0,
         reconnect: { minMs: 1_000, maxMs: 30_000 },

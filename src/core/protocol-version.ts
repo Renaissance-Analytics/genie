@@ -60,6 +60,11 @@ export const LEGACY_OFFER: ProtocolOffer = Object.freeze({ track: null, build: n
 
 /** An id'd `result` with `code: 'unsupported'` answers a call to a method this side does not know (never a bare refusal). */
 export const CAP_UNSUPPORTED_RESULT = 'unsupported-result';
+/**
+ * The Tynn relay path is end to end (audit M-a, P9.2; main/relay-e2e.ts). Said so a window can show it. It is not what
+ * refuses an older peer: that happens in the relay handshake, before any hello.
+ */
+export const CAP_RELAY_E2E = 'relay-e2e';
 /** The ADF catalog's envelope (`catalog.ts` `CATALOG_SCHEMA_VERSION`). */
 export const CAP_CATALOG = 'catalog';
 
@@ -226,7 +231,7 @@ export interface HostUpdateAnswer {
 
 /** The capabilities this build speaks on the remote wire, whichever side it is. */
 export function remoteCapabilities(): string[] {
-    return [capability(CAP_UNSUPPORTED_RESULT, 1), catalogCapability()];
+    return [capability(CAP_UNSUPPORTED_RESULT, 1), catalogCapability(), capability(CAP_RELAY_E2E, 1)];
 }
 
 /** This build's offer on `track`: the wire's schema, the fixed window's floor, its capabilities and any a caller adds. */

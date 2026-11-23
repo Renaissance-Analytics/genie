@@ -46,7 +46,7 @@ describe('a drone opens a share link (Tynn decides, not a local gate)', () => {
             // What genie-host used to hand in on a drone: a local refusal before Tynn was asked.
             refusal: () => 'This workstation is a drone: it cannot browse or open other workstations.',
             keypair: () => PopKeypair.generate(),
-            mint: async (workstationId: string) => { minted.push(workstationId); return { ok: true as const, token: 'GRANT', relayEndpoint: 'wss://relay.tynn.example' }; },
+            mint: async (workstationId: string) => { minted.push(workstationId); return { ok: true as const, token: 'GRANT', relayEndpoint: 'wss://relay.tynn.example', hostPublicKey: 'HOST-KEY' }; },
             open: async () => ({ ok: true as const, transport }),
         } as unknown as RelayMemberPorts;
         const service = new DeviceLinkService({ tokens: {} as never, socket: () => { throw new Error('no sockets'); }, send: () => {}, log: () => {}, relay });
