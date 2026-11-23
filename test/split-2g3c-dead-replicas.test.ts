@@ -42,8 +42,8 @@ describe('the engine link carries no account, keyring, registration, secret, plu
             expect(client, replica).not.toMatch(new RegExp(`^\\s{4}(async\\s+)?${replica}\\(`, 'm'));
         }
         expect(client).not.toMatch(/prepareMcpServers/);
-        // CONTROL: a replica that stays is found by the same pattern.
-        expect(client).toMatch(/^\s{4}stores\(/m);
+        // CONTROL: a replica that stays is found by the same pattern (the stores' went in 2g-4d E2a; the app inbox's stays).
+        expect(client).toMatch(/^\s{4}appInbox\(/m);
     });
 
     it('their window-side files are gone: the replicas and linkedAgentSecrets (its file held nothing else)', () => {

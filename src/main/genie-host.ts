@@ -68,7 +68,6 @@ import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.
 import { setGitExecRoute } from './git-exec.js';
 import { ProcessSupervisor, osPidAlive } from './process-supervisor.js';
 import { endChildTrees } from './end-child-trees.js';
-import { SupervisorService } from './supervisor-host.js';
 import { LinkGate } from './linked-stream.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { HostingService, WindowElevation } from './hosting-host.js';
@@ -523,7 +522,6 @@ async function main(): Promise<void> {
         { pidAlive },
     );
     processSupervisor.watchLiveness();
-    const supervisorService = new SupervisorService(processSupervisor);
     /**
      * The `supervised` child's link: up once it is ready and reconciled, down when it exits (or while it never came up).
      * Streams started there wait for it, and while it is down Hosting says the engines' live status is paused.
@@ -1453,7 +1451,6 @@ async function main(): Promise<void> {
         // A window reaches the `processes` child only: `supervised` and `terminals` are this host's own (P3.3b, P3.3e).
         spawn: { send: (profile, frame) => { if (profile === 'processes') relay?.send('processes', frame); }, windowGone: () => relay?.windowGone() },
         terminals: terminalsService,
-        supervisor: supervisorService,
         ...(hostingService ? { hosting: hostingService } : {}),
         appInbox: appInboxDoor,
         processes: processesService,
@@ -1461,11 +1458,9 @@ async function main(): Promise<void> {
         marketplace: marketplaceHost,
         ...(gappBook ? { gapps: gappsApi(gappBook, gappAsk, gappPreviews ?? undefined), gappsChanged: (listener) => gappBook!.onChange(listener) } : {}),
         ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer, gappPreviews ? { previews: gappPreviews, ask: gappAsk } : undefined) } : {}),
-        flows: flowsService,
         browser: browserService,
         updates: updatesService,
         remoteAccess: remoteAccessService,
-        stores,
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
         workstation: workstationService,
         takeOver: takeOverService,

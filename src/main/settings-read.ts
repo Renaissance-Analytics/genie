@@ -2,8 +2,8 @@ import { SETTINGS, type SettingDef } from '../core/settings.js';
 
 /**
  * THE SETTINGS' READS, over their data (the host split, P3.2). One implementation for the store that owns the file
- * (main/settings-store.ts, in genie-host) and every window's replica of it (main/agent-stores-replica.ts), so a value read
- * in a window is the value the host holds — defaults and workspace overrides included.
+ * (main/settings-store.ts, in genie-host) and every window's copy of its data (settings.watch: window-settings.ts), so a
+ * value read in a window is the value the host holds — defaults and workspace overrides included.
  */
 
 export type SettingValue = boolean | string;

@@ -366,8 +366,8 @@ const NOT_YET = 'genie-host has not sent its hosting yet';
  * THE HOST'S HOSTING, AS A WINDOW READS AND DRIVES IT (P5a). Reads are synchronous, from the last dump (connect awaits
  * the first one, so a composed window never reads "not yet"); every write is forwarded as an `engine.hosting` call and
  * answers in the host's words. The few writes the window uses SYNCHRONOUSLY (`sites.restart`, `sites.serviceEnvChanged`,
- * `deferTrustCertificate`) are forwarded and answered OPTIMISTICALLY from the dump, the way SupervisorReplica answers a
- * start: the host decides, and its answer arrives as the next dump.
+ * `deferTrustCertificate`) are forwarded and answered OPTIMISTICALLY from the dump: the host decides, and its answer
+ * arrives as the next dump.
  */
 export class HostingReplica implements HostingApi {
     readonly #call: (method: string, args: readonly unknown[]) => Promise<unknown>;

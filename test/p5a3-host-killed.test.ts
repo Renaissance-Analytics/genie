@@ -7,6 +7,8 @@ import { parseHostRecord, type HostRecord } from '../src/core/engine-protocol.js
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import { connectSocket, pidAlive } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
+import { ownProtocolClient, type OwnCallAnswer, type OwnProtocolClient } from '../src/main/own-protocol-client.js';
+import { tunnelDoor, tunnelLinkOf } from '../src/main/window-tunnel.js';
 
 const TSX = import.meta.resolve('tsx');
 
@@ -57,6 +59,27 @@ async function window(): Promise<{ client: SessionEngineClient; transport: Clien
     return { client, transport };
 }
 
+/**
+ * MAIN'S OWN PROTOCOL CLIENT OVER THIS WINDOW'S ENGINE LINK, tunnelled exactly as main.ts does it
+ * (`tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true })`): what a window asks of genie-host
+ * — features.act/snapshot, registry.write, deck.watch — goes over the one protocol, never the engine link's replicas.
+ */
+function ownOver(client: SessionEngineClient): { own: OwnProtocolClient; dispose(): void } {
+    const own = ownProtocolClient();
+    const bridge = tunnelDoor(own.door, tunnelLinkOf(client), { own: true });
+    return { own, dispose: () => bridge.dispose() };
+}
+
+/** One call, asked again while genie-host is still opening the part that answers it (its process book, at boot). */
+async function ask(own: OwnProtocolClient, method: Parameters<OwnProtocolClient['call']>[0], args: unknown[]): Promise<OwnCallAnswer> {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+        const answer = await own.call(method, args);
+        if (answer.ok || !/still (starting|opening)/.test(answer.reason) || Date.now() > deadline) return answer;
+        await sleep(200);
+    }
+}
+
 beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie-host-killed-'));
     workspace = await mkdtemp(join(tmpdir(), 'genie-host-killed-ws-'));
@@ -88,10 +111,13 @@ afterAll(async () => {
 describe('genie-host’s supervised processes live and die with the HOST, not the window', () => {
     it('(2) a window going leaves the worker running; (1) the host KILLED leaves no worker behind (Linux: by the spawn host’s parent-gone ending; Windows: the outcome only)', async () => {
         const first = await window();
-        first.client.supervisor().start({ id: 'proc:worker', workspaceId: 'ws', name: 'worker', command: `"${process.execPath}" worker.cjs`, cwd: workspace, restart: 'always' });
+        const firstOwn = ownOver(first.client);
+        // The person's "keep this running", over the protocol as the Hosting tab sends it: the host's supervisor runs it.
+        expect(await ask(firstOwn.own, 'features.act', [{ kind: 'hosting.createProcess', workspaceId: 'ws', workspacePath: workspace, name: 'worker', command: `"${process.execPath}" worker.cjs`, restart: 'always' }])).toMatchObject({ ok: true });
         workerPid = await until('the worker’s own pid', async () => { const t = await readText(join(workspace, 'worker.pid')); return t ? Number(t) : null; }, 60_000);
         expect(pidAlive(workerPid)).toBe(true); // POSITIVE CONTROL: the gauge sees it while the host lives
 
+        firstOwn.dispose();
         first.transport.close(); // (2) the window goes: the spawn host's parent is genie-host, still alive
         await sleep(3_000);
         expect(pidAlive(workerPid)).toBe(true);

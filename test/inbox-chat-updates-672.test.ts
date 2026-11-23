@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import * as pushes from '../src/main/agent-push.js';
-import { InboxReplica } from '../src/main/agent-stores-replica.js';
 import { InboxStore, type InboxMessage } from '../src/main/inbox-store.js';
 
 interface Changes { onMessagesChanged(listener: (messages: readonly InboxMessage[]) => void): () => void }
@@ -40,24 +39,6 @@ describe('mail-card changes reach only their participants after the inbox has ad
         expect(seen).toHaveLength(3);
     });
 
-    it('the replica announces delta changes after adoption, without duplicating the later sent/read events', () => {
-        const inbox = new InboxReplica(async () => { throw new Error('no write in this delta fixture'); });
-        inbox.rebase({ messages: [], cursors: {} });
-        const states: string[] = [];
-        observe(inbox, messages => {
-            expect(inbox.involving(recipient)).toContain(messages[0]);
-            states.push(messages[0]!.readAt ? 'delivered' : messages[0]!.deliveryRefusal?.reason ?? 'waiting');
-        });
-        const mail: InboxMessage = { id: 'm1', seq: 1, from: sender, to: recipient, text: 'hello', attachments: [], sentAt: new Date(0).toISOString(), readAt: null };
-        const apply = (appended: InboxMessage[], updated: InboxMessage[]) => inbox.apply({ store: 'inbox', kind: 'delta', appended, updated, removed: [], cursors: {} });
-        apply([mail], []);
-        inbox.apply({ store: 'inbox', kind: 'sent', to: recipient, messageId: mail.id });
-        apply([], [{ ...mail, deliveryRefusal: { attempts: 5, reason: 'not ready', at: mail.sentAt } }]);
-        apply([], [{ ...mail, readAt: new Date(1).toISOString() }]);
-        inbox.apply({ store: 'inbox', kind: 'read', reader: recipient, ids: [mail.id] });
-        expect(states).toEqual(['waiting', 'not ready', 'delivered']);
-    });
-
     it('chat wiring refreshes both agent participants, excludes the human, and disconnects cleanly', async () => {
         const inbox = await InboxStore.open(dir);
         const changed: string[] = [];
@@ -88,7 +69,7 @@ describe('mail-card changes reach only their participants after the inbox has ad
         expect((await InboxStore.open(dir)).unread(recipient).map(m => m.id)).toEqual([mail.id]);
     });
 
-    it('thread deletion and replica reconnect refresh the affected chats from their current state', async () => {
+    it('thread deletion refreshes the affected chats from their current state', async () => {
         const inbox = await InboxStore.open(dir);
         const mail = await inbox.send({ from: sender, to: recipient, text: 'Remove this card.' });
         const removed: string[] = [];
@@ -98,12 +79,14 @@ describe('mail-card changes reach only their participants after the inbox has ad
         });
         await inbox.deleteThread(sender, recipient);
         expect(removed).toEqual([mail.id]);
-        const replica = new InboxReplica(async () => null);
-        replica.rebase({ messages: [mail], cursors: {} });
+    });
+
+    it('chat wiring refreshes both participants of a deleted thread, from the store whose state no longer has it', async () => {
+        const inbox = await InboxStore.open(dir);
+        await inbox.send({ from: sender, to: recipient, text: 'Remove this thread.' });
         const changed: string[] = [];
-        wire(replica, id => changed.push(id));
-        replica.rebase({ messages: [], cursors: {} });
+        wire(inbox, id => { expect(inbox.involving(recipient)).toEqual([]); changed.push(id); });
+        await inbox.deleteThread(sender, recipient);
         expect(changed).toEqual([sender, recipient]);
-        expect(replica.involving(recipient)).toEqual([]);
     });
 });

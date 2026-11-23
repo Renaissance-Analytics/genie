@@ -7,7 +7,6 @@ import { ProcessesPanel } from '../src/renderer/components/FeatureSurfaces.js';
 import type { HostedProcess } from '../src/main/process-book.js';
 import type { FeatureAction } from '../src/renderer/features.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
-import { SupervisorService } from '../src/main/supervisor-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /** A row's buttons by accessible name: its icon buttons, then "More actions" when it has a menu (Tynn #708). */
@@ -67,15 +66,14 @@ describe('service commands in the existing Processes surface (#633)', () => {
         expect([...host.querySelectorAll<HTMLButtonElement>('[data-process="command-633"] button')].some((button) => button.getAttribute('aria-label') === 'Stop')).toBe(true);
     });
 
-    it('retains the actual command start in the host/replica snapshot after completion', () => {
+    it('retains the actual command start in the supervisor’s list after completion', () => {
         let now = NOW;
         const pty: PtyPort = { open: () => { throw new Error('must not spawn'); }, write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} };
         const supervisor = new ProcessSupervisor(pty, { now: () => now, schedule: () => () => {} });
-        const service = new SupervisorService(supervisor);
         const handle = supervisor.trackExternal({ id: 'timed', workspaceId: 'work', name: 'fixture', command: 'fixture', cwd: '/fixture' }, { pid: 123, stop: () => {} });
         expect(supervisor.status('timed')?.startedAt).toBe(NOW);
         now += 5_000; handle.finish(0);
-        expect(service.dump().statuses[0]).toMatchObject({ startedAt: NOW, since: NOW + 5_000, state: 'exited' });
+        expect(supervisor.list()[0]).toMatchObject({ startedAt: NOW, since: NOW + 5_000, state: 'exited' });
     });
 
     it('CONTROL: Stop is an actual Fancy button that sends the existing stopProcess action for exactly this run', () => {
