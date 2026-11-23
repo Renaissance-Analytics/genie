@@ -65,7 +65,7 @@ export interface PodPorts {
      * The person's Sign / Decline for one HITL claim: `detail` names the task, the score and the commits. `signal` aborts
      * (reason `POD_WITHDRAWN`) when Tynn stops listing the claim as waiting (Tynn #858): the ask leaves the Deck unanswered.
      */
-    approve(request: { readonly id: string; readonly detail: string; readonly signal: AbortSignal }): Promise<'allowed' | 'denied'>;
+    approve(request: { readonly id: string; readonly detail: string; readonly signal: AbortSignal }): Promise<'allowed' | 'denied' | 'expired'>;
     workspaces(): readonly { readonly id: string; readonly path: string }[];
     git(cwd: string, args: readonly string[]): Promise<GitResult>;
     /** What is still owed to git, kept across restarts. */
@@ -217,12 +217,12 @@ export class ProofOfDone {
         if (item.approval === 'hitl') {
             const asking = new AbortController();
             this.#asking.set(id, asking);
-            let verdict: 'allowed' | 'denied';
+            let verdict: 'allowed' | 'denied' | 'expired';
             try { verdict = await this.#ports.approve({ id, detail: describe(item.claim), signal: asking.signal }); }
             finally { if (this.#asking.get(id) === asking) this.#asking.delete(id); }
             // Withdrawn while it waited: whatever the ask answered after that, Tynn is no longer waiting for this claim.
             if (asking.signal.aborted) { this.#say(`claim ${id} withdrawn: Tynn no longer lists it as waiting`); return; }
-            if (verdict !== 'allowed') { this.#say(`claim ${id} not signed: the person declined`); return; }
+            if (verdict !== 'allowed') { this.#say(`claim ${id} not signed: ${verdict === 'expired' ? 'nobody answered within 30 minutes, so the request expired' : 'the person declined'}`); return; }
         } else if (item.approval !== 'agent') {
             this.#say(`claim ${id} refused: unknown approval`);
             return;

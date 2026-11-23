@@ -50,3 +50,42 @@ export function flowRunSound(run: { readonly outcome: 'ran' | 'failed' | 'held' 
     // A run stopped by a quit is recorded at the next launch (genie#1204): nothing just finished, so nothing sounds.
     return run.outcome === 'held' || run.outcome === 'stopped' ? null : 'flowdone';
 }
+
+/**
+ * THE SOUNDS, AS GENIE-HOST SAYS THEM (Tynn #1045, 2g-4d-C). genie-host runs the processes, the sites, the services and the
+ * flows, so it hears their changes and says each sound to every window: an agentless `genie:action`, sent as a `thing` tool
+ * signal the way the mail sounds are (core/mail-actions.ts). main only checks what it was sent and passes it on.
+ */
+export interface ThingActionSignal { readonly agentId: null; readonly kind: ThingKind }
+
+/** What genie-host hears the changes from. A host whose hosting could not start has no sites and no engines. */
+export interface ThingSources {
+    readonly supervisor: { onChange(listener: (status: { readonly id: string; readonly state: string }) => void): unknown };
+    readonly sites: { list(): readonly { readonly id: string; readonly state: string; readonly processIds: readonly string[] }[]; onChange(listener: () => void): unknown } | null;
+    readonly engines: { onStarted(listener: (id: string) => void): unknown } | null;
+    readonly flows: { onRun(listener: (flowId: string, run: { readonly outcome: 'ran' | 'failed' | 'held' | 'stopped' }) => void): unknown };
+}
+
+/** Each change a person would want to hear, said once: ONE ThingSounds, whose baseline is the sites as they are now. */
+export function sayThings(sources: ThingSources, say: (signal: ThingActionSignal) => void): void {
+    const things = new ThingSounds();
+    const heard = (kind: ThingKind | null): void => { if (kind) say({ agentId: null, kind }); };
+    const sites = sources.sites;
+    if (sites) {
+        things.sites(sites.list());
+        sites.onChange(() => { for (const kind of things.sites(sites.list())) heard(kind); });
+    }
+    // A site's own server is the site's row, not a process's.
+    sources.supervisor.onChange((status) => heard(things.process(status, sites?.list().some((s) => s.processIds.includes(status.id)) ?? false)));
+    sources.engines?.onStarted(() => heard('serviceup'));
+    sources.flows.onRun((_id, run) => heard(flowRunSound(run)));
+}
+
+const THING_KINDS: readonly string[] = ['exits', 'siteup', 'sitedown', 'serviceup', 'flowdone'] satisfies readonly ThingKind[];
+
+/** What genie-host sent, or null when it does not read as one: agentless, and one of the five kinds. Nothing else goes on. */
+export function readThingSignal(raw: unknown): ThingActionSignal | null {
+    const r = raw as { agentId?: unknown; kind?: unknown } | null;
+    if (!r || typeof r !== 'object' || r.agentId !== null || typeof r.kind !== 'string' || !THING_KINDS.includes(r.kind)) return null;
+    return { agentId: null, kind: r.kind as ThingKind };
+}

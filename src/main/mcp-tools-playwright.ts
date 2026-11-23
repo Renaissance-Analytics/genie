@@ -4,6 +4,7 @@ import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { PlaywrightInstallOutcome } from './playwright-browsers.js';
 import { MANAGED_BROWSERS, decideInstallAsk } from '../core/playwright-managed.js';
+import { refusalWords } from '../core/approval-words.js';
 
 /**
  * `playwright` — WHAT GENIE HAS FOR PLAYWRIGHT, AND ASKING IT FOR A VERSION (Tynn #846). Agents never install browsers
@@ -41,7 +42,7 @@ export interface PlaywrightToolPort {
 export interface PlaywrightToolDeps {
     readonly resolveCaller: (key: string) => Caller | null;
     readonly port: PlaywrightToolPort;
-    readonly approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
     /** Whether the caller's workspace is trusted (Tynn #846 review): an agent in one not yet trusted installs nothing. Absent = trusted. */
     readonly trusted?: (workspaceId: string) => boolean;
 }
@@ -67,7 +68,7 @@ export function playwrightTools(deps: PlaywrightToolDeps): Registration[] {
             if (decision.kind === 'ready') return ok({ version, browsers: deps.port.held(version), note: 'Genie has these already; nothing was installed' });
             if (decision.kind === 'ask') {
                 const verdict = await deps.approve(caller, PLAYWRIGHT_INSTALL_ACTION, `Install Playwright ${version}'s ${browsers.join(', ')}: ${decision.reason}`, context);
-                if (verdict !== 'allowed') return err(`installing Playwright ${version}'s ${browsers.join(', ')} was denied by the person; nothing was installed`);
+                if (verdict !== 'allowed') return err(refusalWords(verdict, `installing Playwright ${version}'s ${browsers.join(', ')}`, 'nothing was installed'));
             }
             const outcome = await deps.port.install(version, browsers);
             if (outcome.kind === 'installed' || outcome.kind === 'already-installed') return ok({ version: outcome.version, browsers: outcome.browsers });

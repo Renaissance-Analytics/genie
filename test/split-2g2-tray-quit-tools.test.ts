@@ -38,6 +38,10 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
             terminals: [{ workspaceId: 'ws_a', pid: 101 }, { workspaceId: 'ws_b', pid: 202 }],
             armedFlows: ['nightly'],
             scheduledTasks: ['backup'],
+            // No supervisor or hosting list handed in: no processes, services or sites (Tynn #1045, 2g-4d-C).
+            processes: [],
+            services: [],
+            sites: [],
             // Not said here: a drone signed out, fail closed (the role and the account, Tynn #954 2g-3a), with a keychain that
             // cannot keep secrets and no GitHub block (Tynn #959, 2g-3b).
             workstationRole: 'drone',
@@ -53,7 +57,7 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
     });
 
     it('read from the wire: a malformed summary is the empty one, never a throw', () => {
-        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], workstationRole: 'drone', tynnAccountKey: null, keychainReady: false, githubBlocked: false });
+        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], processes: ['vite'], services: [], sites: ['shop.gen'] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], processes: ['vite'], services: [], sites: ['shop.gen'], workstationRole: 'drone', tynnAccountKey: null, keychainReady: false, githubBlocked: false });
         expect(readHostSummary(null)).toEqual(EMPTY_HOST_SUMMARY);
         expect(readHostSummary({ terminals: 'no', armedFlows: [1], scheduledTasks: null })).toEqual(EMPTY_HOST_SUMMARY);
     });

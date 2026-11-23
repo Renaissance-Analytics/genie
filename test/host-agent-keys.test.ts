@@ -96,7 +96,7 @@ describe('THE BUG: the window process is killed, the host starts an agent, the a
         };
         const server = new SessionEngineServer({
             token: TOKEN, build: 'test',
-            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null, runNative: async () => null } as never,
+            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null } as never,
             ...(agentKeys ? { agentKeys: keys() } : {}),
         });
         const host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree, ...server.hostOptions() });
