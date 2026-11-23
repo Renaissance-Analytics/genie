@@ -89,7 +89,8 @@ describe('R2: probes, Take Over and sign-in use the normal home too', () => {
         expect(opened[0]!.env?.GENIE_MCP_TOKEN).toBe('fixture-bearer');
     });
 
-    it.each(['claude', 'codex'] as const)('%s: the sign-in terminal and its status check carry no home variable', async provider => {
+    // Claude signs in in the browser now (Tynn #1011, no terminal): pinned in test/claude-browser-sign-in-1011.test.ts.
+    it.each(['codex'] as const)('%s: the sign-in terminal and its status check carry no home variable', async provider => {
         const scratch = mkdtempSync(join(tmpdir(), 'genie-same-home-753-'));
         try {
             const opened: Array<{ env?: Readonly<Record<string, string>> | undefined }> = [];

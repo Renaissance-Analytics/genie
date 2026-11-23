@@ -14,7 +14,7 @@ import { loginRoute } from './login-host.js';
  * (`openWindow`, the same `terminal.window` op as Take Over), and the login is cancelled when that window closes.
  * Another machine's window gets the route back and opens its own, with a companion ticket from RemoteHost.
  */
-export type SignInAnswer = { ok: true; terminalId: string; route: string } | { ok: false; reason: string };
+export type SignInAnswer = { ok: true; terminalId: string; route: string } | { ok: true; browser: true } | { ok: false; reason: string };
 
 export interface SignInPorts {
     /** LoginHost.start: the provider's own login, its active account's (or the one named). */
@@ -30,6 +30,11 @@ export interface SignInPorts {
      * window closes. False = not one of this machine's windows (another machine opens its own).
      */
     readonly openWindow: (context: CallContext | undefined, route: string, closed: () => void) => boolean;
+    /**
+     * CLAUDE SIGNS IN IN THE BROWSER, NEVER A TERMINAL (Tynn #1011; the owner: "I should not see any terminals"): prism-acp's
+     * hidden login, Anthropic's page opened in the person's browser. `choose`: the account a switch named (its email), if any.
+     */
+    readonly claudeBrowser?: ((choose: string | undefined, context: CallContext | undefined, switching: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
 }
 
 export interface HostSignIns {
@@ -51,8 +56,12 @@ export function hostSignIns(ports: SignInPorts): HostSignIns {
         ports.openWindow(context, at, () => ports.cancel(started.terminalId));
         return { ok: true, terminalId: started.terminalId, route: at };
     };
+    const browser = async (choose: string | undefined, context: CallContext | undefined, switching: boolean): Promise<SignInAnswer> => {
+        const r = await ports.claudeBrowser!(choose, context, switching);
+        return r.ok ? { ok: true, browser: true } : r;
+    };
     const loginFor = async (provider: string, context?: CallContext): Promise<SignInAnswer> =>
-        shown(ports.login(provider), (id) => loginRoute(id, provider), context);
+        provider === 'claude' && ports.claudeBrowser ? browser(undefined, context, false) : shown(ports.login(provider), (id) => loginRoute(id, provider), context);
     return {
         loginFor,
         providerLogin: async (agentId, context) => {
@@ -65,6 +74,7 @@ export function hostSignIns(ports: SignInPorts): HostSignIns {
         switchAccount: async (provider, choose, context) => {
             if (typeof provider !== 'string' || provider === '') return { ok: false, reason: 'No provider named.' };
             const named = chooseOf(choose);
+            if (provider === 'claude' && ports.claudeBrowser) return browser(named, context, true);
             return shown(ports.switchLogin(provider), (id) => loginRoute(id, provider, true, named), context);
         },
     };
