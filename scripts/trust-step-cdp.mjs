@@ -14,6 +14,7 @@
 import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
+import { endOwnRun } from './end-own-tree.mjs';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
@@ -23,6 +24,8 @@ process.env.GENIE_PAGE_PROBE ??= '1';
 
 const PORT = Number(process.env.TRUST_CDP_PORT ?? 9344);
 const failures = [];
+/** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
+const RUN_BEGAN = Date.now();
 function check(ok, label, detail = '') {
     console.log(`${ok ? '  PASS' : '  FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
     if (!ok) failures.push(label);
@@ -77,7 +80,10 @@ async function stop(app) {
     const host = hostPid();
     const gone = new Promise((r) => { if (app.exitCode !== null) r(); else app.once('exit', r); });
     if (process.platform === 'win32') {
-        try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* it has gone */ }
+        // Tynn #1031: the app's tree, this run's genie-host and what they started (its updater helper is under neither the
+        // app nor a tree kill of the host's pid), ended, waited for and said by one helper (end-own-tree.mjs).
+        const ended = await endOwnRun({ app, hostPid: host, since: RUN_BEGAN });
+        check(ended.ok, 'nothing of this run is left running by its own cleanup', ended.ok ? '' : `LEFT RUNNING by this row's own cleanup: ${ended.words}`);
     } else {
         try { process.kill(-app.pid, 'SIGTERM'); } catch { /* it has gone */ }
     }

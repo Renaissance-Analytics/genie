@@ -71,8 +71,9 @@ describe('scripts/plan-popover-cdp.mjs runs on both platforms', () => {
         expect(script).not.toMatch(/process\.platform !== 'linux'\) \{[^}]*process\.exit/);
     });
 
-    it('ends what it started on Windows by pid with its tree (taskkill /T), and never reads `ps` there', () => {
-        expect(script).toMatch(/taskkill', \['\/PID', String\([a-zA-Z.]+\), '\/T', '\/F'\]/);
+    it("ends what it started on Windows through the rows' one cleanup (Tynn #1031: the app's tree, the host in its record, waited for), fails when something is left, and never reads `ps` there", () => {
+        expect(script).toMatch(/const ended = await endOwnRun\(\{ app, hostPid, since: RUN_BEGAN, log: say \}\);/);
+        expect(script).toMatch(/const finish = async \(code\) => \{ const left = await endEverything\(\); process\.exit\(left \? 1 : code\); \};/);
         expect(script).toMatch(/WIN \? '' : .*spawnSync\('ps'/);
     });
 
