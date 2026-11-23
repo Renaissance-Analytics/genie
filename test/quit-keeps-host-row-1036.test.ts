@@ -43,7 +43,7 @@ describe('CONTROL: plan-popover, a registered row, is found by these readings', 
 });
 
 describe('quit-keeps-host is a row of scripts/ci/linux.sh', () => {
-    const fn = /^row_quit-keeps-host\(\) \{ (.*) \}$/m.exec(linux)?.[1] ?? '';
+    const fn = /^row_quit-keeps-host\(\) \{ (.*); \}$/m.exec(linux)?.[1] ?? '';
 
     it('is in ROWS, and its leftovers are reaped before it starts', () => {
         expect(linuxRows()).toContain('quit-keeps-host');
