@@ -1,11 +1,12 @@
 import { createHash, generateKeyPairSync, sign, verify, type KeyObject } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { Duplex } from 'node:stream';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { REMOTE_FRAME_MAX_BYTES } from '../src/core/remote-frame.js';
 import type { ServerConnection } from '../src/core/remote-protocol.js';
 import { verifyMemberGrant, type TynnJwk } from '../src/main/relay-grant.js';
 import { relayHostLink } from '../src/main/relay-host.js';
-import { openRelayMember, PopKeypair, type RelayMemberResult, type RelayMemberTransport } from '../src/main/relay-member.js';
+import { openRelayMember, PopKeypair, type RelayMemberResult, type RelayMemberTransport, type RenewGrant } from '../src/main/relay-member.js';
 import { buildTicketHostHello } from '../src/main/relay-wire.js';
 import { fakeRelay, settle, type RelayTamper } from './relay-fake.js';
 
@@ -51,6 +52,7 @@ const OLD_HOST = `${NAME} runs an older Genie that cannot make an encrypted conn
 const OLD_MEMBER = 'The Genie on the machine you are connecting from is too old to make an encrypted connection to this workstation. Update Genie there, then connect again.';
 const CHANGED = `The connection to ${NAME} was changed on the way, so it was closed. Connect again.`;
 const CHANGED_AT_HOST = 'the encrypted connection was changed on the way, so this workstation closed it';
+const MEMBER_NOT_PROVED = 'the connecting machine could not prove it holds the key its grant names, so this workstation closed the connection';
 
 /** One end of a byte stream that does not echo (a front door, or a browser): what was written to it, and a way to make it speak. */
 function endpoint() {
@@ -62,21 +64,24 @@ function endpoint() {
 const links: Array<ReturnType<typeof relayHostLink>> = [];
 afterEach(() => { for (const l of links.splice(0)) l.close(); });
 
-async function rig(tamper: RelayTamper = {}, opts: { hostSigns?: KeyObject } = {}) {
+async function rig(tamper: RelayTamper = {}, opts: { hostSigns?: KeyObject; holdValidate?: () => Promise<void>; holdSign?: () => Promise<void> } = {}) {
     const relay = fakeRelay(verifyHost, tamper);
     const hostLog: string[] = [];
     const dialed: string[] = [];
     const frontDoors: Array<ReturnType<typeof endpoint>> = [];
+    /** Every grant the host was asked to check, in order. */
+    const validated: string[] = [];
     const link = relayHostLink({
         socket: relay.socket,
         relayUrl: 'wss://relay.example.com',
         workstationId: WS_ID,
         fingerprint: hostFingerprint,
-        sign: (d) => sign(null, d, opts.hostSigns ?? hostKey.privateKey),
+        sign: opts.holdSign ? async (d) => { await opts.holdSign!(); return sign(null, d, opts.hostSigns ?? hostKey.privateKey); } : (d) => sign(null, d, opts.hostSigns ?? hostKey.privateKey),
         hello: async () => buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey) }),
         signedInHere: () => 'user_1',
-        validateGrant: async (token) => verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID }),
+        validateGrant: async (token) => { validated.push(token); await opts.holdValidate?.(); return verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID }); },
         reconnect: { minMs: 0, maxMs: 0 },
+        revalidateMs: 0,
         popTimeoutMs: 200,
         log: (m) => hostLog.push(m),
         site: { dial: async (host) => { dialed.push(host); const door = endpoint(); frontDoors.push(door); return { ok: true, socket: door.socket as unknown as Socket }; }, ca: () => 'HOST CA' },
@@ -88,18 +93,19 @@ async function rig(tamper: RelayTamper = {}, opts: { hostSigns?: KeyObject } = {
     link.onConnection((c) => { admitted.push(c); c.onMessage((text) => { hostRead.push(text); c.send(`echo:${text}`); }); });
     link.connect();
     await settle();
-    const connect = async (o: { hostPublicKey?: string | null; grant?: string; pop?: PopKeypair; e2eTimeoutMs?: number } = {}): Promise<RelayMemberResult> => {
+    const connect = async (o: { hostPublicKey?: string | null; grant?: string; pop?: PopKeypair; e2eTimeoutMs?: number; renew?: RenewGrant } = {}): Promise<RelayMemberResult> => {
         const pop = o.pop ?? PopKeypair.generate();
         return openRelayMember({
             socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, name: NAME,
             grant: o.grant ?? mintGrant({ cnf: { jkt: thumbprint(pop.publicJwk) } }),
             hostPublicKey: o.hostPublicKey === undefined ? HOST_PUBLIC_KEY : o.hostPublicKey,
             pop, timeoutMs: 1_000, e2eTimeoutMs: o.e2eTimeoutMs ?? 300,
+            ...(o.renew ? { renew: o.renew } : {}),
         });
     };
     /** The frames the relay was handed on a channel, from one side. */
     const seen = (from: 'member' | 'host', channel: string) => relay.wire.filter((w) => w.from === from).map((w) => JSON.parse(w.text) as Record<string, unknown>).filter((f) => f.channel === channel);
-    return { relay, link, hostLog, dialed, frontDoors, admitted, hostRead, connect, seen };
+    return { relay, link, hostLog, dialed, frontDoors, admitted, hostRead, connect, seen, validated };
 }
 
 const transportOf = (opened: RelayMemberResult): RelayMemberTransport => {
@@ -299,12 +305,36 @@ describe('the member is the one the grant names', () => {
                 return [JSON.stringify({ ...f, payload: { type: 'e2e-finish', sig: sign(null, Buffer.from('genie-relay-e2e v1 member\n'), relays.privateKey).toString('base64url') } })];
             },
         });
-        const opened = await r.connect();
+        // The member finished its own side (the host's accept was real), so its open came back; the host then ends it.
+        const t = transportOf(await r.connect());
         await settle();
         expect(r.admitted).toEqual([]);
         expect(r.hostLog.join('\n')).toMatch(/could not prove it holds the key its grant names/);
-        // The member is told by the host's close; whatever it had it loses.
-        if (opened.ok) expect(opened.transport.closedBecause()).not.toBeNull();
+        expect(t.closedBecause()).toBe(MEMBER_NOT_PROVED);
+    });
+
+    // The strong case (review note): the RIGHT key's finish, made for ANOTHER session of the same member, moved into this one.
+    it('a real finish by the right key, taken from another of the member’s sessions, does not admit this one', async () => {
+        let first: string | null = null;
+        const r = await rig({
+            fromMember: (text, sid) => {
+                const f = JSON.parse(text) as { payload?: Record<string, unknown> };
+                if (f.payload?.type !== 'e2e-finish') return [text];
+                if (first === null) { first = text; return [text]; }
+                return [JSON.stringify({ ...(JSON.parse(first) as object), sid })];
+            },
+        });
+        const pop = PopKeypair.generate();
+        const grant = mintGrant({ cnf: { jkt: thumbprint(pop.publicJwk) } });
+        const one = transportOf(await r.connect({ pop, grant }));
+        await settle();
+        // CONTROL: the first session, with its own finish, is admitted.
+        expect(r.admitted).toHaveLength(1);
+        const two = transportOf(await r.connect({ pop, grant }));
+        await settle();
+        expect(r.admitted).toHaveLength(1);
+        expect(two.closedBecause()).toBe(MEMBER_NOT_PROVED);
+        expect(one.closedBecause()).toBeNull();
     });
 
     it('the relay invents rest frames for an admitted session (plain, as before this build): the session ends and RemoteHost reads none', async () => {
@@ -495,5 +525,191 @@ describe('the handshake left out', () => {
         r.relay.toHost(sid, JSON.stringify(init));
         await settle();
         expect(t.closedBecause()).toBe(CHANGED_AT_HOST);
+    });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The independent security review of this change (2026-11-23), finding by finding.
+
+describe('review finding 1: the frame cap holds for the SEALED frame (Tynn #579)', () => {
+    const hostFrames = (r: Awaited<ReturnType<typeof rig>>) => r.relay.wire.filter((w) => w.from === 'host').map((w) => Buffer.byteLength(w.text));
+    /** A result whose text is `bytes` long and nearly all quotes: the worst text for anything that escapes. */
+    const quoteHeavy = (id: number, bytes: number): string => {
+        const shell = JSON.stringify({ kind: 'result', id, ok: true, value: '' });
+        return JSON.stringify({ kind: 'result', id, ok: true, value: '"'.repeat(Math.floor((bytes - Buffer.byteLength(shell)) / 2)) });
+    };
+
+    it('a quote-heavy result just under the plain cap is refused in words for the same call, never sent over the cap, and the session lives', async () => {
+        const r = await rig();
+        const t = transportOf(await r.connect());
+        const got = reading(t);
+        t.send('hello');
+        await settle();
+        got.length = 0;
+        const text = quoteHeavy(7, REMOTE_FRAME_MAX_BYTES - 64);
+        // CONTROL: this is a frame the plain cap lets through.
+        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(REMOTE_FRAME_MAX_BYTES);
+        r.admitted[0]!.send(text);
+        await settle();
+        expect(got).toHaveLength(1);
+        expect(JSON.parse(got[0]!)).toEqual({ kind: 'result', id: 7, ok: false, reason: expect.stringMatching(/too large/) });
+        expect(Math.max(...hostFrames(r))).toBeLessThanOrEqual(REMOTE_FRAME_MAX_BYTES);
+        expect(t.closedBecause()).toBeNull();
+        // CONTROL: the session still carries frames, and a large quote-heavy one under the sealed cap arrives whole.
+        const fits = quoteHeavy(8, 380_000);
+        r.admitted[0]!.send(fits);
+        await settle();
+        expect(got).toHaveLength(2);
+        expect(got[1]).toBe(fits);
+        expect(Math.max(...hostFrames(r))).toBeLessThanOrEqual(REMOTE_FRAME_MAX_BYTES);
+        expect(Math.max(...hostFrames(r))).toBeGreaterThan(380_000);
+    });
+
+    it('an event that would seal over the cap is not sent, and the session lives', async () => {
+        const r = await rig();
+        const t = transportOf(await r.connect());
+        const got = reading(t);
+        t.send('hello');
+        await settle();
+        got.length = 0;
+        r.admitted[0]!.send(JSON.stringify({ kind: 'event', channel: 'snapshot', payload: '"'.repeat(Math.floor((REMOTE_FRAME_MAX_BYTES - 200) / 2)) }));
+        await settle();
+        expect(got).toEqual([]);
+        expect(Math.max(...hostFrames(r))).toBeLessThanOrEqual(REMOTE_FRAME_MAX_BYTES);
+        expect(t.closedBecause()).toBeNull();
+    });
+});
+
+describe('review finding 2: a grant renewal travels inside the seal', () => {
+    const soon = () => Math.floor(Date.now() / 1000) + 2;
+
+    it('CONTROL: an honest renewal is taken, the session outlives its first grant, and the relay reads neither the renewal nor the new grant', async () => {
+        const r = await rig();
+        const pop = PopKeypair.generate();
+        const cnf = { cnf: { jkt: thumbprint(pop.publicJwk) } };
+        const exp = soon();
+        const first = mintGrant({ ...cnf, jti: 'g1', exp });
+        const fresh = mintGrant({ ...cnf, jti: 'g2' });
+        const t = transportOf(await r.connect({ pop, grant: first, renew: async () => ({ ok: true, token: fresh }) }));
+        await vi.waitFor(() => { expect(r.validated).toContain(fresh); }, { timeout: 5_000, interval: 50 });
+        await settle();
+        // The first grant has expired by now; a re-check passes only because the session is under the new one.
+        await vi.waitFor(() => { expect(Date.now() / 1000).toBeGreaterThan(exp + 0.1); }, { timeout: 5_000, interval: 50 });
+        await r.link.revalidate();
+        await settle();
+        expect(t.closedBecause()).toBeNull();
+        const all = r.relay.wire.map((w) => w.text).join('\n');
+        expect(all).not.toContain('grant-renew');
+        expect(all).not.toContain(fresh);
+        // It did cross the relay: one sealed control frame from the member.
+        expect(r.seen('member', 'control').filter((f) => (f.payload as { e2e?: unknown } | undefined)?.e2e === 1)).toHaveLength(1);
+    }, 20_000);
+
+    it('the relay substitutes another valid grant of the same person and key (a plain grant-renew): refused unread, and the session ends in words', async () => {
+        const r = await rig();
+        const pop = PopKeypair.generate();
+        const cnf = { cnf: { jkt: thumbprint(pop.publicJwk) } };
+        const older = mintGrant({ ...cnf, jti: 'g0' });
+        const t = transportOf(await r.connect({ pop, grant: mintGrant({ ...cnf, jti: 'g1' }) }));
+        await settle();
+        const sid = [...r.relay.sessions.keys()][0]!;
+        r.relay.toHost(sid, JSON.stringify({ kind: 'data', channel: 'control', sid, payload: { type: 'grant-renew', grant: older } }));
+        await settle();
+        expect(r.validated).not.toContain(older);
+        expect(t.closedBecause()).toBe(CHANGED_AT_HOST);
+    });
+
+    it('the relay replays the member’s own sealed renewal: the session ends', async () => {
+        const r = await rig();
+        const pop = PopKeypair.generate();
+        const cnf = { cnf: { jkt: thumbprint(pop.publicJwk) } };
+        const fresh = mintGrant({ ...cnf, jti: 'g2' });
+        const t = transportOf(await r.connect({ pop, grant: mintGrant({ ...cnf, jti: 'g1', exp: soon() }), renew: async () => ({ ok: true, token: fresh }) }));
+        await vi.waitFor(() => { expect(r.validated).toContain(fresh); }, { timeout: 5_000, interval: 50 });
+        await settle();
+        const sid = [...r.relay.sessions.keys()][0]!;
+        const sealed = r.seen('member', 'control').find((f) => (f.payload as { e2e?: unknown } | undefined)?.e2e === 1)!;
+        r.relay.toHost(sid, JSON.stringify(sealed));
+        await settle();
+        expect(t.closedBecause()).toBe(CHANGED_AT_HOST);
+    }, 20_000);
+});
+
+describe('review finding 3: a session id is opened once', () => {
+    it('a second `control open` for a LIVE session is refused: the first session is untouched, nobody new is admitted, no grant is checked', async () => {
+        const r = await rig();
+        const t = transportOf(await r.connect());
+        const got = reading(t);
+        t.send('before');
+        await settle();
+        const sid = [...r.relay.sessions.keys()][0]!;
+        const checked = r.validated.length;
+        const intruder = PopKeypair.generate();
+        r.relay.toHost(sid, JSON.stringify({ kind: 'open', channel: 'control', sid, payload: { grant: mintGrant({ cnf: { jkt: thumbprint(intruder.publicJwk) }, src: 'invite', scope: ['workspace:tynn'] }) } }));
+        await settle();
+        await new Promise((resolve) => setTimeout(resolve, 300)); // past the proof timeout a second admission would have armed
+        await settle();
+        expect(r.validated.length).toBe(checked);
+        expect(r.admitted).toHaveLength(1);
+        expect(t.closedBecause()).toBeNull();
+        t.send('after');
+        await settle();
+        expect(r.hostRead).toEqual(['before', 'after']);
+        expect(got).toEqual(['echo:before', 'echo:after']);
+        expect(r.hostLog.join('\n')).toMatch(/already open/);
+    });
+
+    it('a second `control open` for a session UNDER ADMISSION is refused: the first admission completes as itself', async () => {
+        let release: () => void = () => {};
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        const r = await rig({}, { holdValidate: () => held });
+        const opening = r.connect({ e2eTimeoutMs: 2_000 });
+        await vi.waitFor(() => { expect(r.relay.sessions.size).toBe(1); expect(r.validated).toHaveLength(1); }, { timeout: 2_000, interval: 10 });
+        const sid = [...r.relay.sessions.keys()][0]!;
+        const intruder = PopKeypair.generate();
+        r.relay.toHost(sid, JSON.stringify({ kind: 'open', channel: 'control', sid, payload: { grant: mintGrant({ cnf: { jkt: thumbprint(intruder.publicJwk) }, src: 'invite', scope: ['workspace:tynn'] }) } }));
+        await settle();
+        expect(r.validated).toHaveLength(1);
+        release();
+        const t = transportOf(await opening);
+        await settle();
+        expect(r.admitted).toHaveLength(1);
+        expect(r.admitted[0]!.preAuth).toMatchObject({ isOwner: true });
+        t.send('mine');
+        await settle();
+        expect(r.hostRead).toEqual(['mine']);
+        expect(t.closedBecause()).toBeNull();
+    });
+});
+
+describe('review finding 5: one handshake a session, also while the host is answering it', () => {
+    it('an e2e-init that arrives while the host is signing its answer to the first is refused, not kept', async () => {
+        let release: () => void = () => {};
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        let signing = 0;
+        const r = await rig({}, { holdSign: () => { signing += 1; return held; } });
+        const opening = r.connect({ e2eTimeoutMs: 2_000 });
+        await vi.waitFor(() => { expect(signing).toBe(1); }, { timeout: 2_000, interval: 10 });
+        const sid = [...r.relay.sessions.keys()][0]!;
+        const init = r.seen('member', 'control').find((f) => (f.payload as { type?: string }).type === 'e2e-init')!;
+        r.relay.toHost(sid, JSON.stringify(init));
+        await settle();
+        release();
+        expect(await opening).toEqual({ ok: false, reason: CHANGED_AT_HOST });
+        await settle();
+        expect(r.admitted).toEqual([]);
+    });
+
+    it('CONTROL: with a host that signs slowly and nothing injected, the member is admitted', async () => {
+        let release: () => void = () => {};
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        let signing = 0;
+        const r = await rig({}, { holdSign: () => { signing += 1; return held; } });
+        const opening = r.connect({ e2eTimeoutMs: 2_000 });
+        await vi.waitFor(() => { expect(signing).toBe(1); }, { timeout: 2_000, interval: 10 });
+        release();
+        expect((await opening).ok).toBe(true);
+        await settle();
+        expect(r.admitted).toHaveLength(1);
     });
 });

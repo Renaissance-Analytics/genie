@@ -41,9 +41,10 @@ const referenceKeys = (shared: Buffer, th: Buffer) => {
     const okm = Buffer.from(hkdfSync('sha256', shared, th, Buffer.from('genie-relay-e2e v1 keys', 'utf8'), 64));
     return { memberToHost: okm.subarray(0, 32), hostToMember: okm.subarray(32) };
 };
-const CHANNEL_ID = { rest: 1, site: 2 } as const;
-const referenceNonce = (channel: 'rest' | 'site', seq: number) => { const b = Buffer.alloc(12); b.writeUInt32BE(CHANNEL_ID[channel], 0); b.writeBigUInt64BE(BigInt(seq), 4); return b; };
-const referenceAad = (f: { sid: string; channel: string; kind: string; reqId?: string }, seq: number) => Buffer.from(JSON.stringify([1, f.sid, f.channel, f.kind, f.reqId ?? '', seq]), 'utf8');
+const CHANNEL_ID = { rest: 1, site: 2, control: 3 } as const;
+const referenceNonce = (channel: 'rest' | 'site' | 'control', seq: number) => { const b = Buffer.alloc(12); b.writeUInt32BE(CHANNEL_ID[channel], 0); b.writeBigUInt64BE(BigInt(seq), 4); return b; };
+/** A frame with no reqId and one with an empty reqId are different frames: absence is `null`. */
+const referenceAad = (f: { sid: string; channel: string; kind: string; reqId?: string }, seq: number) => Buffer.from(JSON.stringify([1, f.sid, f.channel, f.kind, f.reqId === undefined ? null : f.reqId, seq]), 'utf8');
 
 function world() {
     const host = generateKeyPairSync('ed25519');
@@ -122,14 +123,18 @@ describe('the handshake, byte for byte', () => {
         const d = createDecipheriv('aes-256-gcm', keys.memberToHost, referenceNonce('rest', 1));
         d.setAAD(referenceAad(sealed, 1));
         d.setAuthTag(bytes.subarray(bytes.length - 16));
-        const plain = Buffer.concat([d.update(bytes.subarray(0, bytes.length - 16)), d.final()]).toString('utf8');
-        expect(JSON.parse(plain)).toEqual({ p: '{"kind":"hello"}' });
+        // A text payload is sealed as its own UTF-8 bytes after one byte 0x01: no JSON re-encode, so sealing adds a fixed 17 bytes.
+        const plain = Buffer.concat([d.update(bytes.subarray(0, bytes.length - 16)), d.final()]);
+        expect(plain[0]).toBe(1);
+        expect(plain.subarray(1).toString('utf8')).toBe('{"kind":"hello"}');
+        expect(bytes.length).toBe(Buffer.byteLength('{"kind":"hello"}') + 17);
 
         // Host → member, sealed by hand on the SITE channel: the module opens it.
         const frame = { kind: 'error' as const, channel: 'site' as const, sid: SID, reqId: 'site_1' };
         const c = createCipheriv('aes-256-gcm', keys.hostToMember, referenceNonce('site', 1));
         c.setAAD(referenceAad(frame, 1));
-        const ct = Buffer.concat([c.update(Buffer.from(JSON.stringify({ r: 'refused' }), 'utf8')), c.final(), c.getAuthTag()]);
+        // Anything else (an object payload, a reason, a code) is one byte 0x00 and then JSON.
+        const ct = Buffer.concat([c.update(Buffer.concat([Buffer.from([0]), Buffer.from(JSON.stringify({ r: 'refused' }), 'utf8')])), c.final(), c.getAuthTag()]);
         expect(memberCipher.open({ ...frame, payload: { e2e: 1, n: 1, c: ct.toString('base64') } })).toEqual({ ...frame, reason: 'refused' });
         // And the host's own seal opens at the member (on rest: the hand-made frame above took the site channel's first number).
         expect(memberCipher.open(hostCipher.seal(rest('{"kind":"welcome"}')))).toEqual(rest('{"kind":"welcome"}'));
@@ -195,6 +200,31 @@ describe('who the other end is', () => {
         const h = await acceptMember({ ...w.hostInput, init: m.init });
         const done = m.accept(h.accept);
         expect(refusal(() => h.finish(done.finish)).code).toBe('member-not-proved');
+    });
+
+    // Review note: the proof-of-possession signature is by the same key; it must not pass for a finish.
+    it('the member’s proof-of-possession signature, fed in as a finish, is refused', async () => {
+        const w = world();
+        const m = startMember(w.memberInput);
+        const h = await acceptMember({ ...w.hostInput, init: m.init });
+        const popDigest = createHash('sha256').update(Buffer.concat([Buffer.from('a-nonce', 'utf8'), Buffer.from(WS, 'utf8'), Buffer.from(SID, 'utf8')])).digest();
+        const popSig = sign(null, popDigest, w.pop.privateKey).toString('base64url');
+        expect(refusal(() => h.finish({ type: 'e2e-finish', sig: popSig })).code).toBe('member-not-proved');
+    });
+
+    it('PopKeypair signs for the handshake only what starts with the handshake’s own label', async () => {
+        const { PopKeypair } = await import('../src/main/relay-member.js');
+        const pop = PopKeypair.generate();
+        const digest = createHash('sha256').update('a-nonce' + WS + SID, 'utf8').digest();
+        expect(() => pop.signHandshake(digest)).toThrow(/not the end-to-end handshake/);
+        expect(() => pop.signHandshake(Buffer.from('genie-relay-e2e v1 host\n' + 'x'.repeat(32), 'utf8'))).toThrow(/not the end-to-end handshake/);
+        expect(() => pop.signHandshake(Buffer.alloc(0))).toThrow(/not the end-to-end handshake/);
+        // CONTROL: the member's own labelled string is signed, by the key the grant is bound to.
+        const data = Buffer.concat([Buffer.from('genie-relay-e2e v1 member\n', 'utf8'), Buffer.alloc(32, 9)]);
+        const { createPublicKey } = await import('node:crypto');
+        expect(verify(null, data, createPublicKey({ key: pop.publicJwk as never, format: 'jwk' }), pop.signHandshake(data))).toBe(true);
+        pop.discard();
+        expect(() => pop.signHandshake(data)).toThrow(/discarded/);
     });
 
     it('a finish made for another exchange (the relay’s own ephemeral toward the host) is refused', async () => {
@@ -382,10 +412,71 @@ describe('the channels are counted apart', () => {
         expect(refusal(() => hostCipher.open({ ...r1, channel: 'site', reqId: 'site_1' })).code).toBe('frame');
     });
 
-    it('only rest and site are sealed; a control frame is not this cipher’s to carry', async () => {
-        const { memberCipher } = await session();
-        expect(() => memberCipher.seal({ kind: 'data', channel: 'control', sid: SID, payload: { type: 'grant-renew' } })).toThrow(RelayE2eError);
-        expect(() => memberCipher.open({ kind: 'data', channel: 'control', sid: SID, payload: { type: 'pop-challenge' } })).toThrow(RelayE2eError);
+    // Review finding 2: a renewal travels inside the seal, on control, with its own count (channel id 3 in the nonce).
+    it('a control message can be sealed too, counted apart from rest and site', async () => {
+        const { memberCipher, hostCipher } = await session();
+        memberCipher.seal(rest('r1'));
+        const renewal = memberCipher.seal({ kind: 'data', channel: 'control', sid: SID, payload: { type: 'grant-renew', grant: 'a.b.c' } });
+        expect(renewal).toMatchObject({ kind: 'data', channel: 'control', sid: SID, payload: { e2e: 1, n: 1 } });
+        expect(JSON.stringify(renewal)).not.toContain('grant-renew');
+        expect(JSON.stringify(renewal)).not.toContain('a.b.c');
+        expect(hostCipher.open(renewal)).toEqual({ kind: 'data', channel: 'control', sid: SID, payload: { type: 'grant-renew', grant: 'a.b.c' } });
+        // The same sealed renewal a second time is a replay.
+        expect(refusal(() => hostCipher.open(renewal)).code).toBe('sequence');
+    });
+
+    it('a sealed control frame does not open as a rest frame of the same number', async () => {
+        const { memberCipher, hostCipher } = await session();
+        const renewal = memberCipher.seal({ kind: 'data', channel: 'control', sid: SID, payload: { type: 'grant-renew', grant: 'a.b.c' } });
+        expect(refusal(() => hostCipher.open({ ...renewal, channel: 'rest' })).code).toBe('frame');
+    });
+
+    it('a PLAIN control frame is not this cipher’s to open, and the lossy channels are never sealed', async () => {
+        const a = await session();
+        expect(refusal(() => a.hostCipher.open({ kind: 'data', channel: 'control', sid: SID, payload: { type: 'grant-renew', grant: 'a.b.c' } })).code).toBe('plain');
+        const b = await session();
+        expect(() => b.memberCipher.seal({ kind: 'data', channel: 'term', sid: SID, payload: 'x' })).toThrow(RelayE2eError);
+        const c = await session();
+        expect(() => c.memberCipher.seal({ kind: 'data', channel: 'events', sid: SID, payload: 'x' })).toThrow(RelayE2eError);
+    });
+
+    // Review finding 4.
+    it('a missing reqId and an empty one are different frames', async () => {
+        const a = await session();
+        const none = a.memberCipher.seal({ kind: 'close', channel: 'site', sid: SID });
+        expect(refusal(() => a.hostCipher.open({ ...none, reqId: '' })).code).toBe('frame');
+        const b = await session();
+        const empty = b.memberCipher.seal({ kind: 'close', channel: 'site', sid: SID, reqId: '' });
+        const { reqId: _gone, ...stripped } = empty;
+        expect(refusal(() => b.hostCipher.open(stripped)).code).toBe('frame');
+        // CONTROL: each opens as it was sealed.
+        const c = await session();
+        expect(c.hostCipher.open(c.memberCipher.seal({ kind: 'close', channel: 'site', sid: SID }))).toEqual({ kind: 'close', channel: 'site', sid: SID });
+        expect(c.hostCipher.open(c.memberCipher.seal({ kind: 'close', channel: 'site', sid: SID, reqId: '' }))).toEqual({ kind: 'close', channel: 'site', sid: SID, reqId: '' });
+    });
+
+    // Review finding 1: what sealing adds is fixed, whatever the text holds.
+    it('sealing a text adds the same 17 bytes whether it is quotes, backslashes or letters, and every text comes back as it was', async () => {
+        const { memberCipher, hostCipher } = await session();
+        for (const text of ['a'.repeat(3000), '"'.repeat(3000), String.fromCharCode(92).repeat(3000), 'é'.repeat(1500), '', '{"kind":"result","value":"\u0000"}']) {
+            const sealed = memberCipher.seal(rest(text));
+            expect(Buffer.from((sealed.payload as { c: string }).c, 'base64').length).toBe(Buffer.byteLength(text) + 17);
+            expect(hostCipher.open(sealed)).toEqual(rest(text));
+        }
+    });
+
+    it('says how much text one rest frame carries so that the sealed frame is never over the remote frame cap', async () => {
+        const { E2E_REST_TEXT_MAX_BYTES } = await import('../src/main/relay-e2e.js');
+        const { REMOTE_FRAME_MAX_BYTES } = await import('../src/core/remote-frame.js');
+        const { encodeFrame } = await import('../src/main/relay-wire.js');
+        expect(E2E_REST_TEXT_MAX_BYTES).toBeGreaterThan(380_000);
+        expect(E2E_REST_TEXT_MAX_BYTES).toBeLessThan(REMOTE_FRAME_MAX_BYTES);
+        // The worst case: the largest text, the largest frame number, a long session id.
+        const sid = 's'.repeat(200);
+        const { frameCipher } = await import('../src/main/relay-e2e.js');
+        const worst = frameCipher({ send: Buffer.alloc(32, 1), receive: Buffer.alloc(32, 2), sid, sent: { rest: E2E_FRAME_LIMIT - 2 } });
+        const sealed = worst.seal({ kind: 'data', channel: 'rest', sid, payload: '"'.repeat(E2E_REST_TEXT_MAX_BYTES) });
+        expect(Buffer.byteLength(encodeFrame(sealed))).toBeLessThanOrEqual(REMOTE_FRAME_MAX_BYTES);
     });
 });
 
