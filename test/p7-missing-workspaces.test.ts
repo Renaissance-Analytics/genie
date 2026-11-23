@@ -107,6 +107,15 @@ describe('the look: which workspaces are missing', () => {
         expect(await nodeIsDirectory(join(file, 'under-a-file'))).toBe(false);
     });
 
+    it('the real look that FAILS is a rejection, never "not there": a path the OS will not take (a NUL in it) is neither there nor gone', async () => {
+        // Written after the look (a break probe that called every failure "gone" passed every other row): it goes red on that probe.
+        const { nodeIsDirectory } = await missingModule();
+        const root = tempRoot('genie-p7-look-fails-');
+        await expect(nodeIsDirectory(join(root, `bad${String.fromCharCode(0)}name`))).rejects.toThrow();
+        // CONTROL: beside it, nothing there is still a plain false.
+        expect(await nodeIsDirectory(join(root, 'nothing'))).toBe(false);
+    });
+
     it('a FILE at the recorded path is missing (on the real disk); the folder beside it is not', async () => {
         const { MissingWorkspaces, nodeIsDirectory } = await missingModule();
         const root = tempRoot('genie-p7-missing-file-');
