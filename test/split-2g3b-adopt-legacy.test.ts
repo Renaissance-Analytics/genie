@@ -591,9 +591,9 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
         for (const gone of [/moveAgentKeys/, /moveSecretsAgain/, /migrateSecrets/, /legacySecrets/, /onSecretsMoved/, /secretsLog/, /tynnCipher/, /\btynnVault\b/]) expect(compose).not.toMatch(gone);
         // CONTROL: the word boundary still finds the input where it is (compose's agents.json path is tynnVaultFile, not it).
         expect('readonly tynnVault?: HostVault;').toMatch(/\btynnVault\b/);
-        const call = /const composed: WindowServices = await composeWith\(\{[\s\S]*?\n {4}\}\);/.exec(main)?.[0] ?? '';
-        expect(call.length).toBeGreaterThan(0);
-        for (const gone of [/\btynn: \(\) =>/, /tynnCipher:/, /tynnVault:/, /tynnSecrets:/, /legacySecrets:/, /onSecretsMoved:/, /secretsLog:/]) expect(call).not.toMatch(gone);
+        // main composes nothing at all since 2g-4d E (Tynn #955), so it passes compose none of them.
+        expect(main).not.toMatch(/composeWith\(|composeWindowServices/);
+        for (const gone of [/tynnCipher:/, /tynnVault:/, /tynnSecrets:/, /legacySecrets:/, /onSecretsMoved:/, /secretsLog:/]) expect(main).not.toMatch(gone);
     });
 
     it('main holds no Tynn or GitHub account, keyring card or relay registration: their engine uses leave the list', () => {

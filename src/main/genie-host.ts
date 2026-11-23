@@ -274,6 +274,7 @@ import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 import { saveChatUploads, uploadWorkspaceOf } from './chat-uploads.js';
 import { hostWindowView, v1DatabaseFrom } from './host-window-view.js';
+import { scheduleStagingSweep } from './host-staging-sweep.js';
 import { browserDoorOf, hostOpensSite } from './host-browser.js';
 
 /**
@@ -506,6 +507,8 @@ async function main(): Promise<void> {
     });
     let mcp: HostMcp | null = null;
     let v1Done = false;
+    /** Stops the old-staging sweep (Tynn #955); a no-op until it is scheduled after boot, so a shutdown before then has nothing to stop. */
+    let stopStagingSweep = (): void => {};
     /** Genie 1's database, as the window located it (Electron's userData; v1Import below): its record of this machine. */
     let v1DatabasePath: string | null = null;
     /*
@@ -2544,6 +2547,8 @@ async function main(): Promise<void> {
         log: (line) => { say(line); lifecycleLog(line); },
     });
     hostView.refresh();
+    // OLD LOCAL STAGING, swept once after boot (Tynn #955): the window's composition swept it before, so with no window it never was.
+    stopStagingSweep = scheduleStagingSweep(home, { sweep: (h, d) => LocalStagingArea.sweepOld(h, d), warn: say });
     // After both are defined (openFlows, openProcessBook): the kept processes, the flows and Genie 1's data, at boot.
     void importFromV1(v1DatabaseFrom(process.env));
     // THE WORKSPACE AGENT FILES, kept here with or without a window (Tynn #898 step 2e-2, host-workspace-files.ts): every
@@ -2644,6 +2649,7 @@ async function main(): Promise<void> {
             if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
             lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
             browserService.quit();
+            stopStagingSweep();
             logins?.dispose();
             const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
             // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
