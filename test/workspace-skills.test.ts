@@ -5,7 +5,7 @@ import { BUILTIN_TOOLS } from '../src/main/genie-catalog.js';
 /**
  * GENIE 2'S SKILLS, AND GENIE 1'S RETIRED (the owner: Genie 2 manages all the workspace agent files). Genie 1 wrote
  * `genie-*` skills into `.claude/skills/` (Claude) and `.agents/skills/` (Codex) that send an agent to tools Genie 2
- * does not have — `connectToGenie`, `genieGuide`, `checkIssues`, `manageProcess`, `manageWorkspaces`, `manageGappDev`,
+ * does not have — `connectToGenie`, `genieGuide`, `manageProcess`, `manageWorkspaces`, `manageGappDev`,
  * `registerSession` — and a handoff skill for an upgrade that no longer asks for one. Genie 2 writes its own skills,
  * naming only the tools its MCP serves; Genie 1's skills that have no Genie 2 meaning are backed up and removed; every
  * other skill (a person's, a plugin's) is left exactly as it is.
@@ -25,7 +25,7 @@ function memFs(files: Record<string, string>) {
 const W = '/w/moic';
 const run = (fs: SkillFs) => writeAgentSkills({ workspacePath: W, fs, stamp: '20261012' });
 
-// The twelve tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too now (Tynn #806).
+// The tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too (Tynn #806).
 // No runAgent: the sidecar is gone (the owner, 2026-10-19).
 // This list was kept by hand and had fallen to 13 of 19 (Tynn #1040): it is the catalog's own now, with the official plugins' tools.
 // Every OTHER backticked name in a skill (an action, a parameter, a setting) is checked by test/agent-guide-names.test.ts.

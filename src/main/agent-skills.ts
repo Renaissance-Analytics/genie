@@ -3,7 +3,7 @@
  *
  * Claude reads skills from `.claude/skills/<name>/SKILL.md`, Codex from `.agents/skills/<name>/SKILL.md`. Genie 1 wrote
  * `genie-*` skills into both that send an agent to tools Genie 2 does not have (`connectToGenie`, `genieGuide`,
- * `checkIssues`, `manageProcess`, `manageWorkspaces`, `manageGappDev`) and a handoff skill for an upgrade that no longer
+ * `manageProcess`, `manageWorkspaces`, `manageGappDev`) and a handoff skill for an upgrade that no longer
  * asks for one. Genie 2 writes its own skills, naming only the tools its MCP serves, and replaces them on every sync.
  * Genie 1's skills with no Genie 2 meaning are backed up under `.agents/_genie/backups/skills/` and removed with their
  * folder. Nothing else in a skills folder is touched — a person's skill, a plugin's skill.
