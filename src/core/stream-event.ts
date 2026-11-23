@@ -392,12 +392,16 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
         // older name. Unmapped, a Codex plan fell through to `unknown` and never reached the Dashboard (genie#2132).
         case 'plan':
         case 'plan_update': {
-            // A plan is only what carries its steps. The same driver sends Codex's `turn/plan/delta` as a
-            // `plan_update` with only a `delta`; read as a plan it was one of NO steps and blanked the plan
-            // already shown. It stays `unknown`. An explicit `entries: []` is still a plan, cleared.
+            // A plan is only what carries its steps. An explicit `entries: []` is still a plan, cleared.
             const entries = Array.isArray(update['entries']) ? update['entries'] : update['plan'];
-            if (!Array.isArray(entries)) return { kind: 'unknown', sessionUpdate: kind, raw: update };
-            return { kind: 'plan', entries };
+            if (Array.isArray(entries)) return { kind: 'plan', entries };
+            // The same driver sends Codex's `turn/plan/delta` as a `plan_update` with only a `delta`: a fragment of
+            // the plan's text, many a second. Read as a plan it was one of NO steps and blanked the plan already
+            // shown; kept as `unknown` it was drawn as an "(unmapped: plan_update)" row per fragment. It is no row at
+            // all (as the slash-command menu below is none): the plan that follows carries everything.
+            if (typeof update['delta'] === 'string') return null;
+            // Neither steps nor a delta: something new, kept where it can be seen.
+            return { kind: 'unknown', sessionUpdate: kind, raw: update };
         }
 
         case 'compaction_update':
