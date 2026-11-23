@@ -3,10 +3,6 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from '../src/main/workspace-config-sync.js';
 
 /**
@@ -74,52 +70,34 @@ describe('the one lock', () => {
         const host = readFileSync('src/main/genie-host.ts', 'utf8');
         expect(host).toMatch(/const withConfig = configWriter\(\);/);
         expect(host).toMatch(/hostAgentKeys\(\{\s*[^]*?withConfig,/);
-        // The sync holds the lock, and (genie#1519, now the host's) writes nothing into a workspace that is not trusted.
-        expect(host).toMatch(/configSync: async \(asked\) => \(\(await hostMayWriteInto\(asked\.workspacePath\)\) \? withConfig\(asked\.workspacePath, \(\) => writeWorkspaceConfig\(asked\)\) : \[\]\)/);
+        // The sync is genie-host's own (its feature machine's and its workspace files'): no window asks for one (Tynn #1043).
+        expect(host).toMatch(/const featureConfig = async \(workspacePath: string, /);
+        expect(host).not.toMatch(/configSync: async/);
         expect(readFileSync('src/main/host-agent-keys.ts', 'utf8')).toMatch(/withConfig: options\.withConfig/);
     });
 });
 
-describe('over the link', () => {
-    async function linked(configSync?: (asked: WorkspaceConfigRequest) => Promise<unknown>) {
-        const TOKEN = 'a'.repeat(64);
-        const server = new SessionEngineServer({ token: TOKEN, build: 'test', ...(configSync ? { configSync: configSync as never } : {}) });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, TOKEN);
-        return client;
-    }
-
-    it('the window asks, the host writes, and the results come back', async () => {
-        const asked: WorkspaceConfigRequest[] = [];
-        const client = await linked(async (r) => { asked.push(r); return [{ id: 'claude', label: 'Claude', ok: true }]; });
-        expect(await client.configSync(request())).toEqual([{ id: 'claude', label: 'Claude', ok: true }]);
-        expect(asked).toEqual([request()]);
-    });
-
-    it('a host that cannot do it rejects, so nothing reads as synced', async () => {
-        const client = await linked();
-        await expect(client.configSync(request())).rejects.toThrow();
-    });
-
-    it('with no link it rejects', async () => {
-        await expect(new SessionEngineClient().configSync(request())).rejects.toThrow();
+describe('no window asks genie-host to write a workspace’s config (Tynn #1043)', () => {
+    it('the engine link has no config route: the method, the client’s member and the server’s case are gone', () => {
+        expect(readFileSync('src/core/engine-protocol.ts', 'utf8')).not.toMatch(/engine\.configSync/);
+        expect(readFileSync('src/main/session-engine-client.ts', 'utf8')).not.toMatch(/configSync/);
+        expect(readFileSync('src/main/session-engine-server.ts', 'utf8')).not.toMatch(/configSync/);
+        // CONTROL: the same read finds a method that stays.
+        expect(readFileSync('src/core/engine-protocol.ts', 'utf8')).toMatch(/engine\.proxyRemember/);
     });
 });
 
-describe('the window, with a host', () => {
+describe('a composition that runs alone', () => {
     const compose = readFileSync('src/main/compose.ts', 'utf8');
 
-    it('compose has no writer of its own: one function does it, and its lock serves the window running its own engine', () => {
+    it('compose has one writer, under its lock, and takes no host to write for it', () => {
         expect(compose).not.toMatch(/reconcileLegacyTynnConfig/);
         expect(compose).toMatch(/const withConfig = configWriter\(\);/);
-        expect(compose).toMatch(/input\.hostConfigSync/);
+        expect(compose).toMatch(/const results = \[\.\.\.await withConfig\(workspacePath, \(\) => writeWorkspaceConfig\(request\)\)\];/);
+        expect(compose).not.toMatch(/hostConfigSync/);
     });
 
-    it('main hands compose the host when there is one', () => {
-        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/hostConfigSync: \(\) => agentEngineLink\?\.client \?\? null/);
+    it('main hands compose no config writer', () => {
+        expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/hostConfigSync/);
     });
 });

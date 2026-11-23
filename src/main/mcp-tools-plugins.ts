@@ -3,6 +3,7 @@ import type { AccessDecision, AccessRequest, PluginManifest, PluginTool } from '
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { RunResult } from './plugin-runner.js';
+import { refusalWords } from '../core/approval-words.js';
 
 /**
  * PLUGIN TOOLS ON GENIE'S MCP SURFACE (§6.7). Every ENABLED plugin's tools are offered to agents as
@@ -31,7 +32,7 @@ export interface PluginToolsDeps {
         guard(pluginId: string): ((request: AccessRequest) => AccessDecision) | null;
     };
     readonly run: (input: { dir: string; manifest: PluginManifest; tool: PluginTool; args: unknown; caller: Caller; guard: (request: AccessRequest) => AccessDecision; official?: boolean; pluginId?: string }) => Promise<RunResult>;
-    readonly approve: (caller: Caller, action: 'plugin', detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'plugin', detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
     readonly resolveCaller: (terminalId: string) => Caller | null;
 }
 
@@ -91,7 +92,7 @@ export function pluginTools(deps: PluginToolsDeps): Registration[] {
             const { terminalId: _omit, ...rest } = args;
             if (current.tool.gated) {
                 const verdict = await deps.approve(caller, 'plugin', name, context);
-                if (verdict !== 'allowed') return err(`${name} was denied by the person; nothing ran`);
+                if (verdict !== 'allowed') return err(refusalWords(verdict, name, 'nothing ran'));
             }
             const result = await deps.run({ dir: current.dir, manifest: current.manifest, tool: current.tool, args: rest, caller, guard, official: current.official === true, pluginId: current.pluginId });
             return result.ok ? ok(result) : err(result.reason);

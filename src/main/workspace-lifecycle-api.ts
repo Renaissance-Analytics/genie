@@ -125,7 +125,7 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
         register: async (input) => { const record = await registry().register(input); return { id: record.id, name: record.name }; },
         // What project.json says of an adopted agent (Tynn #756, PR8): its IssueWatch, and whether it is the workspace's default.
         setIssueWatch: async (id, setting) => { await registry().setIssueWatch(id as AgentId, setting); },
-        defaultAgentOf: (workspaceId) => w.registry()?.defaultAgentOf(workspaceId) ?? null,
+        chosenDefaultAgentOf: (workspaceId) => w.registry()?.chosenDefaultAgentOf(workspaceId) ?? null,
         setDefaultAgent: async (workspaceId, agentId) => { await registry().setDefaultAgent(workspaceId, agentId); },
         sacredName: async (workspaceId) => {
             const folder = w.registry()?.workspace(workspaceId)?.path;

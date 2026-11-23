@@ -54,11 +54,13 @@ describe('the attention store announces its changes', () => {
 
 describe('main wires it', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    it('the registry’s Deck source is the composition root’s deckItems, after the main process’s recorded errors (core/main-errors.ts)', () => {
-        expect(main.match(/registry\.setDeckSource\(\(\)\s*=>\s*\[\.\.\.mainErrors\.deckItems\(\),\s*\.\.\.composed\.deckItems\(\)\]\)/g) ?? []).toHaveLength(1);
-        expect(main.match(/registry\.setDeckSource\(/g) ?? []).toHaveLength(1);
+    // Since Tynn #998 (2g-4b1) main's window registry carries no Deck: nothing in the window read it (the proof is in
+    // test/split-2g4b1-settings-watch.test.ts). The person's Deck is genie-host's, and it follows attention and approvals.
+    it('main builds no Deck into its window registry; the main process’s recorded errors reach the Deck through its own window', () => {
+        expect(main).not.toMatch(/registry\.setDeckSource\(/);
+        expect(main).toMatch(/mainErrors: \{\s*deckItems: \(\) => mainErrors\.deckItems\(\),\s*dismiss: \(id\) => mainErrors\.dismiss\(id\),/);
     });
-    it('an attention change refreshes the snapshot', () => {
-        expect(main.match(/composed\.attention\.onChange\(\(\)\s*=>\s*registry\?\.touch\(\)\)/g) ?? []).toHaveLength(1);
+    it('an attention change refreshes the Deck: genie-host’s features follow its attention', () => {
+        expect(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8')).toMatch(/own\.attention\.onChange\(listener\)/);
     });
 });

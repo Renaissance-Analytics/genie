@@ -2,6 +2,9 @@ import { remoteOffer } from '../core/protocol-version.js';
 import type { DeckItem } from '../core/deck.js';
 import { readHostSummary, type HostSummary } from '../core/host-summary.js';
 import { readRemoteWatch, type RemoteWatchView } from '../core/remote-watch.js';
+import { readSettingsWatch, type SettingsWatchView } from './settings-watch.js';
+import { readRegistryWatch, type RegistryWatchView } from './registry-protocol.js';
+import { readFrontDoorWatch, type FrontDoorWatchView } from '../core/front-door-watch.js';
 import { LOCAL_EVENTS, inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
 
 /**
@@ -18,10 +21,14 @@ export const OWN_CLIENT_LABEL = 'Genie’s tray';
 
 export type OwnCallAnswer = { ok: true; value: unknown } | { ok: false; reason: string };
 
+/** The controls main's own client asks once, as a call (Tynn #1007, 2g-4e): genie-host's registry, read. */
+export type OwnCallControl = 'registry.read';
+
 export interface OwnProtocolClient {
     /** Tunnelled by main over its engine link; never a listener. */
     readonly door: ServerTransport;
-    call(method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer>;
+    /** `timeoutMs`: this call's own deadline, for an answer that waits on the person (approvals.gate); else the client's. */
+    call(method: RemoteMethod | OwnCallControl, args: unknown[], options?: { timeoutMs?: number }): Promise<OwnCallAnswer>;
     /**
      * THE HOST'S DECK, KEPT (Tynn #941, 2f-2): one connection held open on the door, which says `deck.watch` and hears
      * `local-deck` when the Deck changes, and nothing else of the estate. It is opened again whenever it drops (genie-host
@@ -38,6 +45,21 @@ export interface OwnProtocolClient {
      * `local-remote`: the connections and pair requests this window's desktop notifications read.
      */
     watchRemote(onView: (view: RemoteWatchView) => void): () => void;
+    /**
+     * THE SETTINGS, KEPT (Tynn #998, 2g-4b1): the same kind of connection, which says `settings.watch` and hears
+     * `local-settings`: genie-host's settings data, then each change, which this window's reads follow.
+     */
+    watchSettings(onView: (view: SettingsWatchView) => void): () => void;
+    /**
+     * GENIE-HOST'S REGISTRY, KEPT (Tynn #1007, 2g-4e): the same kind of connection, which says `registry.watch` and hears
+     * `local-registry` each time the registry's files are written: this window's registry reads them again.
+     */
+    watchRegistry(onView: (view: RegistryWatchView) => void): () => void;
+    /**
+     * GENIE-HOST'S FRONT DOOR, KEPT (Tynn #1046, 2g-4d-D1): the same kind of connection, which says `frontdoor.watch` and
+     * hears `local-frontdoor`: the port, Genie's CA, the routes and each site's workspace, which this window's browser reads.
+     */
+    watchFrontDoor(onView: (view: FrontDoorWatchView) => void): () => void;
 }
 
 /**
@@ -69,7 +91,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
             schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities,
         }));
     };
-    const call = (method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer> => {
+    const call = (method: RemoteMethod | OwnCallControl, args: unknown[], callOptions: { timeoutMs?: number } = {}): Promise<OwnCallAnswer> => {
         if (listeners.size === 0) return Promise.resolve({ ok: false, reason: NOT_READY });
         const pair = inMemoryPair();
         const client = pair.client;
@@ -82,7 +104,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
                 resolve(answer);
                 client.close();
             };
-            const timer = setTimeout(() => finish({ ok: false, reason: `${method} got no answer from Genie in time` }), timeoutMs);
+            const timer = setTimeout(() => finish({ ok: false, reason: `${method} got no answer from Genie in time` }), callOptions.timeoutMs ?? timeoutMs);
             client.onClose(() => finish({ ok: false, reason: NOT_READY }));
             client.onMessage((text) => {
                 const parsed = parseMessage(text);
@@ -106,7 +128,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
      * ONE CONNECTION HELD OPEN that says `control` once welcomed and hears `channel` (Tynn #941, #953): what it answered and
      * each event's payload reach `onValue`. Opened again whenever it drops, until the returned stop.
      */
-    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
+    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch' | 'settings.watch' | 'registry.watch' | 'frontdoor.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
         let stopped = false;
         let current: ReturnType<typeof inMemoryPair>['client'] | null = null;
         let attempt = 0;
@@ -155,7 +177,13 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
         persistent('summary.watch', LOCAL_EVENTS.summary, (value) => onSummary(readHostSummary(value)), (payload) => onSummary(readHostSummary(payload)));
     const watchRemote = (onView: (view: RemoteWatchView) => void): (() => void) =>
         persistent('remote.watch', LOCAL_EVENTS.remote, (value) => onView(readRemoteWatch(value)), (payload) => onView(readRemoteWatch(payload)));
-    return { door, call, watchDeck, watchSummary, watchRemote };
+    const watchSettings = (onView: (view: SettingsWatchView) => void): (() => void) =>
+        persistent('settings.watch', LOCAL_EVENTS.settings, (value) => onView(readSettingsWatch(value)), (payload) => onView(readSettingsWatch(payload)));
+    const watchRegistry = (onView: (view: RegistryWatchView) => void): (() => void) =>
+        persistent('registry.watch', LOCAL_EVENTS.registry, (value) => onView(readRegistryWatch(value)), (payload) => onView(readRegistryWatch(payload)));
+    const watchFrontDoor = (onView: (view: FrontDoorWatchView) => void): (() => void) =>
+        persistent('frontdoor.watch', LOCAL_EVENTS.frontdoor, (value) => onView(readFrontDoorWatch(value)), (payload) => onView(readFrontDoorWatch(payload)));
+    return { door, call, watchDeck, watchSummary, watchRemote, watchSettings, watchRegistry, watchFrontDoor };
 }
 
 /** How long the Deck's connection waits before it is opened again; the last repeats. */

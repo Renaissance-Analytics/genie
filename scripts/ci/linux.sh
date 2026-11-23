@@ -42,7 +42,7 @@ ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag
-    trust-step accounts-popover sound-picker question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
+    trust-step accounts-popover claude-accounts sound-picker question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
     flows zip64 host-plain-node mailpit
     package package-fuse
     toolchain
@@ -58,6 +58,10 @@ ROWS=(
 declare -A TRACKED_RED=(
     [toolchain]="pacman:#968 elevation:#973 docker:#970"
 )
+# ENVIRONMENT BLOCKERS (Tynn #968): what a tracked row's check may be BLOCKED by that is outside Genie (the Arch Linux
+# Archive the toolchain row holds git back from). A check blocked by one keeps the row TRACKED and is named in its note;
+# it is never required to stay red (STRICT applies to TRACKED_RED only). RED or FAIL for one is judged as any other.
+TRACKED_ENV=" archive "
 # ROWS THAT CHANGE THE MACHINE, run once even when they fail during a machine stall (Tynn #967): toolchain removes git
 # and docker and moves sudo, so its INFRA rerun met a machine it had already changed and measured nothing.
 ONE_SHOT_ROWS=" toolchain "
@@ -526,6 +530,8 @@ row_ui-lag() { need_app && timeout 420 node scripts/ui-lag-cdp.mjs --budget; }
 # These start the app themselves, on a home and ports of their own.
 row_trust-step() { need_build && need_display && on_display timeout 300 node scripts/trust-step-cdp.mjs; }
 row_accounts-popover() { need_build && need_display && on_display timeout 240 node scripts/accounts-popover-cdp.mjs; }
+# Claude accounts of their own (Tynn #1011): live state, one-click switch, add, sign in, in the real app (a stand-in CLI).
+row_claude-accounts() { need_build && need_display && on_display timeout 240 node scripts/claude-accounts-cdp.mjs; }
 row_sound-picker() { need_build && need_display && on_display timeout 240 node scripts/sound-picker-cdp.mjs; }
 # The whole question window maximized and restored, screenshots of both (Tynn #1019).
 row_question-maximize() { need_build && need_display && on_display timeout 240 node scripts/question-maximize-cdp.mjs; }
@@ -664,6 +670,7 @@ ceiling() {
         seed) echo 300 ;;
         no-pty|smoke|layout|local-door-break|local-door|gapp-open|trust-step) echo 360 ;;
         accounts-popover) echo 300 ;;
+        claude-accounts) echo 300 ;;
         sound-picker|question-maximize) echo 300 ;;
         files-watch) echo 240 ;;
         chat-drafts|artboard) echo 420 ;;
@@ -811,7 +818,7 @@ is_tracked() {
 tracked_verdict() {
     local name="$1" status="$2" secs="$3" entry check verdict reason rest r
     local -A story=() red=() held=()
-    local order=() unlisted=() failed_checks=() gone=() known=()
+    local order=() unlisted=() failed_checks=() gone=() known=() environment=()
     local lines=0
     for entry in ${TRACKED_RED[$name]}; do story["${entry%%:*}"]="${entry#*:}"; order+=("${entry%%:*}"); done
     while read -r _ check verdict reason rest; do
@@ -821,7 +828,9 @@ tracked_verdict() {
             BLOCKED) held["$reason"]=1 ;;
             FAIL) failed_checks+=("$check") ;;
         esac
-        if [ "$verdict" = RED ] || [ "$verdict" = BLOCKED ]; then
+        if [ "$verdict" = BLOCKED ] && [ -z "${story[$reason]+x}" ] && [[ "${TRACKED_ENV:-}" == *" $reason "* ]]; then
+            case " ${environment[*]} " in *" $reason "*) ;; *) environment+=("$reason") ;; esac
+        elif [ "$verdict" = RED ] || [ "$verdict" = BLOCKED ]; then
             if [ -z "${story[$reason]+x}" ]; then
                 case " ${unlisted[*]} " in *" $reason "*) ;; *) unlisted+=("$reason") ;; esac
             fi
@@ -850,6 +859,7 @@ tracked_verdict() {
     else
         tracked_note="$(printf '%s, ' "${known[@]}")"
         tracked_note="${tracked_note%, }"
+        [ "${#environment[@]}" -gt 0 ] && tracked_note="$tracked_note; blocked by the environment: ${environment[*]}"
         row_verdict=TRACKED
         row_line="ROW $name TRACKED $secs (known red: $tracked_note)"
     fi
@@ -860,7 +870,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step accounts-popover sound-picker question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step accounts-popover claude-accounts sound-picker question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"
