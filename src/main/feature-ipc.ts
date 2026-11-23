@@ -30,7 +30,7 @@ import type { MachinePathOutcome } from './machine-path.js';
 import type { DefaultLang } from '../core/toolchain-defaults.js';
 import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
-import type { WindowServices as ComposedServices } from './compose.js';
+import type { WindowServices as ComposedServices } from './host-services.js';
 import type { OpenInBrowser } from './hosting-actions.js';
 import type { ProcessBook } from './process-book.js';
 import type { FeatureAction, FeatureData, InboxSearchResult, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';

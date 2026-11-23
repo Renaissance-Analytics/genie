@@ -33,8 +33,8 @@ describe('P5a: the entry points are wired to the host’s hosting', () => {
         expect(host).toMatch(/const stopHostedOnce = \(\): Promise<void> => \{\s*hostedStop \?\?= shutDownHosted\(\{\s*supervisor: processSupervisor,\s*hosting: hostingStack,\s*endChildren: async \(\) => \{ await relay\?\.stop\(\); \},/);
     });
 
-    it('a linked window hands compose the host’s hosting, runs the host’s elevations, and passes what only Electron knows', () => {
-        expect(main).toMatch(/\bhosting: agentEngineLink\.client\.hosting\(\),/);
+    it('a linked window hands compose no hosting (it composes nothing, Tynn #955), runs the host’s elevations, and passes what only Electron knows', () => {
+        expect(main).not.toMatch(/\bhosting: agentEngineLink\.client\.hosting\(\)/);
         expect(main).toMatch(/elevate: \(steps: readonly PrivilegedStep\[\]\) => runElevatedBatch\(process\.platform, steps,/);
         // P6: and the install's own executable, since the host runs from a copy (host-runtime.ts) and still needs the real one.
         expect(main).toMatch(/env: \{ \.\.\.process\.env, GENIE_V1_USERDATA: app\.getPath\('userData'\), GENIE_APPDATA: app\.getPath\('appData'\), GENIE_RESOURCES: process\.resourcesPath, GENIE_INSTALL_EXEC: process\.execPath \},/);

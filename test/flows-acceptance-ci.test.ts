@@ -118,7 +118,8 @@ describe('the Flows dependency set', () => {
         const main = source('src/main/main.ts').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
         expect(main).toMatch(/function openFlowEditorWindow\(/);
         expect(main).toMatch(/openFlowEditor: route => openFlowEditorWindow\(route, 'user-gesture'\),/);
-        expect(main).toMatch(/flowsEngine: \{ flows: agentEngineLink\.client\.flows\(\), scheduler: agentEngineLink\.client\.flows\(\) \},/);
+        // The flows engine is genie-host's alone (Tynn #955): main hands compose none, and composes nothing.
+        expect(main).not.toMatch(/flowsEngine:|composeWindowServices/);
         // The file itself, never what it imports: the app's hub would bring the whole of Genie.
         expect(set).toContain('src/main/main.ts');
         expect(set).not.toContain('src/main/window-tools.ts');
