@@ -443,6 +443,8 @@ function Row-packaged-launcher {
         if ($copyFailed) { throw "the packaged app could not make genie-host's copy: $($copyFailed.Line)" }
         Write-Output "genie-host runs from: $hostPath"
         if (-not $hostPath -or -not $hostPath.StartsWith("$h\.genie\host\", [System.StringComparison]::OrdinalIgnoreCase)) { throw "genie-host is not running from its copy under $h\.genie\host\ (it runs from '$hostPath')" }
+        # As genie-host.exe in runtime-<electron>-host (Tynn #1036 P6-1): never under the install's name, which an installer ends.
+        if (-not ($hostPath -like "$h\.genie\host\runtime-*-host\genie-host.exe")) { throw "genie-host's copy is not runtime-*-host\genie-host.exe (it runs from '$hostPath')" }
         if ($unready) { throw "genie-host's supervisor is not ready: $($unready.Line)" }
         if (-not $ready) { throw "genie-host did not say its supervisor is ready within 60 s" }
         Write-Output "the packaged app: $($ready.Line)"
