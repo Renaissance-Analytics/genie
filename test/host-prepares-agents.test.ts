@@ -90,7 +90,7 @@ function world(keys: ReturnType<typeof hostAgentKeys>) {
     };
     const server = new SessionEngineServer({
         token: TOKEN, build: 'test', agentKeys: keys,
-        mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null, runNative: async () => null } as never,
+        mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null } as never,
     });
     const host = new SessionHost({ userData: dir, driverFor, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
     server.attach(host);

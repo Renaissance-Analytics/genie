@@ -153,7 +153,8 @@ describe('the dead uses left main', () => {
 
     it('main forwards no host tool and builds no flow caller: its tools are the registrations as built', () => {
         expect(main).not.toMatch(/withHostTools|runHostTool|FlowCallers|flowCallers|createFlowToolCaller|setFlowToolCaller|flow-tools\.js/);
-        expect(main).toMatch(/windowToolRun = windowToolRunner\(\(\) => signalled, vouchedCallers\);/);
+        expect(main).toMatch(/const registrations = withActionSignal\(allGenieTools\(genieToolDeps\(\{/);
+        expect(main).toMatch(/windowToolRun = windowToolRunner\(\(\) => registrations, vouchedCallers\);/);
         expect(main).toMatch(/const resolveCaller = \(terminalId: string\) => vouchedCallers\.get\(terminalId\) \?\? sessionCaller\(terminalId\);/);
     });
 
@@ -239,8 +240,8 @@ describe('the window’s engine inventory', () => {
 });
 
 describe('the files that held nothing else', () => {
-    it('the engine Files tunnel’s own test file is gone with the route', () => {
-        expect(existsSync(resolve(root, 'test/engine-files-tunnel.test.ts'))).toBe(false);
+    it('the engine Files tunnel’s test files are gone with the route', () => {
+        for (const file of ['test/engine-files-tunnel.test.ts', 'test/p4-files-watch-engine-recovery.test.ts']) expect(existsSync(resolve(root, file)), file).toBe(false);
         // CONTROL: the check finds a file that is there.
         expect(existsSync(resolve(root, 'test/engine-spawn-tunnel.test.ts'))).toBe(true);
     });

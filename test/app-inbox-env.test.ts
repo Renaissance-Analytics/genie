@@ -7,7 +7,6 @@ import { appInboxEnvFor, type AppEnvSource } from '../src/main/app-inbox-service
 import { composeServices } from './helpers/compose-alone.js';
 import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
-import { terminalEnvFor } from '../src/main/hosting-actions.js';
 import { ProcessBook } from '../src/main/process-book.js';
 import { ProcessScheduler } from '../src/main/process-scheduler.js';
 import type { ProcessSpec, ProcessStatus } from '../src/main/process-supervisor.js';
@@ -19,7 +18,7 @@ import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-h
  * WHERE AN APP'S CREDENTIAL GOES, AND WHERE IT NEVER GOES (genie#1345). Each site and each kept process gets its OWN
  * `GENIE_INBOX_TOKEN` (and the URL) in its OWN start-up env — handed to it by Genie, so nobody copies a token into a
  * file. It must never ride the workspace's SERVICE env: that env reaches every agent session (session-host.ts
- * `serviceEnvDriverOptions`), every terminal (`terminalEnvFor`) and every site repo's `.env` (`DotEnvSync`), so a token
+ * `serviceEnvDriverOptions`), every terminal (genie-host's `shellEnv`) and every site repo's `.env` (`DotEnvSync`), so a token
  * there would be every agent's to post as an app, and written to disk. Every absence below sits beside the presence it
  * would contradict, measured the same way.
  */
@@ -172,7 +171,6 @@ describe('the workspace’s SERVICE env never carries it (composed for real)', (
         expect(devServer?.env?.GENIE_INBOX_TOKEN).toBe('gik_site_site_flabs'); // presence, measured on the spawn
         // The service env: what agent sessions (session-host serviceEnvFor), processes' base and DotEnvSync read.
         expect(Object.keys(services.engines.envFor('fancy'))).not.toContain('GENIE_INBOX_TOKEN');
-        expect(Object.keys(terminalEnvFor(services, 'fancy', { GENIE_MCP_URL: 'x', GENIE_MCP_TOKEN: 'y' }))).not.toContain('GENIE_INBOX_TOKEN');
     });
 
     it('switched off for the workspace: a new site gets no token', async () => {

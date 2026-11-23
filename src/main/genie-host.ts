@@ -170,7 +170,7 @@ import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
 import { APP_WINDOW, hostLocalPorts } from './host-local-ports.js';
 import { ProtocolTunnels } from './protocol-tunnels.js';
-import { hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
+import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
 import { hostOwnerOps } from './host-owner-ops.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { withComms } from './dashboard-comms.js';
@@ -1435,8 +1435,6 @@ async function main(): Promise<void> {
         remoteAccess: remoteAccessService,
         stores,
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
-        // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
-        configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
         workstation: workstationService,
         takeOver: takeOverService,
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
@@ -1452,25 +1450,19 @@ async function main(): Promise<void> {
             setView: (view) => mcp!.setView(view as never),
             sessionServers: (record) => mcp!.sessionServers(record),
             status: () => mcp!.status(),
-            runNative: (call) => mcp!.runNative(call),
         },
         issueWatch,
         tynnBoard,
         tynnIssues,
         tynnFeatures,
         tynnPages: { read: readHostTynnPage },
-        files: {
-            subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
-            unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
-            dropOwner: (owner) => files?.dropOwner(owner),
-        },
     });
     engineRef = engine;
     // The watch runs on a thread of its own (Tynn #524): a build's thousands of changes never hold this host's loop.
     // THE FILE PANEL, AS GENIE-HOST'S OWN ANSWERS WATCH IT (Tynn #898 step 2d-3b): the same hub, under its own owner; a
     // batch feeds its files host's record of disk changes, as a window's main fed its own.
     const hostFilesWatches = hostFilesWatch({ hub: () => files, workspace: (id) => hostRegistry.workspace(id) ?? null, recordDiskChanges: (id, changes) => phoneFiles.recordDiskChanges(id, changes), log: say });
-    files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: ownerRoute(hostFilesWatches.deliver, (owner, event) => engine.filesEvent(owner, event)), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
+    files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostFilesWatches.deliver(event); }, workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
     // GENIE INSTALLS ITS PLAYWRIGHT BROWSERS ITSELF (Tynn #846): the stable set at launch when it has none, a version a
