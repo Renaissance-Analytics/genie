@@ -28,11 +28,24 @@ function onThisWorkstation(path: string | null, hash: string, workstation: strin
 
 describe('sound-picker row (Tynn #1009, #1023)', () => {
     it('navigates and clicks without waiting for the snapshot, then checks neither was undone (3b)', () => {
+        // The row's steps start where it connects. Functions declared above (the volume proof, Tynn #1022) click
+        // Notifications too, and run after 3b: the order asked about is the order of the steps, not of the file.
+        const CLICK = `click(cdp, '[data-settings-nav="notifications"]')`;
+        const steps = src.indexOf('let cdp = null;');
         const navigate = src.indexOf("window.location.hash = '#genie://settings'");
-        const firstClick = src.indexOf(`click(cdp, '[data-settings-nav="notifications"]')`);
+        const firstClick = src.indexOf(CLICK, navigate);
         const pinned = src.indexOf("waitFor(cdp, onThisWorkstation('settings/notifications')");
-        expect(navigate).toBeGreaterThan(-1);
+        expect(steps).toBeGreaterThan(-1);
+        expect(src.indexOf('let cdp = null;', steps + 1)).toBe(-1);
+        expect(navigate).toBeGreaterThan(steps);
+        // No step clicks before the navigation, and the first click after it is this one, labelled as step 2.
+        expect(src.slice(steps, navigate)).not.toContain('click(cdp,');
+        expect(src.indexOf('click(cdp,', navigate)).toBe(firstClick);
+        expect(src.slice(firstClick, firstClick + 120)).toContain('2. Notifications takes a mouse click');
         expect(firstClick).toBeGreaterThan(navigate);
+        // Nothing declared above the steps runs before them: each is a function, called only after 3b.
+        expect(src.slice(0, steps).split('\n').filter((l) => l.includes(CLICK)).every((l) => /^\s{4,}/.test(l))).toBe(true);
+        expect(src.indexOf('await volumeProof(cdp)')).toBeGreaterThan(pinned);
         expect(src.slice(0, firstClick)).not.toContain('waitFor(cdp, onThisWorkstation(');
         expect(pinned).toBeGreaterThan(firstClick);
         expect(src.slice(pinned, pinned + 300)).toContain('3b. the address is this workstation');
