@@ -250,8 +250,11 @@ describe.each([
         expect(after.flows).toContain('the flow that came back');
         // The threads, byte for byte, and each agent still on its own.
         for (const [name, text] of Object.entries(THREADS)) expect(readFileSync(join(home, 'runtime', 'sessions', name), 'utf8')).toBe(text);
-        const records = JSON.parse(readFileSync(join(home, 'runtime', 'agents.json'), 'utf8')) as Array<{ id: string; threadId: string | null }>;
-        expect(records.map((r) => `${r.id} ${r.threadId}`).sort()).toEqual(agents.map((a) => `${a.id} ${a.threadId}`).sort());
+        // The registry on disk is the one the old machine left, record for record (the host's own agent, which it keeps
+        // there too, with the same id: the first GREEN run showed it), and the two agents are on their threads.
+        const onThread = (root: string): string[] => (JSON.parse(readFileSync(join(root, 'runtime', 'agents.json'), 'utf8')) as Array<{ id: string; threadId: string | null }>).map((r) => `${r.id} ${r.threadId}`).sort();
+        expect(onThread(home)).toEqual(onThread(origin));
+        expect(onThread(home)).toEqual(expect.arrayContaining(agents.map((a) => `${a.id} ${a.threadId}`)));
     });
 
     it('EVERY MACHINE FILE A HOST MAKES AT START IS MADE AGAIN, for this root', () => {
