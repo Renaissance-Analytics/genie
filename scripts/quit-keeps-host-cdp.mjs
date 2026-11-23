@@ -77,7 +77,9 @@ if (!existsSync('package.json') || !existsSync('scripts/stub-codex.mjs')) refuse
 if (!WIN) chmodSync('scripts/stub-codex.mjs', 0o755);
 /**
  * A HOME OF ITS OWN (QUIT_CDP_OWN_HOME=1, the CI row): a new directory is HOME, USERPROFILE, APPDATA, LOCALAPPDATA and
- * XDG_CONFIG_HOME for this script and everything it starts, and smoke-seed.mjs writes its workspace there. Node's own
+ * XDG_CONFIG_HOME for this script and everything it starts, and smoke-seed.mjs writes its workspace there. The workspace is
+ * a fresh directory in that home, never the checkout (the seed takes its cwd): a Genie writes its workspace's project.json,
+ * and the seed then refuses the checkout's on the next run in the same tree (the first Azure probe's restored run). Node's own
  * directory goes first on PATH, so the stub provider's `#!/usr/bin/env node` finds node without a shim that reads the real
  * home (linux.sh's need_app, for the same reason). Bounded; a seed that fails is "cannot run here", said with its words.
  */
@@ -89,8 +91,11 @@ function ownHome() {
     delete process.env.GENIE_HOME;
     process.env.PATH = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`;
     step('0.3h', `a home of its own, seeded (smoke-seed.mjs, ≤ 60 s): ${root}`);
-    const seeded = spawnSync(process.execPath, ['scripts/smoke-seed.mjs'], { encoding: 'utf8', timeout: 60_000, env: process.env, windowsHide: true });
-    if (seeded.status !== 0) refuse(`the seed could not be written in ${root}: ${String(seeded.stderr || seeded.stdout || seeded.error?.message || `exit ${seeded.status}`).trim().split(/\r?\n/).pop()}`);
+    const workspace = join(root, 'workspace');
+    mkdirSync(workspace, { recursive: true });
+    const seeded = spawnSync(process.execPath, [resolve('scripts', 'smoke-seed.mjs')], { cwd: workspace, encoding: 'utf8', timeout: 60_000, env: process.env, windowsHide: true });
+    if (seeded.status !== 0) refuse(`the seed could not be written in ${root} (exit ${seeded.status}${seeded.error ? `, ${seeded.error.message}` : ''}): ${String(`${seeded.stderr ?? ''}\n${seeded.stdout ?? ''}`).trim().split(/\r?\n/).filter((l) => /\S/.test(l) && !/^\s+at /.test(l)).slice(0, 6).join(' | ')}`);
+    console.log(`  ${String(seeded.stdout ?? '').trim()}`);
     return root;
 }
 if (process.env.QUIT_CDP_OWN_HOME === '1') ownHome();
@@ -108,6 +113,12 @@ const HOST_RECORD = join(GENIE_HOME, 'runtime', 'host.json');
 const LIFECYCLE = join(GENIE_HOME, 'runtime', 'lifecycle.log');
 const HOST_LOG = join(GENIE_HOME, 'logs', 'genie-host.log');
 const OUT = process.env.QUIT_CDP_OUT ? resolve(process.env.QUIT_CDP_OUT) : join(process.cwd(), 'smoke-out');
+/**
+ * THE AGENTS' SHUTDOWN DRAIN (src/core/agent-shutdown-drain.ts AGENT_DRAIN_WAIT_MS; test/quit-keeps-host-row-1036.test.ts
+ * holds the two equal): "Shut down everything" lets a mid-turn agent reach a safe point for this long before it stops it.
+ * The ticker agents are mid-turn for ever, so the window process exits after it: step 26 waits the drain plus 60 s.
+ */
+const AGENT_DRAIN_WAIT_MS = 120_000;
 /** Bounds for the process calls this script makes synchronously: none may block a run. */
 const SYNC_MS = 15_000;
 
@@ -347,11 +358,12 @@ const exitWithin = (app, ms) => Promise.race([app.exited, sleep(ms).then(() => n
  * Why a window did not exit: Node's own words when a debugger session holds it (then it is this harness, not Genie), or
  * the product's — named either way, from the window's log.
  */
-function whyStillRunning(app) {
+function whyStillRunning(app, ms) {
     const tail = readOr(app.log).split('\n').slice(-20).join('\n');
+    const after = `still running after ${Math.round(ms / 1000)} s`;
     return /Waiting for the debugger to disconnect/.test(tail)
-        ? 'still running after 60 s, HELD BY A DEBUGGER SESSION ("Waiting for the debugger to disconnect...") — the harness, not the product'
-        : 'still running after 60 s (no debugger hold in its log: the product did not exit)';
+        ? `${after}, HELD BY A DEBUGGER SESSION ("Waiting for the debugger to disconnect...") — the harness, not the product`
+        : `${after} (no debugger hold in its log: the product did not exit)`;
 }
 
 // ---------------------------------------------------------------- the tray-only Genie, read over the main process's inspector
@@ -713,14 +725,14 @@ try {
     }
     await sleep(3_000);
     check(!a.app.gone && alive(a.windowPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '26f. Cancel stopped NOTHING: the window process, the host and the providers all alive');
-    step('26', 'Shut down everything from the tray, confirmed (button 1); then wait for the window process to exit (≤ 60 s)');
+    step('26', `Shut down everything from the tray, confirmed (button 1); then wait for the window process to exit (≤ ${Math.round((AGENT_DRAIN_WAIT_MS + 60_000) / 1000)} s: the agents' drain, then 60 s)`);
     check(await answerNextDialog(c.inspector, 1) === 'ok', '26g. the next dialog will be answered Shut down everything');
     check(await trayClick(c.inspector, 'Shut down everything', 1_000) === 'ok', '26a. the tray\'s Shut down everything was clicked');
     // The inspector session lets go before the quit (batch M: an attached session holds a quitting Node process).
     await c.inspector.closed(5_000);
     a.inspector = null; b.inspector = null;
-    const exit = await exitWithin(a.app, 60_000);
-    check(exit !== null, '26. the window process EXITED', exit ? `code ${exit.code}` : whyStillRunning(a.app));
+    const exit = await exitWithin(a.app, AGENT_DRAIN_WAIT_MS + 60_000);
+    check(exit !== null, '26. the window process EXITED', exit ? `code ${exit.code}` : whyStillRunning(a.app, AGENT_DRAIN_WAIT_MS + 60_000));
     step('27', `waiting for the host pid ${hostPid} to end (≤ 30 s)`);
     const hostGone = await until(() => !alive(hostPid), 30_000);
     check(hostGone === true, '27. "Shut down everything" ENDED the host', `pid ${hostPid}`);
