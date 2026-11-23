@@ -53,9 +53,11 @@ describe('main and compose', () => {
         // The front door as it is now, as genie-host's frontdoor.watch says it (Tynn #1046), and every browser session told
         // when it moves (P5a.2).
         expect(count(main, /frontDoorNow = frontDoorWatch\.now\(\);/g)).toBe(1);
-        // With P2b: the panes, every session and workspace store in this process (rerouteGenieBrowserSession), and the Genie
-        // browser's own process (its facts) all follow.
-        expect(main).toMatch(/frontDoorWatch\.onChange\(\(view, moved\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*rerouteGenieBrowserSession\(\{ frontDoorPort: view\.port, caPem: view\.caPem \}\);[\s\S]{0,120}?publishBrowserFacts\?\.\(\);/);
+        // With P2b: the panes and every session and workspace store in this process (rerouteGenieBrowserSession) follow. The
+        // Genie browser's own process hears the door from genie-host itself (Tynn #1046 D2), so nothing here republishes.
+        expect(main).toMatch(/frontDoorWatch\.onChange\(\(view, moved\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*rerouteGenieBrowserSession\(\{ frontDoorPort: view\.port, caPem: view\.caPem \}\);/);
+        const onChange = main.slice(main.indexOf('frontDoorWatch.onChange((view, moved) => {'), main.indexOf('frontDoorWatch.onChange((view, moved) => {') + 900);
+        expect(onChange.slice(0, onChange.indexOf('\n    });'))).not.toMatch(/publishBrowserFacts/);
         // A store or session made after the door moved uses the door it moved to, not its creator's port.
         const gbe = readFileSync(new URL('../src/main/genie-browser-electron.ts', import.meta.url), 'utf8');
         expect(gbe).toMatch(/export function rerouteGenieBrowserSession\(options: \{[^}]*\}\): void \{\s*currentPort = options\.frontDoorPort;/);
