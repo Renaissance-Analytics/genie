@@ -108,11 +108,11 @@ try {
     const still = await state(cdp);
     check(still.phase === 'available', '5. CONTROL: nothing downloads without being asked', still.phase);
 
-    await cdp.evaluate('location.hash = "#genie://dashboard"; true');
+    // THE UPDATE IS IN THE HEADER, on every surface (core/update-chip.ts; deck.ts: no longer a Dashboard signal).
     await new Promise((r) => setTimeout(r, 400));
-    const shown = await cdp.evaluate('(() => { const b = document.querySelector("[data-signal=update]"); return b ? { text: b.textContent, action: b.dataset.action } : null; })()');
-    check(shown !== null && shown.action === 'update-download', '6. the Dashboard shows the update as a signal whose door is download', JSON.stringify(shown));
-    check(shown !== null && shown.text.includes(EXPECT), '7. the signal names the version', shown?.text ?? '');
+    const shown = await cdp.evaluate('(() => { const b = document.querySelector("[data-update-chip]"); return b ? { text: b.textContent, action: b.dataset.updateAction } : null; })()');
+    check(shown !== null && shown.action === 'update-download', '6. the header shows the update, and its step is download', JSON.stringify(shown));
+    check(shown !== null && shown.text.includes(EXPECT), '7. it names the version', shown?.text ?? '');
     await cdp.screenshot(`${process.cwd()}/update-available.png`);
     if (auto) {
         console.log(failures.length === 0 ? '\nAUTO-CHECK PROVEN — the installed app found the update on the feed without being asked, offered it, and downloaded nothing.' : `\nAUTO-CHECK FAILED — ${failures.length}: ${failures.join(' | ')}`);
@@ -121,7 +121,10 @@ try {
 
     // Click the door rather than call the bridge: this is the path a person takes.
     await closeWhatsNew((expression) => cdp.evaluate(expression));
-    await cdp.evaluate('document.querySelector("[data-signal=update]").click(); true');
+    // The header's update button opens what is in the update (UpdateWindow), whose step button downloads it: a person's path.
+    await cdp.evaluate('document.querySelector("[data-update-chip]").click(); true');
+    await new Promise((r) => setTimeout(r, 400));
+    await cdp.evaluate('document.querySelector("[data-update-window] ~ * [data-action=update-download], button[data-action=update-download]").click(); true');
     const downloading = await until(cdp, (s) => s.phase === 'downloading' || s.phase === 'downloaded', 10_000, 'download to start');
     check(downloading.phase === 'downloading' || downloading.phase === 'downloaded', '8. clicking the signal starts the download', downloading.phase);
 
@@ -130,8 +133,8 @@ try {
     check(downloaded.percent === 100, '10. progress reached 100', String(downloaded.percent));
 
     await new Promise((r) => setTimeout(r, 400));
-    const ready = await cdp.evaluate('(() => { const b = document.querySelector("[data-signal=update]"); return b ? { text: b.textContent, action: b.dataset.action } : null; })()');
-    check(ready !== null && ready.action === 'update-install', '11. the signal now offers install', JSON.stringify(ready));
+    const ready = await cdp.evaluate('(() => { const b = document.querySelector("[data-update-chip]"); return b ? { text: b.textContent, action: b.dataset.updateAction } : null; })()');
+    check(ready !== null && ready.action === 'update-install', '11. the header now offers install', JSON.stringify(ready));
     await cdp.screenshot(`${process.cwd()}/update-downloaded.png`);
 
     // §7.4 — "an upgrade ends every agent session and does not revive them" — is only a claim
