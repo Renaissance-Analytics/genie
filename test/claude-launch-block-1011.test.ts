@@ -40,12 +40,14 @@ describe('SessionHost: a launch a sign-in refused, and who runs in an account\'s
     function world(start: { active?: AccountRecord; signingIn?: string | null; graceMs?: number } = {}) {
         let active: AccountRecord = start.active ?? B;
         let signingIn: string | null = start.signingIn ?? null;
+        // A process no stop can end (as a provider that ignores its end does): it stays in the table until `exit()`.
+        let stuck = false;
         const gone = new Set<string>();
         const drivers: Driver[] = [];
         let processes: ProcessInfo[] = [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }];
         const tree: ProcessTree = {
             snapshot: () => [...processes],
-            killTree: (targets) => { const ids = new Set(targets.map((p) => p.pid)); processes = processes.filter((p) => !ids.has(p.pid)); return { killed: targets.length, refused: false }; },
+            killTree: (targets) => { if (stuck) return { killed: 0, refused: false }; const ids = new Set(targets.map((p) => p.pid)); processes = processes.filter((p) => !ids.has(p.pid)); return { killed: targets.length, refused: false }; },
         };
         const records = new Map<string, AgentRecord>();
         const driverFor: DriverFor = (agent, _cwd, _resume, extras) => ({ events }) => {
@@ -57,7 +59,7 @@ describe('SessionHost: a launch a sign-in refused, and who runs in an account\'s
                 start: () => { running = true; processes.push({ pid, ppid: process.pid, started: 3, name: 'claude-fixture' }); },
                 prompt: () => {},
                 cancel: () => Promise.resolve(),
-                kill: () => { d.killed = true; running = false; processes = processes.filter((p) => p.pid !== pid); },
+                kill: () => { d.killed = true; running = false; if (!stuck) processes = processes.filter((p) => p.pid !== pid); },
                 get running() { return running; },
                 get cliSessionId() { return THREAD; },
             };
@@ -76,7 +78,7 @@ describe('SessionHost: a launch a sign-in refused, and who runs in an account\'s
             records.set(record.id, record);
             return record;
         };
-        return { host, drivers, agent, setActive: (a: AccountRecord) => { active = a; }, signIn: (configDir: string | null) => { signingIn = configDir; }, remove: (id: string) => { gone.add(id); } };
+        return { host, drivers, agent, setActive: (a: AccountRecord) => { active = a; }, signIn: (configDir: string | null) => { signingIn = configDir; }, stick: (on: boolean) => { stuck = on; }, exitAll: () => { processes = processes.filter((p) => p.name !== 'claude-fixture'); }, remove: (id: string) => { gone.add(id); } };
     }
 
     it('a start refused by a sign-in in its folder is started when the sign-in is over, and its refusal is gone', () => {
@@ -170,18 +172,26 @@ describe('SessionHost: a launch a sign-in refused, and who runs in an account\'s
         expect(w.host.runningIn(B.configDir!)).toBe(0);
     });
 
-    it('runningIn counts a run that is still stopping: its process is in the folder until it has ended', async () => {
-        const w = world({ graceMs: 300 });
+    it('runningIn counts a run a stop could not end: its process is still in the folder, until it has gone', async () => {
+        const w = world({ graceMs: 20 });
         const atlas = w.agent('atlas');
         w.host.start(atlas, dir);
+        w.stick(true);
         w.host.stop(atlas.id);
-        // No longer a live session, and not yet over.
+        const verdict = await w.host.ended(atlas.id);
+        // The gauge: the host itself says the run did not end, and it is no longer a live session.
+        expect(verdict?.verified).toBe(false);
         expect(w.host.startedIds()).toEqual([]);
-        expect(w.drivers[0]!.killed).toBe(false);
         expect(w.host.runningIn(B.configDir!)).toBe(1);
+        // It goes after all: the next start looks again, and the folder holds the new run only.
+        w.stick(false);
+        w.exitAll();
+        expect(w.host.start(atlas, dir)).toEqual({ ok: true });
+        expect(w.host.runningIn(B.configDir!)).toBe(1);
+        w.host.stop(atlas.id, { graceful: false });
         await w.host.ended(atlas.id);
         expect(w.host.runningIn(B.configDir!)).toBe(0);
-    });
+    }, 20_000);
 
     it('signed in again on the active account: ONLY the agent it had signed out is started again, not one stopped by hand nor one at work', () => {
         const w = world();
