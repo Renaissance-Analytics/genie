@@ -115,22 +115,22 @@ describe('the login window', () => {
 
     it('runs the provider’s login in a fresh scratch folder, in its own window that carries the notice', () => {
         const f = fakes(0);
-        expect(f.host.start('claude')).toEqual({ ok: true, terminalId: 't1' });
+        expect(f.host.start('codex')).toEqual({ ok: true, terminalId: 't1' });
         expect(f.opened).toHaveLength(1);
-        expect(f.opened[0]!.command).toBe('claude auth login');
+        expect(f.opened[0]!.command).toBe('codex login');
         expect(f.opened[0]!.shell).toBe(true);
-        expect(basename(f.opened[0]!.cwd)).toMatch(/^genie-login-claude-/);
+        expect(basename(f.opened[0]!.cwd)).toMatch(/^genie-login-codex-/);
         expect(dirname(f.opened[0]!.cwd)).toBe(f.scratch);
         expect(existsSync(f.opened[0]!.cwd)).toBe(true);
-        expect(f.windows).toEqual(['genie://takeover/t1?login=claude']);
+        expect(f.windows).toEqual(['genie://takeover/t1?login=codex']);
     });
 
     it('a second click brings the same window back: one login per provider (COUNTED: one terminal)', () => {
         const f = fakes(0);
-        f.host.start('claude');
-        f.host.start('claude');
+        f.host.start('codex');
+        f.host.start('codex');
         expect(f.opened).toHaveLength(1);
-        expect(f.windows).toEqual(['genie://takeover/t1?login=claude', 'genie://takeover/t1?login=claude']);
+        expect(f.windows).toEqual(['genie://takeover/t1?login=codex', 'genie://takeover/t1?login=codex']);
     });
 
     it('when the login ends: asks the status command; signed in, the provider’s agents come back; the folder is gone', async () => {
@@ -149,7 +149,7 @@ describe('the login window', () => {
 
     it('CONTROL: still signed out (status exit 1) — nobody is brought back, and the folder is still removed', async () => {
         const f = fakes(1);
-        f.host.start('claude');
+        f.host.start('codex');
         const scratch = f.opened[0]!.cwd;
         f.exit('t1', 0);
         await new Promise((r) => setTimeout(r, 10));
@@ -159,7 +159,7 @@ describe('the login window', () => {
 
     it('CONTROL: another terminal ending is not the login', async () => {
         const f = fakes(0);
-        f.host.start('claude');
+        f.host.start('codex');
         f.exit('t99', 0);
         await new Promise((r) => setTimeout(r, 10));
         expect(f.statusRan).toEqual([]);

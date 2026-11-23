@@ -18,7 +18,8 @@
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { endOwnRun } from './end-own-tree.mjs';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,8 @@ process.env.GENIE_PAGE_PROBE ??= '1';
 const PORT = Number(process.env.CLAUDE_ACCOUNTS_CDP_PORT ?? 9353);
 const OUT = process.env.CLAUDE_ACCOUNTS_CDP_OUT ?? 'ci-out';
 const failures = [];
+/** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
+const RUN_BEGAN = Date.now();
 function check(ok, label, detail = '') {
     console.log(`${ok ? '  PASS' : '  FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
     if (!ok) failures.push(label);
@@ -81,13 +84,42 @@ if (args[0] === 'auth' && args[1] === 'status') {
     if (!s) { console.log(JSON.stringify({ loggedIn: false, authMethod: 'none', configDirectory: dir ?? undefined })); process.exit(1); }
     console.log(JSON.stringify(s)); process.exit(0);
 }
-if (args[0] === 'auth' && args[1] === 'login') { console.log('STAND-IN LOGIN: claude ' + args.join(' ') + ' in ' + dir); setInterval(() => {}, 1000); return; }
+if (args[0] === 'auth' && args[1] === 'login') {
+    console.log('Opening browser to sign in…');
+    console.log("If the browser didn't open, visit: https://claude.ai/oauth/authorize?code=true&client_id=stand-in&state=proof");
+    process.stdout.write('Paste code here if prompted > ');
+    let got = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+        got += chunk;
+        if (!got.includes('\\n')) return;
+        // The code itself is not logged: only that one came.
+        fs.appendFileSync(${JSON.stringify(join(root, 'standin-calls.log'))}, JSON.stringify({ args: ['code-received'], dir }) + '\\n');
+        const t = JSON.parse(fs.readFileSync(${JSON.stringify(tableFile)}, 'utf8'));
+        t[dir] = { loggedIn: true, authMethod: 'api_key', apiKeySource: '/login managed key', email: 'team@example.invalid', configDirectory: dir };
+        fs.writeFileSync(${JSON.stringify(tableFile)}, JSON.stringify(t));
+        console.log('Login successful.');
+        process.exit(0);
+    });
+    return;
+}
+if (args[0] === 'auth' && args[1] === 'logout') {
+    const t = JSON.parse(fs.readFileSync(${JSON.stringify(tableFile)}, 'utf8'));
+    delete t[dir ?? ''];
+    fs.writeFileSync(${JSON.stringify(tableFile)}, JSON.stringify(t));
+    console.log('Successfully logged out from your Anthropic account.');
+    process.exit(0);
+}
 console.log('stand-in claude: ' + args.join(' '));
 `);
 chmodSync(fakeCjs, 0o755);
+const opened = join(root, 'browser-opened.log');
+const browserRecorder = join(root, 'browser-recorder.sh');
+writeFileSync(browserRecorder, `#!/bin/sh\nprintf '%s\\n' "$1" >> "${opened}"\n`);
+chmodSync(browserRecorder, 0o755);
 // The .cjs on every platform: Genie runs a configured script as Node itself (its Electron, ELECTRON_RUN_AS_NODE), so
-// prism-acp's describe runs it with no shell. A .cmd wrapper (the 4ac1f9c2 gate) is not something prism-acp spawns: on
-// Windows its describe never ran, and every live state read nothing.
+// prism-acp's describe and login run it with no shell. A .cmd wrapper (the 4ac1f9c2 gate) is not something prism-acp
+// spawns: on Windows its describe never ran, and every live state read nothing.
 const standIn = fakeCjs;
 
 const env = {
@@ -96,6 +128,8 @@ const env = {
     APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'),
     XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'),
     GENIE2_CLAUDE_BINARY: standIn,
+    // The sign-in page Genie opens (shell.openExternal) lands here, not in a real browser.
+    BROWSER: browserRecorder,
 };
 for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'GENIE_HOME']) delete env[key];
 const electron = createRequire(import.meta.url)('electron');
@@ -118,7 +152,12 @@ async function stopHost(pid) {
 async function stop(app) {
     const host = hostPid();
     const gone = new Promise((r) => { if (app.exitCode !== null) r(); else app.once('exit', r); });
-    if (process.platform === 'win32') { try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ } }
+    if (process.platform === 'win32') {
+        // Tynn #1031: the app's tree, this run's genie-host and what they started (its updater helper is under neither the
+        // app nor a tree kill of the host's pid), ended, waited for and said by one helper (end-own-tree.mjs).
+        const ended = await endOwnRun({ app, hostPid: host, since: RUN_BEGAN });
+        check(ended.ok, 'nothing of this run is left running by its own cleanup', ended.ok ? '' : `LEFT RUNNING by this row's own cleanup: ${ended.words}`);
+    }
     else { try { process.kill(-app.pid, 'SIGTERM'); } catch { /* gone */ } }
     await Promise.race([gone, sleep(20_000)]);
     if (app.exitCode === null && process.platform !== 'win32') { try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ } }
@@ -252,14 +291,32 @@ try {
     // SIGN IN, NOT YET (the owner: "I should not see any terminals nor do we store login keys"): shown, disabled, with why;
     // a click opens no window and runs no login. prism-acp's hidden login (Anthropic's page in the browser) comes next.
     await openPopover(cdp);
-    const signIn = await cdp.evaluate(`(() => { const b = document.querySelector(${q(`${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`)}); return b ? { disabled: b.disabled, title: b.getAttribute('title'), note: b.closest('[data-account-sign-in-later]')?.textContent ?? '' } : null; })()`);
-    check(signIn?.disabled === true && /no terminal/.test(signIn.title ?? '') && /next prism-acp/.test(signIn.note), '18. Sign in on Team API is shown DISABLED, saying it comes with the next prism-acp, never a terminal', JSON.stringify(signIn));
+    // SIGN IN IN THE BROWSER (prism-acp 0.47.0 login(), the stand-in CLI above): no terminal, no login window. The page is handed
+    // to the browser; the stand-in, like Claude Code with no browser return, asks for the code, which the person pastes.
     const before = (await targets()).filter((t) => t.type === 'page').length;
-    await click(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`);
-    await sleep(2_000);
-    check((await targets()).filter((t) => t.type === 'page').length === before && !(await targets()).some((t) => /login=claude/.test(t.url)), '19. a click on it opens no window (no terminal)');
-    const logins = (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((c) => c.args[0] === 'auth' && c.args[1] === 'login');
-    check(logins.length === 0, '20. and no `claude auth login` ran anywhere', JSON.stringify(logins));
+    const calls = () => (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    check(await click(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`), '18. Sign in on Team API takes a click');
+    check(await waitFor(cdp, `/Finish signing in to Team API in your browser|asks for the code/.test(document.querySelector(${q(POP)})?.innerText ?? '')`, 15_000), '19. the popover says to finish signing in in the browser, with Cancel');
+    let login = null;
+    for (const until = Date.now() + 15_000; Date.now() < until && !login; await sleep(300)) login = calls().find((c) => c.args[0] === 'auth' && c.args[1] === 'login') ?? null;
+    check(login?.args.join(' ') === 'auth login --console --email team@example.invalid' || login?.args.join(' ') === 'auth login --console', '20. prism-acp ran Claude Code\'s own login, hidden, in Team API\'s own folder, the Console way', JSON.stringify(login));
+    check(login?.dir === dirOf(TEAM), '20b. in Team API\'s own folder', String(login?.dir));
+    const field = `${POP} [data-sign-in-pending="${TEAM}"] [data-sign-in-code] input`;
+    check(await waitFor(cdp, `Boolean(document.querySelector(${q(field)}))`, 20_000), '21. the CLI asked for the code: a code field shows (and only now)');
+    await cdp.shot('claude-accounts-1011-sign-in-code.png');
+    await click(cdp, field);
+    await cdp.send('Input.insertText', { text: 'stand-in-code-123' });
+    check(await click(cdp, `${POP} [data-action="sign-in-send-code"]`), '22. Send takes a click');
+    check(await waitFor(cdp, `(() => { const live = document.querySelector(${q(`${POP} [data-account="${TEAM}"] [data-account-live]`)}); return live?.getAttribute('data-account-live') === 'ready'; })()`, 30_000)
+        || (await openPopover(cdp) && await waitFor(cdp, `document.querySelector(${q(`${POP} [data-account="${TEAM}"] [data-account-live]`)})?.getAttribute('data-account-live') === 'ready'`, 15_000)),
+        '23. the code reached the CLI and Team API now reads Signed in, from describe in its own folder');
+    check(calls().some((c) => c.args[0] === 'code-received' && c.dir === dirOf(TEAM)), '23b. the stand-in CLI got the code (its value is in no log)');
+    check(!readFileSync(join(home, '.genie', 'runtime', 'accounts.json'), 'utf8').includes('stand-in-code-123'), '23c. the code is not in the account book');
+    const browserSaw = existsSync(opened) ? readFileSync(opened, 'utf8').trim() : '';
+    console.log(`  the browser was handed: ${browserSaw || '(nothing recorded: this desktop session does not route xdg-open to $BROWSER)'}`);
+    check(!browserSaw || /^https:\/\/claude\.ai\/oauth\/authorize/.test(browserSaw), '24. only Anthropic\'s sign-in page was handed to the browser', browserSaw);
+    check((await targets()).filter((t) => t.type === 'page').length === before && !(await targets()).some((t) => /login=claude/.test(t.url)), '25. no window opened at any point (no terminal)');
+    await cdp.shot('claude-accounts-1011-signed-in.png');
     const statusCalls = (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((c) => c.args[1] === 'status');
     check([dirOf(WORK), dirOf(LAB)].every((d) => statusCalls.some((c) => c.dir === d)), '21. the host asked each account\'s OWN directory (describe), never only the default', `${statusCalls.length} status calls`);
 } catch (error) {

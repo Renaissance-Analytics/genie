@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DESIGN_LOGIN } from '../core/design-login.js';
-import { OWN_DIRECTORY_SIGN_IN_LATER } from '../core/claude-accounts.js';
+import { CLAUDE_SIGNS_IN_IN_THE_BROWSER } from '../core/claude-accounts.js';
 import { type ProviderAccountHome } from '../core/accounts.js';
 import { providerLogin } from '../core/provider-login.js';
 import type { TerminalHost } from './terminal-host.js';
@@ -133,9 +133,9 @@ export class LoginHost {
             if (!account || account.provider !== cli) return { ok: false, reason: 'The provider account is unavailable; reconnect Genie’s host before logging in.' };
             resolvedId = account.id;
         }
-        // NO TERMINAL FOR AN ACCOUNT OF ITS OWN (Tynn #1011; the owner: "I should not see any terminals nor do we store login
-        // keys"): its sign-in is prism-acp's hidden login, opening Anthropic's page in the person's browser, which is not here yet.
-        if (!design && this.#ownDirectory(cli, accountId) !== null) return { ok: false, reason: OWN_DIRECTORY_SIGN_IN_LATER };
+        // NO TERMINAL FOR A CLAUDE SIGN-IN (Tynn #1011; the owner: "I should not see any terminals nor do we store login keys"):
+        // every one is prism-acp's hidden login, Anthropic's page in the person's browser (main/claude-sign-ins.ts).
+        if (!design && provider === 'claude') return { ok: false, reason: CLAUDE_SIGNS_IN_IN_THE_BROWSER };
         // One sign-in per ACCOUNT: two clicks on one account join it; another account of the provider gets its own (Tynn #479).
         const key = design ? DESIGN_LOGIN : resolvedId ?? provider;
         const existing = this.#live.get(key);
@@ -167,14 +167,6 @@ export class LoginHost {
         return { ok: true, terminalId: opened.id };
     }
 
-    /** The account's own directory and method, when it is a Claude account with one (Tynn #1011). */
-    #ownDirectory(provider: string, accountId: string | undefined): { configDir: string; method: 'subscription' | 'console'; email: string | null } | null {
-        if (provider !== 'claude' || !this.#options.accountFor) return null;
-        const account = this.#options.accountFor(provider, accountId);
-        if (!account || account.configDir === undefined || account.method === undefined) return null;
-        return { configDir: account.configDir, method: account.method, email: account.identity?.email ?? null };
-    }
-
     /**
      * SWITCH ACCOUNT (Tynn #753): the provider's OWN login, unmodified, in the provider's one normal home, so every agent keeps
      * its threads. Claude Code's interactive CLI opens (the person types `/logout`, then `/login`); Codex runs its own
@@ -184,6 +176,7 @@ export class LoginHost {
     startSwitch(provider: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
         const known = providerLogin(provider);
         if (!known || !PLAIN_NAME.test(provider)) return { ok: false, reason: `Genie has no account switch for the provider "${provider}".` };
+        if (provider === 'claude') return { ok: false, reason: CLAUDE_SIGNS_IN_IN_THE_BROWSER };
         const key = `switch:${provider}`;
         const existing = this.#live.get(key);
         if (existing) {

@@ -9,6 +9,7 @@
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
+import { endOwnRun } from './end-own-tree.mjs';
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,8 @@ import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 const PORT = Number(process.env.CDP_PORT ?? 9336);
 const WIN = process.platform === 'win32';
+/** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
+const RUN_BEGAN = Date.now();
 const OUT = resolve('smoke-out');
 const APP = 'com.example.realapp';
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -148,14 +151,19 @@ try {
     console.error(`FAIL: ${error.message}`);
     if (log !== undefined) { try { console.error(readFileSync(join(OUT, 'gapp-open-electron.log'), 'utf8').slice(-4000)); } catch { /* no log */ } }
 } finally {
-    if (app?.pid) {
-        try { if (WIN) execFileSync('taskkill', ['/pid', String(app.pid), '/t', '/f'], { stdio: 'ignore' }); else process.kill(-app.pid, 'SIGKILL'); } catch { /* already gone */ }
-    }
     // Its genie-host and what it started (Tynn #916: they outlived the row), only while the record still names the same host.
+    let host = null;
     if (root) {
         let record = null; try { record = JSON.parse(readFileSync(join(root, '.genie', 'runtime', 'host.json'), 'utf8')); } catch { /* none written */ }
-        const host = record && Number.isInteger(record.pid) && (!hostRecord || (record.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt)) ? record.pid : null;
-        if (host !== null) { try { if (WIN) execFileSync('taskkill', ['/pid', String(host), '/t', '/f'], { stdio: 'ignore' }); else process.kill(host, 'SIGTERM'); } catch { /* already gone */ } }
+        host = record && Number.isInteger(record.pid) && (!hostRecord || (record.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt)) ? record.pid : null;
+    }
+    if (WIN) {
+        // Tynn #1031: the app's tree, that host and what they started, ended, waited for and said by one helper.
+        const ended = await endOwnRun({ app, hostPid: host, since: RUN_BEGAN });
+        if (!ended.ok) { console.error(`FAIL: LEFT RUNNING by this row's own cleanup: ${ended.words}`); code = 1; }
+    } else {
+        if (app?.pid) { try { process.kill(-app.pid, 'SIGKILL'); } catch { /* already gone */ } }
+        if (host !== null) { try { process.kill(host, 'SIGTERM'); } catch { /* already gone */ } }
     }
     if (log !== undefined) closeSync(log);
     await sleep(500);
