@@ -116,12 +116,14 @@ describe('the two lists', () => {
 
     it('what a write leaves half-done is machine, whatever it was writing; a database’s own side files are the database’s', async () => {
         const { classifyDataPath } = await dataRoot();
-        for (const left of ['runtime/agents.json.4242.17.tmp', 'runtime/ptys.json.4242.tmp', 'github.json.tmp', 'credentials/tynn.json.0f8fad5b-d9cb-469f-a165-70867728950e.tmp',
+        for (const left of ['runtime/agents.json.4242.17.tmp', 'runtime/ptys.json.4242.tmp', 'github.json.tmp', 'marketplace-publisher-keys.json.0f8fad5b-d9cb-469f-a165-70867728950e.tmp',
             'runtime/workspace-trust.json.unreadable', 'keychain-migration.json.corrupt-1700000000000']) {
             expect(classifyDataPath(left)?.kind, left).toBe('machine');
         }
         expect(classifyDataPath('runtime/knowledge.db-wal')?.path).toBe('runtime/knowledge.db');
         expect(classifyDataPath('runtime/knowledge.db-shm')?.kind).toBe('state');
+        // Inside a folder a rule lists whole, everything is the folder's: a leftover there is not sorted out one by one.
+        expect(classifyDataPath('credentials/tynn.json.0f8fad5b-d9cb-469f-a165-70867728950e.tmp')?.path).toBe('credentials/');
         // Control: the leftover rule is for a LISTED file's leftovers only.
         expect(classifyDataPath('runtime/a-new-store.json.4242.17.tmp')).toBeNull();
     });
