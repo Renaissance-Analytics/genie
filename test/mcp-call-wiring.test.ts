@@ -13,7 +13,8 @@ const code = (file: string): string => readFileSync(join(__dirname, '..', 'src',
 
 describe('the MCP call reaches the approval queue (genie#1360)', () => {
     it('main.ts binds approve to the queue WITH the call', () => {
-        const gates = [...code('main.ts').matchAll(/approvals\.gate\(([^)]*)\)/g)].map((m) => m[1]!.split(',').map((a) => a.trim()));
+        // The window's gate is approvalsNow's since Tynn #1006 (2g-4b2): genie-host's queue over main's own client.
+        const gates = [...code('main.ts').matchAll(/approvalsNow\.gate\(([^)]*)\)/g)].map((m) => m[1]!.split(',').map((a) => a.trim()));
         expect(gates.length).toBeGreaterThan(0);
         for (const args of gates) expect(args).toHaveLength(4);
         // genie-host's queue, through the replica, ties it to the agent's real call by its forwarded id (the host split, P3.1).
