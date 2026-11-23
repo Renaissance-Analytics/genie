@@ -55,9 +55,9 @@ describe('AgentStoresService says each settings change, with the data that has i
 
     it('a workspace write says its workspace', async () => {
         const r = await storesRig();
-        await r.settings.setFor('ws_a', 'track_cwd', false);
+        await r.settings.setFor('ws_a', 'app_inbox', false);
         await tick();
-        expect(r.events.filter((e) => e.store === 'settings')).toEqual([expect.objectContaining({ key: 'track_cwd', value: false, workspaceId: 'ws_a' })]);
+        expect(r.events.filter((e) => e.store === 'settings')).toEqual([expect.objectContaining({ key: 'app_inbox', value: false, workspaceId: 'ws_a' })]);
         r.close();
     });
 
