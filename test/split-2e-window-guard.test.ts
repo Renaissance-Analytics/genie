@@ -67,7 +67,12 @@ describe('the window serves nothing (step 2e)', () => {
     const reach = valueReach('src/main/main.ts');
 
     it('POSITIVE CONTROL: the walk follows main.ts into what the window really loads', () => {
-        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/compose.ts']) expect(reach, file).toContain(file);
+        // compose.ts left the window in 2g-4d E (Tynn #955): window-tools.ts is the window's own module it reaches instead.
+        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/window-tools.ts']) expect(reach, file).toContain(file);
+    });
+
+    it('the window loads no composition: compose.ts is the tests’ (2g-4d E, Tynn #955)', () => {
+        expect(reach.has('src/main/compose.ts')).toBe(false);
     });
 
     it('no remote-serving module is loaded by the window', () => {
@@ -158,7 +163,7 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
         // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy).
         // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
-        flows: '2g', hosting: '2g',
+        // flows, hosting, stores and supervisor left in 2g-4d E (#955): the window composes nothing.
         // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955).
         // pushWindowView and v1Import left in 2g-4d B (#1044).
         // spawnLink and onSpawnFrame are the link's own since 2g-4d-A (#1043: the processes child's exec route is live);
@@ -168,7 +173,6 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         onTynnIssuesEvent: '2g', tynnFeaturesWatch: '2g', tynnFeaturesUnwatch: '2g', onTynnFeaturesEvent: '2g',
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
         // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch.
-        stores: '2g', supervisor: '2g',
     };
     const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[]) => ({
         joined: rows.filter(([u, d]) => d.startsWith('move:') && STILL_TO_MOVE[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),
@@ -185,7 +189,7 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         expect(engineUses("import { X } from './session-engine-client.js';\n// client.flows()\nagentEngineLink.client.hosting();\nvoid client.call('engine.thing', []);\nlink?.client?.heartbeat(b);"))
             .toEqual(['call:engine.thing', 'heartbeat', 'hosting']);
         expect(ratchet([['newThing', 'move:2g']], []).joined).toEqual(['newThing']);
-        expect(ratchet([['hosting', 'window:chrome']], ['hosting']).relabelled).toEqual(['hosting']);
+        expect(ratchet([['issueWatch', 'window:chrome']], ['issueWatch']).relabelled).toEqual(['issueWatch']);
     });
 
     it('CONTROL: the scanner follows an alias of the engine client, and names a client handed over whole (Tynn #1007, 2g-4e)', () => {
