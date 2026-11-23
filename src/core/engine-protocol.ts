@@ -94,9 +94,8 @@ export const ENGINE_METHODS = [
     'engine.tynnPage',
     // The stores, the process supervisor and the flows went from the engine link in 2g-4d E2a (Tynn #955): a window reads and
     // writes them over the protocol (features.act/snapshot, registry.write, chatDrafts.*); genie-host keeps them in-process.
-    // The host's hosting (P5a: hosting-host.ts): `[method, args]` — a window's write. Its whole readable state is sent as
-    // `hosting.dump` before `engine.ready` (the front door's port and CA with it), and again as `hosting.event` on change.
-    'engine.hosting',
+    // The host's hosting left the engine link in 2g-4d E2b (Tynn #955): a window reads its front door on frontdoor.watch and
+    // drives its sites and services over the protocol (features.snapshot/act); genie-host keeps it in-process.
     // The window's environment NOW (P5a.2): `[env]`, pushed after a Check and repair so what the host starts next (a site's
     // php-cgi, an agent) reads it with no restart. Also carried with every start, as before.
     'engine.windowEnv',
