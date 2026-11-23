@@ -46,6 +46,8 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
     const [drawer, setDrawer] = useState<(Drawer & { id: string }) | null>(null);
     // The drawer filling the window (core/preview-full.ts): it belongs to the file open, so another file or none puts it back.
     const [drawerFull, setDrawerFull] = useState<{ id: string; path: string } | null>(null);
+    // THE WINDOW MAXIMIZED (Tynn #1019): the window's, not a question's — a push, an answer, another question picked leave it.
+    const [maximized, setMaximized] = useState(false);
     useEffect(() => {
         const receive = (v: View) => {
             setView(v);
@@ -128,6 +130,11 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
             visuals={visuals !== null && visuals.key === visualKey && visualKey !== '' ? { posts: visuals.posts, ...(visuals.error ? { error: visuals.error } : {}) } : null}
             drawerFull={open !== null && drawerFull !== null && drawerFull.id === open.id && drawerFull.path === open.path}
             onDrawerFull={(full) => setDrawerFull(full && open ? { id: open.id, path: open.path } : null)}
+            maximized={maximized}
+            onMaximize={(on) => {
+                setMaximized(on);
+                void bridge.maximize?.(on);
+            }}
             onOpenInFiles={(path) => { if (shown) void bridge.openInFiles?.(shown, path); }}
             {...(bridge.file ? { onOpenFile: openFile, onCloseFile: closeFile } : {})}
             onPick={(id) => {

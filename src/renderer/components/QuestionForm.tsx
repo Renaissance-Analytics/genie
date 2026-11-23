@@ -56,11 +56,13 @@ export interface QuestionFormProps {
     readonly initial?: QuestionDraft;
     /** Show each question's header chip. The Deck hides it for a single question: the row's title is that header. */
     readonly showHeaders?: boolean;
+    /** The question maximized (Tynn #1019): the form uses the room instead of its reading column. */
+    readonly wide?: boolean;
     /** Every change to the draft (an option picked or cleared, a note written), as the whole draft. */
     readonly onDraft?: ((draft: QuestionDraft) => void) | undefined;
 }
 
-export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', cancelKey, onDismiss, refusal = null, initial, showHeaders = true, onDraft }: QuestionFormProps) {
+export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', cancelKey, onDismiss, refusal = null, initial, showHeaders = true, onDraft, wide = false }: QuestionFormProps) {
     const questions = item.answer.kind === 'form' ? (item.answer.questions ?? null) : null;
     const count = questions?.length ?? 0;
     const [selections, setSelections] = useState<string[][]>(() => Array.from({ length: count }, (_, i) => [...(initial?.selections[i] ?? [])]));
@@ -99,7 +101,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
         onSubmit(selections.map((s) => [...s]), [...notes]);
     };
     return (
-        <form data-deck-form={item.id} onSubmit={submit} className="flex min-w-0 max-w-[72ch] flex-col gap-4 font-sans text-[13px]">
+        <form data-deck-form={item.id} onSubmit={submit} className={`flex min-w-0 ${wide ? 'max-w-[160ch]' : 'max-w-[72ch]'} flex-col gap-4 font-sans text-[13px]`}>
             {questions.map((q, i) => (
                 <fieldset key={i} data-deck-question={i} className="flex min-w-0 flex-col gap-2">
                     {showHeaders ? (

@@ -1,15 +1,23 @@
 import type { ReactNode } from 'react';
 import { Icon, Popover } from '@particle-academy/react-fancy';
 import type { ChatPlanView } from '../../core/chat-plan.js';
+import { PlanScrollFrame, usePlanPopoverRoom } from './PlanPopoverFrame.js';
+
+export { planListMaxHeight, revealCurrentStep } from './PlanPopoverFrame.js';
 
 /**
  * THE WHOLE PLAN, LISTED (Tynn #918): every step in order with its status, the current one marked and bold, done ones
- * dimmed with a check. Hook-free, so a test can render it.
+ * dimmed with a check. A long plan (Tynn #1021) never runs off the screen: the list sits in the plan popovers' shared
+ * frame (PlanPopoverFrame), capped at `maxHeight`, the "n/m" header fixed and the steps scrolling beneath it, opened on
+ * the step in progress.
  */
-export function PlanHoverList({ plan }: { plan: ChatPlanView }) {
+export function PlanHoverList({ plan, maxHeight }: { plan: ChatPlanView; maxHeight?: number | undefined }) {
     return (
-        <div data-plan-full="" className="flex max-w-sm flex-col gap-1.5 text-xs">
-            <p className="font-mono text-[11px] text-[var(--fg-4)]">{plan.done}/{plan.of}</p>
+        <PlanScrollFrame
+            maxHeight={maxHeight}
+            frame={{ 'data-plan-full': '' }}
+            head={<p data-plan-head="" className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">{plan.done}/{plan.of}</p>}
+        >
             <ol className="flex flex-col gap-1">
                 {plan.items.map((item, i) => {
                     const done = item.status === 'completed';
@@ -28,8 +36,13 @@ export function PlanHoverList({ plan }: { plan: ChatPlanView }) {
                     );
                 })}
             </ol>
-        </div>
+        </PlanScrollFrame>
     );
+}
+
+/** The popover's body: the list, capped to the room beside the trigger (usePlanPopoverRoom). */
+function PlanHoverBody({ plan }: { plan: ChatPlanView }) {
+    return <PlanHoverList plan={plan} maxHeight={usePlanPopoverRoom()} />;
 }
 
 /**
@@ -46,7 +59,7 @@ export function PlanHover({ plan, children }: { plan: ChatPlanView | null; child
                 </span>
             </Popover.Trigger>
             <Popover.Content role="dialog" aria-label="Plan" className="border-[var(--border-1)] bg-[var(--surface-raised)] p-3 text-[var(--fg-1)]">
-                <PlanHoverList plan={plan} />
+                <PlanHoverBody plan={plan} />
             </Popover.Content>
         </Popover>
     );

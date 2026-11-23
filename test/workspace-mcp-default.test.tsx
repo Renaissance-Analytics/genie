@@ -32,7 +32,7 @@ const show = (rows: readonly { name: string; required: boolean; on: boolean; inh
 describe('what an agent inherits', () => {
     it('a server its workspace has off is off for it, and its row says it is inherited', () => {
         expect(mcpOffFor({}, ['slack'])).toEqual(['slack']);
-        expect(show(mcpRows({ mcpSeen: ['github'] }, ['slack']))).toEqual(['genie:required', 'tynn:required', 'github:on', 'slack:off:inherited']);
+        expect(show(mcpRows({ mcpSeen: ['github'] }, ['slack']))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on', 'github:on', 'slack:off:inherited']);
     });
 
     it('its own switch wins: on although the workspace has it off, and its row says so', () => {
@@ -40,7 +40,7 @@ describe('what an agent inherits', () => {
         expect(on).toMatchObject({ ok: true, record: { mcpOn: ['slack'], mcpOff: [] } });
         if (!on.ok) return;
         expect(mcpOffFor(on.record, ['slack'])).toEqual([]);
-        expect(show(mcpRows(on.record, ['slack']))).toEqual(['genie:required', 'tynn:required', 'slack:on:overrides']);
+        expect(show(mcpRows(on.record, ['slack']))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on', 'slack:on:overrides']);
     });
 
     it('its own off stays off when the workspace has it on', () => {
@@ -48,7 +48,7 @@ describe('what an agent inherits', () => {
         expect(off).toMatchObject({ ok: true, record: { mcpOff: ['github'] } });
         if (!off.ok) return;
         expect(mcpOffFor(off.record, ['slack'])).toEqual(['github', 'slack']);
-        expect(show(mcpRows(off.record, ['slack']))).toEqual(['genie:required', 'tynn:required', 'github:off', 'slack:off:inherited']);
+        expect(show(mcpRows(off.record, ['slack']))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on', 'github:off', 'slack:off:inherited']);
     });
 
     it('a choice equal to the workspace’s is not kept: the agent inherits again', () => {
@@ -65,13 +65,13 @@ describe('what an agent inherits', () => {
 
     it('CONTROL: with no workspace default nothing is inherited', () => {
         expect(mcpOffFor({ mcpOff: ['slack'] })).toEqual(['slack']);
-        expect(show(mcpRows({ mcpSeen: ['slack'] }))).toEqual(['genie:required', 'tynn:required', 'slack:on']);
+        expect(show(mcpRows({ mcpSeen: ['slack'] }))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on', 'slack:on']);
     });
 });
 
 describe('the workspace’s own list', () => {
     it('Genie’s own required, then what its agents’ sessions reported and what it has off', () => {
-        expect(show(workspaceMcpRows({ mcpSeen: ['github', 'genie'], mcpOff: ['slack'] }))).toEqual(['genie:required', 'tynn:required', 'github:on', 'slack:off']);
+        expect(show(workspaceMcpRows({ mcpSeen: ['github', 'genie'], mcpOff: ['slack'] }))).toEqual(['genie:required', 'tynn:required', 'fancy-ui:on', 'github:on', 'slack:off']);
     });
 
     it('off, on again, and Genie’s own refused in words', () => {
