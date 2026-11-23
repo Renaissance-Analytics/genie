@@ -19,7 +19,6 @@ import { drivablePages } from './page-navigation-electron.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
-import { CommsCache } from '../core/comms.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
@@ -42,6 +41,7 @@ import { readFile } from 'node:fs/promises';
 import { setProviderChoiceFile } from './provider-choice.js';
 import { readMailSignal } from '../core/mail-actions.js';
 import { windowSettings } from './window-settings.js';
+import { windowApprovals } from './approvals-gate-protocol.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
@@ -583,6 +583,8 @@ const ownProtocol = ownProtocolClient();
  * tracking. Its writes go to genie-host over the protocol.
  */
 const settingsNow = windowSettings(ownProtocol);
+/** A window-run tool's approval: genie-host's one queue, over main's own client, with the approval's own deadline (Tynn #1006). */
+const approvalsNow = windowApprovals(ownProtocol);
 /** How long the boot waits for genie-host's settings before reading start minimized and the login item at their defaults. */
 const SETTINGS_BOOT_DEADLINE_MS = 10_000;
 // SWITCH ACCOUNT (Tynn #753): the provider's own login in its one home, in a window that shows the steps. The entry the UI calls.
@@ -634,7 +636,6 @@ function reportProxies(client: SessionEngineClient, log: (line: string) => void)
 let activityFeeds: ActivityFeeds | null = null;
 
 /** The Dashboard's comms cell (§4.1): AgentInbox traffic since the session started, bounded to the newest 2000 mails. */
-const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.involving(agentId as AgentId, 2000) : null));
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b). */
 let updates: (Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> & { prepareQuit?: () => Promise<unknown>; forceDrain?: () => boolean | Promise<boolean>; cancelDrain?: () => void | Promise<void> }) | null = null;
 /** Repeated quit requests cannot skip the pending safe-point wait or overwrite its final record. */
@@ -1346,8 +1347,6 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
-        // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
-        comms: (agentId: AgentId, since: number) => dashboardComms.read(agentId, since, Date.now()),
         onThreadId: (agentId: AgentId, threadId: string) => {
             void theRegistry.recordThread(agentId, threadId).then((result) => {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
@@ -1998,7 +1997,7 @@ async function boot(): Promise<void> {
             knowledge: hostOnly<KnowledgeStore>('the knowledge graph'),
             settings: settingsNow,
             // ONE approval queue: genie-host's (a window tool's ask goes there).
-            approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call),
+            approve: (caller, action, detail, call) => approvalsNow.gate(caller, action, detail, call),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
             refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,

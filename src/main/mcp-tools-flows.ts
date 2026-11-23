@@ -5,6 +5,7 @@ import { flowNodes } from '../core/flow-form.js';
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
+import { refusalWords } from '../core/approval-words.js';
 
 /**
  * THE AGENTS' FLOWS (§6.6). An agent can write the watcher it needs — "every 30 minutes run this check; if it exits 10,
@@ -40,7 +41,7 @@ export interface FlowsPort {
      * The person's approval for an agent's action (the ApprovalQueue gate); absent = nobody to ask. `call`: the MCP call
      * waiting on it (genie#1360), so a client that goes away ends its wait denied instead of leaving it on the Deck.
      */
-    readonly approve?: (caller: Caller, action: string, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve?: (caller: Caller, action: string, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
 }
 
 export interface FlowToolsDeps {
@@ -173,7 +174,7 @@ export function flowTools(deps: FlowToolsDeps): Registration[] {
                         if (!own) {
                             if (!port.approve) return err(`"${f.name}" was made by ${byName(f.createdBy)}: stopping its run needs the person’s approval, and there is nobody to ask here. Nothing was stopped`);
                             const verdict = await port.approve(caller, 'flows.stop', `stop the run of the flow “${f.name}”`, context);
-                            if (verdict !== 'allowed') return err(`the person did not approve stopping "${f.name}"; nothing was stopped`);
+                            if (verdict !== 'allowed') return err(refusalWords(verdict, `stopping "${f.name}"`, 'nothing was stopped'));
                         }
                         const r = await port.stopRun(f.id, me);
                         return r.ok ? ok({ ok: true, stopped: f.id, note: 'its run ends now and is recorded stopped (`flows get`)' }) : err(r.reason);

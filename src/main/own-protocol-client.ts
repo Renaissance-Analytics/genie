@@ -22,7 +22,8 @@ export type OwnCallAnswer = { ok: true; value: unknown } | { ok: false; reason: 
 export interface OwnProtocolClient {
     /** Tunnelled by main over its engine link; never a listener. */
     readonly door: ServerTransport;
-    call(method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer>;
+    /** `timeoutMs`: this call's own deadline, for an answer that waits on the person (approvals.gate); else the client's. */
+    call(method: RemoteMethod, args: unknown[], options?: { timeoutMs?: number }): Promise<OwnCallAnswer>;
     /**
      * THE HOST'S DECK, KEPT (Tynn #941, 2f-2): one connection held open on the door, which says `deck.watch` and hears
      * `local-deck` when the Deck changes, and nothing else of the estate. It is opened again whenever it drops (genie-host
@@ -75,7 +76,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
             schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities,
         }));
     };
-    const call = (method: RemoteMethod, args: unknown[]): Promise<OwnCallAnswer> => {
+    const call = (method: RemoteMethod, args: unknown[], callOptions: { timeoutMs?: number } = {}): Promise<OwnCallAnswer> => {
         if (listeners.size === 0) return Promise.resolve({ ok: false, reason: NOT_READY });
         const pair = inMemoryPair();
         const client = pair.client;
@@ -88,7 +89,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
                 resolve(answer);
                 client.close();
             };
-            const timer = setTimeout(() => finish({ ok: false, reason: `${method} got no answer from Genie in time` }), timeoutMs);
+            const timer = setTimeout(() => finish({ ok: false, reason: `${method} got no answer from Genie in time` }), callOptions.timeoutMs ?? timeoutMs);
             client.onClose(() => finish({ ok: false, reason: NOT_READY }));
             client.onMessage((text) => {
                 const parsed = parseMessage(text);

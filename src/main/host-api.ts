@@ -39,6 +39,7 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { isPromptAction } from '../core/prompt-delivery.js';
 import { answerAccounts, isAccountsMethod, type AccountsPort } from './accounts-protocol.js';
+import { readGateRequest } from './approvals-gate-protocol.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -171,6 +172,8 @@ export interface HostApiDeps {
     deviceLinkProtocol?: Pick<import('./device-link-protocol.js').DeviceLinkProtocol, 'call' | 'dropOwner'>;
     /** What an older Genie sealed, adopted into this host's keychain (host-legacy-adopt.ts; Tynn #959, 2g-3b). Absent = refused. */
     legacySecrets?: { adopt(request: unknown): Promise<unknown> };
+    /** A window-run tool's approval, from this host's one queue, tied to the agent's call by its forwarded id (Tynn #1006). */
+    approvalsGate?: (caller: import('./mcp-tools.js').Caller, action: string, detail: string, forwardedCallId: string | null) => Promise<'allowed' | 'denied' | 'expired'>;
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
     tynnRecheck?: () => Promise<void>;
     takeOver?: {
@@ -783,6 +786,15 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!deps.legacySecrets) return { ok: false, reason: 'this host keeps nothing an older Genie sealed' };
                 if (context.own !== true) return { ok: false, reason: 'what an older Genie sealed is handed over by Genie itself, never by a window' };
                 return deps.legacySecrets.adopt(args[0]);
+            // A WINDOW-RUN TOOL'S APPROVAL (Tynn #1006, 2g-4b2): `local` keeps every other machine out (RemoteHost's), and of this
+            // machine's connections only main's own client asks; the request is read strictly (approvals-gate-protocol.ts).
+            case 'approvals.gate': {
+                if (!deps.approvalsGate) return { ok: false, reason: 'this host keeps no approval queue' };
+                if (context.own !== true) return { ok: false, reason: 'an approval is asked by Genie itself for the tools it runs, never by a window' };
+                const request = readGateRequest(args);
+                if ('ok' in request) return request;
+                return deps.approvalsGate(request.caller, request.action, request.detail, request.forwardedCallId);
+            }
             // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
             case 'tynn.recheck':
                 if (!deps.tynnRecheck) return { ok: false, reason: 'this host has no Tynn account to ask' };

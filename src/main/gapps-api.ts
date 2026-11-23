@@ -12,13 +12,13 @@ import type { Caller } from './mcp-tools.js';
  */
 const listing = (entry: GAppEntry): GAppListing => ({ id: entry.packageId, name: entry.name, version: entry.version, state: entry.state, dev: false });
 
-export type AskPerson = (review: GAppReview, scope: GrantScope) => Promise<'allowed' | 'denied'>;
+export type AskPerson = (review: GAppReview, scope: GrantScope) => Promise<'allowed' | 'denied' | 'expired'>;
 
 /**
  * CONSENT IS THE PERSON'S, ON THE DECK (Tynn #596): a blocking item carrying the review, in Genie's own section. The host
  * asks, so the install waits for the answer wherever it is given. `workspaceName` says a workspace as a person knows it.
  */
-export function askOnDeck(approvals: { gate(caller: Caller, action: string, detail: string): Promise<'allowed' | 'denied'> }, workspaceName: (id: string) => string): AskPerson {
+export function askOnDeck(approvals: { gate(caller: Caller, action: string, detail: string): Promise<'allowed' | 'denied' | 'expired'> }, workspaceName: (id: string) => string): AskPerson {
     const store = { agentId: 'gapp-store' as Caller['agentId'], agentName: 'GApp Store', workspaceId: '', workspacePath: '' };
     return (review, scope) => approvals.gate(store, 'gapps.install', gappInstallDetail(review, scope === 'workstation' ? 'every workspace' : scope.map(workspaceName).join(', ')));
 }
