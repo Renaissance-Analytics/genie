@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { runtimeDir } from '../src/main/paths.js';
 import { LocalStagingArea } from '../src/main/local-staging-area.js';
+import { scheduleStagingSweep } from '../src/main/host-staging-sweep.js';
 import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.js';
 import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -27,17 +28,20 @@ async function homeFixture() {
     const root = join(runtimeDir(home), 'local-staging');
     let accept!: (connection: ServerConnection) => void;
     let scheduledSweep: (() => Promise<void>) | undefined;
+    let stopSweep: () => void = () => {};
     /*
      * A LOCAL CONNECTION STAGES ITS UPLOADS WITH GENIE-HOST (Tynn #898 step 2d-4b2): compose serves no connection; the window's
      * is admitted by genie-host's RemoteAccessHost, which stages under the same home as genie-host does (genie-host.ts). The
-     * composition still owns the staging area's startup sweep.
+     * startup sweep of old staging is genie-host's too (host-staging-sweep.ts, Tynn #955), scheduled here as genie-host
+     * schedules it, over LocalStagingArea.sweepOld.
      */
     const start = async () => {
         access ??= await RemoteAccessHost.open({ home, hostName: 'composition-box', api: hostRemoteApi({ hostName: 'composition-box', own: {} }),
             transport: { onConnection: (listener: (connection: ServerConnection) => void) => { accept = listener; return () => {}; } },
             createLocalUploads: async () => (await LocalStagingArea.open(home)).createConnection(Date.now) });
-        const input = { userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
-            scheduleStagingSweep: (work: () => Promise<void>) => { scheduledSweep = work; return () => { if (scheduledSweep === work) scheduledSweep = undefined; }; } };
+        const input = { userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 };
+        stopSweep = scheduleStagingSweep(home, { sweep: (h, d) => LocalStagingArea.sweepOld(h, d),
+            schedule: (work) => { scheduledSweep = work; return () => { if (scheduledSweep === work) scheduledSweep = undefined; }; } });
         return tracker.compose(input);
     };
     const sweepAfterStartup = async () => { expect(scheduledSweep).toBeTypeOf('function'); const work = scheduledSweep!; scheduledSweep = undefined; await work(); };
@@ -47,7 +51,7 @@ async function homeFixture() {
         const c = connectRemote(pair.client, { kind: 'local' }, 'composition fixture'); clients.push(() => c.close());
         expect(await c.ready).toEqual({ ok: true }); return c;
     };
-    return { home, root, start, client, sweepAfterStartup, hasScheduledSweep: () => !!scheduledSweep };
+    return { home, root, start, client, sweepAfterStartup, hasScheduledSweep: () => !!scheduledSweep, stopSweep: () => stopSweep() };
 }
 async function areaModule() { const path: string = '../src/main/local-staging-area.js'; return import(path); }
 async function heldProcess() {
@@ -166,9 +170,9 @@ describe('7B owned staging at real host composition startup', () => {
         expect((await stat(f.root)).mode & 0o777).toBe(0o700); expect((await stat(sibling)).mode & 0o777).toBe(mode);
         await c.uploads!.abort(uploaded.id);
     });
-    it('shutdown cancels a deferred sweep; the next composition can still perform it', async () => {
+    it('genie-host’s shutdown cancels a deferred sweep; the next start can still perform it', async () => {
         const f = await homeFixture(), stale = join(f.root, `${process.pid}-1`); await mkdir(stale, { recursive: true }); await writeFile(join(stale, 'keep-until-sweep'), 'old bytes');
-        const services = await f.start(); expect(f.hasScheduledSweep()).toBe(true); await services.shutdown(); expect(f.hasScheduledSweep()).toBe(false);
+        await f.start(); expect(f.hasScheduledSweep()).toBe(true); f.stopSweep(); expect(f.hasScheduledSweep()).toBe(false);
         expect(await readFile(join(stale, 'keep-until-sweep'), 'utf8')).toBe('old bytes');
         await f.start(); await f.sweepAfterStartup(); await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
     });

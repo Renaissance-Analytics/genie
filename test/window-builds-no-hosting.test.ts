@@ -21,8 +21,8 @@ describe('source', () => {
         expect(main).not.toMatch(/composeServices/);
     });
 
-    it('the window always reads the host’s hosting', () => {
-        expect(main).toMatch(/\bhosting: agentEngineLink\.client\.hosting\(\)/);
+    it('the window builds no hosting and reads no hosting replica: it composes nothing (Tynn #955)', () => {
+        expect(main).not.toMatch(/agentEngineLink\.client\.hosting\(\)/);
         expect(main).not.toMatch(/\.\.\.\(agentEngineLink \? \{ hosting:/);
     });
 
@@ -33,8 +33,9 @@ describe('source', () => {
     });
 
     it('CONTROL: the patterns read the real sources', () => {
-        // main reads no App Inbox replica since 2g-1 (Tynn #952); the hosting replica is still its own (2g-4).
-        expect(main).toMatch(/agentEngineLink\.client\.hosting\(\)/);
+        // main reads no App Inbox replica since 2g-1 (Tynn #952), nor the hosting replica since 2g-4d E (Tynn #955): the front
+        // door it reads over its own client (frontdoor.watch).
+        expect(main).toMatch(/windowFrontDoor\(ownProtocol\)/);
         expect(main).not.toMatch(/agentEngineLink\.client\.appInbox\(\)/);
         expect(compose).toMatch(/input\.hosting/);
         expect(code('src/main/genie-host.ts')).toMatch(/composeHosting\(/);

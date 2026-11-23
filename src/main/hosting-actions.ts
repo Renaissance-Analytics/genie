@@ -5,7 +5,7 @@ import { siteFormDefaults, validateServiceForm, validateSiteForm, type Problem, 
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { ProcessLog } from '../core/output-tail.js';
 import type { EngineChoice, ServiceInstance } from '../core/services.js';
-import type { WindowServices as ComposedServices } from './compose.js';
+import type { WindowServices as ComposedServices } from './host-services.js';
 import type { ProcessState, ProcessStatus } from './process-supervisor.js';
 import type { SiteActor } from './envelope-sites-host.js';
 import type { CreateSiteInput, SiteInfo } from './site-manager.js';
