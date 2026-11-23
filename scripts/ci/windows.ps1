@@ -57,7 +57,7 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher'
 )
 
@@ -357,6 +357,8 @@ function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-account
 function Row-sound-picker { Need-Build; Need-TestMachine; Run 'sound-picker-cdp' { node scripts/sound-picker-cdp.mjs } }
 # The whole question window maximized and restored, screenshots of both (Tynn #1019): the window's maximize is Windows' own here.
 function Row-question-maximize { Need-Build; Need-TestMachine; Run 'question-maximize-cdp' { node scripts/question-maximize-cdp.mjs } }
+# Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
+function Row-esc-unsend { Need-Build; Need-TestMachine; Run 'esc-unsend-cdp' { node scripts/esc-unsend-cdp.mjs } }
 # The app opened for no-pty..layout wrote this log: the spawn host started, and never fell back.
 function Row-spawn-host {
     if (-not $script:AppHome) { Block 'the app was not opened in this run (the seed row opens it)' }
@@ -461,6 +463,7 @@ function Ceiling([string]$name) {
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
         'question-maximize' { return 300 }
+        'esc-unsend' { return 300 }
         'files-watch' { return 240 }
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
