@@ -84,7 +84,7 @@ describe('the window follows Features live through the host, like Issues', () =>
         const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
         expect(host).toContain("send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostTynnWatches.deliver('features', event); },");
         expect(host).toMatch(/const hostTynnWatches = hostTynnWatch\(\{ hubs: \{ board: tynnBoard, issues: tynnIssues, features: tynnFeatures \} \}\);/);
-        expect(host).toMatch(/tynnWatch: hostTynnWatches\.port,/);
+        expect(host).toMatch(/tynnWatch: hostTynnWatches\.port \},/);
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         expect(preload).not.toContain('genie:workspace-tynn-features');
     });

@@ -291,10 +291,10 @@ describe('genie-host’s tools read its IssueWatch directly, and ask it by call 
         const r = await serverRig();
         r.issueWatch.start();
         await settle();
-        await expect(r.tools.refresh!('acme')).resolves.toMatchObject({ ok: true, refreshed: true });
+        await expect(r.tools.refresh('acme')).resolves.toMatchObject({ ok: true, refreshed: true });
         const refreshes = () => r.tynn.requests.filter((q) => q.path === '/api/v1/user/issue-watch/refresh');
         expect(refreshes()).toEqual([{ method: 'POST', path: '/api/v1/user/issue-watch/refresh', body: { project_id: PROJECT } }]);
-        await expect(r.tools.refresh!('loose')).resolves.toEqual({ ok: false, reason: 'this workspace is not linked to a Tynn project' });
+        await expect(r.tools.refresh('loose')).resolves.toEqual({ ok: false, reason: 'this workspace is not linked to a Tynn project' });
         expect(refreshes()).toHaveLength(1);
     });
 
@@ -311,7 +311,7 @@ describe('genie-host’s tools read its IssueWatch directly, and ask it by call 
 
     it('asking Tynn again about the sign-in is the host’s own account’s, when a tool finds it signed out', async () => {
         const r = await serverRig();
-        r.tools.recheckSignIn!();
+        r.tools.recheckSignIn();
         expect(r.rechecks).toHaveLength(1);
     });
 

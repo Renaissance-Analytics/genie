@@ -564,7 +564,9 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
         expect(host).toMatch(/if \(secretsMoved\) void githubOpening\.then\(\(account\) => account\.reload\(\)\)/);
         expect(host).toMatch(/account\.reload\(\)[\s\S]{0,120}relayHostService\.register\(genie1Identity\)[\s\S]{0,120}tynnRecovery\?\.recover\(\{ secretsMoved: true \}\)/);
         expect(host).toMatch(/legacySecrets: legacyAdopt,/);
-        expect(host).toMatch(/tynnRecheck: async \(\) => \{ const account = await tynnOpening\.catch\(\(\) => null\); if \(account && !account\.status\(\)\.signedIn\) await account\.recheck\(\); \}/);
+        // One recheck, the host's own account's: the protocol's `tynn.recheck` and the host's `checkIssues` (Tynn #934 task #1474).
+        expect(host).toMatch(/const recheckTynn = async \(\): Promise<void> => \{ const account = await tynnOpening\.catch\(\(\) => null\); if \(account && !account\.status\(\)\.signedIn\) await account\.recheck\(\); \};/);
+        expect(host).toMatch(/tynnRecheck: recheckTynn,/);
     });
 
     it('genie-host’s summary reads its keychain and its GitHub account, and is poked on their changes', () => {

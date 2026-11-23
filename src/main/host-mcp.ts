@@ -64,6 +64,11 @@ export interface HostMcpPorts {
     readonly playwright?: import('./mcp-tools-playwright.js').PlaywrightToolPort;
     /** Genie Mail's inboxes and the shared Mailpit, for the `mail` tool (G6): the host's hosting. */
     readonly mail?: import('./mcp-tools-mail.js').MailPort;
+    /**
+     * This host's IssueWatch, for `checkIssues` and imDone's count line (Tynn #934 task #1474: issue-watch-tools.ts). Absent =
+     * this host runs none, and the tools say so.
+     */
+    readonly issueWatch?: import('./issue-watch-tools.js').HostIssueWatchTools;
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
     readonly flowCallers?: { callerFor(key: string): Caller | null };
     /** A Take Over TUI's caller: known here, so it works with no window to tell the host (Tynn #553). */
@@ -162,8 +167,9 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             thumbsUp: (caller, reason) => ports.signal({ kind: 'action', agentId: caller.agentId, action: 'thumbsup', reason }),
             reportPlan: (agentId, steps) => ports.reportPlan(agentId as AgentId, steps),
             readPlan: (agentId) => ports.records().find((r) => r.id === agentId)?.plan ?? null,
+            // checkIssues and imDone's count line read this host's own IssueWatch (Tynn #934 task #1474).
+            ...(ports.issueWatch ? { issueWatch: ports.issueWatch } : {}),
             // THE WINDOW'S: these tools are forwarded whole (mcp-host-tools.ts); here they only give the tools their shape.
-            // checkIssues is forwarded whole. With no host count provider, imDone omits its optional count.
             openFile: unavailable('openFileForUser'),
             terminals: ports.terminals ?? { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             ...(ports.terminalEnv ? { terminalEnv: ports.terminalEnv } : {}),

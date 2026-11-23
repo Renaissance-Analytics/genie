@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { JsonObject } from '@particle-academy/prism-mcp';
+import { ToolDefinition, type JsonObject } from '@particle-academy/prism-mcp';
 import { DURABLE_CALLBACKS, ENGINE_METHODS, isEngineMethod } from '../src/core/engine-protocol.js';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
@@ -74,7 +74,7 @@ describe('PROOF: nothing in the window follows a Tynn page over the engine link'
 
     it('the Tynn tab’s watch is genie-host’s own, under its own owner, said over the protocol to the connection that watches', () => {
         expect(host).toMatch(/const hostTynnWatches = hostTynnWatch\(\{ hubs: \{ board: tynnBoard, issues: tynnIssues, features: tynnFeatures \} \}\);/);
-        expect(host).toMatch(/tynnWatch: hostTynnWatches\.port,/);
+        expect(host).toMatch(/tynnWatch: hostTynnWatches\.port \},/);
         expect(code(src('src/main/host-local-watches.ts'))).toMatch(/watch: async \(kind, viewId, workspaceId\) => sources\.hubs\[kind\]\.watch\(HOST_LOCAL_OWNER, viewId, workspaceId\),/);
         expect(code(src('src/main/remote-host.ts'))).toMatch(/case 'tynn\.watch':/);
     });
@@ -247,8 +247,7 @@ describe('checkIssues runs in genie-host, on its own IssueWatch', () => {
         expect(out.json).not.toHaveProperty('notLive');
         expect(r.forwarded).toEqual([]);
         // CONTROL, same rig: a tool that IS the window's is refused with no window, in the window's words.
-        const all = genieTools({ inbox, attention, roster: () => [atlas], resolveCaller, userActive: () => true, glow: () => true, thumbsUp: () => {} });
-        const windowTool: Registration = { ...all.find((x) => x.definition.name === 'checkIssues')!, definition: { ...all.find((x) => x.definition.name === 'checkIssues')!.definition, name: 'pages' } };
+        const windowTool: Registration = { definition: new ToolDefinition('pages', 'pages tool', { type: 'object', properties: {} } as JsonObject, 'pages'), handler: async () => ({ text: 'pages ran here', isError: false }) };
         const [pages] = hostRegistrations([windowTool], { resolveCaller, window: { connected: () => false, call: async () => ({ text: 'ran', isError: false }) }, openFileLater: () => {} });
         expect(await pages!.handler({ terminalId: 't-atlas' }, { server: 'genie', tool: 'pages', headers: {} } as never)).toEqual({ text: windowClosedRefusal('pages'), isError: true });
     });
