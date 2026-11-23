@@ -31,7 +31,6 @@ import type { ProcessesService } from './processes-host.js';
 import type { BrowserService } from './browser-service.js';
 import type { TerminalsService } from './terminals-host.js';
 import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
-import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView } from '../core/crash-record.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
@@ -151,30 +150,6 @@ export interface EngineServerOptions {
     readonly updates?: UpdatesService;
     /** The host's safe mode (Tynn #386: safe-mode-host.ts): told to EVERY window before ready and on change; `engine.safeMode` leaves it. */
     readonly safeMode?: { view(): SafeModeView; leave(): SafeModeView; onChange(listener: (view: SafeModeView) => void): () => void };
-    /** IssueWatch in the host (P5c: issue-watch-host.ts). Absent = `engine.issueWatch` is refused. Local windows only. */
-    readonly issueWatch?: {
-        dump(): IssueWatchDump;
-        call(method: string, args: readonly unknown[]): Promise<unknown>;
-        onEvent(listener: (event: IssueWatchHostEvent) => void): () => void;
-    };
-    /** The live board's per-view watches (P5c: issue-watch-host.ts TynnBoardHub), owned by the connection. Absent = refused. */
-    readonly tynnBoard?: {
-        watch(owner: string, viewId: string, workspaceId: string): boolean;
-        unwatch(owner: string, viewId: string): void;
-        dropOwner(owner: string): void;
-    };
-    /** Issues follows its own feed, with views owned and released by the same local connection. */
-    readonly tynnIssues?: {
-        watch(owner: string, viewId: string, workspaceId: string): boolean;
-        unwatch(owner: string, viewId: string): void;
-        dropOwner(owner: string): void;
-    };
-    /** The Features page follows its own feed (row F1), with views owned and released by the same local connection. */
-    readonly tynnFeatures?: {
-        watch(owner: string, viewId: string, workspaceId: string): boolean;
-        unwatch(owner: string, viewId: string): void;
-        dropOwner(owner: string): void;
-    };
     /** Other Tynn pages, resolved and read on the host's account. Absent = refused; local windows only. */
     readonly tynnPages?: { read(workspaceId: string, page: unknown, query: unknown): Promise<unknown> };
 }
@@ -258,11 +233,6 @@ export class SessionEngineServer {
         // The updater's state (P5b) travels on LOCAL window links only, as the hosting's does (P4 rules).
         options.updates?.onEvent((state) => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'updates.event', state);
-        });
-        // IssueWatch's state and its sounds (P5c) travel on LOCAL window links only. A sound goes to the windows open now:
-        // with none it is not kept, so nothing plays later.
-        options.issueWatch?.onEvent((event) => {
-            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'issueWatch.event', event);
         });
     }
 
@@ -375,9 +345,6 @@ export class SessionEngineServer {
             // Its disposable terminals end with it: nothing re-attaches one (Tynn story #378).
             if (was) this.#options.terminals?.dropped(String(conn.id));
             if (was) this.#options.features?.dropOwner(conn.id);
-            if (was) this.#options.tynnBoard?.dropOwner(conn.id);
-            if (was) this.#options.tynnIssues?.dropOwner(conn.id);
-            if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
             // Every protocol connection this window process tunnelled ends with its link (the page reconnects).
             if (was) this.#options.protocol?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
@@ -452,7 +419,6 @@ export class SessionEngineServer {
             const failed = this.#options.updates.takeFailed();
             if (failed !== null) this.#event(conn, 'updates.failed', failed);
         }
-        if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
         // Safe mode BEFORE ready: the window's own boot restore holds on it (relaunch-restore.ts).
@@ -692,36 +658,6 @@ export class SessionEngineServer {
                 if (!this.#options.hosting) throw new Error('This host runs no hosting.');
                 if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');
                 return this.#options.hosting.call(str(0), Array.isArray(args[1]) ? args[1] : []);
-            case 'engine.issueWatch':
-                if (!this.#options.issueWatch) throw new Error('This host runs no IssueWatch.');
-                if (!conn.local) throw new Error('IssueWatch is asked from a local window only.');
-                return this.#options.issueWatch.call(str(0), Array.isArray(args[1]) ? args[1] : []);
-            // LOCAL ONLY (P4 rule 4): a non-local link may be a share-link guest, and the board is the owner's, read with the
-            // owner's own account. So a guest neither follows one nor is sent its events (it holds no views).
-            case 'engine.tynnBoardWatch':
-                if (!this.#options.tynnBoard) throw new Error('This host follows no Tynn board.');
-                if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
-                return this.#options.tynnBoard.watch(conn.id, str(0), str(1));
-            case 'engine.tynnBoardUnwatch':
-                if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
-                this.#options.tynnBoard?.unwatch(conn.id, str(0));
-                return true;
-            case 'engine.tynnIssuesWatch':
-                if (!conn.local) throw new Error('The Tynn Issues queue is followed from a local window only.');
-                if (!this.#options.tynnIssues) throw new Error('This host follows no Tynn Issues queue.');
-                return this.#options.tynnIssues.watch(conn.id, str(0), str(1));
-            case 'engine.tynnIssuesUnwatch':
-                if (!conn.local) throw new Error('The Tynn Issues queue is followed from a local window only.');
-                this.#options.tynnIssues?.unwatch(conn.id, str(0));
-                return true;
-            case 'engine.tynnFeaturesWatch':
-                if (!conn.local) throw new Error('The Tynn Features page is followed from a local window only.');
-                if (!this.#options.tynnFeatures) throw new Error('This host follows no Tynn Features page.');
-                return this.#options.tynnFeatures.watch(conn.id, str(0), str(1));
-            case 'engine.tynnFeaturesUnwatch':
-                if (!conn.local) throw new Error('The Tynn Features page is followed from a local window only.');
-                this.#options.tynnFeatures?.unwatch(conn.id, str(0));
-                return true;
             case 'engine.tynnPage':
                 if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
                 if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');
@@ -801,20 +737,6 @@ export class SessionEngineServer {
         return this.#reverseTo(conn, 'client.windowOp', [op, args]);
     }
 
-    /** A board's ring or state, to the connection whose views watch that workspace, and no other (P5c). */
-    tynnBoardEvent(owner: string, event: TynnBoardHubEvent): void {
-        for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnBoard.event', event);
-    }
-
-    /** Issues rings go only to the local connection whose views follow the queue. */
-    tynnIssuesEvent(owner: string, event: TynnBoardHubEvent): void {
-        for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnIssues.event', event);
-    }
-
-    /** Features rings go only to the local connection whose views follow the page. */
-    tynnFeaturesEvent(owner: string, event: TynnBoardHubEvent): void {
-        for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnFeatures.event', event);
-    }
 
     /** A frame from genie-host's spawn-host child of `profile`, to every window. */
     spawnFrame(profile: string, frame: SpawnFrame): void {

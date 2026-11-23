@@ -5,19 +5,15 @@ import type { TynnBoardHub, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { FilesWatchPort } from './local-files-watches.js';
 
 /**
- * GENIE-HOST'S OWN WATCHES (Tynn #898 step 2d-3b). The files hub and the three Tynn hubs send each event to the connection
- * that owns the view: until now only engine-link connections (a window's main) owned views. genie-host's own answers
- * (host-alone-api.ts) now own views too, under one owner id, so its RemoteHost serves `files.watch` and `tynn.watch` from
- * its own hubs. At 2d-4 the window connects there and its file panel and live Tynn tab are watched this way.
+ * GENIE-HOST'S OWN WATCHES (Tynn #898 step 2d-3b). The files hub and the three Tynn hubs send each event to the owner of
+ * the view. genie-host's own answers (host-alone-api.ts) own every view, under one owner id, so its RemoteHost serves
+ * `files.watch` and `tynn.watch` from its own hubs: the window's file panel and live Tynn tab are watched this way. An
+ * engine-link connection (a window's main) owned views too, until nothing in a window read them: the Files watch left in
+ * Tynn #1043, the Tynn watches in #934 task #1474. No hub sends an event over the engine link.
  *
  * The id is not a UUID, so it can never be an engine-link connection's (session-engine-server.ts gives those randomUUID()).
  */
 export const HOST_LOCAL_OWNER = 'genie-host';
-
-/** A hub's `send`: genie-host's own owner's events are delivered here, every other owner's over the engine link. */
-export function ownerRoute<E>(local: (event: E) => void, remote: (owner: string, event: E) => void): (owner: string, event: E) => void {
-    return (owner, event) => { if (owner === HOST_LOCAL_OWNER) local(event); else remote(owner, event); };
-}
 
 export interface HostFilesWatchSources {
     /** genie-host's files hub; null until it is built (after the engine server). */

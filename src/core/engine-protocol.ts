@@ -90,20 +90,6 @@ export const ENGINE_METHODS = [
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',
-    // IssueWatch in genie-host (P5c): `[method, args]` — a LOCAL window's Refresh, repo load and repo switch. Its state is
-    // sent as `issueWatch.dump` before `engine.ready` and as `issueWatch.event` (a new state, or a sound to play now), to
-    // local windows only.
-    'engine.issueWatch',
-    // The live board's per-view subscriptions (P5c), LOCAL windows only: `[viewId, workspaceId]` / `[viewId]`, under the calling window's
-    // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
-    'engine.tynnBoardWatch',
-    'engine.tynnBoardUnwatch',
-    // Issues uses its own host-owned feed and connection-owned views, under the same local-only boundary.
-    'engine.tynnIssuesWatch',
-    'engine.tynnIssuesUnwatch',
-    // The Features page follows its own feed too (row F1), the same way: connection-owned views, local windows only.
-    'engine.tynnFeaturesWatch',
-    'engine.tynnFeaturesUnwatch',
     // Other Tynn pages are read on this host's pairing and workspace registry, for local windows only.
     'engine.tynnPage',
     // The stores, the process supervisor and the flows went from the engine link in 2g-4d E2a (Tynn #955): a window reads and

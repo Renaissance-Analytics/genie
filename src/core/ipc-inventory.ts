@@ -174,16 +174,8 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // (pushWindowView and v1Import left in 2g-4d B, #1044: window.view over the protocol, and genie-host imports Genie 1 itself.)
     // runHostTool (#1471) and the Files watch (onFilesEvent, filesWatch, filesUnwatch: #1472) left in 2g-4d-A (#1043): nothing
     // in the window read them, and their engine routes went with them. spawnLink and onSpawnFrame (#1468) are `link`, above.
-    // IssueWatch and the Tynn board, issues and features watches, through main's `engineClient` alias (Tynn #1007 saw them;
-    // they go with tynn/tynnPage in G-1, #934 task #1474).
-    ['issueWatch', 'move:2g'],
-    ['tynnBoardWatch', 'move:2g'],
-    ['tynnBoardUnwatch', 'move:2g'],
-    ['onTynnBoardEvent', 'move:2g'],
-    ['tynnIssuesWatch', 'move:2g'],
-    ['tynnIssuesUnwatch', 'move:2g'],
-    ['onTynnIssuesEvent', 'move:2g'],
-    ['tynnFeaturesWatch', 'move:2g'],
-    ['tynnFeaturesUnwatch', 'move:2g'],
-    ['onTynnFeaturesEvent', 'move:2g'],
+    // IssueWatch and the Tynn board, issues and features watches left in #934 task #1474 (Tynn #1007 saw them through main's
+    // `engineClient` alias): the nine watch uses were read by nothing in the window (the Tynn tab's `tynn.watch` is
+    // genie-host's own, host-local-watches.ts), `checkIssues` is genie-host's own tool on its own IssueWatch, and a batch's
+    // sound is a tool signal (core/issue-watch-signal.ts). NOTHING IS LEFT TO MOVE: no row here is `move:<step>`.
 ];

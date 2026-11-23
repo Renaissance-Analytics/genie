@@ -564,7 +564,9 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
         expect(host).toMatch(/if \(secretsMoved\) void githubOpening\.then\(\(account\) => account\.reload\(\)\)/);
         expect(host).toMatch(/account\.reload\(\)[\s\S]{0,120}relayHostService\.register\(genie1Identity\)[\s\S]{0,120}tynnRecovery\?\.recover\(\{ secretsMoved: true \}\)/);
         expect(host).toMatch(/legacySecrets: legacyAdopt,/);
-        expect(host).toMatch(/tynnRecheck: async \(\) => \{ const account = await tynnOpening\.catch\(\(\) => null\); if \(account && !account\.status\(\)\.signedIn\) await account\.recheck\(\); \}/);
+        // One recheck, the host's own account's: the protocol's `tynn.recheck` and the host's `checkIssues` (Tynn #934 task #1474).
+        expect(host).toMatch(/const recheckTynn = async \(\): Promise<void> => \{ const account = await tynnOpening\.catch\(\(\) => null\); if \(account && !account\.status\(\)\.signedIn\) await account\.recheck\(\); \};/);
+        expect(host).toMatch(/tynnRecheck: recheckTynn,/);
     });
 
     it('genie-host’s summary reads its keychain and its GitHub account, and is poked on their changes', () => {
@@ -614,7 +616,10 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
 
     it('a wake and IssueWatch’s signed-out ask genie-host’s account again; GitHub’s block is the host’s, on its own Deck strip', () => {
         expect(main).toMatch(/powerMonitor\.on\('resume', \(\) => \{ void handProxyAnswers\?\.\(\); if \(ownProtocolTunnelled\) void ownProtocol\.call\('tynn\.recheck', \[\]\); \}\);/);
-        expect(main).toMatch(/recheckSignIn: \(\) => \{ void ownProtocol\.call\('tynn\.recheck', \[\]\); \} \}/);
+        // IssueWatch's signed-out ask is genie-host's own since Tynn #934 task #1474: checkIssues runs there, on its account.
+        expect(main).not.toMatch(/recheckSignIn/);
+        expect(code(src('src/main/genie-host.ts'))).toMatch(/issueWatch: hostIssueWatchTools\(\{ issueWatch, projectFor: workspaceTynnProject, recheckSignIn: \(\) => \{ void recheckTynn\(\); \} \}\),/);
+        expect(code(src('src/main/mcp-tools.ts'))).toMatch(/if \(s\.state === 'signed-out'\) deps\.issueWatch\?\.recheckSignIn\?\.\(\);/);
         // The window registry's signal strip went in Tynn #998 (2g-4b1): nothing read it. The summary still carries the block.
         expect(main).not.toMatch(/registry\.setSignals\(/);
         expect(src('src/core/host-summary.ts')).toMatch(/githubBlocked/);

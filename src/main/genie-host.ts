@@ -9,6 +9,7 @@ import { featureWorkspaceFiles } from './feature-workspace-files.js';
 import { syncWorkspaceFiles } from './host-workspace-files.js';
 import { AgentFilesHealth } from '../core/agent-files-health.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
+import { hostIssueWatchTools, sayIssueWatchSounds } from './issue-watch-tools.js';
 import { whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
 import { signedOutGithubView } from '../core/github.js';
@@ -170,7 +171,7 @@ import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
 import { APP_WINDOW, hostLocalPorts } from './host-local-ports.js';
 import { ProtocolTunnels } from './protocol-tunnels.js';
-import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch, ownerRoute } from './host-local-watches.js';
+import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch } from './host-local-watches.js';
 import { hostOwnerOps } from './host-owner-ops.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { withComms } from './dashboard-comms.js';
@@ -784,7 +785,7 @@ async function main(): Promise<void> {
         socket: tynnSocket,
         schedule: tynnTimer,
         projectFor: workspaceTynnProject,
-        send: ownerRoute((event) => hostTynnWatches.deliver('board', event), (owner, event) => { engineRef?.tynnBoardEvent(owner, event); }),
+        send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostTynnWatches.deliver('board', event); },
         log: say,
     });
     const tynnIssues = new TynnBoardHub({
@@ -793,7 +794,7 @@ async function main(): Promise<void> {
         schedule: tynnTimer,
         projectFor: workspaceTynnProject,
         feed: TYNN_ISSUES_FEED,
-        send: ownerRoute((event) => hostTynnWatches.deliver('issues', event), (owner, event) => { engineRef?.tynnIssuesEvent(owner, event); }),
+        send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostTynnWatches.deliver('issues', event); },
         log: say,
     });
     // The Features page (row F1) follows its own channel, as the Issues queue does.
@@ -803,16 +804,19 @@ async function main(): Promise<void> {
         schedule: tynnTimer,
         projectFor: workspaceTynnProject,
         feed: TYNN_FEATURES_FEED,
-        send: ownerRoute((event) => hostTynnWatches.deliver('features', event), (owner, event) => { engineRef?.tynnFeaturesEvent(owner, event); }),
+        send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostTynnWatches.deliver('features', event); },
         log: say,
     });
-    // THE LIVE TYNN TAB, AS GENIE-HOST'S OWN ANSWERS WATCH IT (Tynn #898 step 2d-3b): the three hubs, under its own owner.
+    // THE LIVE TYNN TAB, AS GENIE-HOST'S OWN ANSWERS WATCH IT (Tynn #898 step 2d-3b): the three hubs, under its own owner, and
+    // no other: no hub says an event over the engine link (Tynn #934 task #1474).
     const hostTynnWatches = hostTynnWatch({ hubs: { board: tynnBoard, issues: tynnIssues, features: tynnFeatures } });
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now; and once the account opens.
     void tynnOpening.then((account) => {
         account.onChange(() => { issueWatch.restart(); });
         issueWatch.restart();
     }, () => { issueWatch.start(); });
+    // Ask Tynn again whether this host is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
+    const recheckTynn = async (): Promise<void> => { const account = await tynnOpening.catch(() => null); if (account && !account.status().signedIn) await account.recheck(); };
     // THE HOST PREPARES ITS AGENTS (P3.4 cut c), with a window open or not. A start waits for the account: opening has its own deadline.
     // One writer of a workspace's agent config: preparing an agent and syncing hold the same lock.
     const withConfig = configWriter();
@@ -1473,10 +1477,6 @@ async function main(): Promise<void> {
             sessionServers: (record) => mcp!.sessionServers(record),
             status: () => mcp!.status(),
         },
-        issueWatch,
-        tynnBoard,
-        tynnIssues,
-        tynnFeatures,
         tynnPages: { read: readHostTynnPage },
     });
     engineRef = engine;
@@ -1553,6 +1553,9 @@ async function main(): Promise<void> {
     // This host runs them, so it says each to every window, agentless, as it says the mail.
     sayThings({ supervisor: processSupervisor, sites: hostingStack?.sites ?? null, engines: hostingStack?.engines ?? null, flows: hostFlows }, (thing) => { engine.callback({ name: 'toolSignal', signal: { kind: 'thing', thing } }); });
     accountsChangedNow = () => { engine.callback({ name: 'toolSignal', signal: { kind: 'accounts-changed' } }); };
+    // A BATCH OF ISSUEWATCH PLAYS ITS SOUNDS IN THE WINDOWS OPEN NOW (Tynn #806; a tool signal since Tynn #934 task #1474): one
+    // per kind, agentless, as the mail and the things are said. With no window nothing plays, and nothing is kept for later.
+    sayIssueWatchSounds(issueWatch, (signal) => { engine.callback({ name: 'toolSignal', signal }); });
     // EACH ACCOUNT'S LAST READINGS SURVIVE A RESTART (Tynn #485): how an idle account's room is known. Read here, written as they change.
     const headroomBoardFile = join(home, 'headroom-board.json');
     headroomFeed.restore(((): unknown => { try { return JSON.parse(readFileSync(headroomBoardFile, 'utf8')); } catch { return []; } })());
@@ -1855,7 +1858,7 @@ async function main(): Promise<void> {
         featureFilesHealth.config(workspacePath, [...results], Date.now(), source);
         return results;
     };
-    const featureIssueWatch = new IssueWatchReplica((method, args) => issueWatch.call(method, args));
+    const featureIssueWatch = new IssueWatchReplica();
     featureIssueWatch.apply({ kind: 'dump', dump: issueWatch.dump() });
     issueWatch.onEvent(event => { featureIssueWatch.apply(event); featureChanged(); });
     const featureFirewallReader = firewallReader(() => readFirewallRule(REMOTE_PORT), { minIntervalMs: 5000 });
@@ -2048,8 +2051,7 @@ async function main(): Promise<void> {
         // Whether the person is at this machine, said by its window; the workspaces' names are this host's own (Tynn #1044).
         windowView: hostView,
         approvalsGate: (caller, action, detail, forwardedCallId) => approvals.gate(caller, action, detail, forwardedCallId ? forwardedCalls.get(forwardedCallId) : undefined),
-        // Ask Tynn again whether this host is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
-        tynnRecheck: async () => { const account = await tynnOpening.catch(() => null); if (account && !account.status().signedIn) await account.recheck(); },
+        tynnRecheck: recheckTynn,
         providerPrograms: hostProviderPrograms({
             file: () => providerChoiceFile(),
             refresh: (provider) => { void providerHealth.refresh(provider); },
@@ -2450,6 +2452,8 @@ async function main(): Promise<void> {
             if (signal.kind === 'action' && signal.action === 'thumbsup' && signal.reason?.trim().toLowerCase() === 'shutdown') agentShutdown.acknowledge(signal.agentId);
             engine.callback({ name: 'toolSignal', signal });
         },
+        // `checkIssues` and imDone's count line (Tynn #934 task #1474): this host's own IssueWatch, a window open or not.
+        issueWatch: hostIssueWatchTools({ issueWatch, projectFor: workspaceTynnProject, recheckSignIn: () => { void recheckTynn(); } }),
         forwardedCalls,
         // THE AGENTS' `playwright` (Tynn #846): what Genie has, and asking it for a version.
         playwright: playwrightToolPort({ toolchainDir: playwrightToolchain, fs: nodePhpVersionsFs(), installer: playwrightInstaller, workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null }),
