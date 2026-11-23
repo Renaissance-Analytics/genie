@@ -19,6 +19,9 @@ export interface BrowserFacts {
     readonly launch: { readonly file: string; readonly args: readonly string[] };
 }
 
+/** What genie-host says of its own front door (Tynn #1046 D2): every fact a browser needs but how to start it. */
+export type BrowserDoor = Omit<BrowserFacts, 'launch'>;
+
 export type { SyncedCookie } from '../core/cookie-sync.js';
 
 /** A page in the browser's process, as the `pages` tool needs to read it. */
@@ -138,6 +141,11 @@ export class BrowserService {
 
     #emit(event: BrowserEvent): void {
         for (const listener of [...this.#listeners]) listener(event);
+    }
+
+    /** genie-host's own front door, said by genie-host with or without a window (Tynn #1046 D2). */
+    door(_door: BrowserDoor): void {
+        throw new Error('2g-4d D2: not built yet');
     }
 
     /** `from`: the connection that asked, so the browser's going can be told from a window's. */
