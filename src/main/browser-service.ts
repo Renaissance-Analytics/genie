@@ -2,9 +2,10 @@ import { isCookieMessage, type CookieMessage } from '../core/cookie-sync.js';
 
 /**
  * THE GENIE BROWSER'S PROCESS, AS THE HOST SEES IT (the host split, P2b; decision 5). The window and the browser never talk
- * directly: each is a client of the host, so either can go without the other. The window says what the browser needs (the
- * front door's port and Genie's CA, which are the window's until P5) and what to open; what comes before a browser has
- * linked is held here, bounded. Nothing here is secret: a CA certificate, a port and site names.
+ * directly: each is a client of the host, so either can go without the other. genie-host says what the browser needs of its
+ * own front door (its port, Genie's CA, the hosts and each site's workspace: `door`, Tynn #1046 D2), with or without a
+ * window; a window says only how to start the browser (its launch, which only an installed Genie knows) and what to open.
+ * What comes before a browser has linked is held here, bounded. Nothing here is secret: a CA certificate, a port and site names.
  */
 
 export interface BrowserFacts {
@@ -15,9 +16,11 @@ export interface BrowserFacts {
     readonly workspaceOf: Readonly<Record<string, string>>;
     /** Each host's label: its workspace's name (core/browser-sites.ts), so a chip never reads an id. Absent from an older host. */
     readonly siteLabels?: Readonly<Record<string, string>>;
-    /** How to start the browser's process: the window knows the install; the host may run from a copy of it (P6). */
-    readonly launch: { readonly file: string; readonly args: readonly string[] };
+    /** How to start the browser's process: the window knows the install; the host may run from a copy of it (P6). Absent until a window has said it. */
+    readonly launch?: BrowserLaunch;
 }
+
+export interface BrowserLaunch { readonly file: string; readonly args: readonly string[] }
 
 /** What genie-host says of its own front door (Tynn #1046 D2): every fact a browser needs but how to start it. */
 export type BrowserDoor = Omit<BrowserFacts, 'launch'>;
@@ -95,14 +98,17 @@ const HELD_LIMIT = 20;
 const START_PATIENCE_MS = 20_000;
 const PAGE_CALL_LIMIT_MS = 30_000;
 
-function isFacts(value: unknown): value is BrowserFacts {
-    if (typeof value !== 'object' || value === null) return false;
-    const f = value as Partial<BrowserFacts>;
-    return Number.isInteger(f.frontDoorPort) && (f.caPem === null || typeof f.caPem === 'string') && Array.isArray(f.hosts) && f.hosts.every((h) => typeof h === 'string') && typeof f.workspaceOf === 'object' && f.workspaceOf !== null && typeof f.launch?.file === 'string' && Array.isArray(f.launch.args) && f.launch.args.every((a) => typeof a === 'string');
+/** A window's publish: how to start the browser, and nothing else (the front door is genie-host's own, Tynn #1046 D2). */
+function launchOf(value: unknown): BrowserLaunch | null {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== 'launch') return null;
+    const l = (value as { launch?: Partial<BrowserLaunch> }).launch;
+    return l && typeof l.file === 'string' && Array.isArray(l.args) && l.args.every((a) => typeof a === 'string') ? { file: l.file, args: [...l.args] } : null;
 }
 
 export interface BrowserServicePorts {
-    readonly startBrowser?: (launch: BrowserFacts['launch']) => void;
+    readonly startBrowser?: (launch: BrowserLaunch) => void;
     /** Why this host has no Genie browser (P10.1d: plain Node, no Electron to start it with). Absent = it has one. */
     readonly unavailable?: string;
     readonly now?: () => number;
@@ -112,8 +118,10 @@ export class BrowserService {
     readonly #ports: BrowserServicePorts;
     #startedAt: number | null = null;
     readonly #listeners = new Set<(event: BrowserEvent) => void>();
-    #facts: BrowserFacts | null = null;
-    #publisher: string | null = null;
+    /** genie-host's own front door, as it last said it; null until it has (no hosting: never). */
+    #door: BrowserDoor | null = null;
+    /** How to start the browser, as a window last said it. */
+    #launch: BrowserLaunch | null = null;
     #browser: string | null = null;
     #held: Array<Extract<BrowserEvent, { kind: 'open' | 'openSingle' }>> = [];
     readonly #popped = new Map<string, string>();
@@ -127,11 +135,11 @@ export class BrowserService {
 
     /** Something is waiting for a browser and none is linked: start one, not twice while one is on its way. */
     #startIfWanted(): void {
-        if (this.#ports.unavailable !== undefined || this.#browser !== null || this.#held.length === 0 || this.#facts === null || !this.#ports.startBrowser) return;
+        if (this.#ports.unavailable !== undefined || this.#browser !== null || this.#held.length === 0 || this.#door === null || this.#launch === null || !this.#ports.startBrowser) return;
         const now = (this.#ports.now ?? Date.now)();
         if (this.#startedAt !== null && now - this.#startedAt < START_PATIENCE_MS) return;
         this.#startedAt = now;
-        this.#ports.startBrowser(this.#facts.launch);
+        this.#ports.startBrowser(this.#launch);
     }
 
     onEvent(listener: (event: BrowserEvent) => void): () => void {
@@ -144,20 +152,28 @@ export class BrowserService {
     }
 
     /** genie-host's own front door, said by genie-host with or without a window (Tynn #1046 D2). */
-    door(_door: BrowserDoor): void {
-        throw new Error('2g-4d D2: not built yet');
+    door(door: BrowserDoor): void {
+        if (this.#door !== null && JSON.stringify(this.#door) === JSON.stringify(door)) return;
+        const wasDown = this.#door === null;
+        this.#door = door;
+        this.#emit({ kind: 'facts', facts: this.#facts() });
+        if (wasDown) this.#emit({ kind: 'door', up: true });
+        this.#startIfWanted();
+    }
+
+    /** What a browser is given: genie-host's door, with the launch when a window has said it. */
+    #facts(): BrowserFacts {
+        return { ...this.#door!, ...(this.#launch ? { launch: this.#launch } : {}) };
     }
 
     /** `from`: the connection that asked, so the browser's going can be told from a window's. */
     async call(method: string, args: readonly unknown[], from: string): Promise<unknown> {
         switch (method) {
             case 'publish': {
-                if (!isFacts(args[0])) throw new Error('those are not the facts a browser needs');
-                this.#facts = args[0];
-                const wasDown = this.#publisher === null;
-                this.#publisher = from;
-                this.#emit({ kind: 'facts', facts: this.#facts });
-                if (wasDown) this.#emit({ kind: 'door', up: true });
+                // A window says how to start the browser, and only that: the front door is genie-host's (Tynn #1046 D2).
+                const launch = launchOf(args[0]);
+                if (!launch) throw new Error('a window says only how to start the browser ({ launch }); the front door is Genie’s host’s own');
+                this.#launch = launch;
                 this.#startIfWanted();
                 return null;
             }
@@ -192,7 +208,7 @@ export class BrowserService {
                 const held = this.#held;
                 this.#held = [];
                 for (const event of held) this.#emit(event);
-                return { facts: this.#facts, doorUp: this.#publisher !== null };
+                return { facts: this.#door ? this.#facts() : null, doorUp: this.#door !== null };
             }
             case 'cookies': {
                 if (!isCookieMessage(args[1])) throw new Error('only a .gen cookie crosses');
@@ -291,10 +307,6 @@ export class BrowserService {
             this.#pages = [];
             this.#emit({ kind: 'pages', pages: [] });
             for (const panelKey of [...this.#popped.keys()]) { this.#popped.delete(panelKey); this.#emit({ kind: 'poppedBack', panelKey }); }
-        }
-        if (this.#publisher === connection) {
-            this.#publisher = null;
-            this.#emit({ kind: 'door', up: false });
         }
     }
 }

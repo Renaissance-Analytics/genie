@@ -242,8 +242,7 @@ describe('wired: main reads the front door from the watch; genie-host feeds it, 
         expect(main).toMatch(/routes: \(\) => frontDoorNow\.routes,/);
         expect(main).toMatch(/enabledHosts: \(\) => frontDoorNow\.routes\.map\(\(r\) => r\.host\)/);
         expect(main).toMatch(/workspaceOfHost: \(host\) => frontDoorNow\.sites\.find\(/);
-        expect(main).toMatch(/workspaceOf: Object\.fromEntries\(frontDoorNow\.sites\.map\(/);
-        expect(main).toMatch(/frontDoorNow\.sites\.find\(\(s\) => s\.host\.toLowerCase\(\) === host\)/);
+        // The browser's facts and an agent's site moved to genie-host itself in D2 (Tynn #1046): split-2g4d-d2 pins them.
         expect(main).toMatch(/sites: \(workspaceId\) => frontDoorNow\.sites\.filter\(\(s\) => s\.workspaceId === workspaceId\)\.map\(\(s\) => s\.host\),/);
     });
 

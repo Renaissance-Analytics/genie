@@ -19,10 +19,9 @@ describe('main wires the site row', () => {
         expect(body).not.toMatch(/browserPane\.show|genie:navigate/);
     });
 
-    it('the same opener reaches the agents’ tools (background) and the Hosting row (the person’s click) — once each (genie#1235)', () => {
-        // The agents' opener is the background one, and pulses the site's workspace (genie#1265, agent-actions-pulse-wiring).
-        expect(main.match(/openInBrowser: agentOpensSite,/g) ?? []).toHaveLength(1);
-        expect(main.match(/openInBrowserFor\('background'\)\(url\)/g) ?? []).toHaveLength(1);
+    it('the window’s opener reaches only the Hosting row (the person’s click), once; an agent’s site opens in genie-host (genie#1235, Tynn #1046 D2)', () => {
+        // The agents' opener is genie-host's own, in the background (host-browser.ts hostOpensSite); none is handed out here.
+        expect(main).not.toMatch(/agentOpensSite|openInBrowserFor\('background'\)/);
         expect(main.match(/openInBrowser: openInBrowserFor\('user-gesture'\),/g) ?? []).toHaveLength(1);
         const ports = main.slice(main.indexOf('const ownFeatureUi = featureWindow(localDoor, {'), main.indexOf('featureEffectNow = ownFeatureUi;'));
         expect(ports).toMatch(/openInBrowser: openInBrowserFor\('user-gesture'\),/);

@@ -94,10 +94,16 @@ describe('1. genie-host says the browser’s facts itself; the window says only 
     });
 
     it('wired: genie-host says its door to its browser; main publishes only its launch, and never on a site change', () => {
-        expect(code(src('src/main/genie-host.ts'))).toMatch(/browserService\.door\(browserDoorOf\(/);
+        const host = code(src('src/main/genie-host.ts'));
+        expect(host).toMatch(/browserService\.door\(browserDoorOf\(\{ \.\.\.view, workspaceNames \}\)\);/);
+        // At its start, again on each front-door change it watches, and on a registry write (a workspace's name, its labels).
+        expect(host).toMatch(/frontDoorWatch\.subscribe\(\(view\) => \{ sayBrowserDoor\(view\); \}\);/);
+        expect(host).toMatch(/if \(event\.store === 'registry'\) sayBrowserDoor\(\);/);
+        expect(host).toMatch(/\n\s*sayBrowserDoor\(\);\n\s*\}/);
         const main = code(src('src/main/main.ts'));
         expect(main).toMatch(/browserCall\('publish', \[\{ launch \}\]\)/);
-        expect(main).not.toMatch(/frontDoorPort: (composed|frontDoorNow)\.|siteLabels: browserSiteLabels\(/);
+        // The front door's facts are no longer gathered here for the browser (the panels and sessions still read the watch).
+        expect(main).not.toMatch(/siteLabels: browserSiteLabels\(|hosts: frontDoorNow\.routes|workspaceOf: Object\.fromEntries\(/);
     });
 });
 
@@ -138,6 +144,8 @@ describe('2. an agent’s `sites open` runs in genie-host, and the window only p
         expect(host).toMatch(/openInBrowser: hostOpensSite\(\{/);
         const main = code(src('src/main/main.ts'));
         expect(main).toMatch(/signal\.kind === 'site-opened' && typeof signal\.workspaceId === 'string'\) showToPerson\(\{ activation: 'background', workspaceId: signal\.workspaceId, reason: 'sites open' \}\)/);
-        expect(main).not.toMatch(/agentOpensSite|openInBrowser: |hosting: composed|workspaceTrusted: /);
+        expect(main).not.toMatch(/agentOpensSite|openInBrowserFor\('background'\)|hosting: composed|workspaceTrusted: /);
+        // CONTROL: the person's own click (the Hosting row's Open) still opens through this window, over it.
+        expect(main).toMatch(/openInBrowser: openInBrowserFor\('user-gesture'\),/);
     });
 });

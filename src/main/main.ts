@@ -1,5 +1,4 @@
 import { sameFlowWindow } from '../core/route.js';
-import { browserSiteLabels } from '../core/browser-sites.js';
 import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
@@ -1344,6 +1343,8 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }
             // What genie-host runs, each change with its sound (Tynn #766 C2b; genie-host says them since Tynn #1045): only what reads goes on.
             else if (signal.kind === 'thing') { const thing = readThingSignal((raw as { thing?: unknown }).thing); if (thing) broadcast('genie:action', thing); }
+            // An agent's `sites open` in genie-host's browser (Tynn #1046 D2): the site's workspace pulses for the person (genie#1265).
+            else if (signal.kind === 'site-opened' && typeof signal.workspaceId === 'string') showToPerson({ activation: 'background', workspaceId: signal.workspaceId, reason: 'sites open' });
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
         onThreadId: (agentId: AgentId, threadId: string) => {
@@ -1960,14 +1961,8 @@ async function boot(): Promise<void> {
         const opened = await openLocalBrowser(url, activation, anchor);
         return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
-    // AN AGENT'S `sites open` (genie#1265): in the background, and the workspace the site belongs to pulses for the person.
-    const agentOpensSite: OpenInBrowser = async (url) => {
-        const r = await openInBrowserFor('background')(url);
-        const host = ((): string | null => { try { return new URL(url).host.toLowerCase(); } catch { return null; } })();
-        const site = r.ok && host ? frontDoorNow.sites.find((s) => s.host.toLowerCase() === host) : undefined;
-        if (site) showToPerson({ activation: 'background', workspaceId: site.workspaceId, reason: 'sites open' });
-        return r;
-    };
+    // AN AGENT'S `sites open` is genie-host's (Tynn #1046 D2): it opens the site in its browser, in the background, and the
+    // workspace the site belongs to pulses here on its `site-opened` signal (onToolSignal, genie#1265).
     // THE PROCESS BOOK AND ITS SCHEDULER ARE GENIE-HOST'S (P3.3c): what the person keeps running is restored there, and a
     // scheduled task fires on its clock, with or without this window. Every window manages them over the protocol; this
     // process reads only what its tray says (hostSummaryNow, Tynn #953).
@@ -2027,13 +2022,8 @@ async function boot(): Promise<void> {
             terminals: hostOnly<TerminalsPort>('the terminals'),
             // An agent's terminal gets the env the Terminals tab gives the person's (service engines + Genie's endpoint).
             terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
-            // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
-            hosting: composed,
-            // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235)
-            // or the tab on screen, and the site's workspace pulses (genie#1265).
-            openInBrowser: agentOpensSite,
-            // …and `sites` / `services` act only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
-            workspaceTrusted: (workspaceId) => !composed.untrustedNow({ workspaceId }),
+            // The agents' `services` and `sites` are genie-host's tools, `sites open` too (Tynn #1046 D2): no hosting, trust
+            // verdict or browser of this window's is theirs.
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
             // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window.
@@ -2288,7 +2278,6 @@ async function boot(): Promise<void> {
             rerouteGenieBrowserSession({ frontDoorPort: view.port, caPem: view.caPem });
             gappWindowsNow?.reroute();
         }
-        publishBrowserFacts?.();
     });
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.
@@ -2376,19 +2365,13 @@ async function boot(): Promise<void> {
         openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieRoot(), workspaceId, side: 'window', frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem }).ses,
     });
     watchWorkspaceStores(cookieBridge);
+    // HOW TO START THE GENIE BROWSER, and only that: this executable, in a dev run this app's path, and the switches an
+    // Electron needs here. What it needs of the front door genie-host says itself, from its own hosting (Tynn #1046 D2).
     publishBrowserFacts = () => {
         if (agentEngineLink?.live !== true) return;
-        const facts = {
-            frontDoorPort: frontDoorNow.port,
-            caPem: frontDoorNow.caPem,
-            hosts: frontDoorNow.routes.map((r) => r.host),
-            workspaceOf: Object.fromEntries(frontDoorNow.sites.map((s) => [s.host.toLowerCase(), s.workspaceId])),
-            siteLabels: browserSiteLabels(frontDoorNow.routes.map((r) => r.host), frontDoorNow.sites, Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? basename(w.path)]))),
-            launch: { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] },
-        };
-        void agentEngineLink.client.browserCall('publish', [facts]).catch((error: unknown) => { rendererErrorLog?.(`the browser's facts could not be published: ${error instanceof Error ? error.message : String(error)}`); });
+        const launch = { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] };
+        void agentEngineLink.client.browserCall('publish', [{ launch }]).catch((error: unknown) => { rendererErrorLog?.(`how to start the browser could not be said: ${error instanceof Error ? error.message : String(error)}`); });
     };
-    // A site's or a route's change is said again by frontDoorWatch.onChange, above (Tynn #1046).
     publishBrowserFacts();
     // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
     // Genie with nothing left running ends (core/tray-only.ts).

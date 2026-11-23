@@ -1,3 +1,4 @@
+import { browserSiteLabels } from '../core/browser-sites.js';
 import type { BrowserDoor } from './browser-service.js';
 import type { OpenInBrowser } from './hosting-actions.js';
 
@@ -18,8 +19,15 @@ export interface HostFrontDoorFacts {
     readonly workspaceNames: Readonly<Record<string, string>>;
 }
 
-export function browserDoorOf(_facts: HostFrontDoorFacts): BrowserDoor {
-    throw new Error('2g-4d D2: not built yet');
+export function browserDoorOf(facts: HostFrontDoorFacts): BrowserDoor {
+    const hosts = facts.routes.map((r) => r.host);
+    return {
+        frontDoorPort: facts.port,
+        caPem: facts.caPem,
+        hosts,
+        workspaceOf: Object.fromEntries(facts.sites.map((s) => [s.host.toLowerCase(), s.workspaceId])),
+        siteLabels: browserSiteLabels(hosts, facts.sites, facts.workspaceNames),
+    };
 }
 
 export interface HostOpensSitePorts {
@@ -31,6 +39,12 @@ export interface HostOpensSitePorts {
     readonly signal: (signal: { readonly kind: 'site-opened'; readonly workspaceId: string; readonly reason: string }) => void;
 }
 
-export function hostOpensSite(_ports: HostOpensSitePorts): OpenInBrowser {
-    throw new Error('2g-4d D2: not built yet');
+export function hostOpensSite(ports: HostOpensSitePorts): OpenInBrowser {
+    return async (url) => {
+        try { await ports.open(url); } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+        const host = ((): string | null => { try { return new URL(url).host.toLowerCase(); } catch { return null; } })();
+        const site = host ? ports.sites().find((s) => s.host.toLowerCase() === host) : undefined;
+        if (site) ports.signal({ kind: 'site-opened', workspaceId: site.workspaceId, reason: 'sites open' });
+        return { ok: true };
+    };
 }

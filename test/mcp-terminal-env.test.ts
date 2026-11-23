@@ -142,9 +142,10 @@ describe('main wires both paths to the one function', () => {
         expect(main).not.toMatch(/\.\.\.serviceEnv/);
     });
 
-    it('the agents’ services/sites tools get the composition, and the Services and Hosting tabs redraw when an agent acts', () => {
+    it('the agents’ services/sites tools are genie-host’s (no composition of the window’s), and the Services and Hosting tabs redraw when an agent acts', () => {
         const main = code('src/main/main.ts');
-        expect(main).toMatch(/hosting: composed,/);
+        // Tynn #1046 D2: `sites open`, the last of them the window ran, is genie-host's too.
+        expect(main).not.toMatch(/hosting: composed/);
         const owner = code('src/main/features-host.ts');
         expect(owner).toMatch(/h\.api\.engines\.onChange\(changed\), h\.api\.sites\.onChange\(changed\)/);
         // The tabs redraw through RemoteHost from genie-host's HostFeatures (Tynn #898 step 2e-2).

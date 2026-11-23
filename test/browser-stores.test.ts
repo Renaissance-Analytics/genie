@@ -53,17 +53,17 @@ describe('a tab and its store', () => {
     });
 });
 
-describe('what the window publishes', () => {
-    const facts = (over: Partial<BrowserFacts> = {}): BrowserFacts => ({ frontDoorPort: 1, caPem: null, hosts: ['a.gen'], workspaceOf: { 'a.gen': 'workspace-a' }, launch: { file: 'g', args: [] }, ...over });
+describe('what genie-host says of its front door (Tynn #1046 D2)', () => {
+    const facts = (over: Partial<BrowserFacts> = {}): BrowserFacts => ({ frontDoorPort: 1, caPem: null, hosts: ['a.gen'], workspaceOf: { 'a.gen': 'workspace-a' }, ...over });
 
     it('names each site’s workspace', async () => {
         const service = new BrowserService();
-        await service.call('publish', [facts()], 'window');
+        service.door(facts());
         expect(await service.call('register', [], 'browser')).toMatchObject({ facts: { workspaceOf: { 'a.gen': 'workspace-a' } } });
     });
 
-    it('no such map: refused', async () => {
-        await expect(new BrowserService().call('publish', [{ ...facts(), workspaceOf: 'x' }], 'window')).rejects.toThrow(/facts/);
+    it('a window cannot say it: a publish with the map in it is refused', async () => {
+        await expect(new BrowserService().call('publish', [{ ...facts(), launch: { file: 'g', args: [] } }], 'window')).rejects.toThrow(/how to start the browser/);
     });
 });
 
@@ -87,8 +87,8 @@ describe('the wires', () => {
         expect(fn).toMatch(/workspaceStores/);
     });
 
-    it('the window says each site’s workspace', () => {
-        // From genie-host's front door, as frontdoor.watch says it (Tynn #1046).
-        expect(strip('src/main/main.ts')).toMatch(/workspaceOf: Object\.fromEntries\(frontDoorNow\.sites\.map\(/);
+    it('genie-host says each site’s workspace, from its own front door (Tynn #1046 D2); the window does not', () => {
+        expect(strip('src/main/host-browser.ts')).toMatch(/workspaceOf: Object\.fromEntries\(facts\.sites\.map\(\(s\) => \[s\.host\.toLowerCase\(\), s\.workspaceId\]\)\)/);
+        expect(strip('src/main/main.ts')).not.toMatch(/workspaceOf:/);
     });
 });
