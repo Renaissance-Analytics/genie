@@ -234,7 +234,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
  * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'frontdoor.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -265,7 +265,10 @@ export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activit
     settings: 'local-settings',
     // That genie-host's registry was written (main/registry-protocol.ts), to a connection that said registry.watch: main's
     // own client, whose window registry reads it again (Tynn #1007, 2g-4e).
-    registry: 'local-registry' } as const;
+    registry: 'local-registry',
+    // genie-host's front door (core/front-door-watch.ts), to a connection that said frontdoor.watch: main's own client, for
+    // its browser sessions, site panels, cookie bridge and GApp windows (Tynn #1046, 2g-4d-D1).
+    frontdoor: 'local-frontdoor' } as const;
 
 /** What another window on an agent is typing (Tynn #730), to a remote connection; this machine's windows hear LOCAL_EVENTS.typing. */
 export const TYPING_EVENT = 'agent-typing';
