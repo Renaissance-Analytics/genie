@@ -8,8 +8,8 @@ import { notAvailableHere } from '../src/core/host-runtime.js';
 /**
  * AN ELEVATION THAT WAITED FOR A WINDOW (the host split, P5a): genie-host held it because no window was open, and says what
  * waits. The Deck item that names it (core/elevation-waiting.ts) answers Approve now with the hosts sync, the one privileged
- * step the host can need with no one asking; nothing else answers it. (Since 2g-4d E2b no source puts that item on a Deck:
- * WindowElevation's own `deckItems()` was read only by the engine link's hosting dump, which no window showed after E1.)
+ * step the host can need with no one asking; nothing else answers it. genie-host puts it on its own Deck (deck.watch and
+ * every client's estate): split-2g4d-e2b-elevation-deck.test.ts.
  */
 
 const hostsStep: PrivilegedStep = { id: 'hosts', label: 'update the hosts file', step: { command: 'cp', args: [] } as never };
@@ -33,11 +33,13 @@ describe('an elevation waiting for a window', () => {
         expect(held.ok ? '' : held.error).toMatch(/^waiting for a window/);
         expect(asked).toEqual([]);
         expect(elevation.waiting()).toEqual(['update the hosts file']);
+        expect(elevation.deckItems().map((i) => i.id)).toEqual([ELEVATION_WAITING_DECK_ID]);
         connected = true;
         // The window's own answer (here the person declined) is the answer: asked, so nothing waits any more.
         expect(await elevation.run([hostsStep])).toEqual({ ok: false, failed: null, error: 'declined' });
         expect(asked.length).toBe(1);
         expect(elevation.waiting()).toEqual([]);
+        expect(elevation.deckItems()).toEqual([]);
     });
 });
 
@@ -55,6 +57,7 @@ describe('elevation on a host with no window', () => {
         expect(outcome.ok ? '' : outcome.error).not.toMatch(/window opens|open Genie/i);
         expect(asked).toEqual([]);
         expect(elevation.waiting()).toEqual([]);
+        expect(elevation.deckItems()).toEqual([]);
     });
 
     it('CONTROL: elevation: true is today\'s — asked in a connected window', async () => {

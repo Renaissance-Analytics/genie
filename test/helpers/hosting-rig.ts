@@ -64,6 +64,8 @@ export interface HostingRig {
     /** Genie's home for this host: a NEXT host on the same home is the same machine after a restart. */
     readonly home: string;
     readonly elevationsAsked: Array<readonly PrivilegedStep[]>;
+    /** The host's elevations, asked of its windows (WindowElevation): what waits for a window is on genie-host's Deck. */
+    readonly elevation: WindowElevation;
     /** Every process the host's supervisor opened, with its env. */
     readonly opened: PtySpawnOptions[];
     /** A window: a LOCAL one by default (the host's own endpoint), or `local: false` for any other transport. */
@@ -123,7 +125,7 @@ export async function hostingRig(options: { appEnv?: (source: { readonly kind: '
         };
     };
     return {
-        stack, supervisor, server: theServer, ws, home, elevationsAsked, opened,
+        stack, supervisor, server: theServer, ws, home, elevationsAsked, opened, elevation,
         window: async (w = {}) => {
             const [h, raw] = memoryPair();
             theServer.accept(h, { local: w.local ?? true });
