@@ -116,6 +116,7 @@ import { hostSummaryFeed, hostSummaryOf } from '../core/host-summary.js';
 import { remoteWatchFeed, remoteWatchOf } from '../core/remote-watch.js';
 import { settingsWatchFeed } from './settings-watch.js';
 import { mailSignalsOfRead, mailSignalsOfSend } from '../core/mail-actions.js';
+import { sayThings } from '../core/thing-sounds.js';
 import { hostDraftPrune } from './host-draft-prune.js';
 import { accountKeyOf } from '../core/remote-window-policy.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -1135,13 +1136,19 @@ async function main(): Promise<void> {
     /** This host's keychain once open: whether it can keep secrets, for the summary (Tynn #959, 2g-3b). */
     let keychainNow: HostKeychain | null = null;
     const hostSummary = hostSummaryFeed({
-        read: () => hostSummaryOf(terminalHost.list(), hostFlows.list(), hostBook.kept(), { workstationRole: relayHostService.role(), tynnAccountKey: tynnAccountNow ? accountKeyOf(tynnAccountNow.status()) : null, keychainReady: keychainNow?.state() === 'ready', githubBlocked: (githubAccountNow?.view().signal ?? null) !== null }),
+        read: () => hostSummaryOf(terminalHost.list(), hostFlows.list(), hostBook.kept(), { workstationRole: relayHostService.role(), tynnAccountKey: tynnAccountNow ? accountKeyOf(tynnAccountNow.status()) : null, keychainReady: keychainNow?.state() === 'ready', githubBlocked: (githubAccountNow?.view().signal ?? null) !== null },
+            // The processes, the services and the sites this host runs (Tynn #1045, 2g-4d-C): its own supervisor's and hosting's lists.
+            { processes: processSupervisor.list(), services: hostingStack?.engines.list() ?? [], routes: hostingStack?.routes() ?? [] }),
         onChange: (listener) => {
             summaryPokes.add(listener);
-            const offs = [terminalHost.onChange(listener), flowsService.onEvent(() => listener()), processesService.onEvent(() => listener()), () => { summaryPokes.delete(listener); }];
+            const offs = [terminalHost.onChange(listener), flowsService.onEvent(() => listener()), processesService.onEvent(() => listener()), () => { summaryPokes.delete(listener); },
+                // A process's state, a site's (its routes), an engine's (active, and the routes it serves).
+                processSupervisor.onChange(() => listener()), hostingStack?.sites.onChange(listener) ?? (() => {}), hostingStack?.engines.onChange(listener) ?? (() => {})];
             return () => { for (const off of offs) off(); };
         },
     });
+    // A GApp's route came or went: the routed sites are read again.
+    gappRouteListeners.add(pokeSummary);
     void tynnOpening.then((account) => { account.onChange(pokeSummary); pokeSummary(); }, () => {});
     // WHETHER THE KEYCHAIN CAN KEEP SECRETS, AND GITHUB'S BLOCK (Tynn #959, 2g-3b): main's one-time unsealer runs again when the
     // keychain turns ready (legacy-unsealer.ts), and its Deck strip reads GitHub's block from here.
@@ -1518,6 +1525,10 @@ async function main(): Promise<void> {
     // every window (Tynn #998, 2g-4b1); main only checks what it is sent.
     own.inbox.onSend((to, message) => { for (const mail of mailSignalsOfSend(to, message)) engine.callback({ name: 'toolSignal', signal: { kind: 'mail', mail } }); });
     own.inbox.onRead((reader, ids) => { for (const mail of mailSignalsOfRead(reader, ids ? [...ids] : null)) engine.callback({ name: 'toolSignal', signal: { kind: 'mail', mail } }); });
+    // WHAT AGENTS RUN, EACH CHANGE WITH ITS OWN SOUND ROW (Tynn #766 C2b, core/thing-sounds.ts; here since Tynn #1045, 2g-4d-C): a
+    // process exiting (a site's own server is the site's), a site down or up again, a service started, a flow run finished.
+    // This host runs them, so it says each to every window, agentless, as it says the mail.
+    sayThings({ supervisor: processSupervisor, sites: hostingStack?.sites ?? null, engines: hostingStack?.engines ?? null, flows: hostFlows }, (thing) => { engine.callback({ name: 'toolSignal', signal: { kind: 'thing', thing } }); });
     accountsChangedNow = () => { engine.callback({ name: 'toolSignal', signal: { kind: 'accounts-changed' } }); };
     // EACH ACCOUNT'S LAST READINGS SURVIVE A RESTART (Tynn #485): how an idle account's room is known. Read here, written as they change.
     const headroomBoardFile = join(home, 'headroom-board.json');

@@ -106,7 +106,8 @@ describe('main.ts', () => {
         const now = block(src, 'function onTheClockNow(', '\n}\n');
         expect(now).toMatch(/armedFlows: hostSummaryNow\.armedFlows\.length, scheduledTasks: hostSummaryNow\.scheduledTasks\.length/);
         expect(block(src, 'function hostActivityNow(', '\n}\n')).toMatch(/\.\.\.onTheClockNow\(\)/);
-        expect(block(src, "app.on('before-quit'")).toMatch(/\{ keptProcesses: kept, \.\.\.onTheClockNow\(\) \}/);
+        // The kept processes too, since Tynn #1045 (2g-4d-C): the summary's, never the window's supervisor replica.
+        expect(block(src, "app.on('before-quit'")).toMatch(/\{ keptProcesses: hostSummaryNow\.processes\.length, \.\.\.onTheClockNow\(\) \}/);
     });
 
     it('the left-running mark: on when the UI closes, off when Genie is opened, the tray shuts down, or nothing is left; the OS ending the session leaves it alone', () => {

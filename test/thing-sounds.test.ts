@@ -149,13 +149,13 @@ describe('services', () => {
     });
 });
 
-describe('main reports them to the window that plays them', () => {
-    const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-    it('each source is wired to ONE ThingSounds and broadcast as a genie:action', () => {
-        expect(src.match(/new ThingSounds\(\)/g)).toHaveLength(1);
-        expect(src).toMatch(/composed\.supervisor\.onChange\(\(status\) => \{ const kind = things\.process\(status, siteProcess\(status\.id\)\); if \(kind\) broadcast\('genie:action', \{ agentId: null, kind \}\); \}\);/);
-        expect(src).toMatch(/composed\.sites\.onChange\(\(\) => \{ for \(const kind of things\.sites\(composed\.sites\.list\(\)\)\) broadcast\('genie:action', \{ agentId: null, kind \}\); \}\);/);
-        expect(src).toMatch(/composed\.engines\.onStarted\(\(\) => \{ broadcast\('genie:action', \{ agentId: null, kind: 'serviceup' \}\); \}\);/);
-        expect(src).toMatch(/composed\.flows\.onRun\(\(_id, run\) => \{ const kind = flowRunSound\(run\); if \(kind\) broadcast\('genie:action', \{ agentId: null, kind \}\); \}\);/);
+describe('genie-host, which runs them, says them; main reports what it is sent to the window that plays them', () => {
+    const strip = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+    it('ONE ThingSounds, in genie-host (Tynn #1045, 2g-4d-C; test/split-2g4d-c-summary-things.test.ts says how each source sounds)', () => {
+        expect(strip('src/core/thing-sounds.ts').match(/new ThingSounds\(\)/g)).toHaveLength(1);
+        expect(strip('src/main/genie-host.ts').match(/sayThings\(/g)).toHaveLength(1);
+        const main = strip('src/main/main.ts');
+        expect(main).not.toMatch(/new ThingSounds\(\)|sayThings\(/);
+        expect(main).toMatch(/const thing = readThingSignal\(\(raw as \{ thing\?: unknown \}\)\.thing\); if \(thing\) broadcast\('genie:action', thing\);/);
     });
 });

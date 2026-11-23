@@ -42,7 +42,7 @@ import { setProviderChoiceFile } from './provider-choice.js';
 import { readMailSignal } from '../core/mail-actions.js';
 import { windowSettings } from './window-settings.js';
 import { windowApprovals } from './approvals-gate-protocol.js';
-import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
+import { readThingSignal } from '../core/thing-sounds.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
@@ -377,9 +377,8 @@ let trayMenuNow: TrayItem[] = [];
 /** What genie-host runs now, as the tray says it and the tray-only rule counts it (core/tray-only.ts). */
 function hostActivityNow(): HostActivity {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
-    const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-    const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).length;
-    return { agents, terminals: hostSummaryNow.terminals.length, processes, services: servicesUp, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
+    // The processes and the services are genie-host's, in its summary (Tynn #1045, 2g-4d-C).
+    return { agents, terminals: hostSummaryNow.terminals.length, processes: hostSummaryNow.processes.length, services: hostSummaryNow.services.length, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
 }
 
 /** What waits on the host's clock, from genie-host's summary (core/tray-only.ts's rule). With no host, nothing outlives the window. */
@@ -421,12 +420,10 @@ function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
         // A terminal whose pid has not come in yet runs no command it could be busy with.
         return { name: `${ws ? basename(ws.path) : t.workspaceId} · terminal ${n}`, busy: t.pid !== null && terminalBusy(t.pid, table) };
     });
-    const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
-    const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);
-    const sites = (services?.routes() ?? []).map((r) => r.host);
     const clockFlows = agentEngineLink?.live === true ? [...hostSummaryNow.armedFlows] : [];
     const clockTasks = agentEngineLink?.live === true ? [...hostSummaryNow.scheduledTasks] : [];
-    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
+    // The kept processes, the active services and the sites, as genie-host's summary names them (Tynn #1045, 2g-4d-C).
+    return { agents, terminals: terminalsOpen, processes: [...hostSummaryNow.processes], services: [...hostSummaryNow.services], sites: [...hostSummaryNow.sites], flows: clockFlows, scheduled: clockTasks };
 }
 
 /** How long the tray's question waits for the busy marks' process table (read off main) before it is asked without them. */
@@ -1339,6 +1336,8 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
             // Mail between agents (genie#1209, Tynn #766 C2a; Tynn #998): genie-host keeps the inbox and says each; only what reads goes on.
             else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }
+            // What genie-host runs, each change with its sound (Tynn #766 C2b; genie-host says them since Tynn #1045): only what reads goes on.
+            else if (signal.kind === 'thing') { const thing = readThingSignal((raw as { thing?: unknown }).thing); if (thing) broadcast('genie:action', thing); }
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
         onThreadId: (agentId: AgentId, threadId: string) => {
@@ -1938,15 +1937,8 @@ async function boot(): Promise<void> {
     // rechecks them itself when its keychain comes back (keyring-service.ts onReady) and registers with Genie 1's record
     // when the unsealer hands it over. What only Electron knows is said here once, for the log.
     if (process.platform === 'linux') console.log(`[genie] this window's password store: backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'}`);
-    // What agents run, each change with its own sound row (Tynn #766 C2b, core/thing-sounds.ts): a process exiting (a
-    // site's own server is the site's), a site up or down, a service started, a flow run finished.
-    const things = new ThingSounds();
-    const siteProcess = (id: string) => composed.sites.list().some((s) => s.processIds.includes(id));
-    things.sites(composed.sites.list());
-    composed.supervisor.onChange((status) => { const kind = things.process(status, siteProcess(status.id)); if (kind) broadcast('genie:action', { agentId: null, kind }); });
-    composed.sites.onChange(() => { for (const kind of things.sites(composed.sites.list())) broadcast('genie:action', { agentId: null, kind }); });
-    composed.engines.onStarted(() => { broadcast('genie:action', { agentId: null, kind: 'serviceup' }); });
-    composed.flows.onRun((_id, run) => { const kind = flowRunSound(run); if (kind) broadcast('genie:action', { agentId: null, kind }); });
+    // WHAT AGENTS RUN, EACH CHANGE WITH ITS OWN SOUND ROW (Tynn #766 C2b) is said by genie-host, which runs them (Tynn #1045,
+    // 2g-4d-C): a `thing` tool signal, handed on above (onToolSignal).
     // GENIE'S BROWSER FOR A SITE'S OPEN — the Hosting row's and an agent's `sites open` alike (hosting-actions.ts
     // `openSite` checks the site is served first): the Genie browser WINDOW comes up with the site in a new tab (beta.35
     // item 36 — Genie 1's own window). The person sees what the agent opened; nothing opens outside Genie.
@@ -2530,8 +2522,8 @@ app.on('before-quit', (event) => {
             const running = registry!.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);
             // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
             // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
-            const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-            return quitPlan({ runningAgents: running, liveTerminals: hostSummaryNow.terminals.length, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
+            // The kept processes are counted from genie-host's summary (Tynn #1045, 2g-4d-C).
+            return quitPlan({ runningAgents: running, liveTerminals: hostSummaryNow.terminals.length, host: agentEngineLink?.live === true ? { keptProcesses: hostSummaryNow.processes.length, ...onTheClockNow() } : null });
         },
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
