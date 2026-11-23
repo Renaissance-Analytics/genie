@@ -238,6 +238,22 @@ describe('a relay connection says only a relay hello (SECURITY, pairing vs share
         const t = connect();
         expect(await t.hello({ kind: 'relay' })).toEqual({ kind: 'refused', reason: 'this connection did not come through the Tynn relay' });
     });
+
+    /*
+     * P9.1 (audit H1, the hello the audit predates): `local` is what this machine's own window says on its own door, and it
+     * is welcomed as the owner with no PIN and no Allow. A guest the relay admitted, or anything on the tailnet socket,
+     * saying it must be refused, or the grant's scope and the guest's Allow are both skipped.
+     */
+    it('a `local` hello on a relay socket, or on the tailnet socket, is refused and is nobody; on this machine’s own door it is the owner (CONTROL)', async () => {
+        const refusedAsLocal = { kind: 'refused', reason: 'local authentication is available only on this Genie window’s protocol door' };
+        for (const who of [linkGuest, hostGuest]) expect(await connectRelay(who).hello({ kind: 'local' })).toEqual(refusedAsLocal);
+        expect(await connect().hello({ kind: 'local' })).toEqual(refusedAsLocal);
+        expect(host.connections()).toEqual([]);
+        expect(pairPrompts).toBe(0);
+        // CONTROL: the same hello on the door this host opened for its own window is the owner.
+        const own = connectRelay({ kind: 'local', label: 'this window', isOwner: true, workspaceId: null, readonly: false, window: 'main' });
+        expect(await own.hello({ kind: 'local' })).toMatchObject({ kind: 'welcome', isOwner: true, workspaceId: null });
+    });
 });
 
 describe('the host API is listened to only while someone is connected (genie#1200)', () => {
