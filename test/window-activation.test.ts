@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type ActivatableWindow, type FirstShowWindow } from '../src/core/window-activation.js';
+import { ActivationLedger, FIRST_SHOW_FOCUS_MS, FirstShowTrace, bringUp, traceFirstShow, onceShowable, showWhenReady, windowLabelOf, type ActivatableWindow, type FirstShowWindow } from '../src/core/window-activation.js';
 
 /**
  * GENIE NEVER TAKES THE KEYBOARD ON ITS OWN (genie#1235; the owner, 2026-10-26: "the most annoying thing ever").
@@ -183,5 +183,106 @@ describe('windowLabelOf — which Genie window, from its URL', () => {
         expect(windowLabelOf('http://genie.localhost:24567/browser.html')).toBe('browser');
         expect(windowLabelOf('http://genie.localhost:24567/doctor.html')).toBe('doctor');
         expect(windowLabelOf('')).toBe('unknown');
+    });
+});
+
+/**
+ * THE FIRST SHOW, TIMED (Tynn #1032). On Linux CI a terminal "dropped" typed input in 4 of 39 smoke runs: the keys
+ * reached the shell, the shell echoed them, xterm's buffer held them, and its rows never drew them. In all four, and in
+ * none of the 35 passes, the main window never took focus at launch: the window the compositor did not show gets no
+ * frames on Wayland (genie#1370), so nothing drawn on a frame (xterm's renderer) draws. Nothing said so. The trace says
+ * when each step of a window's first show happened, and says it out loud when the window was shown and never focused.
+ */
+describe('FirstShowTrace — a new window\'s first show, each step timed (Tynn #1032)', () => {
+    it('says each step with its time since the window was made, and which event showed it', () => {
+        const lines: string[] = [];
+        const t = new FirstShowTrace('main', 1_000, (l) => lines.push(l));
+        t.note('did-finish-load', 1_800);
+        t.shown('did-finish-load', 1_801);
+        t.note('focus', 1_890);
+        expect(lines).toEqual([
+            '[genie] window main: did-finish-load at +800 ms',
+            '[genie] window main: show() at +801 ms, on did-finish-load',
+            '[genie] window main: focus at +890 ms (89 ms after show())',
+        ]);
+    });
+
+    it('a window shown and never focused is said once, when the wait is over: the compositor did not show it', () => {
+        const lines: string[] = [];
+        const t = new FirstShowTrace('main', 0, (l) => lines.push(l));
+        t.shown('did-finish-load', 500);
+        t.check(500 + FIRST_SHOW_FOCUS_MS - 1);
+        expect(lines.filter((l) => l.includes('NOT FOCUSED'))).toEqual([]);
+        t.check(500 + FIRST_SHOW_FOCUS_MS);
+        t.check(500 + FIRST_SHOW_FOCUS_MS + 5_000);
+        expect(lines.filter((l) => l.includes('NOT FOCUSED'))).toEqual([
+            `[genie] window main: NOT FOCUSED ${FIRST_SHOW_FOCUS_MS} ms after show() (on did-finish-load): the compositor has not shown it, and a window it does not show gets no frames (Tynn #1032)`,
+        ]);
+    });
+
+    it('a window that took focus in time is not reported, and nothing is said before show()', () => {
+        const lines: string[] = [];
+        const t = new FirstShowTrace('main', 0, (l) => lines.push(l));
+        t.check(FIRST_SHOW_FOCUS_MS * 3);
+        t.shown('ready-to-show', 100);
+        t.note('focus', 200);
+        t.check(100 + FIRST_SHOW_FOCUS_MS * 2);
+        expect(lines.some((l) => l.includes('NOT FOCUSED'))).toBe(false);
+    });
+
+    it('only the FIRST of each step is said: a reload\'s second did-finish-load and a later focus are not the first show', () => {
+        const lines: string[] = [];
+        const t = new FirstShowTrace('main', 0, (l) => lines.push(l));
+        t.note('did-finish-load', 10);
+        t.shown('did-finish-load', 11);
+        t.note('focus', 20);
+        t.note('did-finish-load', 900);
+        t.note('focus', 950);
+        expect(lines).toHaveLength(3);
+    });
+});
+
+describe('traceFirstShow — the trace, on a real window\'s events (Tynn #1032)', () => {
+    function fakeTracedWindow() {
+        const listeners = new Map<string, Array<() => void>>();
+        const once = (event: string, listener: () => void): void => { listeners.set(event, [...(listeners.get(event) ?? []), listener]); };
+        const emit = (event: string): void => { const fns = listeners.get(event) ?? []; listeners.delete(event); for (const fn of fns) fn(); };
+        return { once, webContents: { once }, emit };
+    }
+
+    it('logs the load, the show (naming the event that came first) and the first focus, timed from when it was traced', () => {
+        const w = fakeTracedWindow();
+        const lines: string[] = [];
+        let now = 1_000;
+        traceFirstShow(w, 'main', { log: (l) => lines.push(l), now: () => now, every: () => () => {} });
+        now = 1_400; w.emit('did-finish-load');
+        now = 1_401; w.emit('show');
+        now = 1_500; w.emit('focus');
+        expect(lines).toEqual([
+            '[genie] window main: did-finish-load at +400 ms',
+            '[genie] window main: show() at +401 ms, on did-finish-load',
+            '[genie] window main: focus at +500 ms (99 ms after show())',
+        ]);
+    });
+
+    it('a window shown and never focused is said by the timer, and the timer stops once it is said', () => {
+        const w = fakeTracedWindow();
+        const lines: string[] = [];
+        let now = 0, stopped = 0;
+        const ticks: Array<() => void> = [];
+        traceFirstShow(w, 'main', { log: (l) => lines.push(l), now: () => now, every: (fn) => { ticks.push(fn); return () => { stopped += 1; }; } });
+        now = 300; w.emit('did-finish-load');
+        now = 301; w.emit('show');
+        now = 301 + FIRST_SHOW_FOCUS_MS; ticks[0]!();
+        expect(lines.at(-1)).toMatch(/^\[genie\] window main: NOT FOCUSED 10000 ms after show\(\) \(on did-finish-load\)/);
+        expect(stopped).toBe(1);
+    });
+
+    it('a show before any load or paint says so, rather than naming an event that did not come', () => {
+        const w = fakeTracedWindow();
+        const lines: string[] = [];
+        traceFirstShow(w, 'remote', { log: (l) => lines.push(l), now: () => 0, every: () => () => {} });
+        w.emit('show');
+        expect(lines).toEqual(['[genie] window remote: show() at +0 ms, on neither the load nor the first paint']);
     });
 });
