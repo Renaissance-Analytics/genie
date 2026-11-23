@@ -112,7 +112,6 @@ const PROVEN: Readonly<Record<string, readonly [file: string, literal: string]>>
     'edits only': [AGENT_VIEW, '<option value="edits">edits only'],
     'Script keys': ['src/renderer/components/AppInboxCard.tsx', '<span>Script keys</span>'],
     // Flows: what the `flows` tool's own description does not spell out.
-    '@genie/<tool>': ['src/core/flow-canvas.ts', '`@genie/<tool>` kinds'],
     waitForReply: ['src/core/flow-canvas.ts', "key: 'waitForReply'"],
 };
 
@@ -255,8 +254,7 @@ describe('the guide is caught up with what Genie serves', () => {
         const body = skill('genie-flows').body;
         expect(SUPPORTED_KINDS.length).toBeGreaterThanOrEqual(16);
         expect(SUPPORTED_KINDS.map(short).filter((k) => !body.includes(`\`${k}\``))).toEqual([]);
-        const line = body.split('\n').find((l) => l.includes('`@genie/<tool>`')) ?? '';
-        const listed = backticked(line).filter((n) => n !== '@genie/<tool>');
+        const listed = backticked(body).filter((n) => n.startsWith('@genie/')).map((n) => n.slice('@genie/'.length));
         expect([...listed].sort()).toEqual([...flowTools].sort());
         expect(flowTools.length).toBeGreaterThanOrEqual(10);
     });
