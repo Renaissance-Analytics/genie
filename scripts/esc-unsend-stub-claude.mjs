@@ -10,11 +10,15 @@
  * proof tells "never reached the agent" from "hidden in the UI".
  *
  * Pointed at through `GENIE2_CLAUDE_BINARY`, the way a non-standard install would be; the product behaves identically.
- * prism-acp hands the child a filtered environment, so the place is fixed, not an env var (as stub-claude-chat.mjs).
+ * prism-acp hands the child a filtered environment, so the place is not an env var: the record is written BESIDE THIS
+ * FILE. The proof copies this file into the run's own folder and points Genie at the copy, so the record is in that
+ * folder on every platform (no /tmp, which Windows has none of) and two runs never share one.
  */
 import { appendFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const RECEIVED = '/tmp/genie-esc-unsend-received.jsonl';
+const RECEIVED = join(dirname(fileURLToPath(import.meta.url)), 'esc-unsend-received.jsonl');
 const HOLD_MS = 150_000;
 const MODELS = [{ value: 'default', displayName: 'Default (recommended)', description: 'Use the default model', resolvedModel: 'claude-opus-5-5' }];
 const SESSION = '7a1d3c5e-2b4f-4e6a-8c0d-1e2f3a4b5c6d';

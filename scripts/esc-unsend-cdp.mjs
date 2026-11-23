@@ -18,19 +18,22 @@
  * Screenshots in ci-out/esc-unsend-1029/. Result: ci-out/esc-unsend-1029/result.json.
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { spawn, execFileSync } from 'node:child_process';
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 
-const WIN = process.platform === 'win32', OUT = resolve('ci-out/esc-unsend-1029'), PORT = 9354, INSPECT = 9355, started = Date.now(), sessions = [], checks = [];
-const RECEIVED = '/tmp/genie-esc-unsend-received.jsonl';
+// Ports of this row's own (test/esc-unsend-row-1029.test.ts: no other script's).
+const WIN = process.platform === 'win32', OUT = resolve('ci-out/esc-unsend-1029'), PORT = 9381, INSPECT = 9382, started = Date.now(), sessions = [], checks = [];
+// What the agent got: written by the stub beside itself, in this run's own folder (set once that folder is made).
+let RECEIVED = null;
 const BUFFER_MS = 5_000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const json = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
-const received = () => { try { return readFileSync(RECEIVED, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+const received = () => { if (RECEIVED === null) return []; try { return readFileSync(RECEIVED, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 function check(id, ok, label, detail) {
     checks.push({ id, ok: Boolean(ok), label, detail });
     console.log(`${ok ? 'PASS' : 'FAIL'} ${id} ${label}${detail === undefined ? '' : ` :: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`}`);
@@ -69,12 +72,14 @@ const MARK = 'E1029 unsend me please';
 
 let app, page, main, root, hostRecord, failure = null, code = 1;
 try {
-    demand(process.env.CI === 'true' || (process.platform === 'linux' && process.env.USER === 'genie'), 'refused: run only in CI or a test VM');
+    demand(process.env.CI === 'true' || process.env.GENIE_TEST_MACHINE === '1', 'refused: run only in CI or a test VM');
     demand(existsSync('dist/main/entry.js'), 'run from a built checkout');
     for (const port of [PORT, INSPECT]) { let busy = false; try { await targets(port); busy = true; } catch (e) { if (e.name === 'TimeoutError') busy = true; } demand(!busy, `debugger port ${port} occupied; no app touched`); }
-    rmSync(RECEIVED, { force: true });
     root = mkdtempSync(join(tmpdir(), 'genie-esc-unsend-')); const workspace = join(root, 'workspace'), runtime = join(root, '.genie', 'runtime'); mkdirSync(workspace); mkdirSync(OUT, { recursive: true });
-    const stub = resolve('scripts/esc-unsend-stub-claude.mjs'); chmodSync(stub, 0o755);
+    // The stub, copied into this run's folder: it writes its record beside itself, so the record is here on every platform.
+    const stub = join(root, 'esc-unsend-stub-claude.mjs');
+    copyFileSync(resolve('scripts/esc-unsend-stub-claude.mjs'), stub); chmodSync(stub, 0o755);
+    RECEIVED = join(root, 'esc-unsend-received.jsonl');
     const env = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE2_CLAUDE_BINARY: stub };
     execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env, stdio: 'pipe', timeout: 15_000, windowsHide: true });
     const atlas = (json(join(runtime, 'agents.json')) ?? []).find((a) => a.name === 'atlas' && a.provider === 'claude');
@@ -119,8 +124,7 @@ try {
     })()`);
 
     // What's new opens on a first run and covers the window (run 2's screenshots): closed first, as a person would.
-    try { await until('What’s new', () => page.evaluate(`Boolean(document.querySelector('[data-whats-new]'))`), 20_000); await page.evaluate(`document.querySelector('[data-action="whats-new-close"]')?.click(); true`); } catch { /* not shown */ }
-    await until('What’s new to close', () => page.evaluate(`!document.querySelector('[data-whats-new]')`), 15_000);
+    await closeWhatsNew((expression) => page.evaluate(expression));
 
     // Open atlas, with its chat beside it.
     await page.evaluate(`window.location.hash = '#genie://agent/${atlas.id}?tab=stream'; true`);
